@@ -67,25 +67,40 @@ export function reauthenticationUrl(request: RecentSignInRequest, targetTo: stri
 const DRAFT_PREFIX = 'reauth.draft.';
 
 /**
- * Keeps a form's values across the sign-in round trip. sessionStorage is per
- * tab and survives the navigation; a draft is read ONCE and removed, so a
- * later visit starts empty. Storage that throws (private mode, blocked site
- * data) loses the draft and nothing else.
+ * How long a saved draft stays restorable. A sign-in takes a minute or two;
+ * a draft older than this belongs to a sign-in the person abandoned, and a
+ * page opened much later must not come back pre-filled (with administration
+ * scopes already ticked).
  */
-export function saveReauthenticationDraft(key: string, draft: unknown): void {
+const DRAFT_TTL_MS = 10 * 60 * 1000;
+
+interface StoredDraft {
+  readonly savedAt: number;
+  readonly draft: unknown;
+}
+
+/**
+ * Keeps a form's values across the sign-in round trip. sessionStorage is per
+ * tab and survives the navigation. A draft is read ONCE and removed, and is
+ * discarded unread after `DRAFT_TTL_MS`. Storage that throws (private mode,
+ * blocked site data) loses the draft and nothing else.
+ */
+export function saveReauthenticationDraft(key: string, draft: unknown, now: number = Date.now()): void {
   try {
-    createStorage('session').setJSON(DRAFT_PREFIX + key, draft);
+    createStorage('session').setJSON(DRAFT_PREFIX + key, { savedAt: now, draft } satisfies StoredDraft);
   } catch {
     // Handled (§3.6): the sign-in still works; the person types again.
   }
 }
 
-export function takeReauthenticationDraft(key: string): unknown {
+export function takeReauthenticationDraft(key: string, now: number = Date.now()): unknown {
   try {
     const session = createStorage('session');
-    const draft = session.getJSON<unknown>(DRAFT_PREFIX + key);
+    const stored = session.getJSON<Partial<StoredDraft>>(DRAFT_PREFIX + key);
     session.remove(DRAFT_PREFIX + key);
-    return draft ?? undefined;
+    if (stored === null || typeof stored.savedAt !== 'number') return undefined;
+    if (now - stored.savedAt > DRAFT_TTL_MS || now < stored.savedAt) return undefined;
+    return stored.draft ?? undefined;
   } catch {
     // Handled (§3.6): an unreadable draft is no draft.
     return undefined;

@@ -25575,7 +25575,19 @@ paths:
 
         NO SECRET: no token value, no masked hint, no digest and no uuid. A
         row is named by its id.
+
+        Paged like the role history: `limit` (1..200, default 50) and
+        `offset`; `total` counts every row.
       tags: [admin]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         '200':
           description: The tokens with administration access
@@ -25604,6 +25616,7 @@ paths:
                     owner_name: Sam Auditor
                     owner_email: sam@example.com
                     owner_suspended: false
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }

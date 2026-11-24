@@ -53,6 +53,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strconv"
@@ -210,11 +211,27 @@ type adminScopeCaller struct {
 	set     []string
 }
 
+// scopeMintCredential names the calling credential in the mint rule's words
+// (browser_session, native_session, access_token, unresolved), so a scope
+// refusal's body and log line use the same vocabulary as a mint refusal's.
+func scopeMintCredential(kind identity.CredentialKind) mintCredential {
+	switch kind {
+	case identity.CredentialKindSession, identity.CredentialKindForm, identity.CredentialKindSealed:
+		return mintCredentialBrowserSession
+	case identity.CredentialKindNative:
+		return mintCredentialNativeSession
+	case identity.CredentialKindToken, identity.CredentialKindRun, identity.CredentialKindSystem:
+		return mintCredentialAccessToken
+	default:
+		return mintCredentialUnresolved
+	}
+}
+
 // scopeKindRefusal applies rule 1: the credential kinds that may set scopes.
 func scopeKindRefusal(kind identity.CredentialKind) *tokenScopeRefusal {
 	refuse := func(code, message string) *tokenScopeRefusal {
 		return &tokenScopeRefusal{tokenMintRefusal: tokenMintRefusal{
-			Code: code, Message: message, CredentialKind: mintCredential(kind),
+			Code: code, Message: message, CredentialKind: scopeMintCredential(kind),
 		}}
 	}
 	switch kind {
@@ -231,7 +248,7 @@ func scopeKindRefusal(kind identity.CredentialKind) *tokenScopeRefusal {
 
 // adminScopeCallerOf applies rules 1 and 2. err is a dependency fault (500).
 func (h *Handler) adminScopeCallerOf(r *http.Request, user identity.User) (adminScopeCaller, error) {
-	kind := mintCredential(user.CredentialKind)
+	kind := scopeMintCredential(user.CredentialKind)
 	refuse := func(code, message string) (adminScopeCaller, error) {
 		return adminScopeCaller{refusal: &tokenScopeRefusal{
 			tokenMintRefusal: tokenMintRefusal{Code: code, Message: message, CredentialKind: kind},
@@ -286,12 +303,12 @@ func scopeRefusalOf(kind mintCredential, set, names []string) *tokenScopeRefusal
 func (h *Handler) authorizeAdminScopes(w http.ResponseWriter, r *http.Request, user identity.User, names []string, action string) bool {
 	caller, err := h.adminScopeCallerOf(r, user)
 	if err != nil {
-		writeTokenMintFault(w, r, mintCredential(user.CredentialKind), err)
+		writeTokenFault(w, r, action, scopeMintCredential(user.CredentialKind), err)
 		return false
 	}
 	refusal := caller.refusal
 	if refusal == nil {
-		refusal = scopeRefusalOf(mintCredential(user.CredentialKind), caller.set, names)
+		refusal = scopeRefusalOf(scopeMintCredential(user.CredentialKind), caller.set, names)
 	}
 	if refusal != nil {
 		writeTokenScopeRefusal(w, r, action, refusal)
@@ -318,6 +335,9 @@ func writeTokenScopeRefusal(w http.ResponseWriter, r *http.Request, action strin
 		return
 	}
 	audit.Annotate(r.Context(), audit.Annotation{Action: action, EntityType: "token", EntityName: refusal.Code})
+	slog.WarnContext(r.Context(), "personal token request refused",
+		"action", action, "code", refusal.Code, "credential_kind", string(refusal.CredentialKind),
+		"scopes", refusal.Scopes, "method", r.Method, "path", r.URL.Path)
 	var body tokenScopeJSONError
 	body.Error.tokenJSONErrorFields = tokenJSONErrorFields{Message: refusal.Message, Type: "permission_error", Code: refusal.Code}
 	body.Error.Scopes = refusal.Scopes
@@ -430,7 +450,7 @@ func (h *Handler) TokenSetAdminScopes(w http.ResponseWriter, r *http.Request) {
 	// credential learns nothing about the deployment.
 	caller, err := h.adminScopeCallerOf(r, user)
 	if err != nil {
-		writeTokenMintFault(w, r, mintCredential(user.CredentialKind), err)
+		writeTokenFault(w, r, TokenAdminScopesRefusedAuditAction, scopeMintCredential(user.CredentialKind), err)
 		return
 	}
 	if caller.refusal != nil {

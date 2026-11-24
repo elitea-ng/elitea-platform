@@ -131,6 +131,7 @@ import type {
   ListAdminConnectorRequestsParams,
   ListAdminPermissionTrimmingParams,
   ListAdminPublishedAgentsParams,
+  ListAdministrationAccessTokensParams,
   ListAdministrationRoleHistoryParams,
   ListAgentIdentityBindingsParams,
   ListBackgroundJobsParams,
@@ -4085,6 +4086,11 @@ export type listAdministrationAccessTokensResponse200 = {
   status: 200;
 };
 
+export type listAdministrationAccessTokensResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
 export type listAdministrationAccessTokensResponse401 = {
   data: N401Response;
   status: 401;
@@ -4105,6 +4111,7 @@ export type listAdministrationAccessTokensResponseSuccess =
     headers: Headers;
   };
 export type listAdministrationAccessTokensResponseError = (
+  | listAdministrationAccessTokensResponse400
   | listAdministrationAccessTokensResponse401
   | listAdministrationAccessTokensResponse403
   | listAdministrationAccessTokensResponse500
@@ -4116,8 +4123,22 @@ export type listAdministrationAccessTokensResponse =
   | listAdministrationAccessTokensResponseSuccess
   | listAdministrationAccessTokensResponseError;
 
-export const getListAdministrationAccessTokensUrl = () => {
-  return `/admin/access/tokens`;
+export const getListAdministrationAccessTokensUrl = (
+  params?: ListAdministrationAccessTokensParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/tokens?${stringifiedParams}`
+    : `/admin/access/tokens`;
 };
 
 /**
@@ -4128,13 +4149,17 @@ export const getListAdministrationAccessTokensUrl = () => {
  *
  * NO SECRET: no token value, no masked hint, no digest and no uuid. A
  * row is named by its id.
+ *
+ * Paged like the role history: `limit` (1..200, default 50) and
+ * `offset`; `total` counts every row.
  * @summary List the personal access tokens with administration access
  */
 export const listAdministrationAccessTokens = async (
+  params?: ListAdministrationAccessTokensParams,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<listAdministrationAccessTokensResponse> => {
   return eliteaFetch<listAdministrationAccessTokensResponse>(
-    getListAdministrationAccessTokensUrl(),
+    getListAdministrationAccessTokensUrl(params),
     {
       ...options,
       method: "GET",
@@ -4142,32 +4167,37 @@ export const listAdministrationAccessTokens = async (
   );
 };
 
-export const getListAdministrationAccessTokensQueryKey = () => {
-  return [`/admin/access/tokens`] as const;
+export const getListAdministrationAccessTokensQueryKey = (
+  params?: ListAdministrationAccessTokensParams,
+) => {
+  return [`/admin/access/tokens`, ...(params ? [params] : [])] as const;
 };
 
 export const getListAdministrationAccessTokensQueryOptions = <
   TData = Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-  TError = N401Response | N403Response | N500Response,
->(options?: {
-  query?: Partial<
-    UseQueryOptions<
-      Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-      TError,
-      TData
-    >
-  >;
-  request?: SecondParameter<typeof eliteaFetch>;
-}) => {
+  TError = N400Response | N401Response | N403Response | N500Response,
+>(
+  params?: ListAdministrationAccessTokensParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
   const { query: queryOptions, request: requestOptions } = options ?? {};
 
   const queryKey =
-    queryOptions?.queryKey ?? getListAdministrationAccessTokensQueryKey();
+    queryOptions?.queryKey ?? getListAdministrationAccessTokensQueryKey(params);
 
   const queryFn: QueryFunction<
     Awaited<ReturnType<typeof listAdministrationAccessTokens>>
   > = ({ signal }) =>
-    listAdministrationAccessTokens({ signal, ...requestOptions });
+    listAdministrationAccessTokens(params, { signal, ...requestOptions });
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
@@ -4180,12 +4210,13 @@ export type ListAdministrationAccessTokensQueryResult = NonNullable<
   Awaited<ReturnType<typeof listAdministrationAccessTokens>>
 >;
 export type ListAdministrationAccessTokensQueryError =
-  N401Response | N403Response | N500Response;
+  N400Response | N401Response | N403Response | N500Response;
 
 export function useListAdministrationAccessTokens<
   TData = Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
+  params: undefined | ListAdministrationAccessTokensParams,
   options: {
     query: Partial<
       UseQueryOptions<
@@ -4210,8 +4241,9 @@ export function useListAdministrationAccessTokens<
 };
 export function useListAdministrationAccessTokens<
   TData = Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
+  params?: ListAdministrationAccessTokensParams,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -4236,8 +4268,9 @@ export function useListAdministrationAccessTokens<
 };
 export function useListAdministrationAccessTokens<
   TData = Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
+  params?: ListAdministrationAccessTokensParams,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -4258,8 +4291,9 @@ export function useListAdministrationAccessTokens<
 
 export function useListAdministrationAccessTokens<
   TData = Awaited<ReturnType<typeof listAdministrationAccessTokens>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = N400Response | N401Response | N403Response | N500Response,
 >(
+  params?: ListAdministrationAccessTokensParams,
   options?: {
     query?: Partial<
       UseQueryOptions<
@@ -4274,7 +4308,10 @@ export function useListAdministrationAccessTokens<
 ): UseQueryResult<TData, TError> & {
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
-  const queryOptions = getListAdministrationAccessTokensQueryOptions(options);
+  const queryOptions = getListAdministrationAccessTokensQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

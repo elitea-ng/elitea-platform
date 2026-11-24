@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -154,24 +155,27 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 	want("native_client", nativeClient, adminaccess.PlatformMaintenanceManage,
 		adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
 	want("maintenance", maintenance, adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
-	// Every row is a token scope (R1.3a) except the seeded-only names
-	// (identity trust, the global administrator's own permission, break-glass)
-	// and the two legacy names.
-	var eligible []string
-	for _, row := range adminaccess.Registry().Rows() {
-		if row.Grantable == adminaccess.GrantableAny && !row.Legacy {
-			eligible = append(eligible, row.Name)
-		}
-	}
-	want("token", token, eligible...)
-	for _, never := range []string{
+	// Every row is a token scope (R1.3a) except a CLOSED list: the seeded-only
+	// names (identity trust, the global administrator's own permission,
+	// break-glass) and the two legacy names. The list is written out rather
+	// than derived from the rule, so widening the rule, or a new seeded-only
+	// or legacy row, fails here until the list is reviewed.
+	never := []string{
 		adminaccess.AdminAuthUsersSuperAdmin, adminaccess.IdentitySSOTrustManage,
 		adminaccess.AccessBreakglassRequest, adminaccess.AccessBreakglassApprove,
 		adminaccess.AccessBreakglassReview, adminaccess.AccessBreakglassManage,
 		adminaccess.RuntimePlugins, adminaccess.ConfigurationGovernance,
-	} {
-		if row, _ := adminaccess.Lookup(never); row.Token {
-			t.Errorf("%s is a token scope; it must say token: never", never)
+	}
+	var eligible []string
+	for _, row := range adminaccess.Registry().Rows() {
+		if !slices.Contains(never, row.Name) {
+			eligible = append(eligible, row.Name)
+		}
+	}
+	want("token", token, eligible...)
+	for _, name := range never {
+		if row, _ := adminaccess.Lookup(name); row.Token {
+			t.Errorf("%s is a token scope; it must say token: never", name)
 		}
 	}
 	if len(token) < 50 {

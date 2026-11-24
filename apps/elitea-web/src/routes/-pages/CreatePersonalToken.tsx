@@ -279,17 +279,18 @@ export function CreatePersonalTokenPage() {
                   )}
                 </Box>
 
-                {/* Project binding — the sidebar selection, fixed at creation (§4).
-                    The name comes from the id the request carries, so a dropped
-                    store value reads as unbound here too. `||`, not `??`: the
-                    store gives `''` for a missing name, and the id labels it
-                    better than an empty string does. */}
+                {/* Administration scopes (ADR-0059 R1.3b): only when the server offers any. */}
                 <TokenAdminScopesField
                   value={adminScopes}
                   onChange={setAdminScopes}
                   disabled={isGenerating}
                 />
 
+                {/* Project binding — the sidebar selection, fixed at creation (§4).
+                    The name comes from the id the request carries, so a dropped
+                    store value reads as unbound here too. `||`, not `??`: the
+                    store gives `''` for a missing name, and the id labels it
+                    better than an empty string does. */}
                 <TokenProjectNotice projectName={boundProjectId === undefined ? null : selectedProjectName || selectedProjectId} />
 
                 <TokenCreateError message={submitError} />

@@ -45,13 +45,16 @@ const globals = globalThis as unknown as Record<string, unknown>;
 /** The caller's own permission list, as the browser holds it: it includes a `token: never` permission. */
 const ADMIN_PERMISSIONS = [NEVER_SCOPE, 'admin.auth.users', 'access.roles.view'];
 
-function ScopesHarness() {
-  const [value, setValue] = useState<readonly string[]>([]);
+function ScopesHarness({ initial = [] }: { readonly initial?: readonly string[] }) {
+  const [value, setValue] = useState<readonly string[]>(initial);
   return (
-    <TokenAdminScopesField
-      value={value}
-      onChange={setValue}
-    />
+    <>
+      <TokenAdminScopesField
+        value={value}
+        onChange={setValue}
+      />
+      <output data-testid="chosen">{value.join(',')}</output>
+    </>
   );
 }
 
@@ -101,7 +104,7 @@ afterEach(() => {
 describe('the scope control', () => {
   it('is absent for a person without administration permissions', async () => {
     const { authorization } = offer({ settable: true, scopes: [] });
-    mount(ScopesHarness);
+    mount(() => <ScopesHarness />);
 
     await waitFor(() => expect(authorization).toHaveLength(1));
     expect(screen.queryByTestId('token-admin-scopes')).not.toBeInTheDocument();
@@ -116,7 +119,7 @@ describe('the scope control', () => {
         { name: 'admin.auth.users', area: 'people_access', class: 'write' },
       ],
     });
-    mount(ScopesHarness, ADMIN_PERMISSIONS);
+    mount(() => <ScopesHarness />, ADMIN_PERMISSIONS);
 
     const control = await screen.findByTestId('token-admin-scopes');
     const boxes = within(control).getAllByRole('checkbox');
@@ -129,13 +132,28 @@ describe('the scope control', () => {
     expect(within(control).queryByText(/inherit/i)).not.toBeInTheDocument();
   });
 
+  it('drops a chosen scope the offer no longer holds, so nothing unseen is sent', async () => {
+    offer({ settable: true, scopes: [{ name: 'access.roles.view', area: 'people_access', class: 'read' }] });
+    mount(() => <ScopesHarness initial={['access.roles.view', 'admin.auth.users']} />, ADMIN_PERMISSIONS);
+
+    expect(await screen.findByLabelText('access.roles.view')).toBeChecked();
+    await waitFor(() => expect(screen.getByTestId('chosen')).toHaveTextContent(/^access\.roles\.view$/));
+  });
+
+  it('drops every chosen scope when the sign-in may set none', async () => {
+    offer({ settable: false, code: 'token_scopes_elevated', scopes: [] });
+    mount(() => <ScopesHarness initial={['access.roles.view']} />, ADMIN_PERMISSIONS);
+
+    await waitFor(() => expect(screen.getByTestId('chosen')).toBeEmptyDOMElement());
+  });
+
   it('is absent when the sign-in may set no scope', async () => {
     const { authorization } = offer({
       settable: false,
       code: 'token_scopes_sealed_session',
       scopes: [{ name: 'access.roles.view', area: 'people_access', class: 'read' }],
     });
-    mount(ScopesHarness, ADMIN_PERMISSIONS);
+    mount(() => <ScopesHarness />, ADMIN_PERMISSIONS);
 
     await waitFor(() => expect(authorization).toHaveLength(1));
     expect(screen.queryByTestId('token-admin-scopes')).not.toBeInTheDocument();
@@ -192,7 +210,7 @@ describe('the token list', () => {
 
     expect(await screen.findByRole('columnheader', { name: 'Administration' })).toBeInTheDocument();
     const marks = screen.getAllByTestId('token-admin-inherit').map((mark) => mark.textContent);
-    expect(marks).toEqual(['All your administration permissions, until 2027-03-01', 'All your administration permissions']);
+    expect(marks).toEqual(['All your administration permissions, until Mar 1, 2027', 'All your administration permissions']);
     const scoped = screen.getByTestId('token-admin-scopes-cell');
     expect(within(scoped).getByText('access.roles.view')).toBeInTheDocument();
     expect(within(scoped).getByText('llm.usage.view')).toBeInTheDocument();

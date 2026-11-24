@@ -71,4 +71,14 @@ describe('the draft', () => {
     expect(takeReauthenticationDraft('k')).toEqual({ name: 'a' });
     expect(takeReauthenticationDraft('k')).toBeUndefined();
   });
+
+  it('is discarded when the sign-in was abandoned long ago', () => {
+    const savedAt = Date.UTC(2026, 10, 24, 8, 0);
+    saveReauthenticationDraft('k', { name: 'a' }, savedAt);
+    expect(takeReauthenticationDraft('k', savedAt + 11 * 60 * 1000)).toBeUndefined();
+    // …and is gone, not kept for a later read.
+    expect(takeReauthenticationDraft('k', savedAt)).toBeUndefined();
+    saveReauthenticationDraft('k', { name: 'b' }, savedAt);
+    expect(takeReauthenticationDraft('k', savedAt + 9 * 60 * 1000)).toEqual({ name: 'b' });
+  });
 });

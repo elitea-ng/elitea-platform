@@ -12,11 +12,18 @@ import { memo } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { t } from '@/shared/i18n';
+import { currentLocale, t } from '@/shared/i18n';
 import type { PersonalAccessToken } from '@/entities/token';
 
 export interface TokenAdminAccessCellProps {
   readonly token: PersonalAccessToken;
+}
+
+/** The end date (YYYY-MM-DD, a calendar date) in the reader's locale; the raw value if it does not parse. */
+function endDateLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return date;
+  return new Intl.DateTimeFormat(currentLocale(), { dateStyle: 'medium', timeZone: 'UTC' }).format(parsed);
 }
 
 export const TokenAdminAccessCell = memo(function TokenAdminAccessCell({ token }: TokenAdminAccessCellProps) {
@@ -30,7 +37,7 @@ export const TokenAdminAccessCell = memo(function TokenAdminAccessCell({ token }
         {token.inherit_ends_on === undefined
           ? t('entities.token.table.adminInherit', 'All your administration permissions')
           : t('entities.token.table.adminInheritEnds', 'All your administration permissions, until {{date}}', {
-              date: token.inherit_ends_on,
+              date: endDateLabel(token.inherit_ends_on),
             })}
       </Typography>
     );

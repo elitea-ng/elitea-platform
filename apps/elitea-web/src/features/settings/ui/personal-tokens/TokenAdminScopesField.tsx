@@ -9,8 +9,13 @@
  * is never offered: it exists only as an upgrade backfill.
  *
  * Nothing chosen means a token with no administration access.
+ *
+ * A chosen scope the offer no longer holds (a draft restored after a sign-in
+ * that lost the permission, or a sign-in that may set none) is DROPPED once
+ * the offer loads: the person could neither see it nor untick it, and the
+ * server would refuse it.
  */
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect } from 'react';
 
 import Box from '@mui/material/Box';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
@@ -35,6 +40,12 @@ export const TokenAdminScopesField = memo(function TokenAdminScopesField({
   disabled = false,
 }: TokenAdminScopesFieldProps) {
   const { data: offer } = useTokenScopeOfferQuery();
+  useEffect(() => {
+    if (offer === undefined) return;
+    const offered = offer.settable ? offer.scopes.map((scope) => scope.name) : [];
+    const kept = value.filter((name) => offered.includes(name));
+    if (kept.length !== value.length) onChange(kept);
+  }, [offer, value, onChange]);
   const toggle = useCallback(
     (name: string, checked: boolean) => {
       onChange(checked ? [...value, name].sort() : value.filter((scope) => scope !== name));

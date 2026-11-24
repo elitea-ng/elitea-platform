@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -43,31 +44,75 @@ type accessToken struct {
 }
 
 // AccessTokens serves `GET /admin/access/tokens`.
+//
+// Query: `limit` (1..200, default 50) and `offset` page, like the role
+// history: the upgrade backfilled `inherit` onto every token of an
+// administrator, so the list is not small on a large deployment. `total`
+// counts every row.
 func (h *Handler) AccessTokens(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	tokens, err := h.accessTokens(r.Context())
+	limit, offset, ok := accessPage(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	var total int
+	if err := h.pool.QueryRow(ctx, `SELECT count(*) FROM public.auth_core__token AS token
+JOIN public.auth_core__user AS account ON account.id = token.user_id
+WHERE `+accessTokenFilter).Scan(&total); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to list tokens with administration access")
+		return
+	}
+	tokens, err := h.accessTokens(ctx, limit, offset)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to list tokens with administration access")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"total": len(tokens), "rows": tokens})
+	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": tokens})
 }
 
-// accessTokens reads the tokens. A row with uuid NULL is a native device
-// session anchor, not a personal access token (shared 0265), and is never
-// listed whatever its column says.
-func (h *Handler) accessTokens(ctx context.Context) ([]accessToken, error) {
+// accessPage reads `limit` and `offset` with the role history's bounds, or
+// writes the 400 and answers false.
+func accessPage(w http.ResponseWriter, r *http.Request) (limit, offset int, ok bool) {
+	query := r.URL.Query()
+	limit = 50
+	if raw := query.Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > accessHistoryMaxLimit {
+			apierr.WriteStatus(w, http.StatusBadRequest, fmt.Sprintf("limit must be between 1 and %d", accessHistoryMaxLimit))
+			return 0, 0, false
+		}
+		limit = value
+	}
+	if raw := query.Get("offset"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			apierr.WriteStatus(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return 0, 0, false
+		}
+		offset = value
+	}
+	return limit, offset, true
+}
+
+// accessTokenFilter is the rows listed: a row with uuid NULL is a native
+// device session anchor, not a personal access token (shared 0265), and is
+// never listed whatever its column says.
+const accessTokenFilter = `token.uuid IS NOT NULL AND token.admin_access <> 'none'`
+
+// accessTokens reads one page of the tokens.
+func (h *Handler) accessTokens(ctx context.Context, limit, offset int) ([]accessToken, error) {
 	rows, err := h.pool.Query(ctx, `
 SELECT token.id, token.name, token.expires, token.admin_access, token.admin_scopes,
        account.id, COALESCE(account.name, account.email, ''), COALESCE(account.email, ''), account.suspended
 FROM public.auth_core__token AS token
 JOIN public.auth_core__user AS account ON account.id = token.user_id
-WHERE token.uuid IS NOT NULL
-  AND token.admin_access <> 'none'
-ORDER BY token.admin_access, lower(COALESCE(account.name, account.email, '')), account.id, token.id`)
+WHERE `+accessTokenFilter+`
+ORDER BY token.admin_access, lower(COALESCE(account.name, account.email, '')), account.id, token.id
+LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list tokens with administration access: %w", err)
 	}

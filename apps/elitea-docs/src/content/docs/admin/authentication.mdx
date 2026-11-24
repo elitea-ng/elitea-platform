@@ -341,7 +341,7 @@ Removing every scope (`{"admin_access": "none"}`) needs a browser sign-in but no
 
 A scoped token still follows its owner: a scope that the owner loses stops working at the next request. And it still follows the [critical action rule](#tokens-and-critical-actions) below.
 
-The token responses carry `admin_access` and `admin_scopes`. An `inherit` token also carries `inherit_ends_on`, the date it ends, once the sunset date is set. A holder of `access.roles.view` lists every token with `scoped` or `inherit` access, with its owner, at `GET /api/v2/admin/access/tokens`. The listing never shows a token value.
+The token responses carry `admin_access` and `admin_scopes`. An `inherit` token also carries `inherit_ends_on`, the date it ends, once the sunset date is set. A holder of `access.roles.view` lists every token with `scoped` or `inherit` access, with its owner, at `GET /api/v2/admin/access/tokens` (paged with `limit`, at most 200, and `offset`). The listing never shows a token value.
 
 ### Tokens and critical actions
 

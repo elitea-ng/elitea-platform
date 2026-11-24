@@ -272,13 +272,19 @@ func writeTokenRefusal(w http.ResponseWriter, r *http.Request, action string, re
 // the store did not answer. It is a 500, not a refusal, but it is logged with
 // its cause and annotated so the audit row says why no token was made.
 func writeTokenMintFault(w http.ResponseWriter, r *http.Request, kind mintCredential, err error) {
+	writeTokenFault(w, r, TokenMintRefusedAuditAction, kind, err)
+}
+
+// writeTokenFault is writeTokenMintFault for any token request: action is the
+// audit action of the request (the mint's, or the scope change's).
+func writeTokenFault(w http.ResponseWriter, r *http.Request, action string, kind mintCredential, err error) {
 	audit.Annotate(r.Context(), audit.Annotation{
-		Action:     TokenMintRefusedAuditAction,
+		Action:     action,
 		EntityType: "token",
 		EntityName: mintFaultAuditName,
 	})
-	slog.ErrorContext(r.Context(), "personal token mint: the owner's administration permissions could not be read",
-		"credential_kind", string(kind), "err", err, "method", r.Method, "path", r.URL.Path)
+	slog.ErrorContext(r.Context(), "personal token request: the caller's administration permissions could not be read",
+		"action", action, "credential_kind", string(kind), "err", err, "method", r.Method, "path", r.URL.Path)
 	writeTokenJSONError(w, http.StatusInternalServerError, "server_error",
 		mintFaultAuditName, "failed to resolve caller permissions")
 }

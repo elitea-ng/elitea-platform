@@ -91,6 +91,18 @@ func TestTheTokenListingIsForTheAccessReaderAndCarriesNoSecret(t *testing.T) {
 		}
 	}
 
+	// Paged like the role history: total counts every row.
+	paged := adminDo(t, env.gatedAccessRouter(accessReader), http.MethodGet, accessTokens+"?limit=1&offset=1", nil)
+	expectStatus(t, paged, http.StatusOK)
+	if total, rows := decodeRows[listedAccessToken](t, paged.Body.Bytes()); total != 2 || len(rows) != 1 ||
+		rows[0].ID != inherit.ID && rows[0].ID != scoped.ID {
+		t.Fatalf("page = %d %+v, want total 2 and one row", total, rows)
+	}
+	for _, bad := range []string{"?limit=0", "?limit=201", "?offset=-1", "?limit=x"} {
+		expectStatus(t, adminDo(t, env.gatedAccessRouter(accessReader), http.MethodGet, accessTokens+bad, nil),
+			http.StatusBadRequest)
+	}
+
 	expectStatus(t, adminDo(t, env.gatedAccessRouter(accessNobody), http.MethodGet, accessTokens, nil),
 		http.StatusForbidden)
 }

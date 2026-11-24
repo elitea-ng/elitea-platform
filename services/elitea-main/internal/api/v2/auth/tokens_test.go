@@ -572,11 +572,15 @@ const scopeTokenUUID = "8ce4be49-0d10-4f05-a63f-d6d46f99a3f0"
 type scopeResolver struct {
 	set      []string
 	elevated bool
+	err      error
 }
 
 func (s scopeResolver) ResolvePermissions(_ context.Context, _ identity.User, mode, _ string) (identity.PermissionResolution, error) {
 	if mode != identity.PermissionModeAdministration {
 		return identity.PermissionResolution{}, errors.New("unexpected mode " + mode)
+	}
+	if s.err != nil {
+		return identity.PermissionResolution{}, s.err
 	}
 	resolution := identity.PermissionResolution{UserID: 7, Permissions: s.set}
 	if s.elevated {
@@ -938,5 +942,38 @@ func TestAnInheritTokenStatesItsEndOnlyOnceTheDateIsSet(t *testing.T) {
 	encoded, _ := json.Marshal(token)
 	if adminaccess.InheritEndsOn() == "" && strings.Contains(string(encoded), "inherit_ends_on") {
 		t.Fatalf("an empty sunset date is stated: %s", encoded)
+	}
+}
+
+// A permission store that does not answer is a 500 on both routes, and the
+// audit row names the request's own action: the scope change is not a mint.
+func TestAScopeFaultIsAnnotatedWithTheRequestsAction(t *testing.T) {
+	broken := scopeResolver{err: errors.New("store down")}
+	created := scopeRequest(t, freshSession, broken, http.MethodPost, "/token/", createScoped("admin.auth.users"))
+	if created.status != http.StatusInternalServerError || created.audit != TokenMintRefusedAuditAction+":"+mintFaultAuditName {
+		t.Fatalf("create: %d %q", created.status, created.audit)
+	}
+	changed := scopeRequest(t, freshSession, broken, http.MethodPut,
+		"/token/"+scopeTokenUUID+"/admin_scopes", `{"admin_access":"scoped","admin_scopes":["admin.auth.users"]}`)
+	if changed.status != http.StatusInternalServerError || changed.audit != TokenAdminScopesRefusedAuditAction+":"+mintFaultAuditName {
+		t.Fatalf("change: %d %q", changed.status, changed.audit)
+	}
+}
+
+// A scope refusal names the calling credential in the mint rule's words.
+func TestAScopeRefusalNamesTheCredentialInTheMintVocabulary(t *testing.T) {
+	for kind, want := range map[identity.CredentialKind]mintCredential{
+		identity.CredentialKindSession: mintCredentialBrowserSession,
+		identity.CredentialKindForm:    mintCredentialBrowserSession,
+		identity.CredentialKindSealed:  mintCredentialBrowserSession,
+		identity.CredentialKindNative:  mintCredentialNativeSession,
+		identity.CredentialKindToken:   mintCredentialAccessToken,
+		identity.CredentialKindRun:     mintCredentialAccessToken,
+		identity.CredentialKindSystem:  mintCredentialAccessToken,
+		identity.CredentialKindNone:    mintCredentialUnresolved,
+	} {
+		if got := scopeMintCredential(kind); got != want {
+			t.Errorf("%q: %q, want %q", kind, got, want)
+		}
 	}
 }
