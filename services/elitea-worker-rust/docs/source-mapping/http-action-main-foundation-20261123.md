@@ -2,8 +2,8 @@
 
 | Item | Value |
 | --- | --- |
-| Date | 2026-11-23 |
-| Branch | `feat/http-action-main-foundation` (merged `origin/main` `d463a8a66`) |
+| Date | 2026-11-24 |
+| Branch | `feat/http-action-main-foundation` (merged `origin/main` `ca4a50234`, `2d5e9ceac`) |
 | Migration | `services/elitea-main/migrations/shared/0269_http_action_rules_and_effects_v3.sql` |
 | Design | `services/elitea-worker-rust/docs/http-action-node-design.md` (updated: "Implementation status (5d-1)") |
 | Closes | FU-073 (transport port and egress guard); the Main half of FU-072. The `http` node is admitted in 5d-2. |
@@ -100,7 +100,7 @@ vault are composed (`internal/runtimecomposition/composition.go`, `http_actions.
 | Supply chain and deployment | Applicable | Zero new Go or npm dependencies added; `govulncheck ./...` reports 0 called vulnerabilities (1 pre-existing uncalled); `npm audit` reports 21 pre-existing moderate dev-dep advisories (`glob`/`minimatch` via storybook/orval, 0 new). `ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST` defaults empty (public only) in Helm & Compose. |
 | Cross-layer differentials and version skew | Applicable | Canonical JSON (`canonical.go`) + 25 shared render vectors (`http-action-render-vectors-v1.json`) + strict JSON schema fixtures (`libs/jsonschema/runtime/v1/`); unknown fields & v1 snapshots fail closed (`node.go`, `frozen.go`, `contract.go`). Proven by `TestRenderVectors`, `TestFrozen*`, `internal/runtimecontracts/...`. |
 | Agentic delegation and untrusted content isolation | Applicable | Frozen toolkit guardrails (`ToolPolicy.Permits`, sensitive tools fail closed in `storage/runtime_http_action.go:167-173`); fan-out `scope_ref` fails closed `policy_denied` until 5d-3 (`contract.go:194-198`). Proven by `TestExecute*`, `TestFrozen*`. |
-| TOCTOU, concurrency races, and effect replay | Applicable | Live claim/rule/config rechecked `FOR SHARE` inside `Begin` tx; `Lookup` fences `dispatching -> uncertain` on `lockHTTPActionClaim` in canonical lock order (`SEC-5D1-01`); `INSERT ... ON CONFLICT DO NOTHING`; atomic `Commit` fence; attempt N>0 requires exact prior digests and retryable pinned `rule_wire`; OAuth2 token cache keyed by revision + `singleflight` with overflow-safe `expires_in` clamp (`DOC-01`). Proven by `-race` runs across all packages + PG concurrency/crash/attempt/fencing tests (compiled; live PG rerun pending before un-drafting). |
+| TOCTOU, concurrency races, and effect replay | Applicable | Live claim/rule/config rechecked `FOR SHARE` inside `Begin` tx; `Lookup` fences `dispatching -> uncertain` on `lockHTTPActionClaim` in canonical lock order (`SEC-5D1-01`); `INSERT ... ON CONFLICT DO NOTHING`; atomic `Commit` fence; attempt N>0 requires exact prior digests and retryable pinned `rule_wire`; OAuth2 token cache keyed by revision + `singleflight` with overflow-safe `expires_in` clamp (`DOC-01`). Proven by `-race` runs across all packages + live PG 18 concurrency/crash/attempt/fencing tests (`p5d1v`). |
 | Sandbox escape and resource isolation | N/A | No sandbox/code-runner execution or host filesystem paths touched; response artifacts use content-addressed keys `http-effects/<effect>/<sha256>.bin` (`storage/http_action_artifacts.go:50-71`). |
 | AuthN, OAuth, PAT, and cryptographic hygiene | Applicable | OAuth2 client-credentials token fetch enforces HTTPS, no redirects, egress guard, RFC 6749 §2.3.1 encoding, typed 4xx refusal, revision-scoped cache bounded by token expiry/1h (`repos/http_action_credentials.go:255-350`); domain-separated SHA-256 digests (`elitea.http.effect.v3`, `elitea.http.credential-revision.v1`, `elitea.graph.http.activation.v1`). |
 
@@ -115,7 +115,7 @@ Executed on rebased branch (`feat/http-action-main-foundation` over `origin/main
   - `internal/infra/egress`: **PASS** (all hardening, address class, private allowlist, dial-time tests)
   - `internal/infra/storage` (`-run TestHTTPAction`): **PASS** (pool 8/9 & 32/33 boundaries, pool isolation from content reads, gRPC status mapping, all 5 egress hardening tests)
   - `internal/infra/db/repos` (non-PG: `TestHTTPActionRecovery*`, `TestNodeRecoveryMainTransactionUsesActualHTTPCommittedProof`): **PASS**
-  - `internal/infra/db/migrate`: **PASS** (`Head(shared) == 264`)
+  - `internal/infra/db/migrate`: **PASS** (`Head(shared) == 269`; re-verified `npm run typecheck`, `node scripts/check-endpoint-manifest.mjs` (`399` entries), and `go vet ./...` after `origin/main` `ca4a50234` merge / `api.gen.go` regeneration)
   - `internal/adminaccess` & `internal/adminaccess/rolegrants`: **PASS**
   - `internal/domain/entitlements`: **PASS**
   - `internal/api` & `internal/api/v2/admin` (`TestAdministrationSurface*`, `TestNoAdministrationPermissionLiteralOutsideTheRegistry`, `TestEveryGatedPermissionHasAGrant`, `TestEntitlementsCapabilityCoverage`, `TestRolesCatalogueIsUnchangedForTheExistingNames`, `TestProductionRouter*`): **PASS**
@@ -134,15 +134,29 @@ Executed on rebased branch (`feat/http-action-main-foundation` over `origin/main
   - `npm audit`: **21 pre-existing moderate dev-dep advisories** (`glob`/`minimatch` via `@storybook/react-vite` and `orval`); 0 new
   - Diff secret & trailer scan (`/usr/bin/grep`): **0 hits**
 
-### Deferred / Skipped in this Draft PR pass (honest boundary statement)
+### Live PostgreSQL 18 integration suite & disposable `p5d1v` stack (`2026-11-24`, torn down)
 
-- **Real-PostgreSQL integration rerun (`ELITEA_TEST_DATABASE_URL`)**: Deferred while Docker builds/stacks are paused to preserve host headroom for the active EKG build. All PostgreSQL test files (including new tests for attempt N>0 digest/replay hardening, write-time config ownership, runtime private-config writer checks, invalid-row `List` resilience, and OAuth2 4xx/`singleflight`) compile cleanly (`go test -c`). Previous baseline at `55685077e` passed 50/50 against real PG 18; re-run against real PG 18 before taking the PR out of Draft.
-- **Live-stack Docker image rebuild & real-browser acceptance (brief §6 items 1 & 6)**: Deferred for the same reason; no Docker images were rebuilt and no stack was started in this pass. Must run before merge, recording image binary marker (`elitea.http.effect.v3`), `verify-profile`, and reloaded browser proof for Settings > HTTP actions.
-- **Fixtures honesty**: All unit and component tests use in-process fakes/doubles and MSW mocks (`HttpActions.test.tsx`). PostgreSQL tests use real ledgered migrations on real PG 18 when `ELITEA_TEST_DATABASE_URL` is set.
+- **Live PostgreSQL 18 integration tests (`ELITEA_TEST_DATABASE_URL`, scratch DB `httpaction_test` on `elitea-p5d1v-postgres-1`, dropped before teardown): 34/34 top-level tests PASS, 0 failed, 0 skipped**:
+  - `migrations` (`-run 'TestHTTPAction|TestCleanDatabaseGrantsHTTPActionRulePermissions|TestProjectRolesResolveHTTPActionRulePermissions'`): **3/3 PASS** (`6.903s`)
+  - `internal/infra/db/repos` (`-run 'TestHTTP|TestNodeRecoveryHTTP'`): **27/27 PASS** (`15.564s`)
+  - `internal/infra/db/repos` (`-run TestNodeRecoveryMainTransactionUsesActualHTTPCommittedProof`): **1/1 PASS** (5/5 subtests, `0.484s`)
+  - `internal/infra/db/repos` (`-tags loadgate -run TestHTTPActionMainOverheadBudgetPostgres`): **1/1 PASS** (`1000` runs: `p50=6.730333ms`, `p95=11.131417ms`, `max=43.43525ms`, `8.285s`)
+  - `internal/api` (`-run TestHTTPAction`): **1/1 PASS** (`TestHTTPActionRulesAuthorizationMatrixOnACleanDatabase`, `50` authenticated route × principal × shape cases, `1.821s`)
+  - `internal/application/projectprovisioning` (`-run TestDeprovisionRemovesTheProjectOwnedRowsThatHaveNoForeignKey`): **1/1 PASS** (`5.609s`)
+- **Built images & `stack.sh binary-check` receipts (commit `2d5e9ceac`)**:
+  - `ghcr.io/elitea-ng/elitea-main:p5d1-2d5e9ceac` (`id=9bfbc4861dba29f91aec7963d21adc6f8cee2e612955fc2695d013ad347e561a`, `/elitea-main`, `marker=elitea.http.effect.v3`, `count=1` OK)
+  - `ghcr.io/elitea-ng/elitea-web:p5d1-2d5e9ceac` (`id=12ac49d84e3952983b90e3130e6278cd573d1e1fc0d828615f59ea69f72b4c4e`, `/usr/share/nginx/html/spa`, `marker=httpactions/prompt_lib`, `count=1` OK)
+- **Disposable production-profile Docker stack (`p5d1v` at `http://p5d1v.localhost:18440/app/`)**:
+  - `stack.sh verify-profile --name p5d1v`: **`50 passed, 0 failed`** (exit `0`; shared migration `0269`, tenant migrations, and agentstate migrations at worktree head; real-model dump restored).
+- **Real-browser acceptance (`Settings > HTTP actions`, `admin@centry.user`, zero mocks)**:
+  - **Project & permission scoping**: On `Private` (`projectID: 2`) UI fetched `GET /api/v2/httpactions/prompt_lib/2/rule-names` (`200`) with no Add button; on `promptlib_public` (`projectID: 1`) UI fetched `GET /api/v2/httpactions/prompt_lib/1/rules` (`200`) and rendered `Add an HTTP action rule`.
+  - **Create, reload, disable, & no hard-delete**: Created rule `github_status_check` (`https://api.github.com`, `/status`, `GET`, toolkit `github`, tool `status_check`) via `POST .../1/rules` -> **`201 Created`** (`id: 1`, `revision: 1`, `enabled: true`). First hard browser reload preserved `github_status_check` (`enabled: true`). Toggled `Toggle enabled` off via `PUT .../1/rules/1` -> **`200 OK`** (`revision: 2`, `enabled: false`); verified no hard-delete button/option in table Actions or Edit dialog; second hard browser reload preserved `github_status_check` (`enabled: false`).
+  - **Private & metadata origin refusal**: Submitting `https://127.0.0.1` (`test_loopback_deny`) and `https://169.254.169.254` (`test_metadata_deny`) each returned **`400 Bad Request`** with readable error `HTTP action rule origin does not resolve to a permitted destination` and left only `github_status_check` in the table (`0` unexpected console errors).
+  - **`rule-names` redaction check**: `GET http://p5d1v.localhost:18440/api/v2/httpactions/prompt_lib/1/rule-names` returned **`200`** with `{"items":[{"name":"github_status_check","enabled":false}]}` and zero `origin`, `path_template`, or credential fields.
+- **Fixtures honesty**: Unit and Web component tests (`HttpActions.test.tsx`) use in-process fakes/doubles and MSW mocks. Live PostgreSQL 18 tests run ledgered migrations against `elitea-p5d1v-postgres-1`, and all `p5d1v` browser rules were created and verified directly through the UI (`0` DB seeding, `0` response mocks).
 
 ## Follow-ups
 
-1. Run the real-PostgreSQL integration suite (`repos`, `migrations`, `api`, `projectprovisioning`) + quiet-host overhead budget (`-tags loadgate`) and live-stack browser acceptance (§6 items 1 & 6) before un-drafting and merging 5d-1.
-2. **5d-2**: Admitted `type: http` node in Worker, `agent-runtime`, Main `admittedNodeTypes`, and Web pipeline editor (closes remaining half of FU-072 and browser acceptance §6 items 2–5).
-3. **5d-3**: HTTP actions inside Parallel/Map fan-out children (`scope_ref` + `execution_saved_child_scopes`).
-4. **D3 follow-up**: Delegated user OAuth and mTLS client certificates for `openapi` configurations.
+1. **5d-2**: Admitted `type: http` node in Worker, `agent-runtime`, Main `admittedNodeTypes`, and Web pipeline editor (closes remaining half of FU-072 and browser acceptance §6 items 2–5).
+2. **5d-3**: HTTP actions inside Parallel/Map fan-out children (`scope_ref` + `execution_saved_child_scopes`).
+3. **D3 follow-up**: Delegated user OAuth and mTLS client certificates for `openapi` configurations.
