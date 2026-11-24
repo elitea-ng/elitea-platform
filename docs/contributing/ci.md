@@ -347,6 +347,35 @@ A job runs directly in the pod (Ubuntu 24.04):
   `_work` is the separate 80 GiB volume, and a pod that writes past the limit is evicted. The default places
   for `~/go/pkg/mod`, `~/.cache/go-build`, `~/.npm`, `~/.cargo`, `~/.cache` and `/tmp` all count against it.
 
+### Action archives come from the image (codeload 429)
+
+In "Set up job" the runner downloads the tarball of every action the job uses from `codeload.github.com`.
+Every pool pod leaves the cluster through the same egress address, and codeload limits by address, so a
+burst of pool jobs got `429 (Too Many Requests)` three times in a row and failed before its first step
+(#3003). The runner already sends the job token with that download, so the requests are authenticated and
+another token would not lift the limit.
+
+The runner (2.320 and later) first looks for a local copy under `ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE`, at
+`<owner>_<repo>/<commit sha>.tar.gz` (`src/Runner.Worker/ActionManager.cs` in `actions/runner`). The pool
+image sets that variable to `/opt/action-archive-cache`, which is read-only to the runner user, and bakes the
+archives in:
+
+- `scripts/ci/action-archive-list.mjs` reads every remote `uses:` in `.github/workflows` and
+  `.github/actions`. With `--resolve` it resolves each ref to its commit through the GitHub API (a tag such
+  as `v7` to the commit it names, as the runner does) and follows the `uses:` of remote composite actions,
+  because the runner downloads those too. With `--download <dir>` it writes the archives in the runner's
+  layout. A sub-path action such as `actions/cache/restore` shares the `actions_cache` archive.
+- `eng-runner-image.yml` runs `--download` on a hosted runner before the build, and its smoke step checks
+  the variable, the count, the layout and that no archive is writable.
+- **A miss is not a failure.** An action whose commit is not in the image (a Dependabot bump, or a major tag
+  that moved) is downloaded as before. The weekly image build bakes the new commits in, and a new image
+  reaches the pool when the owner pins its digest in the GitOps values.
+
+To list the set locally: `node scripts/ci/action-archive-list.mjs` (refs, offline) or
+`GH_TOKEN=$(gh auth token) node scripts/ci/action-archive-list.mjs --resolve` (one `owner/repo@sha` per
+archive). The runner prints "Download action repository" for a hit too; a hit has no codeload warning after
+it, and with step debug logging on the log adds `Copied action archive '/opt/action-archive-cache/...'`.
+
 These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 
 | Workflow | Jobs |

@@ -1,0 +1,4 @@
+# Filled at build time by scripts/ci/action-archive-list.mjs --download
+# (eng-runner-image.yml); the archives are never committed.
+*
+!.gitignore
