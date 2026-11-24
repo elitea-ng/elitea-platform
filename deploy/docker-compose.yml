@@ -226,7 +226,10 @@ services:
       # HTTPRoute does this routing, and the chart never sets it.
       ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
-      APPLICATION_SECRET_KEY: "changeme"
+      # Signs personal access tokens and is the root of the run, vector and
+      # publish-validation token keys. elitea-main refuses a value shorter
+      # than 32 bytes or a placeholder (#2958), so there is no default here.
+      APPLICATION_SECRET_KEY: "${APPLICATION_SECRET_KEY:?set a random value of at least 32 bytes in your environment, for example the output of openssl rand -base64 32}"
       SKIP_MIGRATIONS: "1"
       # The centry vault key (issue #418). elitea-main and elitea-llm-gateway
       # share centry.secrets_key and centry.secrets_data. Each one wraps the
@@ -313,7 +316,9 @@ services:
       # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5; elitea-main refuses
       # it): the provider's model and artifact calls are gRPC on elitea-main's
       # platform listener below.
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
+      # Required (at least 32 random bytes) when ELITEA_DEEPWIKI_ENABLED is
+      # true: elitea-main and the provider refuse to start without it.
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       # The provider's gRPC listener (#1359): the facade's SPI calls and the
       # project deletion (#1243) both go there, over mutual TLS with the
@@ -447,8 +452,9 @@ services:
       # service would serve TLS and accept any client.
       ELITEA_DEEPWIKI_TLS_CA_FILE: /certs/ca.crt
       # Must hold the SAME value as elitea-main's ELITEA_DEEPWIKI_IDENTITY_SECRET:
-      # this side verifies what that side signs.
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "changeme"
+      # this side verifies what that side signs. The provider refuses to start
+      # without a strong value (#2959).
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       # FAIL-CLOSED on both sides. This dev value allows GitHub and nothing
       # else; elitea-main carries the same string, and two that disagree mean
       # an invocation that starts and then fails.

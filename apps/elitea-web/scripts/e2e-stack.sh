@@ -44,6 +44,15 @@ E2E_PROJECT="${E2E_PROJECT:-elitea-e2e}"
 # shellcheck disable=SC2034 # read by lib/stack-backend.sh (compose mode)
 COMPOSE_F="-p ${E2E_PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.e2e-standalone.yml"
 
+# The stack's signing secrets and vault master key (#2958). The compose file
+# and the native table carry no literal value: every verb sees the same
+# generated set, kept in deploy/.stack-secrets/<project>.env. A value already
+# in the environment wins (deploy/scripts/standalone-stack.sh exports its own
+# before it calls `seed` here).
+# shellcheck source=../../../deploy/scripts/lib/stack-secrets.sh
+. "${REPO_ROOT}/deploy/scripts/lib/stack-secrets.sh"
+stack_secrets_load "$E2E_PROJECT"
+
 # The IANA zone this seed computes its calendar-day boundaries in (issue #214).
 #
 # It must be the SAME zone playwright.config.ts pins the browser to, because a
@@ -1865,6 +1874,10 @@ ENDSQL
       -U elitea -d elitea < "$SEED_TMP"
     rm -f "$SEED_TMP"
     echo "  ✓ DB rows seeded (calendar-day fixtures anchored in ${E2E_TZ})."
+    # The vault key rows above are written in the clear; this stack runs with
+    # a generated SECRETS_MASTER_KEY (#2958), so wrap them now. It runs again
+    # before the restart below, for the rows the later blocks copy.
+    stack_wrap_seeded_vault_keys stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea
 
     # ── tenant migrations, the SECOND migrate pass ───────────────────────────
     #
@@ -2677,6 +2690,7 @@ PUBLISH_SQL
     # test — left Settings > Secrets empty, and the run then reported a visual
     # diff on the Secrets page instead of the failed mint. The value is a
     # property of the stack, so the stack makes it, and the setup only asserts.
+    stack_wrap_seeded_vault_keys stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea
     echo "  → Restarting elitea-main so the X-SECRET backfill reaches the seeded projects…"
 
     # The vault's digest, not its content: the blob is Fernet ciphertext with a

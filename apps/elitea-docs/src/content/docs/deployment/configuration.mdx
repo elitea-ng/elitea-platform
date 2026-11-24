@@ -25,6 +25,26 @@ An empty `kind` means `ClusterIssuer`, as before, or `Issuer` when `create` is `
 
 **Shared secret properties.** With `externalSecrets.remoteKey` (one flat JSON secret), `externalSecrets.sharedProperties: true` reads the values that several Secrets carry from one property each: `runtime-ca.crt`, `runtime-ca.key`, `command-signing-keyring.json` and `gateway-identity-secret`. A key's own `property` still wins. `deploy/scripts/mint-secrets.sh` mints that JSON for a new install; see [Deploy on GKE with Argo CD](/deployment/gke-argocd#steps).
 
+## Signing secrets and identity secrets
+
+These values sign tokens and identity headers. Put each one in a Kubernetes Secret and reference it from the component's `secrets:` map, never from an `env:` map (an `env:` value lands in a ConfigMap). Generate each value with `openssl rand -base64 32`.
+
+| Variable | Read by | Required |
+|---|---|---|
+| `APPLICATION_SECRET_KEY` | elitea-main | Recommended. It signs personal access tokens and is the root of the run, vector and publish-validation token keys. |
+| `GATEWAY_IDENTITY_SECRET` | elitea-main and the LLM gateway (the same value) | Always, by the gateway. It keys the HMAC over the project, user and tenant identity headers. |
+| `GATEWAY_HOP_SECRET` | the LLM gateway | Optional. |
+| `ELITEA_DEEPWIKI_IDENTITY_SECRET` | elitea-main and the DeepWiki host (the same value) | When `ELITEA_DEEPWIKI_ENABLED` is `true`. |
+| `ELITEA_INVENTORY_IDENTITY_SECRET` | elitea-main and the Inventory host (the same value) | When `ELITEA_INVENTORY_ENABLED` is `true`. |
+
+**The minimum.** Every one of them must be at least 32 bytes. elitea-main, the LLM gateway and the sub-application hosts refuse to start when a value that is set is shorter, is blank, is a well-known placeholder (`changeme`, `secret`, `password` and similar), or is a value that was once committed to the platform repository. The error names the variable, never the value. The chart applies the same rule to an `env:` value while it renders.
+
+**Identity secrets are required.** The LLM gateway refuses to start without `GATEWAY_IDENTITY_SECRET`, and with an empty secret it refuses every request. A sub-application host (DeepWiki, Inventory) refuses to start without its `IDENTITY_SECRET`, and refuses every call without one. `ELITEA_DEV_INSECURE_IDENTITY=true` lets a host start without the secret on a development machine only; the host refuses that flag next to `OIDC_ISSUER_URL` or `ELITEA_AUTH_CONFIG_FILE`.
+
+**The vault master key.** `SECRETS_MASTER_KEY` is a Fernet key (32 random bytes, base64url): `python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'`. elitea-main and the gateway refuse a key that was once committed to the repository; convert the rows to a new key with `deploy/scripts/rewrap-centry-vault.py`. The development opt-out `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is refused next to a sign-in configuration (`OIDC_ISSUER_URL`, `ELITEA_AUTH_CONFIG_FILE`, or `main.fileConfig.authConfig.enabled`), by elitea-main and by the chart.
+
+**Outbound webhooks are always signed.** Every webhook has a signing secret, and every delivery carries `X-Webhook-Signature`. See [Webhooks and triggers](/how-tos/credentials-toolkits/webhooks-and-triggers).
+
 ## Identity: OIDC, SAML, SCIM
 
 Configure identity providers under **Configuration › Authentication** in the admin console — see [Authentication](/admin/authentication) for the click-through. What matters at the deployment level:

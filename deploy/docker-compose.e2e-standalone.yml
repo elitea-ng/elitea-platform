@@ -260,7 +260,11 @@ services:
       # does. See docker-compose.standalone-full.yml for the mount recipe.
       BRAND_PACK_PATH: "${BRAND_PACK_PATH:-}"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
-      APPLICATION_SECRET_KEY: "changeme-e2e"
+      # No literal value (#2958): apps/elitea-web/scripts/e2e-stack.sh
+      # generates it once per stack (deploy/scripts/lib/stack-secrets.sh), and
+      # elitea-main refuses an empty, short or placeholder value. Empty here
+      # only when compose runs outside that script (`config` in CI).
+      APPLICATION_SECRET_KEY: "${APPLICATION_SECRET_KEY:-}"
       SKIP_MIGRATIONS: "1"
       # Reachable under this exact name from the container AND from the host
       # browser — see the oidc-mock service's comment for why that symmetry is
@@ -335,16 +339,13 @@ services:
       # without it once the plane is on.
       ELITEA_AI_PROJECT_ID: "1"
       #
-      # SECRETS_MASTER_KEY IS DELIBERATELY ABSENT, and adding it would break
-      # every vault read on this stack. The seeder writes each project's key as
-      # the 44-byte UNWRAPPED Fernet key (apps/elitea-web/scripts/e2e-stack.sh
-      # — the literal blobs are 88 hex characters), which is the shape centry
-      # writes when no master key is set. With the variable present the reader
-      # takes the WRAPPED path instead (internal/infra/storage/
-      # postgres_secret_vault.go) and refuses those rows as invalid keys.
-      # Main refuses to start without the key unless a throwaway stack opts
-      # out explicitly, which this one does.
-      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
+      # The vault master key, generated per stack like the signing secrets.
+      # The unwrapped opt-out is gone (#2958): elitea-main refuses it next to
+      # OIDC_ISSUER_URL above. The seeder still writes each project's key as
+      # the 44-byte UNWRAPPED Fernet key (psql cannot produce Fernet), then
+      # wraps every such row with this key (stack_wrap_seeded_vault_keys in
+      # deploy/scripts/lib/stack-secrets.sh) before anything reads it.
+      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY:-}"
       #
       # ── Egress for the toolkit credential probe ──────────────────────────
       # With the runtime composed, a stored TOOLKIT credential is really
@@ -388,7 +389,7 @@ services:
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /certs/ca.crt
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
 
       # No ELITEA_DEEPWIKI_CALLBACK_BASE_URL (#1359 U5; elitea-main refuses
@@ -416,7 +417,7 @@ services:
       ELITEA_INVENTORY_CLIENT_CERT_FILE: /certs/client.crt
       ELITEA_INVENTORY_CLIENT_KEY_FILE: /certs/client.key
       ELITEA_INVENTORY_CA_FILE: /certs/ca.crt
-      ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
+      ELITEA_INVENTORY_IDENTITY_SECRET: "${ELITEA_INVENTORY_IDENTITY_SECRET:-}"
       ELITEA_INVENTORY_GIT_ALLOWLIST: "github.com,*.github.com"
     volumes:
       - ./certs:/certs:ro
@@ -469,7 +470,7 @@ services:
       ELITEA_DEEPWIKI_TLS_CERTFILE: /certs/deepwiki-server.crt
       ELITEA_DEEPWIKI_TLS_KEYFILE: /certs/deepwiki-server.key
       ELITEA_DEEPWIKI_TLS_CA_FILE: /certs/ca.crt
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "e2e-deepwiki-identity"
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "grpcs://elitea-deepwiki:9443"
@@ -524,7 +525,7 @@ services:
       ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt
       ELITEA_INVENTORY_TLS_KEYFILE: /certs/inventory-server.key
       ELITEA_INVENTORY_TLS_CA_FILE: /certs/ca.crt
-      ELITEA_INVENTORY_IDENTITY_SECRET: "e2e-inventory-identity"
+      ELITEA_INVENTORY_IDENTITY_SECRET: "${ELITEA_INVENTORY_IDENTITY_SECRET:-}"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
       ELITEA_INVENTORY_SERVICE_LOCATION_URL: "grpcs://elitea-inventory:9443"
       # The provider service (elitea.subapp.v1.ProviderService, the SPI) and

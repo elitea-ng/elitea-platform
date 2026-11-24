@@ -737,6 +737,19 @@ in a release note.**
   binary crash-loop — same outcome, worse diagnostics.
   Guarded by `TestStartupIdentityCheck` + the `startupIdentityCheck(` entry in
   `TestMainWiring`; both mutation-verified 2026-08-09.
+  **2026-11-24 (issues #2958, #2959): the check is unconditional, and the
+  verifier fails closed.** `startupIdentityCheck` now requires the secret
+  whether or not a database or NATS is configured, and refuses a secret that
+  is blank, shorter than 32 bytes, a placeholder or a value once committed to
+  the repository (`libs/go/secretstrength`); `GATEWAY_HOP_SECRET` gets the
+  same check when it is set. It runs right after the master-key gate, before
+  any listener or pool. `verifySignature` with an empty secret now refuses
+  every identity (no skip path), pinned by
+  `TestVerifySignature_EmptySecretRefusesEveryIdentity` and
+  `TestNewHandler_EmptySecretRefusesEveryIdentity`. The issue mandated this
+  change of the fail-open/closed policy. "Any non-empty value" above no longer
+  holds: dev and CI stacks generate 32 random bytes
+  (`deploy/scripts/lib/stack-secrets.sh`).
 
 - **[human decision] 2026-08-09 — Tenant-authored `api_base` may reach a private
   network ONLY through an operator egress allowlist (issue #13).** The previous

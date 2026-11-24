@@ -65,3 +65,7 @@ coverage.out
 **/*.log
 **/.env.local
 **/.env.*.local
+
+# ── Generated stack signing secrets (deploy/scripts/lib/stack-secrets.sh) ─────
+# Never part of an image or a build context.
+deploy/.stack-secrets
