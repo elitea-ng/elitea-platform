@@ -401,6 +401,14 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			role_id integer NOT NULL REFERENCES auth_core__role (id) ON DELETE CASCADE,
 			UNIQUE (user_id, role_id)
 		);
+		-- The grants that say who is a global administrator: the list applies
+		-- only while nobody holds admin.auth.users.super_admin (issue 2589).
+		CREATE TABLE auth_core__role_permission (
+			id serial PRIMARY KEY,
+			role_id integer NOT NULL REFERENCES auth_core__role (id) ON DELETE CASCADE,
+			permission varchar(128) NOT NULL,
+			UNIQUE (role_id, permission)
+		);
 		CREATE SCHEMA elitea_identity;
 		CREATE TABLE elitea_identity.token_project_binding (
 			token_id integer PRIMARY KEY REFERENCES auth_core__token (id) ON DELETE CASCADE,
@@ -410,7 +418,10 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			('super_admin', 'administration'),
 			('admin', 'administration'),
 			('user', 'administration'),
-			('viewer', 'default');`)
+			('viewer', 'default');
+		INSERT INTO auth_core__role_permission (role_id, permission)
+		SELECT id, 'admin.auth.users.super_admin' FROM auth_core__role
+		WHERE name = 'super_admin' AND mode = 'administration';`)
 	require.NoError(t, err)
 
 	// The role history the grant writes (issue 2499), from the real shared

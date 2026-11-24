@@ -54,12 +54,18 @@ func TestTheUnassignableSystemRoleIsAssignedToNobody(t *testing.T) {
 			t.Errorf("%s assigning system on the modes route: %d %v, want 403 %s",
 				role, status, body, adminaccess.CodeSetLocked)
 		}
-		// The Users page route refuses the name before any lookup (its name
-		// list, a 400), as it did before.
-		status, body = postJSON(t, router, "/admin/auth_users/administration",
-			map[string]any{"action": "set_admin_role", "user_id": target, "role_name": adminaccess.RoleSystem})
-		if status != http.StatusBadRequest {
-			t.Errorf("%s assigning system on the users route: %d %v, want 400", role, status, body)
+		// The Users page route has no fixed name list since ADR-0059 R0.8b
+		// (issue 2574): it accepts any role of the mode, and the seed row
+		// refuses this one there too, in both request forms.
+		for _, request := range []map[string]any{
+			{"action": "set_admin_role", "user_id": target, "role_name": adminaccess.RoleSystem},
+			{"action": "set_admin_role", "user_id": target, "role_names": []string{adminaccess.RoleViewer, adminaccess.RoleSystem}},
+		} {
+			status, body = postJSON(t, router, "/admin/auth_users/administration", request)
+			if status != http.StatusForbidden || body["code"] != adminaccess.CodeSetLocked {
+				t.Errorf("%s assigning system on the users route (%v): %d %v, want 403 %s",
+					role, request, status, body, adminaccess.CodeSetLocked)
+			}
 		}
 	}
 	var held int

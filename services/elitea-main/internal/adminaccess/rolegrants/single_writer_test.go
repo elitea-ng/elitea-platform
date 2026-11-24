@@ -68,6 +68,6 @@ func TestThisPackageIsTheOnlyWriterOfCentralAssignments(t *testing.T) {
 	}
 	if len(offenders) != 0 {
 		t.Fatalf("auth_core__user_role is written outside internal/adminaccess/rolegrants, "+
-			"so those changes leave no history; call rolegrants.Grant, Revoke or Set instead: %v", offenders)
+			"so those changes leave no history; call rolegrants.Grant, Revoke, Replace or RevokeAll instead: %v", offenders)
 	}
 }

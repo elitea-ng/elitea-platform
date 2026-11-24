@@ -119,8 +119,8 @@ func TestASuperAdminAssignsARoleToItself(t *testing.T) {
 	expectStatus(t, adminDo(t, env.as(escalationSuper), http.MethodPost, modesAssign,
 		map[string]any{"user_id": env.ids[escalationSuper], "mode": "administration", "role": "empty_role"}),
 		http.StatusOK)
-	// The route is single-role-per-mode: the new role replaces super_admin.
-	expectRoles(t, env, escalationSuper, "empty_role")
+	// The route adds a role (ADR-0059 R0.8b): super_admin stays beside it.
+	expectRoles(t, env, escalationSuper, "empty_role", "super_admin")
 }
 
 func TestASuperAdminRemovesARoleFromItself(t *testing.T) {
