@@ -219,8 +219,10 @@ before the build; the directory is never committed. A commit that is not in
 the image is downloaded by the runner as before, so the cache can lag a
 Dependabot bump by up to a week without breaking anything. About 50 MB.
 docs/contributing/ci.md, "Action archives come from the image", has the
-details. The scale-set values may also set the variable explicitly; both name
-the same directory.
+details. The scale-set values set the variable explicitly too (pod env wins
+over the image), so both must name the same directory;
+`scripts/ci/action-archive-list.test.mjs` holds the Containerfile and
+`../values-eng-runner.yaml` to it.
 
 ### Why Ubuntu
 
