@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use elitea_worker_rust::execution::{
     ClaimLeaseActivation, ClaimLeaseError, ClaimLeaseMonitor, ClaimLeaseMonitorConfig,
 };
+use elitea_worker_rust::protocol::capabilities::CAP_GOVERNED_SECURITY_CONTEXT;
 use elitea_worker_rust::protocol::command::{
     SignedCommandAuthenticator, TestOnlyConformanceHmacAuthenticator,
     parse_and_verify_agent_command,
@@ -237,6 +238,12 @@ async fn only_a_governed_worker_claims_with_the_security_context_opt_in() {
     fresh_claim(&control).await;
     let legacy = state.claim_requests.lock().expect("claim requests")[0].clone();
     assert!(!legacy.governed_security_context_v1);
+    assert!(
+        !legacy
+            .worker_capabilities
+            .iter()
+            .any(|cap| cap == CAP_GOVERNED_SECURITY_CONTEXT)
+    );
 
     // On: every fresh claim says the worker verifies the governed context.
     let (control, state) = client();
@@ -248,13 +255,18 @@ async fn only_a_governed_worker_claims_with_the_security_context_opt_in() {
         .expect("delivery claim");
     let requests = state.claim_requests.lock().expect("claim requests").clone();
     assert_eq!(requests.len(), 2);
-    assert!(
-        requests
-            .iter()
-            .all(|request| request.governed_security_context_v1)
-    );
+    assert!(requests.iter().all(|request| {
+        request.governed_security_context_v1
+            && request
+                .worker_capabilities
+                .iter()
+                .any(|cap| cap == CAP_GOVERNED_SECURITY_CONTEXT)
+    }));
     let mut unflagged = requests[0].clone();
     unflagged.governed_security_context_v1 = false;
+    unflagged
+        .worker_capabilities
+        .retain(|cap| cap != CAP_GOVERNED_SECURITY_CONTEXT);
     assert_eq!(unflagged, legacy, "the opt-in is the only difference");
 }
 

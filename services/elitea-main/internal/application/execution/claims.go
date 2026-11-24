@@ -30,7 +30,10 @@ type ClaimRequest struct {
 	// IdleCompaction is the worker's opt-in to the idle compaction
 	// continuation (issue 1610); an idle compaction job is granted only with
 	// it, so an older worker never runs its empty input as a fresh turn.
-	IdleCompaction       bool
+	IdleCompaction bool
+	// WorkerCapabilities carries the validated, domain-named capabilities the
+	// claiming worker advertised alongside legacy boolean opt-ins.
+	WorkerCapabilities   []string
 	CommandID            string
 	OutboxID             string
 	ExecutionID          string
@@ -305,6 +308,18 @@ func NewClaimService(repository ClaimRepository, applicationNow func() time.Time
 }
 
 func (s *ClaimService) Claim(ctx context.Context, request ClaimRequest) (ClaimDecision, error) {
+	if len(request.WorkerCapabilities) > 0 {
+		caps, err := runtimedomain.ParseCapabilities(request.WorkerCapabilities)
+		if err != nil {
+			return ClaimDecision{}, ErrInvalidClaim
+		}
+		request.AgentModelCheckpointRecovery = request.AgentModelCheckpointRecovery || caps.Has(runtimedomain.CapabilityAgentModelCheckpointRecovery)
+		request.NodeRecovery = request.NodeRecovery || caps.Has(runtimedomain.CapabilityNodeRecovery)
+		request.FanoutInterruptDecisions = request.FanoutInterruptDecisions || caps.Has(runtimedomain.CapabilityFanoutInterruptDecisions)
+		request.FanoutDelegatedCredentials = request.FanoutDelegatedCredentials || caps.Has(runtimedomain.CapabilityFanoutDelegatedCredentials)
+		request.IdleCompaction = request.IdleCompaction || caps.Has(runtimedomain.CapabilityIdleCompaction)
+		request.WorkerCapabilities = caps.Strings()
+	}
 	if (request.NodeRecovery && request.AgentModelCheckpointRecovery) || request.CommandID == "" || request.OutboxID == "" || request.ExecutionID == "" || request.Generation == 0 || !claimCapabilityAllowed(request.CapabilityID) || request.SignedEnvelopeDigest.IsZero() || request.WorkloadIdentity == "" || request.WorkloadSessionID == "" || request.ProducerID == "" {
 		return ClaimDecision{}, ErrInvalidClaim
 	}
