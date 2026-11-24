@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "الإدارة",
   "entities.token.table.adminInherit": "جميع أذونات الإدارة الخاصة بك",
   "entities.token.table.adminInheritEnds": "جميع أذونات الإدارة الخاصة بك، حتى {{date}}",
-  "entities.token.table.adminNone": "لا شيء"
+  "entities.token.table.adminNone": "لا شيء",
+  "agents.deleteApplicationButton.failed": "تعذّر حذف الوكيل.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "تعذّر حذف {{count}} {{noun}}.",
+  "features.agentLifecycle.import.failed": "فشل الاستيراد. لم يُستورد أي شيء.",
+  "features.agentLifecycle.import.team.badKind": "يجب أن يحتوي {{file}} على kind: team.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} ليس YAML صالحًا.",
+  "features.agentLifecycle.import.team.leadNotMember": "القائد {{lead}} ليس من أعضاء {{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "يذكر {{file}} ملفات لا يحتويها ملف zip: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "يجب أن يسرد {{file}} أعضاءه بمسارات ملفات .agent.md الخاصة بهم.",
+  "features.agentLifecycle.import.team.noName": "لا يحتوي {{file}} على اسم فريق.",
+  "features.agentLifecycle.import.team.repeatedMember": "يذكر {{file}} عضوًا مرتين.",
+  "features.agentLifecycle.import.team.tooManyMembers": "يضم الفريق {{limit}} وكيلًا على الأكثر.",
+  "features.agentLifecycle.import.teamLead": "القائد: {{name}}",
+  "features.agentLifecycle.import.teamName": "الفريق: {{name}}",
+  "features.agentTeams.exportAction": "تصدير",
+  "features.agentTeams.exportMemberFailed": "تعذّر تصدير الفريق: تعذّرت قراءة الوكيل {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "ملف zip هذا فريق. استورده من قائمة الوكلاء."
 }

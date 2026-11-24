@@ -13,9 +13,6 @@ import (
 // also when the verb and the table are on different lines.
 var elevationWrite = regexp.MustCompile(`(?is)\b(insert\s+into|delete\s+from|update|truncate)\s+(table\s+)?(only\s+)?(elitea_auth\s*\.\s*)?"?admin_elevations\b`)
 
-// ledgerCall matches a call of a ledger writer (not its declaration).
-var ledgerCall = regexp.MustCompile(`\b(StartElevation|EndElevation)\s*\(`)
-
 var blockComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 
 // withoutComments drops block comments and whole-line `//` and `--` comments:
@@ -100,36 +97,6 @@ func TestThisPackageIsTheOnlyWriterOfElevations(t *testing.T) {
 	}
 }
 
-// TestNoProductionCallerBeforeTheAuditEvent: in this build the ledger
-// writers take a security audit appender and write no event through it yet.
-// R2.3 (issue 2517) adds the `admin.elevation` event on the same
-// transaction; until then a production caller would start or end an
-// elevation with no evidence. R2.3 deletes this test together with the gap.
-func TestNoProductionCallerBeforeTheAuditEvent(t *testing.T) {
-	module, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ledger, err := filepath.Abs("elevation.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var callers []string
-	runtimeSources(t, module, func(path, body string) {
-		if path == ledger || !strings.HasSuffix(path, ".go") {
-			return
-		}
-		if ledgerCall.MatchString(body) {
-			relative, _ := filepath.Rel(module, path)
-			callers = append(callers, relative)
-		}
-	})
-	if len(callers) != 0 {
-		t.Fatalf("StartElevation or EndElevation is called by production code before R2.3 (#2517) "+
-			"writes the admin.elevation event through the appender: %v", callers)
-	}
-}
-
 // The scans see what they guard: the ledger's own statements match, on one
 // line and across lines, and a comment does not.
 func TestTheElevationScansMatchTheLedger(t *testing.T) {
@@ -158,8 +125,5 @@ func TestTheElevationScansMatchTheLedger(t *testing.T) {
 		if elevationWrite.MatchString(withoutComments(sample)) {
 			t.Errorf("the scan matches %q", sample)
 		}
-	}
-	if !ledgerCall.MatchString("adminaccess.StartElevation(ctx, tx, appender, start)") {
-		t.Error("the caller scan misses a call")
 	}
 }

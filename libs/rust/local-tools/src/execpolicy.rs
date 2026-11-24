@@ -48,6 +48,22 @@
 //! * `origin: "repository"` marks a rule imported from a repository's
 //!   proposal: its justification is the repository's text, so the person
 //!   sees it but the model never does.
+//! * On an `allow` only (refused on `prompt` and `forbidden`, which already
+//!   match broadly):
+//!   * `conditions` ([`crate::conditions`], #3007): what the command's
+//!     flags must look like anywhere after the program (`forbid_flags`,
+//!     `require_flags`, `flag_values`, `graphql: "query"`). The examples
+//!     are checked through them.
+//!   * `hosts` (#3005): the hosts the command may reach; it runs sandboxed
+//!     with the network off but for a filtering proxy that tunnels to
+//!     those only ([`crate::egress_proxy`]). Such a rule covers a call that
+//!     asks for the network where the platform enforces the list (macOS).
+//!     Refused together with `network: true`.
+//!   * `credential` (#3006): a built-in profile ([`crate::credentials`],
+//!     `"gh"`) whose program (the pattern's first word, exactly) gets its
+//!     stored login inside the sandbox; its network is limited to `hosts`,
+//!     or the profile's hosts. Only a rule the person wrote grants it
+//!     ([`crate::approvals::RulesEngine::command_grant`]).
 //!
 //! Not taken from the upstream design: Starlark, its CLI, policy rewriting
 //! (`amend`) and the sandbox migration helpers.
@@ -64,6 +80,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::command::{basename, resolve_program};
+use crate::conditions::Conditions;
 use crate::policy::SandboxMode;
 
 /// The one file format version.
@@ -265,6 +282,23 @@ pub struct PrefixRule {
     /// imported proposal; its justification never reaches the model).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<RuleOrigin>,
+    /// `allow` only: the built-in credential profile
+    /// ([`crate::credentials`]) the command gets its program's login from,
+    /// inside the sandbox (`"gh"`). Its network is limited to
+    /// [`Self::hosts`], or the profile's hosts when the rule names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+    /// `allow` only: the hosts the command may reach (exact names or
+    /// `*.parent`), through the host's filtering proxy; the network stays
+    /// off for everything else ([`crate::egress_proxy`]). Such a rule
+    /// covers a call that asks for the network, where the platform can
+    /// enforce the list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    /// `allow` only: what the command's flags must look like
+    /// ([`crate::conditions`]).
+    #[serde(default, skip_serializing_if = "Conditions::is_empty")]
+    pub conditions: Conditions,
 }
 
 /// Where a rule came from, when it was not written by the person.
@@ -300,6 +334,9 @@ impl PrefixRule {
             sandbox: None,
             network: false,
             origin: None,
+            credential: None,
+            hosts: Vec::new(),
+            conditions: Conditions::default(),
         }
     }
 
@@ -312,6 +349,87 @@ impl PrefixRule {
             && self.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
                 == other.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
             && self.network == other.network
+            && self.credential == other.credential
+            && self.hosts == other.hosts
+            && self.conditions == other.conditions
+    }
+
+    /// Whether the rule limits its command's network to named hosts (its
+    /// own, or its credential profile's).
+    #[must_use]
+    pub fn scopes_network(&self) -> bool {
+        !self.hosts.is_empty() || self.credential.is_some()
+    }
+
+    /// The hosts the command may reach: the rule's, else its credential
+    /// profile's; empty when the rule does not scope the network.
+    #[must_use]
+    pub fn effective_hosts(&self) -> Vec<String> {
+        if !self.hosts.is_empty() {
+            return self.hosts.clone();
+        }
+        self.credential
+            .as_deref()
+            .and_then(crate::credentials::profile)
+            .map(|profile| {
+                profile
+                    .default_hosts
+                    .iter()
+                    .map(|host| (*host).to_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Why the rule's grant fields (`credential`, `hosts`, `conditions`)
+    /// are malformed, or `None`.
+    fn grant_problem(&self) -> Option<String> {
+        let grants = self.credential.is_some() || !self.hosts.is_empty();
+        if self.decision != RuleDecision::Allow && (grants || !self.conditions.is_empty()) {
+            return Some(
+                "credential, hosts and conditions belong to an allow rule (prompt and forbidden \
+                 rules already match broadly)"
+                    .to_owned(),
+            );
+        }
+        if let Some(problem) = self.conditions.problem() {
+            return Some(problem);
+        }
+        if self.network && grants {
+            return Some(
+                "`hosts` and `credential` limit the network to named hosts; drop `network: true`"
+                    .to_owned(),
+            );
+        }
+        if self.hosts.len() > crate::egress_proxy::MAX_HOSTS {
+            return Some(format!("at most {} hosts", crate::egress_proxy::MAX_HOSTS));
+        }
+        if let Some(problem) = self
+            .hosts
+            .iter()
+            .find_map(|host| crate::egress_proxy::host_problem(host))
+        {
+            return Some(problem);
+        }
+        if let Some(id) = &self.credential {
+            let Some(profile) = crate::credentials::profile(id) else {
+                return Some(format!(
+                    "`{id}` is not a credential profile (known: {})",
+                    crate::credentials::PROFILES
+                        .iter()
+                        .map(|profile| profile.id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            };
+            if self.pattern.first() != Some(&PatternToken::One(profile.program.to_owned())) {
+                return Some(format!(
+                    "the `{id}` credential is for `{}`: the pattern must start with exactly that word",
+                    profile.program
+                ));
+            }
+        }
+        None
     }
 
     /// Whether the person wrote it (or vouched for it): its justification
@@ -331,7 +449,11 @@ impl PrefixRule {
             .join(" ")
     }
 
-    /// Whether an `allow` covers a call with `sandbox` and `network`.
+    /// Whether an `allow` covers a call with `sandbox` and `network`. A
+    /// rule that limits the network to named hosts ([`Self::scopes_network`])
+    /// covers a network call only where its grant applies
+    /// ([`crate::approvals::RulesEngine::command_grant`]); this says
+    /// whether it covers one without that.
     #[must_use]
     pub fn covers(&self, sandbox: SandboxMode, network: bool) -> bool {
         sandbox <= self.sandbox.unwrap_or(SandboxMode::WorkspaceWrite) && (!network || self.network)
@@ -561,6 +683,9 @@ impl RuleSet {
                     "a pattern element is empty (or `{\"any\": false}`)".to_owned(),
                 ));
             }
+            if let Some(problem) = rule.grant_problem() {
+                return Err(refuse(Some(index), format!("rule {index}: {problem}")));
+            }
             for (examples, expected) in [(&rule.matches, true), (&rule.not_match, false)] {
                 for example in examples {
                     let label = if expected { "match" } else { "not_match" };
@@ -642,6 +767,7 @@ impl RuleSet {
                 || program.alternatives().iter().any(|want| {
                     self.program_matches(want, have, rule.decision.tightens(), resolver)
                 }))
+            && rule.conditions.hold(words)
     }
 
     fn program_matches(
@@ -1038,5 +1164,133 @@ mod tests {
             "sh and /bin/sh, once each: {}",
             cache.len()
         );
+    }
+
+    fn loads(rule: &str) -> Result<RuleSet, Box<super::LoadError>> {
+        RuleSet::parse(
+            "user",
+            format!(r#"{{"version":1,"rules":[{rule}]}}"#).as_bytes(),
+        )
+    }
+
+    #[test]
+    fn grant_fields_load_on_allow_rules_only() {
+        let set = loads(
+            r#"{"pattern":["gh",["pr","issue"]],"credential":"gh",
+                "hosts":["api.github.com","*.githubusercontent.com"],
+                "conditions":{"forbid_flags":["-f"],"flag_values":{"-X":["GET"]}},
+                "match":["gh pr list","gh pr view 1 -X GET"],
+                "not_match":["gh pr view 1 -f a=b","gh pr view -XPOST 1"]}"#,
+        )
+        .expect("loads");
+        let rule = &set.rules()[0];
+        assert!(rule.scopes_network());
+        assert_eq!(
+            rule.effective_hosts(),
+            vec!["api.github.com", "*.githubusercontent.com"]
+        );
+        let defaults = loads(r#"{"pattern":["gh"],"credential":"gh"}"#).expect("loads");
+        assert_eq!(
+            defaults.rules()[0].effective_hosts(),
+            vec!["api.github.com", "github.com", "uploads.github.com"]
+        );
+        // Written back as given (absent fields stay absent).
+        let text = serde_json::to_string(&defaults.rules()[0]).expect("json");
+        assert_eq!(
+            text,
+            r#"{"pattern":["gh"],"decision":"allow","credential":"gh"}"#
+        );
+
+        for (rule, why) in [
+            (
+                r#"{"pattern":["gh"],"decision":"prompt","credential":"gh"}"#,
+                "allow rule",
+            ),
+            (
+                r#"{"pattern":["gh"],"decision":"forbidden","hosts":["github.com"]}"#,
+                "allow rule",
+            ),
+            (
+                r#"{"pattern":["gh"],"decision":"forbidden","conditions":{"forbid_flags":["-f"]}}"#,
+                "allow rule",
+            ),
+            (
+                r#"{"pattern":["gh"],"credential":"npm"}"#,
+                "not a credential profile",
+            ),
+            (
+                r#"{"pattern":[["gh","hub"]],"credential":"gh"}"#,
+                "exactly that word",
+            ),
+            (
+                r#"{"pattern":[{"any":true}],"credential":"gh"}"#,
+                "exactly that word",
+            ),
+            (
+                r#"{"pattern":["/opt/homebrew/bin/gh"],"credential":"gh"}"#,
+                "exactly that word",
+            ),
+            (
+                r#"{"pattern":["curl"],"credential":"gh"}"#,
+                "exactly that word",
+            ),
+            (
+                r#"{"pattern":["gh"],"credential":"gh","network":true}"#,
+                "drop `network: true`",
+            ),
+            (r#"{"pattern":["curl"],"hosts":["10.0.0.1"]}"#, "IP address"),
+            (
+                r#"{"pattern":["curl"],"hosts":["api.example.com:8443"]}"#,
+                "not a host name",
+            ),
+            (r#"{"pattern":["curl"],"hosts":[""]}"#, "not a host name"),
+            (
+                r#"{"pattern":["curl"],"conditions":{"forbid_flags":["f"]}}"#,
+                "is not a flag",
+            ),
+            (
+                r#"{"pattern":["curl"],"conditions":{"flag_values":{"-X":[]}}}"#,
+                "non-empty values",
+            ),
+        ] {
+            let error = loads(rule).expect_err(rule);
+            assert!(error.message.contains(why), "{rule}: {}", error.message);
+            assert_eq!(error.rule_index, Some(1));
+        }
+        let many: Vec<String> = (0..33).map(|n| format!("\"h{n}.example.com\"")).collect();
+        assert!(
+            loads(&format!(
+                r#"{{"pattern":["curl"],"hosts":[{}]}}"#,
+                many.join(",")
+            ))
+            .is_err()
+        );
+        assert!(
+            loads(r#"{"pattern":["gh"],"conditions":{"nope":1}}"#).is_err(),
+            "an unknown condition refuses the file"
+        );
+    }
+
+    #[test]
+    fn conditions_are_checked_through_the_examples() {
+        let refused = loads(
+            r#"{"pattern":["gh","api"],
+                "conditions":{"flag_values":{"--method":["GET"]}},
+                "match":["gh api --method POST x"]}"#,
+        )
+        .expect_err("the example disagrees");
+        assert_eq!(refused.got.as_deref(), Some("did not match"));
+    }
+
+    #[test]
+    fn same_scope_tells_granted_rules_apart() {
+        let plain = PrefixRule::from_command_pattern(vec!["gh".to_owned(), "pr".to_owned()]);
+        let mut granted = plain.clone();
+        granted.credential = Some("gh".to_owned());
+        assert!(!plain.same_scope(&granted));
+        let mut hosts = plain.clone();
+        hosts.hosts = vec!["github.com".to_owned()];
+        assert!(!plain.same_scope(&hosts));
+        assert!(!plain.scopes_network() && plain.effective_hosts().is_empty());
     }
 }

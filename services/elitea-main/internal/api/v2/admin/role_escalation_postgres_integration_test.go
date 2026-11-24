@@ -101,8 +101,15 @@ func newEscalationEnvironment(t *testing.T) escalationEnvironment {
 
 // as mounts every role write for one caller, with the real resolver.
 func (e escalationEnvironment) as(email string) chi.Router {
+	return e.asSession(email, 0)
+}
+
+// asSession is `as` from the browser session whose reference is sessionRef
+// (0: a session without a server-side row).
+func (e escalationEnvironment) asSession(email string, sessionRef int64) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := &auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
+	principal := &auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession,
+		BrowserSessionRef: sessionRef}
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(e.pool)))
 	router := chi.NewRouter()
 	router.Mount("/m", rolesRouter(handler, nil, principal))

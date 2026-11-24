@@ -140,7 +140,7 @@ func (s importedSkill) versionID(name string) (int, bool) {
 // and wrote a user id into the project column. ownership.ProjectID and
 // ownership.UserID make that call a compile error.
 func (h *Handler) importSkill(
-	ctx context.Context, schema string,
+	ctx context.Context, q relationQuerier, schema string,
 	ownerID ownership.ProjectID, authorID ownership.UserID,
 	entry map[string]any,
 ) (importedSkill, error) {
@@ -203,7 +203,7 @@ func (h *Handler) importSkill(
 	// FORK writes into the version meta and so cannot see a plain import at all.
 	// It is the same idea, keyed on the one identifier every import document carries.
 	var skillID int
-	err = h.pool.QueryRow(ctx, fmt.Sprintf(`
+	err = q.QueryRow(ctx, fmt.Sprintf(`
 		SELECT id FROM %s.skills
 		WHERE owner_id = $1 AND meta ->> 'import_uuid' = $2
 		ORDER BY id LIMIT 1`, schema), ownerID.Int64(), importUUID).Scan(&skillID)
@@ -212,7 +212,7 @@ func (h *Handler) importSkill(
 		// Reused. The name and the description are refreshed, because the file
 		// is the authority on what the skill is called and a retry can follow an
 		// edit to it.
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			UPDATE %s.skills SET name = $2, description = $3 WHERE id = $1`, schema),
 			skillID, name, description); err != nil {
 			return importedSkill{}, err
@@ -222,7 +222,7 @@ func (h *Handler) importSkill(
 		if encodeErr != nil {
 			return importedSkill{}, encodeErr
 		}
-		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.skills (name, description, owner_id, author_id, meta, created_at)
 			VALUES ($1, $2, $3, $4, $5::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, schema),
 			name, description, ownerID.Int64(), authorID.Int64(), metaJSON).Scan(&skillID); err != nil {
@@ -261,7 +261,7 @@ func (h *Handler) importSkill(
 		// (001_initial.sql:395-406): the ON CONFLICT is there so that a file
 		// carrying two versions of one name costs the duplicate and not the
 		// whole skill, since a reference cannot tell those two apart anyway.
-		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.skill_versions (skill_id, name, instructions, author_id, status, meta, created_at)
 			VALUES ($1, $2, $3, $4, 'draft', $5::jsonb, now() AT TIME ZONE 'UTC')
 			ON CONFLICT ON CONSTRAINT _skill_version_name_uc
@@ -275,7 +275,7 @@ func (h *Handler) importSkill(
 		}
 		imported.versions[versionName] = versionID
 
-		if err := h.importSkillVersionTags(ctx, schema, versionID, version["tags"]); err != nil {
+		if err := h.importSkillVersionTags(ctx, q, schema, versionID, version["tags"]); err != nil {
 			return imported, fmt.Errorf("version %q of skill %q: %w", versionName, name, err)
 		}
 	}
@@ -345,7 +345,7 @@ func ensureBaseSkillVersion(versions []any) []any {
 // and as a plain string, which is what a hand-written markdown file carries —
 // the two shapes `_normalize_tags` accepts
 // (utils/skill_export_import.py:62-71).
-func (h *Handler) importSkillVersionTags(ctx context.Context, schema string, versionID int, raw any) error {
+func (h *Handler) importSkillVersionTags(ctx context.Context, q relationQuerier, schema string, versionID int, raw any) error {
 	tags, _ := raw.([]any)
 	for _, entry := range tags {
 		var tagName string
@@ -359,13 +359,13 @@ func (h *Handler) importSkillVersionTags(ctx context.Context, schema string, ver
 			continue
 		}
 		var tagID int
-		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.tags (name) VALUES ($1)
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 			RETURNING id`, schema), tagName).Scan(&tagID); err != nil {
 			return fmt.Errorf("tag %q: %w", tagName, err)
 		}
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO %s.skill_version_tag_association (version_id, tag_id) VALUES ($1, $2)
 			ON CONFLICT DO NOTHING`, schema), versionID, tagID); err != nil {
 			return fmt.Errorf("tag %q: %w", tagName, err)
@@ -384,7 +384,7 @@ func (h *Handler) importSkillVersionTags(ctx context.Context, schema string, ver
 // carries. Each message goes into the response the same way a failed toolkit
 // link does (#420), so the wizard marks the entity and the user sees it.
 func (h *Handler) attachImportedSkills(
-	ctx context.Context, schema string, entityVersionID int,
+	ctx context.Context, q relationQuerier, schema string, entityVersionID int,
 	references []any, imported map[string]importedSkill,
 ) []string {
 	messages := make([]string, 0)
@@ -459,7 +459,7 @@ func (h *Handler) attachImportedSkills(
 				importUUID, v2skills.MaxSkillsPerEntityVersion))
 			continue
 		}
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO %s.entity_skill_mapping (entity_version_id, entity_type, skill_id, skill_version_id, created_at)
 			VALUES ($1, $2, $3, $4, now() AT TIME ZONE 'UTC')`, schema),
 			entityVersionID, entityType, skill.id, skillVersionID); err != nil {

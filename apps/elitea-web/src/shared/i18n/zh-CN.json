@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "管理",
   "entities.token.table.adminInherit": "您的全部管理权限",
   "entities.token.table.adminInheritEnds": "您的全部管理权限，至 {{date}}",
-  "entities.token.table.adminNone": "无"
+  "entities.token.table.adminNone": "无",
+  "agents.deleteApplicationButton.failed": "无法删除该智能体。",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} 个{{noun}}无法删除。",
+  "features.agentLifecycle.import.failed": "导入失败，未导入任何内容。",
+  "features.agentLifecycle.import.team.badKind": "{{file}} 必须包含 kind: team。",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} 不是有效的 YAML。",
+  "features.agentLifecycle.import.team.leadNotMember": "负责人 {{lead}} 不是 {{file}} 的成员。",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} 引用了 zip 中不存在的文件：{{files}}。",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} 必须以 .agent.md 文件路径列出其成员。",
+  "features.agentLifecycle.import.team.noName": "{{file}} 没有团队名称。",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} 重复列出了一个成员。",
+  "features.agentLifecycle.import.team.tooManyMembers": "一个团队最多有 {{limit}} 个智能体。",
+  "features.agentLifecycle.import.teamLead": "负责人：{{name}}",
+  "features.agentLifecycle.import.teamName": "团队：{{name}}",
+  "features.agentTeams.exportAction": "导出",
+  "features.agentTeams.exportMemberFailed": "无法导出团队：无法读取智能体 {{name}}。",
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一个团队，请从智能体列表导入。"
 }

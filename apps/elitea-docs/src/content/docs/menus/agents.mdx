@@ -101,11 +101,18 @@ Selecting **Save** again updates the current version. Use **Save As Version** to
 ### Publish, export, import, and fork
 
 - **Publish** a draft version through a guided wizard with automated AI validation, making it visible in the [Marketplace](/menus/marketplace). See [Agent publishing](/how-tos/agents-pipelines/publishing).
-- **Export** downloads the selected version as a single `.md` file, or a `.zip` if it references nested agents.
+- **Export** downloads the selected version as a single `.md` file. Nested agents are not in it; export them on their own.
 - **Import** an exported file from the **List** tab of the Agents page.
 - **Fork** copies the selected version into another project you choose.
 
 See [Import/export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking) for full detail; toolkit credentials must be reconfigured manually after either operation.
+
+### Delete an agent
+
+**Delete** removes the agent with all its versions. An agent hired from the Marketplace, or one that uses sub-agents, carries a private copy of each sub-agent; those copies are listed as drafts and are deleted with the agent. When a delete is refused, the dialog says why:
+
+- **Unpublish first.** An agent with a published version must be unpublished before it can be deleted.
+- **This agent is the sub-agent copy of another agent.** Delete or unpublish that agent, and the copy goes with it. A copy whose parent is already gone can be deleted on its own.
 
 ## Evaluation
 

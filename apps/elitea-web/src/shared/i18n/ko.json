@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "관리",
   "entities.token.table.adminInherit": "모든 관리 권한",
   "entities.token.table.adminInheritEnds": "모든 관리 권한, {{date}}까지",
-  "entities.token.table.adminNone": "없음"
+  "entities.token.table.adminNone": "없음",
+  "agents.deleteApplicationButton.failed": "에이전트를 삭제할 수 없습니다.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{noun}} {{count}}개를 삭제할 수 없습니다.",
+  "features.agentLifecycle.import.failed": "가져오기에 실패했습니다. 아무것도 가져오지 않았습니다.",
+  "features.agentLifecycle.import.team.badKind": "{{file}}에는 kind: team이 있어야 합니다.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}}은(는) 올바른 YAML이 아닙니다.",
+  "features.agentLifecycle.import.team.leadNotMember": "리더 {{lead}}은(는) {{file}}의 멤버가 아닙니다.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}}이(가) 지정한 파일이 zip에 없습니다: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}}은(는) 멤버를 .agent.md 파일 경로로 나열해야 합니다.",
+  "features.agentLifecycle.import.team.noName": "{{file}}에 팀 이름이 없습니다.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}}에 같은 멤버가 두 번 있습니다.",
+  "features.agentLifecycle.import.team.tooManyMembers": "팀에는 에이전트가 최대 {{limit}}개까지 있습니다.",
+  "features.agentLifecycle.import.teamLead": "리더: {{name}}",
+  "features.agentLifecycle.import.teamName": "팀: {{name}}",
+  "features.agentTeams.exportAction": "내보내기",
+  "features.agentTeams.exportMemberFailed": "팀을 내보낼 수 없습니다: 에이전트 {{name}}을(를) 읽을 수 없습니다.",
+  "features.agentLifecycle.import.teamOnAgents": "이 zip은 팀입니다. 에이전트 목록에서 가져오세요."
 }

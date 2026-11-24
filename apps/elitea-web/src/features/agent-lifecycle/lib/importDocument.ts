@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 import { t } from '@/shared/i18n';
 
 import type { EntityExportDocument } from '../api/lifecycleApi';
+import { ImportDocumentError } from './importError';
 import {
   asRecord,
   buildEntry,
@@ -15,6 +16,7 @@ import {
   newKey,
   pipelineInstructions,
 } from './importMarkdown';
+import { findTeamManifest, parseTeamManifest, type ImportTeam } from './teamManifest';
 
 /**
  * Reads an exported agent or pipeline file back into the document the import
@@ -32,13 +34,15 @@ import {
  */
 export interface ImportDocumentSummary {
   readonly names: readonly string[];
+  /** Set when the file is a team zip: the team its agents form. */
+  readonly team?: { readonly name: string; readonly lead: string | undefined } | undefined;
   readonly toolkitCount: number;
   readonly skillCount: number;
   /** Parts of the file the import cannot carry; shown, not dropped silently. */
   readonly skipped: readonly string[];
 }
 
-export class ImportDocumentError extends Error {}
+export { ImportDocumentError } from './importError';
 
 export function parseImportDocument(text: string): EntityExportDocument {
   let parsed: unknown;
@@ -70,6 +74,7 @@ export function parseImportDocument(text: string): EntityExportDocument {
 export function summarizeImportDocument(
   document: EntityExportDocument,
   skipped: readonly string[] = [],
+  team?: ImportTeam,
 ): ImportDocumentSummary {
   const names = (document.applications ?? []).map((entry, index) => {
     const name = typeof entry === 'object' && entry !== null ? (entry as { name?: unknown }).name : undefined;
@@ -80,6 +85,7 @@ export function summarizeImportDocument(
     toolkitCount: document.toolkits?.length ?? 0,
     skillCount: document.skills?.length ?? 0,
     skipped,
+    ...(team === undefined ? {} : { team: { name: team.name, lead: team.leadName } }),
   };
 }
 
@@ -163,6 +169,8 @@ export function parseMarkdownAgent(text: string): Record<string, unknown> {
 export interface ReadImportResult {
   readonly document: EntityExportDocument;
   readonly skipped: readonly string[];
+  /** Set for a zip that carries a `team.yaml`. */
+  readonly team?: ImportTeam | undefined;
 }
 
 type Rec = Record<string, unknown>;
@@ -313,8 +321,49 @@ async function parseZipEntries(zip: JSZip, names: readonly string[], zipName: st
   return parsed;
 }
 
+/**
+ * Reads a team zip: one `.agent.md` per member, listed by `team.yaml`. Only
+ * the member files are read (a README beside them is not an agent), and each
+ * file is its own agent, because a team pins one version of each member.
+ */
+async function readTeamZip(zip: JSZip, manifestPath: string, zipName: string): Promise<ReadImportResult> {
+  const manifest = parseTeamManifest((await zip.files[manifestPath]?.async('string')) ?? '', manifestPath);
+  const missing = manifest.members.filter((member) => zip.files[member] === undefined || (zip.files[member]?.dir ?? false));
+  if (missing.length > 0) {
+    throw new ImportDocumentError(
+      t('features.agentLifecycle.import.team.missingMember', '{{file}} names files the zip does not hold: {{files}}.', {
+        file: manifestPath,
+        files: missing.join(', '),
+      }),
+    );
+  }
+  checkDeclaredSizes(zip, manifest.members, zipName);
+  const parsed = await parseZipEntries(zip, manifest.members, zipName);
+  const uuids = parsed.map((file) => String(file.entry['import_uuid']));
+  const leadIndex = manifest.lead === undefined ? -1 : manifest.members.indexOf(manifest.lead);
+  const leadEntry = parsed[leadIndex]?.entry;
+  return {
+    document: {
+      ok: true,
+      applications: parsed.map((p) => p.entry),
+      toolkits: parsed.flatMap((p) => p.toolkits),
+      skills: parsed.flatMap((p) => p.skills),
+    },
+    skipped: parsed.flatMap((p) => p.skipped),
+    team: {
+      name: manifest.name,
+      description: manifest.description,
+      ...(manifest.floorPolicy === undefined ? {} : { floor_policy: manifest.floorPolicy }),
+      ...(leadEntry === undefined ? {} : { lead: uuids[leadIndex], leadName: String(leadEntry['name']) }),
+      members: uuids,
+    },
+  };
+}
+
 async function readZipEntries(file: File): Promise<ReadImportResult> {
   const zip = await loadZip(file);
+  const manifest = findTeamManifest(zip);
+  if (manifest !== undefined) return readTeamZip(zip, manifest, file.name);
   const names = zipMarkdownNames(zip);
   if (names.length > MAX_ZIP_ENTRIES) {
     throw new ImportDocumentError(
@@ -339,6 +388,7 @@ export function isImportableFileName(name: string): boolean {
 /** Reads an import file by its extension into the document the wizard accepts. */
 export async function readImportFile(file: File): Promise<ReadImportResult> {
   const lower = file.name.toLowerCase();
+  // A zip with a team.yaml is a team (issue 3010); without one it is a set of agents, as before.
   if (lower.endsWith('.zip')) return readZipEntries(file);
   if (lower.endsWith('.md')) {
     if (file.size > MAX_FILE_BYTES) throw tooLarge(file.name, MAX_FILE_BYTES);

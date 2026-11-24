@@ -23,9 +23,15 @@ type Querier interface {
 
 // Caller is the caller's own authority, read from the database for each
 // request. Nothing the client sent takes part in it.
+//
+// It is read through the standing-set call (auth.ResolveStandingAdministration;
+// ADR-0059 decision 3, "The exemption is read from standing roles only",
+// story R2.1b): an elevation takes no part in it, so a super_admin-level
+// elevation neither carries the exemption nor widens the set the subset rule
+// measures against.
 type Caller struct {
 	UserID int64
-	// Administration is the caller's administration-mode set.
+	// Administration is the caller's STANDING administration-mode set.
 	Administration Set
 	// SuperAdmin is true when Administration holds SuperAdminPermission.
 	SuperAdmin bool
@@ -45,7 +51,7 @@ func ResolveCaller(r *http.Request, resolver auth.PermissionResolver) (Caller, *
 	if !ok {
 		return Caller{}, unresolved
 	}
-	resolution, err := resolver.ResolvePermissions(r.Context(), principal, ModeAdministration, "")
+	resolution, err := auth.ResolveStandingAdministration(r.Context(), resolver, principal)
 	if err != nil || resolution.UserID <= 0 {
 		return Caller{}, unresolved
 	}
@@ -66,7 +72,7 @@ func (c Caller) Reload(ctx context.Context) (Caller, error) {
 	if c.resolver == nil {
 		return Caller{}, errors.New("adminaccess: the caller has no resolver")
 	}
-	resolution, err := c.resolver.ResolvePermissions(ctx, c.principal, ModeAdministration, "")
+	resolution, err := auth.ResolveStandingAdministration(ctx, c.resolver, c.principal)
 	if err != nil {
 		return Caller{}, err
 	}
