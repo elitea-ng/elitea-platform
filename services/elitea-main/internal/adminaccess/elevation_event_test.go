@@ -6,6 +6,7 @@ package adminaccess_test
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,48 @@ func TestTheElevationEventCarriesNoText(t *testing.T) {
 	}
 	if decoded.Data.Elevation.NoteID != "note-1" || decoded.Data.Elevation.NoteLength != 13 {
 		t.Fatalf("note = %+v, want note-1 and 13 characters", decoded.Data.Elevation)
+	}
+}
+
+// The export schema's elevationStep lists exactly the ledger's levels, paths,
+// reason codes and end reasons, and the event's sources: a value added on one
+// side only fails here, not in a SIEM that validates the export.
+func TestTheExportSchemaListsTheLedgerValues(t *testing.T) {
+	raw, err := os.ReadFile("../../../../libs/jsonschema/audit/v1/event.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	step := schema.Defs["elevationStep"].Properties
+	for field, want := range map[string][]string{
+		"level": {adminaccess.ElevationLevelAdmin, adminaccess.ElevationLevelSuperAdmin},
+		"path":  {adminaccess.ElevationPathApproved, adminaccess.ElevationPathSelf, adminaccess.ElevationPathSealed},
+		"reason_code": {
+			adminaccess.ElevationReasonIncident, adminaccess.ElevationReasonIdentityOutage,
+			adminaccess.ElevationReasonRecovery, adminaccess.ElevationReasonOther,
+		},
+		"end_reason": {
+			adminaccess.ElevationEndHolder, adminaccess.ElevationEndApprover, adminaccess.ElevationEndOperator,
+			adminaccess.ElevationEndExpired, adminaccess.ElevationEndLogout, adminaccess.ElevationEndSessionRevoked,
+			adminaccess.ElevationEndUserSuspended, adminaccess.ElevationEndUserDeleted, adminaccess.ElevationEndSCIMDeactivated,
+		},
+		"source": {
+			securityaudit.ElevationSourceConsole, securityaudit.ElevationSourceAPI,
+			securityaudit.ElevationSourceOperator, securityaudit.ElevationSourceSystem,
+		},
+	} {
+		if got := step[field].Enum; strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("elevationStep.%s lists %v, the ledger %v", field, got, want)
+		}
 	}
 }
 

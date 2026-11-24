@@ -79,7 +79,7 @@ Each step of a break-glass elevation is one `security_audit` event of type `ai.e
 | `path` | `approved`, `self` or `sealed`. |
 | `reason_code` | `incident`, `identity_outage`, `recovery` or `other`. The event never carries the reason text: that stays in the elevation ledger. |
 | `expires_at` | The elevation's expiry, once it has started. |
-| `end_reason` | On `ended` and `expired`: why access stopped (`holder`, `approver`, `operator`, `expired`, `logout`, `session_revoked`, `user_suspended`, `user_deleted`, `scim_deactivated`). An end asked for after the expiry is `expired`; the reason that was asked for is the reason code `requested_end_reason:<reason>`. |
+| `end_reason` | On `ended` and `expired`: why access stopped (`holder`, `approver`, `operator`, `expired`, `logout`, `session_revoked`, `user_suspended`, `user_deleted`, `scim_deactivated`). An end asked for after the expiry is `expired`; the reason that was asked for is the reason code `requested_end_reason:<reason>`, and the actor and source stay those of the person who asked. |
 | `note_id`, `note_length` | On `note_added`: the note's id and its length in characters, never its text. |
 | `credential_id` | On the credential actions: the sealed credential. |
 

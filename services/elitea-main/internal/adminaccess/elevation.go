@@ -478,12 +478,13 @@ type ElevationEnd struct {
 	Reason string
 	// At is the end, from the caller's clock. Required.
 	At time.Time
-	// ActorUserID is who ended it (the holder, the approver); 0 for the
-	// platform or an operator.
+	// ActorUserID is who ended it; 0 for the platform or an operator. 0 with
+	// the reason `holder` is the elevated person; the reason `approver`
+	// requires it.
 	ActorUserID int64
 	// Source is the source of the event (securityaudit ElevationSource*);
-	// "" takes the stored end reason's (defaultEndSource). A process command passes
-	// operator.
+	// "" takes the requested end reason's (defaultEndSource). A process
+	// command passes operator.
 	Source string
 	// AuthenticationRef and CorrelationID are the event's: the session or
 	// token row behind the end, and the trace id.
@@ -516,6 +517,10 @@ func EndElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appende
 	if end.Source != "" && !knownElevationSource(end.Source) {
 		return ElevationRecord{}, false, fmt.Errorf("%w: unknown event source %q", ErrElevationInvalid, end.Source)
 	}
+	if end.Reason == ElevationEndApprover && end.ActorUserID <= 0 {
+		// An approver's end names the approver: the event must say who.
+		return ElevationRecord{}, false, fmt.Errorf("%w: an approver end names the approver", ErrElevationInvalid)
+	}
 	if appender == nil {
 		return ElevationRecord{}, false, ErrElevationNoAppender
 	}
@@ -544,17 +549,23 @@ RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 		if elevation.EndReason != end.Reason {
 			reasons = []string{"requested_end_reason:" + end.Reason}
 		}
-		// The source follows the STORED reason: an elevation past its
-		// expiry was stopped by the platform, whoever asked to end it.
+		// The actor and the source are who ASKED for the end, so they agree
+		// with each other: a holder who ends a lapsed elevation is the actor
+		// of its `expired` event, from the console, and the reason code
+		// says what they asked for.
 		source := end.Source
 		if source == "" {
-			source = defaultEndSource(elevation.EndReason)
+			source = defaultEndSource(end.Reason)
+		}
+		actor := end.ActorUserID
+		if actor == 0 && end.Reason == ElevationEndHolder {
+			actor = elevation.UserID
 		}
 		return AppendElevationEvent(ctx, sp, appender, ElevationEvent{
 			Action:            action,
 			Source:            source,
 			Elevation:         elevation,
-			ActorUserID:       end.ActorUserID,
+			ActorUserID:       actor,
 			AuthenticationRef: end.AuthenticationRef,
 			CorrelationID:     end.CorrelationID,
 			Reasons:           reasons,

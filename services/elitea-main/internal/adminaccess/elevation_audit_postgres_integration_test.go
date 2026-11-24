@@ -163,8 +163,14 @@ func TestStartAndEndWriteOneEventEach(t *testing.T) {
 		t.Fatalf("the events are not consecutive links of one chain: %+v", events)
 	}
 
+	// The holder's end names the holder as the actor, though none was given.
+	if !strings.Contains(events[1].raw, fmt.Sprintf(`"principal_ref": "user:%d"`, start.UserID)) {
+		t.Fatalf("the ended event lacks the holder as its actor: %s", events[1].raw)
+	}
+
 	// Past the expiry: the stored reason is expired, and so is the action;
-	// the reason the caller asked for is a reason code of the event.
+	// the reason the caller asked for is a reason code of the event, and the
+	// actor and the source are the holder who asked, from the console.
 	late := seededStart(t, pool)
 	lateElevation := startElevation(t, pool, late)
 	ended, changed := endElevation(t, pool, adminaccess.ElevationEnd{
@@ -176,8 +182,32 @@ func TestStartAndEndWriteOneEventEach(t *testing.T) {
 	lateEvents := elevationEvents(t, pool, lateElevation.ID.String())
 	if len(lateEvents) != 2 || lateEvents[1].action != "expired" ||
 		!strings.Contains(lateEvents[1].raw, "requested_end_reason:holder") ||
-		!strings.Contains(lateEvents[1].raw, `"source": "system"`) {
+		!strings.Contains(lateEvents[1].raw, `"source": "console"`) ||
+		!strings.Contains(lateEvents[1].raw, fmt.Sprintf(`"principal_ref": "user:%d"`, late.UserID)) {
 		t.Fatalf("late events = %+v", lateEvents)
+	}
+
+	// The platform's own expiry has no actor and the system source.
+	lapsed := seededStart(t, pool)
+	lapsedElevation := startElevation(t, pool, lapsed)
+	endElevation(t, pool, adminaccess.ElevationEnd{
+		ID: lapsedElevation.ID, Reason: adminaccess.ElevationEndExpired, At: lapsed.At.Add(lapsed.Duration),
+	})
+	lapsedEvents := elevationEvents(t, pool, lapsedElevation.ID.String())
+	if len(lapsedEvents) != 2 || lapsedEvents[1].action != "expired" ||
+		!strings.Contains(lapsedEvents[1].raw, `"source": "system"`) || strings.Contains(lapsedEvents[1].raw, "principal_ref") {
+		t.Fatalf("lapsed events = %+v", lapsedEvents)
+	}
+
+	// An approver's end must name the approver.
+	open := startElevation(t, pool, seededStart(t, pool))
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, _, err := adminaccess.EndElevation(t.Context(), tx, auditAppender(t), adminaccess.ElevationEnd{
+			ID: open.ID, Reason: adminaccess.ElevationEndApprover, At: start.At.Add(time.Minute),
+		})
+		return err
+	}); !errors.Is(err, adminaccess.ErrElevationInvalid) {
+		t.Fatalf("an approver end with no approver: %v", err)
 	}
 }
 

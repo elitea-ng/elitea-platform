@@ -77,14 +77,18 @@ func NewElevationEvent(ev ElevationEvent) (securityaudit.SecurityEvent, error) {
 		return securityaudit.SecurityEvent{}, fmt.Errorf("%w: unknown action %q", ErrElevationEvent, ev.Action)
 	}
 	record := ev.Elevation
-	for name, known := range map[string]bool{
-		"level":       record.Level == "" || record.Level == ElevationLevelAdmin || record.Level == ElevationLevelSuperAdmin,
-		"path":        record.Path == "" || record.Path == ElevationPathApproved || record.Path == ElevationPathSelf || record.Path == ElevationPathSealed,
-		"reason code": record.ReasonCode == "" || knownElevationReasonCode(record.ReasonCode),
-		"end reason":  record.EndReason == "" || knownElevationEndReason(record.EndReason),
+	// A fixed order, so the refusal names the same field every time.
+	for _, check := range []struct {
+		name  string
+		known bool
+	}{
+		{"level", record.Level == "" || record.Level == ElevationLevelAdmin || record.Level == ElevationLevelSuperAdmin},
+		{"path", record.Path == "" || record.Path == ElevationPathApproved || record.Path == ElevationPathSelf || record.Path == ElevationPathSealed},
+		{"reason code", record.ReasonCode == "" || knownElevationReasonCode(record.ReasonCode)},
+		{"end reason", record.EndReason == "" || knownElevationEndReason(record.EndReason)},
 	} {
-		if !known {
-			return securityaudit.SecurityEvent{}, fmt.Errorf("%w: unknown %s", ErrElevationEvent, name)
+		if !check.known {
+			return securityaudit.SecurityEvent{}, fmt.Errorf("%w: unknown %s", ErrElevationEvent, check.name)
 		}
 	}
 	change := securityaudit.ElevationChange{
