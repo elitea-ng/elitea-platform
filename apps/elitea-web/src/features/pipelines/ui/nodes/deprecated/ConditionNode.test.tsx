@@ -6,7 +6,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import { ConditionNode } from './ConditionNode';
 
@@ -56,10 +56,10 @@ function renderConditionNode(
   function TestNode(): ReactNode {
     return (
       <FlowEditorContext.Provider value={contextValue}>
-        <ConditionNode
-          id="condition-1"
-          data={{}}
-        />
+        <ConditionNode id="condition-1" data={{}} />
+        <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+          <ConditionNode id="condition-1" data={{}} />
+        </NodeConfigPanelContext.Provider>
       </FlowEditorContext.Provider>
     );
   }

@@ -35,7 +35,10 @@ import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import type { VersionTool } from '../../lib/flow-editor/hooks/useFunctionInputMapping';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
 import { LlmOutputContractSettings } from '../settings/LlmOutputContractSettings';
+import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
+import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { InputSelect } from '../select/InputSelect';
 import { LLMToolsSelect } from '../select/LLMToolsSelect';
 import { OutputSelect } from '../select/OutputSelect';
@@ -77,52 +80,70 @@ export const LLMNode = memo(function LLMNode(props: LLMNodeProps): ReactNode {
         />
       )}
     >
-      <SimpleLLMInputs
-        inputMappings={model.inputMappings}
-        values={model.inputMappingValues}
-        onChangeMapping={model.handleSimpleLLMChange}
-        defaultValues={model.defaultValues}
-        disabled={model.isFieldsDisabled}
-        enableAIAssistant
-        modelConfig={model.resolvedLlmSettings}
-        gap="1rem"
-      />
-
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.llmNode.inputLabel', 'Input')}
-        disabled={model.isFieldsDisabled}
-        inputFieldName="input"
-      />
-      <OutputSelect
-        id={id}
-        label={t('pipelines.flowEditor.llmNode.outputLabel', 'Output')}
-        outputFieldName="output"
-        disabled={model.isFieldsDisabled}
-      />
-      <ToolkitsSelect
-        id={id}
-        disabled={model.isFieldsDisabled}
-        versionTools={versionToolsForSelect}
-      />
-      {model.toolkitToolRows.map(row => (
-        <LLMToolsSelect
-          key={row.toolkitName}
-          toolkitName={row.toolkitName}
+      <NodeConfigSection section="basic">
+        <ToolkitsSelect
           id={id}
-          tools={row.tools}
+          disabled={model.isFieldsDisabled}
+          versionTools={versionToolsForSelect}
+        />
+        {model.toolkitToolRows.map(row => (
+          <LLMToolsSelect
+            key={row.toolkitName}
+            toolkitName={row.toolkitName}
+            id={id}
+            tools={row.tools}
+            disabled={model.isFieldsDisabled}
+          />
+        ))}
+        <SimpleLLMInputs
+          inputMappings={model.inputMappings}
+          values={model.inputMappingValues}
+          onChangeMapping={model.handleSimpleLLMChange}
+          defaultValues={model.defaultValues}
+          disabled={model.isFieldsDisabled}
+          enableAIAssistant
+          modelConfig={model.resolvedLlmSettings}
+          gap="1rem"
+        />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.llmNode.inputLabel', 'Input')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.LLM}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.llmNode.inputLabel', 'Input')}
+          disabled={model.isFieldsDisabled}
+          inputFieldName="input"
+        />
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.llmNode.outputLabel', 'Output')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.LLM}
+          fieldKey={NODE_FIELD_KEYS.output}
+        />
+        <OutputSelect
+          id={id}
+          label={t('pipelines.flowEditor.llmNode.outputLabel', 'Output')}
+          outputFieldName="output"
           disabled={model.isFieldsDisabled}
         />
-      ))}
-      <LlmOutputContractSettings
-        id={id}
-        disabled={model.isFieldsDisabled}
-      />
-      <CommonInterruptSettings
-        id={id}
-        type={FlowEditorConstants.PipelineNodeTypes.LLM}
-        disabled={model.isFieldsDisabled}
-      />
+        <LlmOutputContractSettings
+          id={id}
+          disabled={model.isFieldsDisabled}
+        />
+        <CommonInterruptSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.LLM}
+          disabled={model.isFieldsDisabled}
+        />
+        <NodeSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.LLM}
+          disabled={model.isFieldsDisabled}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

@@ -21,15 +21,26 @@ import { flowEditorIconScaleSx, flowEditorStateDrawerButtonSx } from './FlowEdit
 export interface FlowEditorStateToggleProps {
   readonly isOpen: boolean;
   readonly onToggle: () => void;
+  readonly rightOffset?: number | undefined;
 }
 
-export function FlowEditorStateToggle({ isOpen, onToggle }: FlowEditorStateToggleProps): ReactNode {
+export function FlowEditorStateToggle({ isOpen, onToggle, rightOffset = 0 }: FlowEditorStateToggleProps): ReactNode {
   const theme = useTheme();
 
   if (isOpen) return null;
 
   return (
-    <Box sx={{ position: 'absolute', top: theme.spacing(2.5), right: theme.spacing(2.5), zIndex: 100 }}>
+    <Box
+      data-testid="pipeline-state-toggle-wrapper"
+      data-right-offset={String(rightOffset)}
+      sx={{
+        position: 'absolute',
+        top: theme.spacing(2.5),
+        right: rightOffset > 0 ? `${(rightOffset + 20) / 16}rem` : theme.spacing(2.5),
+        zIndex: 100,
+        transition: 'right 0.2s ease',
+      }}
+    >
       <BaseBtn
         variant="elitea"
         color="secondary"

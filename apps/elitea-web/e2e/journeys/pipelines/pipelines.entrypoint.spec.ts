@@ -57,7 +57,10 @@ async function openEditor(page: Page, pipeline: CreatedPipeline) {
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   const card = page.locator(`.react-flow__node[data-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`);
   await expect(card).toBeVisible({ timeout: 20_000 });
-  const trigger = triggerCombobox(card);
+  await card.click();
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`);
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const trigger = triggerCombobox(panel);
   // The selector is disabled while its two reads are in flight — deliberately,
   // so a click cannot pick "Webhook" against a stale "no trigger yet" and
   // ROTATE a credential somebody else is already holding. Wait it out rather
@@ -186,5 +189,8 @@ test('the trigger stays Chat Message across ordinary pipeline edits and a reload
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   const reloadedCard = page.locator(`.react-flow__node[data-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`);
   await expect(reloadedCard).toBeVisible({ timeout: 20_000 });
-  await expect(triggerCombobox(reloadedCard)).toHaveText('Chat Message');
+  await reloadedCard.click();
+  const reloadedPanel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${PIPELINE_STARTER_ENTRY_NODE_ID}"]`);
+  await expect(reloadedPanel).toBeVisible({ timeout: 10_000 });
+  await expect(triggerCombobox(reloadedPanel)).toHaveText('Chat Message');
 });
