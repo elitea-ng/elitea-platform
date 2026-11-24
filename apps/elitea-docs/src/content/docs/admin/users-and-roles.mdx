@@ -52,7 +52,16 @@ A request with both is a `400`, and so is a role the deployment does not define 
 
 **`POST /api/v2/admin/modes/administration`** with `{"user_id", "mode": "administration", "role"}` adds one role and keeps the others; `DELETE` with `?id=<user_id>:administration:<role>` removes one.
 
-**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, the four legacy names first. The single `admin_role` field, the highest of `super_admin`, `admin`, `editor` and `viewer` that the person holds, is kept for one release and then removed.
+**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, sorted by name: no role ranks above another, so a person who holds only `llm_manager` is listed with `llm_manager`. The single `admin_role` field, the highest of `super_admin`, `admin`, `editor` and `viewer` that the person holds, is kept while the Users page reads it and is removed when the page shows the set of roles. No check reads it: read `admin_roles`.
+
+### What the name `super_admin` reaches
+
+Almost every administration check tests a permission. A few test the role **name** `super_admin` of the administration mode, on purpose:
+
+- **Every project.** A standing holder of the role named `super_admin` passes the project access check of every project and is listed as a member of every project, with the role `super_admin`. A custom role does not, even one that holds every permission of `super_admin`, and neither will a break-glass elevation: an elevation gives permissions, not the role's name. Break-glass repairs the platform; it does not open project content.
+- **The public project at sign-in.** A holder of `admin` or `super_admin` gets the extra public-project roles the deployment configures for administrators. Narrow roles do not.
+
+Giving or taking the role `super_admin` needs the permission `admin.auth.users.super_admin`, not a role of that name, and no role other than `super_admin` holds that permission (the legacy `system` role also holds it on an upgraded deployment, and is never assigned). A source test lists every check by the names `super_admin` and `admin` with its decision, so a new one cannot appear unreviewed.
 
 ## Edit roles and permissions
 
@@ -112,6 +121,20 @@ A route accepts a narrow permission beside the broad one it narrows, so a holder
 <Note>
 Six names are not a narrower part of an existing permission. `projects.settings.view` and `projects.settings.manage` are a privilege increase: once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of. `identity.sso.trust.manage` names a power that `super_admin` already has. The four `access.breakglass.*` names belong to break-glass elevation and allow nothing until that feature ships; then every holder of `admin` can use them.
 </Note>
+
+### The two legacy permissions end on a date
+
+`runtime.plugins` and `configuration.governance` each cover many unrelated subjects. The narrow permissions above replace them:
+
+- `runtime.plugins` is replaced by `platform.config.view` and `.manage`, `platform.email.manage`, `platform.maintenance.manage`, `platform.operations.view` and `.manage`, `mcp.catalogue.manage`, `identity.sso.view`, `.settings.manage` and `.trust.manage`, and the `llm.policy.*` and `llm.guardrails.manage` names for the guardrail and breaker sections.
+- `configuration.governance` is replaced by the `llm.*` names for the gateway. The agent governance Configuration sections have no narrow pair yet and still need `configuration.governance`; a later release gives them one.
+
+Both legacy names end on a sunset date, at least 90 days after the last replacement ships; a later release sets and announces the date. Until then:
+
+- An existing grant of either keeps working, and a role that holds one can be saved unchanged.
+- The Roles matrix marks both **Deprecated**.
+- A save that adds either to a role that does not hold it is refused with `400` and the code `permission_deprecated`, for every caller, a super admin included. Removing one is allowed, and cannot be undone from the matrix. Grant the narrow permission instead.
+- No new route or section is gated on either name: a test holds the number of places that name them, and it may only go down.
 
 ## Built-in administration roles
 
