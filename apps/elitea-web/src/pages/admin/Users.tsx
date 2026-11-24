@@ -201,6 +201,15 @@ export function AdminUsers() {
         </Alert>
       ) : null}
 
+      {state.rolesUnavailable ? (
+        <Alert severity="warning" data-testid="admin-users-roles-unavailable">
+          {t(
+            'pages.admin.users.error.rolesUnavailable',
+            'The list of administration roles could not be read, so each picker shows only the roles the person holds. Reading it needs the configuration.roles.permissions.view permission.',
+          )}
+        </Alert>
+      ) : null}
+
       {state.isError ? (
         <Alert severity="error" data-testid="admin-users-load-error">
           {state.loadErrorMessage}

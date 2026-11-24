@@ -7350,5 +7350,6 @@
   "pages.admin.users.roles.superAdmin.label": "Global administrator",
   "pages.admin.users.roles.viewer.description": "A legacy role. It keeps the permissions it held at the upgrade.",
   "pages.admin.users.roles.viewer.label": "Viewer",
-  "pages.admin.users.error.forbidden": "You do not have the permission to see the users."
+  "pages.admin.users.error.forbidden": "You do not have the permission to see the users.",
+  "pages.admin.users.error.rolesUnavailable": "The list of administration roles could not be read, so each picker shows only the roles the person holds. Reading it needs the configuration.roles.permissions.view permission."
 }

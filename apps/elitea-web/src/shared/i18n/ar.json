@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "سيترك هذا التغيير النشر بدون مسؤول. امنح الدور لشخص آخر أولاً.",
   "pages.admin.users.column.adminRoles": "أدوار الإدارة",
   "pages.admin.users.error.roles": "تعذّر تغيير أدوار الإدارة.",
+  "pages.admin.users.error.rolesUnavailable": "تعذرت قراءة قائمة أدوار الإدارة، لذا يعرض كل منتقٍ الأدوار التي يملكها الشخص فقط. تتطلب قراءتها الإذن configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "الإدارة اليومية للمنصة.",
   "pages.admin.users.roles.admin.label": "مسؤول المنصة",
   "pages.admin.users.roles.editor.description": "دور قديم. يحتفظ بالأذونات التي كانت لديه عند الترقية.",

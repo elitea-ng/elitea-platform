@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "שינוי זה ישאיר את הפריסה ללא מנהל. תן תחילה את התפקיד למישהו אחר.",
   "pages.admin.users.column.adminRoles": "תפקידי ניהול",
   "pages.admin.users.error.roles": "לא ניתן היה לשנות את תפקידי הניהול.",
+  "pages.admin.users.error.rolesUnavailable": "לא ניתן היה לקרוא את רשימת תפקידי הניהול, ולכן כל בורר מציג רק את התפקידים של האדם. הקריאה דורשת את ההרשאה configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "ניהול יומיומי של הפלטפורמה.",
   "pages.admin.users.roles.admin.label": "מנהל פלטפורמה",
   "pages.admin.users.roles.editor.description": "תפקיד מדור קודם. הוא שומר את ההרשאות שהיו לו בעת השדרוג.",

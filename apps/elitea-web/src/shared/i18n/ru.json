@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Это изменение оставит развертывание без администратора. Сначала назначьте роль кому-то другому.",
   "pages.admin.users.column.adminRoles": "Административные роли",
   "pages.admin.users.error.roles": "Не удалось изменить административные роли.",
+  "pages.admin.users.error.rolesUnavailable": "Не удалось прочитать список ролей администрирования, поэтому в каждом списке видны только роли, которые есть у человека. Для чтения нужно разрешение configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Повседневное администрирование платформы.",
   "pages.admin.users.roles.admin.label": "Администратор платформы",
   "pages.admin.users.roles.editor.description": "Устаревшая роль. Она сохраняет разрешения, которые у нее были при обновлении.",

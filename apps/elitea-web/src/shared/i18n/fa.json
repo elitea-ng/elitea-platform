@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "این تغییر استقرار را بدون مدیر می‌گذارد. ابتدا این نقش را به شخص دیگری بدهید.",
   "pages.admin.users.column.adminRoles": "نقش‌های مدیریتی",
   "pages.admin.users.error.roles": "تغییر نقش‌های مدیریتی ممکن نشد.",
+  "pages.admin.users.error.rolesUnavailable": "فهرست نقش‌های مدیریتی خوانده نشد، بنابراین هر انتخابگر فقط نقش‌های فعلی شخص را نشان می‌دهد. خواندن آن به مجوز configuration.roles.permissions.view نیاز دارد.",
   "pages.admin.users.roles.admin.description": "مدیریت روزانه پلتفرم.",
   "pages.admin.users.roles.admin.label": "مدیر پلتفرم",
   "pages.admin.users.roles.editor.description": "یک نقش قدیمی. مجوزهایی را که هنگام ارتقا داشت حفظ می‌کند.",

@@ -15,6 +15,7 @@
  */
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 
+import { PermissionMatrixRoleColumn } from '@/shared/api/generated/model/permissionMatrixRoleColumn.zod';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
@@ -49,13 +50,12 @@ interface ColumnFacts {
   readonly displayName: string | undefined;
 }
 
+/** One `roles` entry, by the contract's `PermissionMatrixRoleColumn`; a malformed entry is skipped. */
 function readColumn(value: unknown): [string, ColumnFacts] | undefined {
-  if (!isRecord(value) || typeof value['name'] !== 'string') return undefined;
-  const marker = typeof value['marker'] === 'string' ? value['marker'] : null;
-  const displayName = typeof value['display_name'] === 'string' && value['display_name'] !== ''
-    ? value['display_name']
-    : undefined;
-  return [value['name'], { builtIn: value['built_in'] === true, marker, displayName }];
+  const parsed = PermissionMatrixRoleColumn.safeParse(value);
+  if (!parsed.success) return undefined;
+  const { name, built_in: builtIn, marker, display_name: displayName } = parsed.data;
+  return [name, { builtIn, marker, displayName: displayName === '' ? undefined : displayName }];
 }
 
 /** The role columns of the rows, in first-seen order (a server without `roles`). */

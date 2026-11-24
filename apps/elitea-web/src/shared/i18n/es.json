@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Este cambio dejaría la implementación sin administrador. Asigne primero el rol a otra persona.",
   "pages.admin.users.column.adminRoles": "Roles de administración",
   "pages.admin.users.error.roles": "No se pudieron cambiar los roles de administración.",
+  "pages.admin.users.error.rolesUnavailable": "No se pudo leer la lista de roles de administración, así que cada selector muestra solo los roles que tiene la persona. Leerla requiere el permiso configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Administración diaria de la plataforma.",
   "pages.admin.users.roles.admin.label": "Administrador de la plataforma",
   "pages.admin.users.roles.editor.description": "Un rol heredado. Conserva los permisos que tenía en la actualización.",

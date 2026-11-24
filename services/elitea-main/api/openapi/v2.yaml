@@ -22347,6 +22347,28 @@ components:
         rows:
           type: array
           items: { $ref: '#/components/schemas/PermissionMatrixRow' }
+        roles:
+          type: array
+          description: >
+            The central (administration-scope) matrix only: one entry per role
+            column, describing it by its seed record (ADR-0059 R0.8c). Absent
+            on a project matrix.
+          items: { $ref: '#/components/schemas/PermissionMatrixRoleColumn' }
+
+    PermissionMatrixRoleColumn:
+      type: object
+      required: [name, built_in, marker]
+      description: >
+        NOTE(W2): internal/api/v2/admin/roles.go:162. `built_in` is true when
+        elitea_auth.admin_role_seeds holds a record for the role, not because of
+        its name. `marker` is the record's marker (declared, as_found or
+        unassignable), null for a custom role. `display_name` is set for a
+        built-in role Elitea defines.
+      properties:
+        name: { type: string }
+        built_in: { type: boolean }
+        marker: { type: string, nullable: true }
+        display_name: { type: string }
 
     UserProjectPermissionsUpdate:
       description: >

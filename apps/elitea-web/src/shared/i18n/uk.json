@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Ця зміна залишить розгортання без адміністратора. Спершу призначте роль комусь іншому.",
   "pages.admin.users.column.adminRoles": "Адміністративні ролі",
   "pages.admin.users.error.roles": "Не вдалося змінити адміністративні ролі.",
+  "pages.admin.users.error.rolesUnavailable": "Не вдалося прочитати список ролей адміністрування, тому кожен список показує лише ролі, які має людина. Для читання потрібен дозвіл configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Щоденне адміністрування платформи.",
   "pages.admin.users.roles.admin.label": "Адміністратор платформи",
   "pages.admin.users.roles.editor.description": "Застаріла роль. Вона зберігає дозволи, які мала під час оновлення.",

@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "この変更を行うと、デプロイに管理者がいなくなります。先に別の人にロールを割り当ててください。",
   "pages.admin.users.column.adminRoles": "管理ロール",
   "pages.admin.users.error.roles": "管理ロールを変更できませんでした。",
+  "pages.admin.users.error.rolesUnavailable": "管理ロールの一覧を読み取れなかったため、各選択欄にはその人が持つロールのみが表示されます。読み取りには configuration.roles.permissions.view 権限が必要です。",
   "pages.admin.users.roles.admin.description": "日常のプラットフォーム管理。",
   "pages.admin.users.roles.admin.label": "プラットフォーム管理者",
   "pages.admin.users.roles.editor.description": "レガシーのロールです。アップグレード時に保持していた権限をそのまま保持します。",

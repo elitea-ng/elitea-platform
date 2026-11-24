@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "此更改将使部署没有管理员。请先将该角色授予其他人。",
   "pages.admin.users.column.adminRoles": "管理角色",
   "pages.admin.users.error.roles": "无法更改管理角色。",
+  "pages.admin.users.error.rolesUnavailable": "无法读取管理角色列表，因此每个选择器只显示该用户已有的角色。读取需要 configuration.roles.permissions.view 权限。",
   "pages.admin.users.roles.admin.description": "日常平台管理。",
   "pages.admin.users.roles.admin.label": "平台管理员",
   "pages.admin.users.roles.editor.description": "旧版角色。它保留升级时拥有的权限。",

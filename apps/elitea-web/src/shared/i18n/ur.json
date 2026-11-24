@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "اس تبدیلی سے ڈیپلائمنٹ بغیر منتظم کے رہ جائے گی۔ پہلے یہ کردار کسی اور کو دیں۔",
   "pages.admin.users.column.adminRoles": "انتظامی کردار",
   "pages.admin.users.error.roles": "انتظامی کردار تبدیل نہیں ہو سکے۔",
+  "pages.admin.users.error.rolesUnavailable": "انتظامی کرداروں کی فہرست پڑھی نہیں جا سکی، اس لیے ہر انتخاب صرف وہ کردار دکھاتا ہے جو اس شخص کے پاس ہیں۔ پڑھنے کے لیے configuration.roles.permissions.view اجازت درکار ہے۔",
   "pages.admin.users.roles.admin.description": "پلیٹ فارم کا روزمرہ انتظام۔",
   "pages.admin.users.roles.admin.label": "پلیٹ فارم منتظم",
   "pages.admin.users.roles.editor.description": "ایک پرانا کردار۔ یہ وہ اجازتیں برقرار رکھتا ہے جو اپ گریڈ کے وقت اس کے پاس تھیں۔",

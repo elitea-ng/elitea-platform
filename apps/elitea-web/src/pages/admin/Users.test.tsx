@@ -301,6 +301,18 @@ describe('Admin › Users', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
   });
 
+  it('says so when the roles list cannot be read', async () => {
+    server.use(
+      http.get('*/admin/permissions/administration/administration', () =>
+        HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
+      ),
+    );
+    renderAdminRoute(<AdminUsers />);
+    expect(await screen.findByTestId('admin-users-roles-unavailable')).toHaveTextContent(
+      'configuration.roles.permissions.view',
+    );
+  });
+
   it('says the server refused when the listing answers 403', async () => {
     server.use(
       http.get('*/admin/auth_users/administration', () =>

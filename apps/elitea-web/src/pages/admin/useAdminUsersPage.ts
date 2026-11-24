@@ -69,6 +69,8 @@ export interface AdminUsersPageState {
 
   /** The administration roles of the mode, from the roles API (ADR-0059 R0.8c). */
   readonly roleOptions: readonly AdministrationRole[];
+  /** The roles list (needs `configuration.roles.permissions.view`) could not be read. */
+  readonly rolesUnavailable: boolean;
 
   readonly onTabChange: (event: unknown, next: number) => void;
   readonly onSearchChange: (value: string) => void;
@@ -122,11 +124,7 @@ function readListing(data: AdminUsersPage | undefined): {
   };
 }
 
-/**
- * A 403 on the listing is the server saying no, not a failure: a person with
- * a narrow administration role who types this page's URL (ADR-0059 R0.16)
- * is told so.
- */
+/** A 403 is a refusal, not a failure: a narrow-role holder who types this URL is told so (R0.16). */
 function listingErrorMessage(error: unknown): string {
   if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 403) {
     return t('pages.admin.users.error.forbidden', 'You do not have the permission to see the users.');
@@ -379,6 +377,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
     pendingIds,
 
     roleOptions: rolesQuery.data ?? NO_ROLES,
+    rolesUnavailable: rolesQuery.isError,
 
     onTabChange,
     onSearchChange,

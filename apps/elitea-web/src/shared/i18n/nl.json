@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Deze wijziging zou de implementatie zonder beheerder laten. Geef de rol eerst aan iemand anders.",
   "pages.admin.users.column.adminRoles": "Beheerrollen",
   "pages.admin.users.error.roles": "De beheerrollen konden niet worden gewijzigd.",
+  "pages.admin.users.error.rolesUnavailable": "De lijst met beheerrollen kon niet worden gelezen, dus elke keuzelijst toont alleen de rollen die de persoon heeft. Voor het lezen is de toestemming configuration.roles.permissions.view nodig.",
   "pages.admin.users.roles.admin.description": "Dagelijks platformbeheer.",
   "pages.admin.users.roles.admin.label": "Platformbeheerder",
   "pages.admin.users.roles.editor.description": "Een verouderde rol. Hij behoudt de rechten die hij bij de upgrade had.",

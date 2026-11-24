@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Cette modification laisserait le déploiement sans administrateur. Attribuez d'abord le rôle à quelqu'un d'autre.",
   "pages.admin.users.column.adminRoles": "Rôles d'administration",
   "pages.admin.users.error.roles": "Impossible de modifier les rôles d'administration.",
+  "pages.admin.users.error.rolesUnavailable": "La liste des rôles d'administration n'a pas pu être lue : chaque sélecteur n'affiche donc que les rôles de la personne. Sa lecture nécessite l'autorisation configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Administration quotidienne de la plateforme.",
   "pages.admin.users.roles.admin.label": "Administrateur de la plateforme",
   "pages.admin.users.roles.editor.description": "Un rôle hérité. Il conserve les autorisations qu'il avait lors de la mise à niveau.",

@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Ta zmiana pozostawiłaby wdrożenie bez administratora. Najpierw przypisz rolę komuś innemu.",
   "pages.admin.users.column.adminRoles": "Role administracyjne",
   "pages.admin.users.error.roles": "Nie udało się zmienić ról administracyjnych.",
+  "pages.admin.users.error.rolesUnavailable": "Nie udało się odczytać listy ról administracyjnych, więc każdy wybór pokazuje tylko role posiadane przez osobę. Odczyt wymaga uprawnienia configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Codzienna administracja platformą.",
   "pages.admin.users.roles.admin.label": "Administrator platformy",
   "pages.admin.users.roles.editor.description": "Rola starszego typu. Zachowuje uprawnienia, które miała podczas aktualizacji.",

@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Diese Änderung würde die Bereitstellung ohne Administrator lassen. Geben Sie die Rolle zuerst jemand anderem.",
   "pages.admin.users.column.adminRoles": "Administrationsrollen",
   "pages.admin.users.error.roles": "Die Administrationsrollen konnten nicht geändert werden.",
+  "pages.admin.users.error.rolesUnavailable": "Die Liste der Administrationsrollen konnte nicht gelesen werden, daher zeigt jede Auswahl nur die Rollen, die die Person hat. Zum Lesen ist die Berechtigung configuration.roles.permissions.view nötig.",
   "pages.admin.users.roles.admin.description": "Tägliche Plattformadministration.",
   "pages.admin.users.roles.admin.label": "Plattformadministrator",
   "pages.admin.users.roles.editor.description": "Eine Legacy-Rolle. Sie behält die Berechtigungen, die sie beim Upgrade hatte.",

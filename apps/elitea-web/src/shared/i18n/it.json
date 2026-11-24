@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Questa modifica lascerebbe la distribuzione senza amministratore. Assegna prima il ruolo a qualcun altro.",
   "pages.admin.users.column.adminRoles": "Ruoli di amministrazione",
   "pages.admin.users.error.roles": "Impossibile modificare i ruoli di amministrazione.",
+  "pages.admin.users.error.rolesUnavailable": "Non è stato possibile leggere l'elenco dei ruoli di amministrazione, quindi ogni selettore mostra solo i ruoli della persona. Per leggerlo serve l'autorizzazione configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Amministrazione quotidiana della piattaforma.",
   "pages.admin.users.roles.admin.label": "Amministratore della piattaforma",
   "pages.admin.users.roles.editor.description": "Un ruolo legacy. Mantiene le autorizzazioni che aveva all'aggiornamento.",

@@ -4938,6 +4938,7 @@
   "pages.admin.roles.refusal.lastAdministrator": "Esta alteração deixaria a implantação sem administrador. Atribua a função a outra pessoa primeiro.",
   "pages.admin.users.column.adminRoles": "Funções de administração",
   "pages.admin.users.error.roles": "Não foi possível alterar as funções de administração.",
+  "pages.admin.users.error.rolesUnavailable": "Não foi possível ler a lista de funções de administração, então cada seletor mostra apenas as funções da pessoa. A leitura exige a permissão configuration.roles.permissions.view.",
   "pages.admin.users.roles.admin.description": "Administração diária da plataforma.",
   "pages.admin.users.roles.admin.label": "Administrador da plataforma",
   "pages.admin.users.roles.editor.description": "Uma função legada. Ela mantém as permissões que tinha na atualização.",
