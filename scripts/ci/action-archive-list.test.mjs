@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -13,6 +14,7 @@ import {
   archivePath,
   CACHE_DIR,
   downloadArchives,
+  githubApi,
   isRetryable,
   main,
   MINIMUM_REF_COUNT,
@@ -171,6 +173,28 @@ test("only rate limits and server errors are retried", () => {
   assert.ok(isRetryable(403, h({ "x-ratelimit-remaining": "0" })));
   assert.ok(!isRetryable(403, h({ "x-ratelimit-remaining": "12" })));
   assert.ok(!isRetryable(401, h()));
+});
+
+test("a 403 from an IP allow list is retried once without the token", async () => {
+  const seen = [];
+  const server = http.createServer((req, res) => {
+    seen.push(req.headers.authorization ?? "anonymous");
+    if (req.headers.authorization) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end('{"message":"the acme organization has an IP allow list enabled"}');
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ sha: SHA_A }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const api = githubApi("t0ken", `http://127.0.0.1:${server.address().port}`);
+    assert.equal(await api.commitSha("acme/scan", "v1"), SHA_A);
+    assert.deepEqual(seen, ["Bearer t0ken", "anonymous"]);
+  } finally {
+    server.close();
+  }
 });
 
 test("a scan or a resolution below its floor fails instead of baking an empty cache", async () => {

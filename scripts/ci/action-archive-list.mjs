@@ -180,13 +180,19 @@ export function isRetryable(status, headers) {
 
 // fetch with the token and a timeout, retrying network errors and rate
 // limits (Retry-After first, then x-ratelimit-reset, capped at 5 minutes).
+//
+// A 403 that is not a rate limit is retried once WITHOUT the token: an
+// organisation with an IP allow list (aquasecurity, measured on #3004)
+// refuses the workflow token from a hosted runner's address even for its
+// public repositories, and answers the same request anonymously.
 async function request(url, token, { raw = false, attempts = 5 } = {}) {
+  let auth = token;
   for (let attempt = 1; ; attempt++) {
     let res;
     try {
       res = await fetch(url, {
         headers: {
-          authorization: `Bearer ${token}`,
+          ...(auth ? { authorization: `Bearer ${auth}` } : {}),
           accept: raw ? "application/vnd.github.raw" : "application/vnd.github+json",
           "x-github-api-version": "2022-11-28",
           "user-agent": "elitea-platform-action-archive-list",
@@ -200,6 +206,11 @@ async function request(url, token, { raw = false, attempts = 5 } = {}) {
       continue;
     }
     if (res.ok || res.status === 404) return res;
+    if (res.status === 403 && auth && !isRetryable(res.status, res.headers)) {
+      await res.body?.cancel().catch(() => {});
+      auth = null;
+      continue;
+    }
     if (attempt >= attempts || !isRetryable(res.status, res.headers)) {
       throw new Error(`${url}: HTTP ${res.status} ${await res.text().catch(() => "")}`.slice(0, 500));
     }
