@@ -22,6 +22,7 @@ function row(overrides: Partial<AdminUserRow> = {}): AdminUserRow {
     suspended: false,
     is_admin: true,
     admin_role: 'admin',
+    admin_roles: ['admin'],
     ...overrides,
   };
 }
