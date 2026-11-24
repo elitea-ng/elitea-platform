@@ -3144,10 +3144,8 @@ export const getListAdminAuthUsersUrl = (
  * because it labels the page's two tabs.
  *
  * `admin_roles` lists every administration role of the account, sorted
- * by name. `admin_role` is the highest of the four legacy names the
- * account holds (null when it holds none of them); it is kept for one
- * release beside `admin_roles` (ADR-0059 R0.8b) while the Users page
- * reads it, and is removed when that page reads the set (R0.8c).
+ * by name. The single `admin_role` field (the highest of the four legacy
+ * names) was removed in ADR-0059 R0.8c: read `admin_roles`.
  * @summary List every user account of the deployment
  */
 export const listAdminAuthUsers = async (

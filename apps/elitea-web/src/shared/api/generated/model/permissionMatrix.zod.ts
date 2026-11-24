@@ -42,12 +42,19 @@
  */
 import * as zod from "zod";
 import { PermissionCatalogueEntry } from "./permissionCatalogueEntry.zod";
+import { PermissionMatrixRoleColumn } from "./permissionMatrixRoleColumn.zod";
 import { PermissionMatrixRow } from "./permissionMatrixRow.zod";
 
 export const PermissionMatrix = zod
   .object({
     total: zod.int(),
     rows: zod.array(PermissionMatrixRow),
+    roles: zod
+      .array(PermissionMatrixRoleColumn)
+      .optional()
+      .describe(
+        "The central (administration-scope) matrix only: one entry per role column, describing it by its seed record (ADR-0059 R0.8c). Absent on a project matrix.\n",
+      ),
     catalogue: zod
       .array(PermissionCatalogueEntry)
       .optional()

@@ -37,6 +37,7 @@ import {
 } from './adminNavItems';
 import { readPersistedAdminNavCollapsed, useAdminNavCollapsedStore } from './adminNavCollapsed';
 import { adminApiBaseUrl } from './adminUiConfig';
+import registry from './adminPermissionRegistry.json';
 import { createAdminRouter } from './router';
 import {
   COLLAPSED_SIDE_BAR_WIDTH_REM,
@@ -225,6 +226,23 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // 001_initial.sql and migrations/shared/0208_credential_inventory.sql
   // (ADR-0044 decision 5), administration mode, super_admin and admin.
   'credentials.inventory.read',
+  // migrations/shared/0261_narrow_admin_permissions.sql (ADR-0059 decision 2),
+  // administration mode, super_admin and admin.
+  'identity.sso.settings.manage',
+  'identity.sso.view',
+  'llm.catalogue.view',
+  'llm.guardrails.manage',
+  'llm.policy.manage',
+  'llm.policy.view',
+  'mcp.catalogue.manage',
+  'platform.config.manage',
+  'platform.config.view',
+  'platform.email.manage',
+  'platform.maintenance.manage',
+  'platform.operations.view',
+  // 001_initial.sql grants the next two in the administration mode.
+  'configuration.native_clients',
+  'configuration.microsoft_apps',
 ]);
 
 /**
@@ -232,11 +250,13 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  * repository grants.
  *
  * Each one is a permission a Go gate checks, so an operator can grant it:
- * `configuration.secrets.secret.list` gates the secret listing and is seeded in
- * the DEFAULT mode; `admin.moderation.view` is seeded in the DEFAULT mode too
- * (`migrations/shared/0077_moderation_permissions.sql`), which the admin
- * console never resolves; `configuration.service_descriptors` is the
- * Configuration section's own permission and no seed grants it.
+ * `configuration.service_descriptors` is the Configuration section's own
+ * permission and no seed grants it.
+ *
+ * `configuration.secrets.secret.list` and `admin.moderation.view` were here
+ * until ADR-0059 R0.16: both are DEFAULT-mode names, which the console never
+ * receives, so they showed nothing. `adminNavGroups.test.ts` now holds every
+ * name to the server's administration registry.
  *
  * The legacy section names `configuration.roles` and `projects.projects` are
  * NOT here: no code checks them, so shared migration 0172 retires them and the
@@ -246,8 +266,6 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
  * item that names ONLY these fails the test above.
  */
 const NOT_SEEDED_IN_ADMINISTRATION = new Set([
-  'admin.moderation.view',
-  'configuration.secrets.secret.list',
   'configuration.service_descriptors',
 ]);
 
@@ -345,7 +363,7 @@ describe('permission filtering', () => {
 
   it('drops a group that loses every item, rather than rendering an empty one', () => {
     const groups = visibleAdminNavGroups((permission) =>
-      ['admin.auth.users', 'configuration.roles.permissions.view', 'projects.projects.projects.view', 'configuration.secrets.secret.list', 'admin.moderation'].includes(
+      ['admin.auth.users', 'configuration.roles.permissions.view', 'projects.projects.projects.view', 'configuration.secrets.secret.view', 'admin.moderation'].includes(
         permission,
       ),
     );
@@ -361,6 +379,36 @@ describe('permission filtering', () => {
     await mountAdmin();
     expect(screen.queryByTestId('admin-nav-item-audit')).toBeNull();
     expect(navItem('users')).toBeInTheDocument();
+  });
+});
+
+/* ── the narrow roles (ADR-0059 R0.16, interim until R3.2) ─────────────── */
+
+describe('a holder of a narrow role', () => {
+  const visibleIds = (): string[] =>
+    screen.getAllByTestId(/^admin-nav-item-/).map((link) => link.dataset.testid?.replace('admin-nav-item-', '') ?? '');
+
+  it('as an LLM manager sees Configuration, LLM Governance, Budgets and Projects, and no other platform item', async () => {
+    // The set the registry declares for the role, exported by the server.
+    setPermissions(registry.declared_role_sets.llm_manager);
+    await mountAdmin('/projects');
+    const platform = new Set(
+      adminNavGroups()
+        .filter((group) => group.id === 'platform')
+        .flatMap((group) => group.items.map((item) => item.id)),
+    );
+    const ids = visibleIds();
+    expect(ids.filter((id) => platform.has(id)).sort()).toEqual(['budgets', 'configuration', 'governance']);
+    expect(ids).toContain('projects');
+    expect(ids).not.toContain('users');
+  });
+
+  it('with only platform.email.manage sees E-mail', async () => {
+    setPermissions(['platform.email.manage']);
+    await mountAdmin('/email');
+    expect(navItem('email')).toBeInTheDocument();
+    expect(navItem('configuration')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-nav-item-features')).toBeNull();
   });
 });
 

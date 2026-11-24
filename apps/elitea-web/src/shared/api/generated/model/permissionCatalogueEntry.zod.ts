@@ -52,7 +52,7 @@ export const PermissionCatalogueEntry = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/roles.go:160-180 (ADR-0059 R0.14a).\n",
+    "NOTE(W2): internal/api/v2/admin/roles.go:239-258 (ADR-0059 R0.14a).\n",
   );
 
 export type PermissionCatalogueEntry = zod.input<

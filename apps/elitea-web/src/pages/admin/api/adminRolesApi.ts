@@ -144,6 +144,12 @@ const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
     ),
   role_self_escalation: () =>
     t('pages.admin.roles.refusal.selfEscalation', 'This change would give you permissions that you do not hold.'),
+  // ADR-0059 R0.11: the 409 of the last-administrator rule.
+  last_administrator: () =>
+    t(
+      'pages.admin.roles.refusal.lastAdministrator',
+      'This change would leave the deployment without an administrator. Give the role to someone else first.',
+    ),
   permission_deprecated: () =>
     t(
       'pages.admin.roles.refusal.deprecated',

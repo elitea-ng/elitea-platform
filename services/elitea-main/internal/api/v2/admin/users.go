@@ -46,16 +46,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// legacyAdminRoleOrder serves the listing's single `admin_role` field and
-// nothing else: the highest of the four legacy administration-mode names the
-// user holds, matching `list_users_paginated`'s `role_priority`. The field is
-// kept for one release beside `admin_roles` (ADR-0059 R0.8b) because the
-// Users page still reads it; it goes with this list when that page reads the
-// set (R0.8c, issue 2586). No check decides by this order (R0.13): the
-// listing returns the set by name, and the demotion guard tests the
-// permission admin.auth.users.super_admin (adminaccess.Caller.SuperAdmin).
-var legacyAdminRoleOrder = []string{"super_admin", "admin", "editor", "viewer"}
-
 // maxAssignedRoles bounds the `role_names` set of one request. The built-in
 // catalogue has nine roles; a request naming more than this many is not a
 // person's role set.
@@ -210,7 +200,6 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 		if err := rows.Scan(&id, &name, &email, &lastLogin, &suspended, &adminRoles); err != nil {
 			return nil, fmt.Errorf("scan user row: %w", err)
 		}
-		adminRole := highestLegacyAdminRole(adminRoles)
 		items = append(items, map[string]any{
 			"id":         id,
 			"name":       name,
@@ -221,10 +210,8 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 			// kept so existing clients (admin_ui, the QA suite) keep working.
 			"is_admin":  len(adminRoles) > 0, // any administration role
 			"is_active": !suspended,
-			// The highest of the four legacy roles, kept for one release
-			// beside the set (ADR-0059 R0.8b) while the Users page reads
-			// it; removed with R0.8c (issue 2586).
-			"admin_role":  adminRole,
+			// Every administration role held, sorted by name (ADR-0059
+			// R0.8b). The single `admin_role` went with R0.8c (issue 2586).
 			"admin_roles": adminRoles,
 		})
 	}
@@ -676,18 +663,6 @@ ORDER BY 1`, mode, roles)
 		return nil, fmt.Errorf("read defined roles: %w", err)
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[string])
-}
-
-// highestLegacyAdminRole is the single `admin_role` of the listing: the
-// highest of the four legacy names in `roles`, nil when it holds none.
-func highestLegacyAdminRole(roles []string) *string {
-	for _, legacy := range legacyAdminRoleOrder {
-		if slices.Contains(roles, legacy) {
-			name := legacy
-			return &name
-		}
-	}
-	return nil
 }
 
 // UserSuspend serves `PUT /admin/user_suspend/{mode}/{userID}`.

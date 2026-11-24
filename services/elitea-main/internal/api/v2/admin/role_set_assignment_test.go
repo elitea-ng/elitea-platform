@@ -217,10 +217,10 @@ func TestTheSetFormGivesSeveralRolesAndTheListingReportsThem(t *testing.T) {
 		t.Fatalf("history = %+v, want two granted rows", history)
 	}
 
-	// The listing: both roles, and no single legacy role.
+	// The listing: both roles, and no single `admin_role` field (R0.8c).
 	row := listedUser(t, router, plain)
 	if !slices.Equal(row.AdminRoles, []string{"llm_manager", "security_auditor"}) || row.AdminRole != nil || !row.IsAdmin {
-		t.Fatalf("listing = %+v, want admin_roles [llm_manager security_auditor], admin_role null and is_admin true", row)
+		t.Fatalf("listing = %+v, want admin_roles [llm_manager security_auditor], no admin_role and is_admin true", row)
 	}
 
 	// The same set again changes nothing.
@@ -232,7 +232,7 @@ func TestTheSetFormGivesSeveralRolesAndTheListingReportsThem(t *testing.T) {
 }
 
 // Acceptance (5): the single role_name form still replaces the whole set with
-// one role, and the listing returns both fields.
+// one role, and the listing returns the set alone.
 func TestTheSingleFormStillReplacesTheSet(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	seedBuiltInRoles(t, env, adminaccess.RoleLLMManager, adminaccess.RoleSecurityAuditor)
@@ -252,17 +252,15 @@ func TestTheSingleFormStillReplacesTheSet(t *testing.T) {
 	expectRoles(t, env, escalationPlainTarget, "editor")
 
 	row = listedUser(t, router, plain)
-	if row.AdminRole == nil || *row.AdminRole != "editor" || !slices.Equal(row.AdminRoles, []string{"editor"}) {
-		t.Fatalf("listing after = %+v, want admin_role editor and admin_roles [editor]", row)
+	if row.AdminRole != nil || !slices.Equal(row.AdminRoles, []string{"editor"}) {
+		t.Fatalf("listing after = %+v, want admin_roles [editor] and no admin_role", row)
 	}
-	// admin_roles is sorted by name, no name above another (ADR-0059 R0.13);
-	// the kept single field is still the highest legacy name.
+	// admin_roles is sorted by name, no name above another (ADR-0059 R0.13).
 	giveRole(t, env, escalationPlainTarget, adminaccess.RoleLLMManager)
 	giveRole(t, env, escalationPlainTarget, "super_admin")
 	row = listedUser(t, router, plain)
-	if !slices.Equal(row.AdminRoles, []string{"editor", "llm_manager", "super_admin"}) ||
-		row.AdminRole == nil || *row.AdminRole != "super_admin" {
-		t.Fatalf("listing = %+v, want [editor llm_manager super_admin] and admin_role super_admin", row)
+	if !slices.Equal(row.AdminRoles, []string{"editor", "llm_manager", "super_admin"}) || row.AdminRole != nil {
+		t.Fatalf("listing = %+v, want [editor llm_manager super_admin] and no admin_role", row)
 	}
 }
 
@@ -321,8 +319,9 @@ func TestTheModesRouteAddsARoleBesideTheOthers(t *testing.T) {
 
 type listedAdminUser struct {
 	ID         int      `json:"id"`
-	AdminRole  *string  `json:"admin_role"`
-	AdminRoles []string `json:"admin_roles"`
+	// AdminRole catches the single field R0.8c removed: it must be absent.
+	AdminRole  json.RawMessage `json:"admin_role"`
+	AdminRoles []string        `json:"admin_roles"`
 	IsAdmin    bool     `json:"is_admin"`
 }
 

@@ -64,12 +64,6 @@ export const AdminAuthUserRow = zod
     is_active: zod
       .boolean()
       .describe("Legacy field. The inverse of `suspended`."),
-    admin_role: zod
-      .string()
-      .nullable()
-      .describe(
-        "The highest of `super_admin`, `admin`, `editor` and `viewer` that the account holds, null when it holds none of them. Kept for one release beside `admin_roles`; read `admin_roles`.\n",
-      ),
     admin_roles: zod
       .array(zod.string())
       .describe(
@@ -77,7 +71,7 @@ export const AdminAuthUserRow = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/users.go:215-229 — one account of the deployment.\n",
+    "NOTE(W2): internal/api/v2/admin/users.go:203-216 — one account of the deployment.\n",
   );
 
 export type AdminAuthUserRow = zod.input<typeof AdminAuthUserRow>;

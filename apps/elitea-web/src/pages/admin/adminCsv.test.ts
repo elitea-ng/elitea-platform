@@ -21,7 +21,6 @@ function row(overrides: Partial<AdminUserRow> = {}): AdminUserRow {
     last_login: '2026-08-01T10:00:00',
     suspended: false,
     is_admin: true,
-    admin_role: 'admin',
     admin_roles: ['admin'],
     ...overrides,
   };
@@ -84,17 +83,20 @@ describe('buildAdminProjectsCsv', () => {
 
 describe('buildAdminUsersCsv', () => {
   it('writes the header and one CRLF-terminated line per user', () => {
-    const csv = buildAdminUsersCsv([row(), row({ name: 'Bo Blocked', email: 'bo@example.com', last_login: null, suspended: true, admin_role: null })]);
+    const csv = buildAdminUsersCsv([
+      row({ admin_roles: ['admin', 'llm_manager'] }),
+      row({ name: 'Bo Blocked', email: 'bo@example.com', last_login: null, suspended: true, admin_roles: [] }),
+    ]);
 
     expect(csv.split('\r\n')).toEqual([
-      'Name,Email,Last login,Status,Admin Role',
-      'Ada Admin,ada@example.com,2026-08-01T10:00:00,Active,Admin',
+      'Name,Email,Last login,Status,Administration roles',
+      'Ada Admin,ada@example.com,2026-08-01T10:00:00,Active,Platform administrator; LLM manager',
       'Bo Blocked,bo@example.com,Never,Suspended,None',
     ]);
   });
 
   it('is the header alone when nothing matches the filter', () => {
-    expect(buildAdminUsersCsv([])).toBe('Name,Email,Last login,Status,Admin Role');
+    expect(buildAdminUsersCsv([])).toBe('Name,Email,Last login,Status,Administration roles');
   });
 });
 
