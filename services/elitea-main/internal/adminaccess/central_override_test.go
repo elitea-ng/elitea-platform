@@ -19,7 +19,7 @@ func readReviewed(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("open %s: %v", reviewedCentralOverride, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var lines []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
