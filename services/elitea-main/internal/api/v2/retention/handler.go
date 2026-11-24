@@ -46,9 +46,11 @@ const maxBodyBytes = 8 << 10
 // Store is the persistence the handler needs (repos.RetentionPolicyRepo).
 type Store interface {
 	ListPolicies(ctx context.Context) ([]retention.Policy, error)
-	SetPlatformPolicy(ctx context.Context, p retention.Policy, actor int64) (retention.Policy, error)
-	SetProjectOverride(ctx context.Context, p retention.Policy, actor int64) (retention.Policy, error)
-	DeleteProjectOverride(ctx context.Context, class retention.DataClass, projectID int64) error
+	// The three policy writes call check with the bounds they move from and
+	// to, read under their own locks, before they write (retention.WriteCheck).
+	SetPlatformPolicy(ctx context.Context, p retention.Policy, actor int64, check retention.WriteCheck) (retention.Policy, error)
+	SetProjectOverride(ctx context.Context, p retention.Policy, actor int64, check retention.WriteCheck) (retention.Policy, error)
+	DeleteProjectOverride(ctx context.Context, class retention.DataClass, projectID int64, check retention.WriteCheck) error
 	ListHolds(ctx context.Context, activeOnly bool) ([]retention.Hold, error)
 	CreateHold(ctx context.Context, h retention.Hold) (retention.Hold, error)
 	ReleaseHold(ctx context.Context, id, actor int64, reason string) (retention.Hold, error)
@@ -202,12 +204,13 @@ func (h *Handler) SetPlatformPolicy(w http.ResponseWriter, r *http.Request) {
 		EventType: "retention", Action: "retention.policy.update", EntityType: "retention_policy",
 		EntityName: string(class) + " " + describeMax(body.MaxAgeDays.value),
 	})
+	check := tokenRule(r, adminaccess.RetentionPolicyPattern)
 	stored, err := h.store.SetPlatformPolicy(r.Context(), retention.Policy{
 		Class: class, MinAgeDays: *body.MinAgeDays.value, MaxAgeDays: body.MaxAgeDays.value,
 		AllowProjectOverride: *body.AllowProjectOverride.value,
-	}, userID)
+	}, userID, check.run)
 	if err != nil {
-		apierr.Write(w, err)
+		check.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewPolicy(stored))
@@ -240,11 +243,12 @@ func (h *Handler) SetProjectOverride(w http.ResponseWriter, r *http.Request) {
 		EventType: "retention", Action: "retention.override.set", EntityType: "retention_policy",
 		EntityName: string(class) + " " + describeMax(body.MaxAgeDays), ProjectID: &projectID,
 	})
+	check := tokenRule(r, adminaccess.RetentionProjectPolicyPattern)
 	stored, err := h.store.SetProjectOverride(r.Context(), retention.Policy{
 		Class: class, ProjectID: &projectID, MaxAgeDays: body.MaxAgeDays,
-	}, userID)
+	}, userID, check.run)
 	if err != nil {
-		apierr.Write(w, err)
+		check.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, viewPolicy(stored))
@@ -267,11 +271,54 @@ func (h *Handler) DeleteProjectOverride(w http.ResponseWriter, r *http.Request) 
 		EventType: "retention", Action: "retention.override.delete", EntityType: "retention_policy",
 		EntityName: string(class), ProjectID: &projectID,
 	})
-	if err := h.store.DeleteProjectOverride(r.Context(), class, projectID); err != nil {
-		apierr.Write(w, err)
+	check := tokenRule(r, adminaccess.RetentionProjectPolicyPattern)
+	if err := h.store.DeleteProjectOverride(r.Context(), class, projectID, check.run); err != nil {
+		check.writeError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// retentionTokenRule is the token rule of the action table on one retention
+// write (ADR-0059 R1.2b, issue 2993). The store calls run with the bounds the
+// write moves, read under its locks; run classifies the move
+// (adminaccess.RetentionAction) and refuses a personal access token the
+// shorten outcome, so the store writes nothing. A token may lengthen a
+// policy; only a shortening is critical.
+type retentionTokenRule struct {
+	r       *http.Request
+	pattern string
+}
+
+func tokenRule(r *http.Request, pattern string) retentionTokenRule {
+	return retentionTokenRule{r: r, pattern: pattern}
+}
+
+// tokenRefusedError carries the refusal out of the store.
+type tokenRefusedError struct {
+	outcome string
+	refusal *adminaccess.Refusal
+}
+
+func (e *tokenRefusedError) Error() string { return e.refusal.Message }
+
+func (t retentionTokenRule) run(before, after retention.Bounds) error {
+	outcome := adminaccess.RetentionAction(adminaccess.RetentionBounds(before), adminaccess.RetentionBounds(after))
+	if refusal := adminaccess.CheckTokenRule(t.r.Context(), t.r.Method, t.pattern, outcome); refusal != nil {
+		return &tokenRefusedError{outcome: outcome, refusal: refusal}
+	}
+	return nil
+}
+
+// writeError answers a store error: the token rule's refusal as the
+// middleware writes it, anything else as before.
+func (t retentionTokenRule) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	var refused *tokenRefusedError
+	if errors.As(err, &refused) {
+		adminaccess.WriteTokenRefusal(w, r, r.Method, t.pattern, refused.outcome, refused.refusal)
+		return
+	}
+	apierr.Write(w, err)
 }
 
 // ListHolds answers holds, newest first. ?active=true drops released ones.

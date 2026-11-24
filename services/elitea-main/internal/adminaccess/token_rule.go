@@ -24,7 +24,12 @@ package adminaccess
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
 	"slices"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 )
 
 // CodeTokenCriticalAction is the stable code of the refusal.
@@ -98,6 +103,14 @@ var StandingGlobalAdmin = func(_ context.Context, ownerSet []string) bool {
 // failure.
 var TokenRuleInHandler = map[Classifier]bool{
 	ClassifyIdentityProvider: true,
+	// The gateway governance rows, the global provider update and the
+	// retention writes (issue 2993). Each handler classifies from the stored
+	// row and the body, and makes its write conditional on what it
+	// classified, so a concurrent change cannot turn the harmless outcome
+	// into the critical one between the check and the write.
+	ClassifyGovernanceRow:  true,
+	ClassifyGlobalProvider: true,
+	ClassifyRetention:      true,
 }
 
 type tokenCallerKey struct{}
@@ -124,6 +137,45 @@ func CheckTokenRule(ctx context.Context, method, pattern, action string) *Refusa
 			Message: "a personal access token cannot call this administration action"}
 	}
 	return TokenRefusal(entry, caller)
+}
+
+// TokenRefused answers whether the token caller of ctx is refused the entry
+// (method, pattern, action): CheckTokenRule as a question, for a handler that
+// narrows its write by the answer before it can classify (a stored row read
+// in the write's own statement).
+func TokenRefused(ctx context.Context, method, pattern, action string) bool {
+	return CheckTokenRule(ctx, method, pattern, action) != nil
+}
+
+// RefuseToken applies the handler half of the rule to the entry (method,
+// pattern, action) the handler classified. When the token caller of r is
+// refused it, RefuseToken writes the 403 the middleware writes, annotates
+// the admin audit row with TokenRefusedAuditAction and answers true: the
+// handler returns without writing.
+func RefuseToken(w http.ResponseWriter, r *http.Request, method, pattern, action string) bool {
+	refusal := CheckTokenRule(r.Context(), method, pattern, action)
+	if refusal == nil {
+		return false
+	}
+	WriteTokenRefusal(w, r, method, pattern, action, refusal)
+	return true
+}
+
+// WriteTokenRefusal writes the token rule's refusal of the entry (method,
+// pattern, action) the way the middleware of internal/api writes it.
+func WriteTokenRefusal(w http.ResponseWriter, r *http.Request, method, pattern, action string, refusal *Refusal) {
+	name := Action{Method: method, Pattern: pattern, Name: action}.Key()
+	audit.Annotate(r.Context(), audit.Annotation{
+		Action:     TokenRefusedAuditAction,
+		EntityType: "admin_action",
+		EntityName: name,
+	})
+	slog.WarnContext(r.Context(), "a personal access token was refused on an administration action",
+		"code", refusal.Code, "action", name)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": refusal.Message, "code": refusal.Code})
 }
 
 // CriticalEntries lists the critical entries of the action table, sorted, for

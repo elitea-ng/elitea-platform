@@ -101,7 +101,24 @@ func TestTheHandlerHalfReadsTheCallerTheMiddlewareRecorded(t *testing.T) {
 	if adminaccess.CheckTokenRule(ctx, http.MethodPut, "/api/v2/admin/nowhere", "") == nil {
 		t.Fatal("an entry the table does not have was not refused")
 	}
-	if !adminaccess.TokenRuleInHandler[adminaccess.ClassifyIdentityProvider] {
-		t.Fatal("the identity provider save no longer applies the rule in its handler")
+	for _, classifier := range []adminaccess.Classifier{adminaccess.ClassifyIdentityProvider,
+		adminaccess.ClassifyGovernanceRow, adminaccess.ClassifyGlobalProvider, adminaccess.ClassifyRetention} {
+		if !adminaccess.TokenRuleInHandler[classifier] {
+			t.Fatalf("the handler of %s no longer applies the rule itself", classifier)
+		}
+	}
+	// Each route the handlers name has the entries they look up.
+	for _, tc := range []struct{ method, pattern, action string }{
+		{http.MethodPost, adminaccess.GovernanceCreatePattern, adminaccess.OutcomeGuardrail},
+		{http.MethodPut, adminaccess.GovernanceRowPattern, adminaccess.OutcomeOther},
+		{http.MethodDelete, adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail},
+		{http.MethodPut, adminaccess.GlobalProviderUpdatePattern, adminaccess.OutcomeSettings},
+		{http.MethodPut, adminaccess.RetentionPolicyPattern, adminaccess.OutcomeLengthen},
+		{http.MethodPut, adminaccess.RetentionProjectPolicyPattern, adminaccess.OutcomeShorten},
+		{http.MethodDelete, adminaccess.RetentionProjectPolicyPattern, adminaccess.OutcomeLengthen},
+	} {
+		if _, found := adminaccess.ActionFor(tc.method, tc.pattern, tc.action); !found {
+			t.Errorf("no entry %s %s %s", tc.method, tc.pattern, tc.action)
+		}
 	}
 }

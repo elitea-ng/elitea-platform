@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -192,6 +193,52 @@ func TestOtherCredentialsAreNotTokens(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || reached != 6 {
 		t.Fatalf("a token = %d (reached %d), want 403", rec.Code, reached)
+	}
+}
+
+// The gateway governance rows, the global provider update and the retention
+// writes are decided in their handlers (issue 2993): the middleware lets an
+// inherit token through with the token caller on the context, so the handler
+// refuses the critical outcome and nothing else.
+func TestTheClassifiedRoutesAreDecidedInTheirHandlers(t *testing.T) {
+	gate := &tokenCriticalActions{resolver: tokenRuleResolver{granted: tokenRuleSuperAdmin,
+		access: adminaccess.TokenAccessInherit}}
+	user := authenticatedTestUser()
+	user.CredentialKind, user.TokenID = auth.CredentialKindToken, "5"
+	gate.mark(NewRouter(RouterConfig{
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		AuthValidator:      testTokenValidator{user: user},
+		PrincipalValidator: testPrincipalValidator{},
+		PermissionResolver: tokenRuleResolver{access: adminaccess.TokenAccessInherit},
+		RetentionAdmin:     v2retention.NewHandler(nil),
+	}))
+	for _, tc := range []struct {
+		method, path, pattern, critical string
+	}{
+		{http.MethodPost, "/api/v2/admin/gateway/governance", adminaccess.GovernanceCreatePattern, adminaccess.OutcomeGuardrail},
+		{http.MethodPut, "/api/v2/admin/gateway/governance/id1", adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail},
+		{http.MethodDelete, "/api/v2/admin/gateway/governance/id1", adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail},
+		{http.MethodPut, "/api/v2/admin/gateway/providers/7", adminaccess.GlobalProviderUpdatePattern, adminaccess.OutcomeRoute},
+		{http.MethodPut, "/api/v2/admin/retention/policies/conversation", adminaccess.RetentionPolicyPattern, adminaccess.OutcomeShorten},
+		{http.MethodPut, "/api/v2/admin/retention/policies/conversation/projects/1",
+			adminaccess.RetentionProjectPolicyPattern, adminaccess.OutcomeShorten},
+		{http.MethodDelete, "/api/v2/admin/retention/policies/conversation/projects/1",
+			adminaccess.RetentionProjectPolicyPattern, adminaccess.OutcomeShorten},
+	} {
+		reached, holdsCaller := false, false
+		handler := gate.middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			reached = true
+			holdsCaller = adminaccess.TokenRefused(r.Context(), tc.method, tc.pattern, tc.critical)
+		}))
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+		req = req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: "1", TokenID: "5",
+			CredentialKind: auth.CredentialKindToken}))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if !reached || !holdsCaller {
+			t.Errorf("%s %s = %d (reached %v, caller on the context %v), want the handler to decide",
+				tc.method, tc.path, rec.Code, reached, holdsCaller)
+		}
 	}
 }
 

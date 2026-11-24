@@ -16,28 +16,56 @@ import (
 )
 
 type fakeStore struct {
-	platform retention.Policy
-	actor    int64
-	hold     retention.Hold
+	platform    retention.Policy
+	hasPlatform bool
+	override    *retention.Policy
+	actor       int64
+	hold        retention.Hold
 }
 
 func (f *fakeStore) ListPolicies(context.Context) ([]retention.Policy, error) {
 	return []retention.Policy{{Class: retention.ClassConversation}}, nil
 }
 
-func (f *fakeStore) SetPlatformPolicy(_ context.Context, p retention.Policy, actor int64) (retention.Policy, error) {
+// The three writes call the check as the PostgreSQL store does, with the
+// same moves (retention.PlatformChange, OverrideChange, OverrideDelete).
+func (f *fakeStore) SetPlatformPolicy(
+	_ context.Context, p retention.Policy, actor int64, check retention.WriteCheck,
+) (retention.Policy, error) {
 	if err := retention.ValidatePlatform(p); err != nil {
 		return retention.Policy{}, apierr.BadRequest(err.Error())
 	}
-	f.platform, f.actor = p, actor
+	var prior *retention.Policy
+	if f.hasPlatform {
+		prior = &f.platform
+	}
+	if err := check.Run(retention.PlatformChange(prior, p)); err != nil {
+		return retention.Policy{}, err
+	}
+	f.platform, f.hasPlatform, f.actor = p, true, actor
 	return p, nil
 }
 
-func (f *fakeStore) SetProjectOverride(_ context.Context, p retention.Policy, _ int64) (retention.Policy, error) {
+func (f *fakeStore) SetProjectOverride(
+	_ context.Context, p retention.Policy, _ int64, check retention.WriteCheck,
+) (retention.Policy, error) {
+	if err := check.Run(retention.OverrideChange(f.platform, f.override, p)); err != nil {
+		return retention.Policy{}, err
+	}
+	f.override = &p
 	return p, nil
 }
 
-func (f *fakeStore) DeleteProjectOverride(context.Context, retention.DataClass, int64) error {
+func (f *fakeStore) DeleteProjectOverride(
+	_ context.Context, _ retention.DataClass, _ int64, check retention.WriteCheck,
+) error {
+	if f.override == nil {
+		return apierr.NotFound("no override for this project and data class")
+	}
+	if err := check.Run(retention.OverrideDelete(f.platform, *f.override)); err != nil {
+		return err
+	}
+	f.override = nil
 	return nil
 }
 

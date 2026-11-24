@@ -86,11 +86,36 @@ func (r *RetentionPolicyRepo) ProjectOverrides(ctx context.Context, class retent
 // SetPlatformPolicy validates and stores a platform row. Existing overrides
 // are left as they are: retention.Effective clamps one that the new bounds
 // exclude, so a tightened maximum applies at once.
-func (r *RetentionPolicyRepo) SetPlatformPolicy(ctx context.Context, p retention.Policy, actor int64) (retention.Policy, error) {
+//
+// check is called with the stored row and the new one, the stored row read
+// under a row lock in the write's transaction, so the move it judges is the
+// move the write makes.
+func (r *RetentionPolicyRepo) SetPlatformPolicy(
+	ctx context.Context, p retention.Policy, actor int64, check retention.WriteCheck,
+) (retention.Policy, error) {
 	if err := retention.ValidatePlatform(p); err != nil {
 		return retention.Policy{}, apierr.BadRequest(err.Error())
 	}
-	stored, err := scanRetentionPolicy(r.pool.QueryRow(ctx, `
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return retention.Policy{}, fmt.Errorf("retention: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var stored *retention.Policy
+	current, err := scanRetentionPolicy(tx.QueryRow(ctx, `SELECT `+retentionPolicyColumns+`
+		FROM elitea_runtime.retention_policy WHERE scope = 'platform' AND data_class = $1
+		FOR UPDATE`, string(p.Class)))
+	switch {
+	case err == nil:
+		stored = &current
+	case !errors.Is(err, pgx.ErrNoRows):
+		return retention.Policy{}, fmt.Errorf("retention: platform policy: %w", err)
+	}
+	if err := check.Run(retention.PlatformChange(stored, p)); err != nil {
+		return retention.Policy{}, err
+	}
+	saved, err := scanRetentionPolicy(tx.QueryRow(ctx, `
 		INSERT INTO elitea_runtime.retention_policy
 		    (data_class, scope, min_age_days, max_age_days, allow_project_override, updated_by, updated_at)
 		VALUES ($1, 'platform', $2, $3, $4, $5, now())
@@ -105,13 +130,52 @@ func (r *RetentionPolicyRepo) SetPlatformPolicy(ctx context.Context, p retention
 	if err != nil {
 		return retention.Policy{}, fmt.Errorf("retention: store platform policy: %w", err)
 	}
-	return stored, nil
+	if err := tx.Commit(ctx); err != nil {
+		return retention.Policy{}, fmt.Errorf("retention: commit platform policy: %w", err)
+	}
+	return saved, nil
+}
+
+// lockedPlatformPolicy reads the platform row of class under a share lock in
+// tx, so a concurrent platform edit cannot slip between a check and a write.
+// found is false when the class has no platform row.
+func lockedPlatformPolicy(ctx context.Context, tx pgx.Tx, class retention.DataClass) (retention.Policy, bool, error) {
+	platform, err := scanRetentionPolicy(tx.QueryRow(ctx, `SELECT `+retentionPolicyColumns+`
+		FROM elitea_runtime.retention_policy WHERE scope = 'platform' AND data_class = $1
+		FOR SHARE`, string(class)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return retention.Policy{Class: class}, false, nil
+	}
+	if err != nil {
+		return retention.Policy{}, false, fmt.Errorf("retention: platform policy: %w", err)
+	}
+	return platform, true, nil
+}
+
+// lockedOverride reads the override of (class, project) under a row lock in
+// tx; nil when there is none.
+func lockedOverride(ctx context.Context, tx pgx.Tx, class retention.DataClass, projectID int64) (*retention.Policy, error) {
+	override, err := scanRetentionPolicy(tx.QueryRow(ctx, `SELECT `+retentionPolicyColumns+`
+		FROM elitea_runtime.retention_policy
+		WHERE scope = 'project' AND data_class = $1 AND project_id = $2
+		FOR UPDATE`, string(class), projectID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("retention: project override: %w", err)
+	}
+	return &override, nil
 }
 
 // SetProjectOverride validates an override against the platform row, read
 // under a share lock in the same transaction so a concurrent platform edit
-// cannot slip between the check and the write, and stores it.
-func (r *RetentionPolicyRepo) SetProjectOverride(ctx context.Context, p retention.Policy, actor int64) (retention.Policy, error) {
+// cannot slip between the check and the write, and stores it. check is
+// called with the maximum that applies to the project before and after, the
+// stored override read under a row lock.
+func (r *RetentionPolicyRepo) SetProjectOverride(
+	ctx context.Context, p retention.Policy, actor int64, check retention.WriteCheck,
+) (retention.Policy, error) {
 	if !retention.Known(p.Class) {
 		return retention.Policy{}, apierr.BadRequest("unknown data class " + string(p.Class))
 	}
@@ -121,14 +185,12 @@ func (r *RetentionPolicyRepo) SetProjectOverride(ctx context.Context, p retentio
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	platform, err := scanRetentionPolicy(tx.QueryRow(ctx, `SELECT `+retentionPolicyColumns+`
-		FROM elitea_runtime.retention_policy WHERE scope = 'platform' AND data_class = $1
-		FOR SHARE`, string(p.Class)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return retention.Policy{}, apierr.NotFound("no platform retention policy for " + string(p.Class))
-	}
+	platform, found, err := lockedPlatformPolicy(ctx, tx, p.Class)
 	if err != nil {
-		return retention.Policy{}, fmt.Errorf("retention: platform policy: %w", err)
+		return retention.Policy{}, err
+	}
+	if !found {
+		return retention.Policy{}, apierr.NotFound("no platform retention policy for " + string(p.Class))
 	}
 	if err := retention.ValidateOverride(platform, p); err != nil {
 		return retention.Policy{}, apierr.BadRequest(err.Error())
@@ -140,7 +202,14 @@ func (r *RetentionPolicyRepo) SetProjectOverride(ctx context.Context, p retentio
 	if !exists {
 		return retention.Policy{}, apierr.NotFound("project not found")
 	}
-	stored, err := scanRetentionPolicy(tx.QueryRow(ctx, `
+	stored, err := lockedOverride(ctx, tx, p.Class, *p.ProjectID)
+	if err != nil {
+		return retention.Policy{}, err
+	}
+	if err := check.Run(retention.OverrideChange(platform, stored, p)); err != nil {
+		return retention.Policy{}, err
+	}
+	saved, err := scanRetentionPolicy(tx.QueryRow(ctx, `
 		INSERT INTO elitea_runtime.retention_policy
 		    (data_class, scope, project_id, max_age_days, updated_by, updated_at)
 		VALUES ($1, 'project', $2, $3, $4, now())
@@ -156,19 +225,43 @@ func (r *RetentionPolicyRepo) SetProjectOverride(ctx context.Context, p retentio
 	if err := tx.Commit(ctx); err != nil {
 		return retention.Policy{}, fmt.Errorf("retention: commit override: %w", err)
 	}
-	return stored, nil
+	return saved, nil
 }
 
 // DeleteProjectOverride removes an override; the platform value applies
-// again.
-func (r *RetentionPolicyRepo) DeleteProjectOverride(ctx context.Context, class retention.DataClass, projectID int64) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM elitea_runtime.retention_policy
-		WHERE scope = 'project' AND data_class = $1 AND project_id = $2`, string(class), projectID)
+// again. check is called with the maximum the override gives the project and
+// the platform maximum it falls back to, both read under locks.
+func (r *RetentionPolicyRepo) DeleteProjectOverride(
+	ctx context.Context, class retention.DataClass, projectID int64, check retention.WriteCheck,
+) error {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("retention: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The platform row first, in the order SetProjectOverride takes them. A
+	// class with no platform row falls back to keeping data forever.
+	platform, _, err := lockedPlatformPolicy(ctx, tx, class)
+	if err != nil {
+		return err
+	}
+	stored, err := lockedOverride(ctx, tx, class, projectID)
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		return apierr.NotFound("no override for this project and data class")
+	}
+	if err := check.Run(retention.OverrideDelete(platform, *stored)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM elitea_runtime.retention_policy
+		WHERE scope = 'project' AND data_class = $1 AND project_id = $2`, string(class), projectID); err != nil {
 		return fmt.Errorf("retention: delete override: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return apierr.NotFound("no override for this project and data class")
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("retention: commit override delete: %w", err)
 	}
 	return nil
 }

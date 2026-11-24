@@ -67,6 +67,9 @@ func (q *storedKindQuerier) admits(args []any, first int) bool {
 	guardrails, _ := args[first+2].(bool)
 	policy, _ := args[first+4].(bool)
 	types, _ := args[first+3].([]string)
+	if tokenNoGuardrail, _ := args[first+5].(bool); tokenNoGuardrail && q.storedType == args[first+1] {
+		return false
+	}
 	return legacy || (q.storedType == args[first+1] && guardrails) || (slices.Contains(types, q.storedType) && policy)
 }
 
@@ -78,6 +81,9 @@ func (q *storedKindQuerier) QueryRow(_ context.Context, sql string, args ...any)
 	switch {
 	case strings.HasPrefix(sql, "SELECT type FROM"):
 		return &fakeRow{vals: []any{q.storedType}}
+	case strings.Contains(sql, "INSERT INTO gateway.governance_config"):
+		q.wrote = true
+		return okRow("id1", args[0].(string), "n", map[string]any{}, true)
 	case strings.Contains(sql, "UPDATE gateway.governance_config"):
 		if !q.admits(args, 6) {
 			return &fakeRow{scanErr: pgx.ErrNoRows}
