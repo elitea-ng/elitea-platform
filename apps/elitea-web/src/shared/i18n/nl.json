@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "De rol bijwerken mislukt.",
   "pages.admin.projects.member.existing": "Deze gebruiker zit al in het project — zijn rol wordt vervangen.",
   "pages.admin.projects.member.remove": "Uit project verwijderen",
+  "pages.admin.projects.member.removeConfirm": "Klik nogmaals om te verwijderen",
   "pages.admin.projects.member.removed": "Gebruiker uit het project verwijderd.",
   "pages.admin.projects.member.removing": "Verwijderen…",
   "pages.admin.projects.member.role": "Rol",

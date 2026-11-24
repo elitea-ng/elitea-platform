@@ -72,7 +72,7 @@ var invisibleChecks = map[string]string{
 // come from adminaccess.OverrideRoutePermissions, and the same check is seen
 // on the detail, update and delete routes, where the type is the stored row's.
 func init() {
-	const settingsOverride = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations.(*Handler).settingsOverride"
+	const settingsOverride = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware.ResolveCentralPermission"
 	for _, route := range []adminsurface.Route{
 		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{projectID}"},
 		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{mode}/{projectID}"},

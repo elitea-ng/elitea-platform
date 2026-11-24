@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "更新角色失敗。",
   "pages.admin.projects.member.existing": "此使用者已在專案中——其角色將被替換。",
   "pages.admin.projects.member.remove": "從專案中移除",
+  "pages.admin.projects.member.removeConfirm": "再次點擊以移除",
   "pages.admin.projects.member.removed": "已將使用者從專案中移除。",
   "pages.admin.projects.member.removing": "正在移除…",
   "pages.admin.projects.member.role": "角色",

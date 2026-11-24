@@ -84,23 +84,36 @@ func RequireResolvedPermissionsOrCentral(
 }
 
 // HoldsCentralPermission answers whether the caller holds any of `permissions`
-// in the administration mode. A native device session holds none at any
-// administration check that stands in for a route gate (ADR-0059 decision 7),
-// and a denied resolution is false, not an error.
+// in the administration mode (ResolveCentralPermission without the id).
 func HoldsCentralPermission(ctx context.Context, resolver auth.PermissionResolver, permissions ...string) (bool, error) {
+	_, held, err := ResolveCentralPermission(ctx, resolver, permissions...)
+	return held, err
+}
+
+// ResolveCentralPermission answers whether the caller holds any of
+// `permissions` in the administration mode, and the resolved numeric user id
+// when it does. A native device session holds none at any administration check
+// that stands in for a route gate (ADR-0059 decision 7), and a denied
+// resolution is false, not an error.
+func ResolveCentralPermission(
+	ctx context.Context, resolver auth.PermissionResolver, permissions ...string,
+) (userID int64, held bool, err error) {
 	user, ok := auth.UserFromContext(ctx)
 	if !ok || resolver == nil || len(permissions) == 0 {
-		return false, nil
+		return 0, false, nil
 	}
 	if nativeAtAdministrationGate(user, auth.PermissionModeAdministration) {
-		return false, nil
+		return 0, false, nil
 	}
 	resolution, err := resolver.ResolvePermissions(ctx, user, auth.PermissionModeAdministration, "")
 	if errors.Is(err, auth.ErrPermissionDenied) {
-		return false, nil
+		return 0, false, nil
 	}
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
-	return hasIntersection(permissionSet(permissions), permissionSet(resolution.Permissions)), nil
+	if !hasIntersection(permissionSet(permissions), permissionSet(resolution.Permissions)) {
+		return 0, false, nil
+	}
+	return resolution.UserID, true, nil
 }

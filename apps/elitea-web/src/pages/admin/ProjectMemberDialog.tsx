@@ -199,11 +199,14 @@ function MemberAlerts({
   );
 }
 
-/**
- * Remove the member the typed address names (ADR-0059 R0.6a). Rendered only
- * for an existing member, with its own mutation, so the form's branches stay
- * inside the complexity budget.
- */
+function removeLabel(isPending: boolean, armed: boolean): string {
+  if (isPending) return t('pages.admin.projects.member.removing', 'Removing…');
+  return armed
+    ? t('pages.admin.projects.member.removeConfirm', 'Click again to remove')
+    : t('pages.admin.projects.member.remove', 'Remove from project');
+}
+
+/** Remove the typed member (ADR-0059 R0.6a); its own component for the complexity budget. */
 function RemoveMemberButton({
   projectId,
   member,
@@ -218,8 +221,16 @@ function RemoveMemberButton({
   readonly clearEmail: () => void;
 }) {
   const removeMember = useRemoveProjectMember();
+  // Two clicks: a removal takes every role the member has in the project.
+  const [armedFor, setArmedFor] = useState<string | null>(null);
   if (member === undefined) return null;
+  const armed = armedFor === member.id;
   const handleRemove = () => {
+    if (!armed) {
+      setArmedFor(member.id);
+      return;
+    }
+    setArmedFor(null);
     setFeedback(NO_FEEDBACK);
     removeMember.mutate(
       { projectId, userId: member.id },
@@ -245,9 +256,7 @@ function RemoveMemberButton({
   };
   return (
     <Button color="error" onClick={handleRemove} disabled={disabled || removeMember.isPending}>
-      {removeMember.isPending
-        ? t('pages.admin.projects.member.removing', 'Removing…')
-        : t('pages.admin.projects.member.remove', 'Remove from project')}
+      {removeLabel(removeMember.isPending, armed)}
     </Button>
   );
 }

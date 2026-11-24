@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "ロールを更新できませんでした。",
   "pages.admin.projects.member.existing": "このユーザーは既にプロジェクトに所属しています。ロールが置き換えられます。",
   "pages.admin.projects.member.remove": "プロジェクトから削除",
+  "pages.admin.projects.member.removeConfirm": "もう一度クリックして削除",
   "pages.admin.projects.member.removed": "ユーザーをプロジェクトから削除しました。",
   "pages.admin.projects.member.removing": "削除中…",
   "pages.admin.projects.member.role": "ロール",

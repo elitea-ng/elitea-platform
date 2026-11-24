@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -69,7 +70,7 @@ func (h *Handler) settingsOverride(pattern string) middleware.CentralFallback {
 		}
 		// The central permission first: a caller without it is refused
 		// before anything of the project is read.
-		held, err := middleware.HoldsCentralPermission(r.Context(), h.permissionResolver, permissions...)
+		userID, held, err := middleware.ResolveCentralPermission(r.Context(), h.permissionResolver, permissions...)
 		if err != nil || !held {
 			return r, false, err
 		}
@@ -77,9 +78,28 @@ func (h *Handler) settingsOverride(pattern string) middleware.CentralFallback {
 		if err != nil || !ok || !adminaccess.OverrideAllows(r.Method, pattern, types...) {
 			return next, false, err
 		}
-		adminaccess.MarkCentralOverride(next.Context())
-		return next, true, nil
+		// The handler sees the caller as the member branch leaves it: the
+		// resolved numeric id on the user (author_id, the audit actor), and
+		// the mark that it came in centrally, so the write itself is held to
+		// the guarded types whatever the body says (projectSettingsWriteForbidden).
+		ctx := next.Context()
+		if user, hasUser := auth.UserFromContext(ctx); hasUser {
+			user.UserID = strconv.FormatInt(userID, 10)
+			ctx = auth.ContextWithUser(ctx, user)
+		}
+		ctx = context.WithValue(ctx, centralSettingsAdmittedKey{}, true)
+		adminaccess.MarkCentralOverride(ctx)
+		return next.WithContext(ctx), true, nil
 	}
+}
+
+type centralSettingsAdmittedKey struct{}
+
+// admittedCentrally reports a request the route gate admitted through the
+// central override, not as a member.
+func admittedCentrally(ctx context.Context) bool {
+	admitted, _ := ctx.Value(centralSettingsAdmittedKey{}).(bool)
+	return admitted
 }
 
 // overrideTypes reads the configuration types a request reaches, and the
@@ -146,17 +166,20 @@ func overrideBodyType(r *http.Request) (*http.Request, string, bool) {
 	if err != nil || len(raw) > maxConfigurationRequestBytes {
 		return next, "", false
 	}
-	var body struct {
-		Type json.RawMessage `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &body); err != nil {
+	// The handlers read the body as a map and the exact key `type`
+	// (strVal), so this does too: a struct decode matches keys without
+	// regard to case, and {"type":"github","TYPE":"browser"} would decide
+	// on a type the handler never writes.
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil || body == nil {
 		return next, "", false
 	}
-	if len(body.Type) == 0 || string(body.Type) == "null" {
+	value, present := body["type"]
+	if !present || value == nil {
 		return next, "", true
 	}
-	var typeName string
-	if err := json.Unmarshal(body.Type, &typeName); err != nil {
+	typeName, isString := value.(string)
+	if !isString {
 		// A non-string type is refused by the handler; it is no type here.
 		return next, "", false
 	}

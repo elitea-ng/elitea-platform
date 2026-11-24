@@ -1695,6 +1695,7 @@
   "pages.admin.projects.member.error.update": "Failed to update the role.",
   "pages.admin.projects.member.existing": "This user is already in the project — their role will be replaced.",
   "pages.admin.projects.member.remove": "Remove from project",
+  "pages.admin.projects.member.removeConfirm": "Click again to remove",
   "pages.admin.projects.member.removed": "User removed from the project.",
   "pages.admin.projects.member.removing": "Removing…",
   "pages.admin.projects.member.role": "Role",

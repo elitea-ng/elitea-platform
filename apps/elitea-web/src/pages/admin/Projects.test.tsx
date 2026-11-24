@@ -763,7 +763,10 @@ describe('Admin › Projects', () => {
 
       await user.clear(screen.getByRole('textbox', { name: 'User email' }));
       await user.type(screen.getByRole('textbox', { name: 'User email' }), 'already@example.com');
+      // The first click arms the button and removes nothing.
       await user.click(await screen.findByRole('button', { name: 'Remove from project' }));
+      expect(writes()).toHaveLength(0);
+      await user.click(screen.getByRole('button', { name: 'Click again to remove' }));
 
       await waitFor(() => expect(writes()).toHaveLength(1));
       expect(writes()[0]!.method).toBe('DELETE-member');

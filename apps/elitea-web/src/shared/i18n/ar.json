@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "فشل تحديث الدور.",
   "pages.admin.projects.member.existing": "هذا المستخدم في المشروع بالفعل — سيُستبدل دوره.",
   "pages.admin.projects.member.remove": "إزالة من المشروع",
+  "pages.admin.projects.member.removeConfirm": "انقر مرة أخرى للإزالة",
   "pages.admin.projects.member.removed": "تمت إزالة المستخدم من المشروع.",
   "pages.admin.projects.member.removing": "جارٍ الإزالة…",
   "pages.admin.projects.member.role": "الدور",

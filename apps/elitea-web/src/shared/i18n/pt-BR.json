@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "Falha ao atualizar a função.",
   "pages.admin.projects.member.existing": "Este usuário já está no projeto — a função dele será substituída.",
   "pages.admin.projects.member.remove": "Remover do projeto",
+  "pages.admin.projects.member.removeConfirm": "Clique novamente para remover",
   "pages.admin.projects.member.removed": "Usuário removido do projeto.",
   "pages.admin.projects.member.removing": "Removendo…",
   "pages.admin.projects.member.role": "Função",

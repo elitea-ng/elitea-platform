@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "کردار اپ ڈیٹ نہیں ہو سکا۔",
   "pages.admin.projects.member.existing": "یہ صارف پہلے ہی پروجیکٹ میں ہے — اس کا کردار تبدیل کر دیا جائے گا۔",
   "pages.admin.projects.member.remove": "پروجیکٹ سے ہٹائیں",
+  "pages.admin.projects.member.removeConfirm": "ہٹانے کے لیے دوبارہ کلک کریں",
   "pages.admin.projects.member.removed": "صارف کو پروجیکٹ سے ہٹا دیا گیا۔",
   "pages.admin.projects.member.removing": "ہٹایا جا رہا ہے…",
   "pages.admin.projects.member.role": "کردار",

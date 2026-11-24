@@ -34,6 +34,12 @@ var guardedProjectSettingTypes = []string{
 // projectSettingsWriteForbidden reports a write of a type that needs the
 // project settings permission by a caller who lacks it.
 func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID string, typeNames ...string) bool {
+	// A request the gate admitted through the central override writes the
+	// guarded types and nothing else, whatever the gate read: the decision is
+	// made again on the types the handler is about to write.
+	if admittedCentrally(ctx) {
+		return !h.centralSettingsWrite(ctx, typeNames)
+	}
 	guarded := false
 	for _, name := range typeNames {
 		if slices.Contains(guardedProjectSettingTypes, strings.TrimSpace(name)) {

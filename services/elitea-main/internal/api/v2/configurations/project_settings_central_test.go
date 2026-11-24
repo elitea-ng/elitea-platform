@@ -65,7 +65,9 @@ func settingsRouter(pool *pgxpool.Pool, caller settingsCaller) (chi.Router, func
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, recorded := audit.ContextWithAnnotationSlot(r.Context())
 			slot = recorded
-			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(ctx, auth.User{ID: "1", UserID: "1"})))
+			// No numeric id on the session user: the gate sets the resolved
+			// one, as the member branch does, so the row's author is the caller.
+			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(ctx, auth.User{ID: "session-1"})))
 		})
 	})
 	router.Mount("/api/v2/configurations", h.Routes())
@@ -143,6 +145,28 @@ func expectSettingsRefused(t *testing.T, typeName, section string) {
 	mixed := settingsDo(t, router, http.MethodGet, settingsList+"?type=cloud_executor&type="+typeName, nil)
 	if mixed.Code != http.StatusForbidden {
 		t.Fatalf("list of cloud_executor and %s = %d, want 403", typeName, mixed.Code)
+	}
+}
+
+// The gate reads the create body's `type` the way the handler does, as the
+// exact key: a second key that differs only in case cannot pass a credential
+// off as a guarded setting.
+func TestACaseVariantTypeKeyDoesNotPassACredential(t *testing.T) {
+	router, recorded := settingsRouter(closedPool(t), projectAdministrator(t))
+	for _, body := range []string{
+		`{"type":"github","TYPE":"browser","section":"credentials","data":{}}`,
+		`{"TYPE":"browser","type":"github","section":"credentials","data":{}}`,
+		`{"Type":"browser","section":"credentials","data":{}}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, settingsList, bytes.NewBufferString(body))
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Errorf("create %s = %d, want 403", body, recorder.Code)
+		}
+		if recorded().CentralOverride {
+			t.Errorf("create %s is marked central_override", body)
+		}
 	}
 }
 
@@ -240,6 +264,14 @@ func TestTheProjectAdministratorChangesAGuardedSettingOfAnyProject(t *testing.T)
 	}
 	if !enabled {
 		t.Fatal("the update did not land")
+	}
+	var author *int64
+	if err := pool.QueryRow(context.Background(), fmt.Sprintf(
+		`SELECT author_id FROM p_%d.configuration WHERE id = $1`, globalScopeProject), id).Scan(&author); err != nil {
+		t.Fatal(err)
+	}
+	if author == nil || *author != 1 {
+		t.Fatalf("the central create's author is %v, want the resolved user 1", author)
 	}
 
 	// An update that changes the guarded type into a credential type is

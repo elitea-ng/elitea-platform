@@ -3,14 +3,16 @@ package adminaccess
 // The central override (ADR-0059 R0.6): a central permission that reaches a
 // project the caller is not a member of.
 //
-// Two powers use it. R0.6a: the administration member routes and the bulk
-// invite place other people into any project (projects.members.manage, or
-// the legacy configuration.users.users.* names). R0.6b: the five guarded
+// Two powers use it. R0.6a: the administration member routes place other
+// people into any project (projects.members.manage, or the legacy
+// configuration.users.users.* names); the bulk invite keeps its own invite
+// permissions and is marked the same way. R0.6b: the five guarded
 // project settings of any project, through projects.settings.view and
 // projects.settings.manage, on the reviewed allowlist below and nothing else.
 //
 // Each such write marks its audit record `central_override`
-// (MarkCentralOverride). R1.4a persists the flag as an audit column.
+// (MarkCentralOverride); the audit middleware keeps the mark only on a
+// response below 400, so a refused or failed request is not one. R1.4a persists the flag as an audit column.
 
 import (
 	"context"

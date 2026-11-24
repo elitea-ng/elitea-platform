@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "Не вдалося оновити роль.",
   "pages.admin.projects.member.existing": "Цей користувач уже в проєкті — його роль буде замінено.",
   "pages.admin.projects.member.remove": "Видалити з проєкту",
+  "pages.admin.projects.member.removeConfirm": "Натисніть ще раз, щоб видалити",
   "pages.admin.projects.member.removed": "Користувача видалено з проєкту.",
   "pages.admin.projects.member.removing": "Видалення…",
   "pages.admin.projects.member.role": "Роль",

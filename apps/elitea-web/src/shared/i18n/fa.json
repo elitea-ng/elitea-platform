@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "به‌روزرسانی نقش ناموفق بود.",
   "pages.admin.projects.member.existing": "این کاربر از قبل در پروژه است — نقش او جایگزین خواهد شد.",
   "pages.admin.projects.member.remove": "حذف از پروژه",
+  "pages.admin.projects.member.removeConfirm": "برای حذف دوباره کلیک کنید",
   "pages.admin.projects.member.removed": "کاربر از پروژه حذف شد.",
   "pages.admin.projects.member.removing": "در حال حذف…",
   "pages.admin.projects.member.role": "نقش",

@@ -1619,6 +1619,7 @@
   "pages.admin.projects.member.error.update": "Die Rolle konnte nicht aktualisiert werden.",
   "pages.admin.projects.member.existing": "Dieser Benutzer ist bereits im Projekt — seine Rolle wird ersetzt.",
   "pages.admin.projects.member.remove": "Aus dem Projekt entfernen",
+  "pages.admin.projects.member.removeConfirm": "Zum Entfernen erneut klicken",
   "pages.admin.projects.member.removed": "Benutzer aus dem Projekt entfernt.",
   "pages.admin.projects.member.removing": "Wird entfernt…",
   "pages.admin.projects.member.role": "Rolle",
