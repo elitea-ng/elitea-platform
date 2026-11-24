@@ -17,6 +17,7 @@ import (
 	executionapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/executions"
 	workeregressapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workeregress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
@@ -203,6 +204,11 @@ type Config struct {
 	// kept (ELITEA_EGRESS_AUDIT_RETENTION_DAYS, default 30, at most 365).
 	// Zero takes the default.
 	EgressAuditRetention time.Duration
+
+	// HTTPActionEgressAllowlist is ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST, the
+	// operator's outer bound for HTTP action dials (empty: public only). A
+	// malformed value refuses startup.
+	HTTPActionEgressAllowlist string
 
 	ControlAddress string
 	OutputAddress  string
@@ -491,6 +497,10 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	// ELITEA_RUNTIME_SSE_* names itself, so they do not appear as literal
 	// lookups here.
 	if config.SSEStreamLimits, err = executionapi.SSEStreamLimitsFromEnv(lookup); err != nil {
+		return Config{}, err
+	}
+	config.HTTPActionEgressAllowlist, _ = lookup(egress.HTTPActionAllowlistEnv)
+	if _, err := egress.NewHTTPActionGuard(config.HTTPActionEgressAllowlist); err != nil {
 		return Config{}, err
 	}
 	if err := config.Validate(); err != nil {

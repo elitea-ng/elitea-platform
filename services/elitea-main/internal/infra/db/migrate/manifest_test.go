@@ -1239,7 +1239,15 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 269: shared/0269_admin_elevations.sql, the elevation ledger of
 	// break-glass access (elitea_auth.admin_elevations), append-only except
 	// its end and review columns (issue 2515, ADR-0059 R2.1a). No permission.
-	require.EqualValues(t, 269, Head(shared))
+	//
+	// 270: shared/0270_http_action_rules_and_effects_v3.sql, the project HTTP
+	// action rules and their write audit (elitea_runtime.http_action_rules,
+	// http_action_rule_audit), the revision-2 identity of
+	// elitea_runtime.execution_http_effects (rule, attempt, dispatch
+	// deadline), and the grants models.http_action_rules.manage (admin) and
+	// models.http_action_rules.list (admin, editor, viewer), including the
+	// per-project override rows. No foreign key to centry.project.
+	require.EqualValues(t, 270, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

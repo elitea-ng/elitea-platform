@@ -16,6 +16,7 @@ export * from "./configurations/configurations";
 export * from "./deepwiki/deepwiki";
 export * from "./default/default";
 export * from "./discovery/discovery";
+export * from "./httpactions/httpactions";
 export * from "./inventory/inventory";
 export * from "./marketplace/marketplace";
 export * from "./notifications/notifications";

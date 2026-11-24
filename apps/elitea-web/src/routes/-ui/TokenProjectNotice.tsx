@@ -18,7 +18,13 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { tokenMintRefusal, tokenProjectErrorCode, type TokenMintRefusal } from '@/entities/token/model/selectors';
+import {
+  tokenMintRefusal,
+  tokenProjectErrorCode,
+  tokenScopeRefusal,
+  type TokenMintRefusal,
+  type TokenScopeRefusal,
+} from '@/entities/token/model/selectors';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
@@ -55,6 +61,8 @@ export function createTokenFailureMessage(error: unknown): string {
   }
   const refusal = tokenMintRefusal(error);
   if (refusal !== null) return mintRefusalMessage(refusal);
+  const scopeRefusal = tokenScopeRefusal(error);
+  if (scopeRefusal !== null) return scopeRefusalMessage(scopeRefusal);
   const code = tokenProjectErrorCode(error);
   if (code === 'project_forbidden') {
     return t(
@@ -110,6 +118,38 @@ function mintRefusalMessage({ code, projectId }: TokenMintRefusal): string {
         'A personal token can be created only after you sign in with a browser, not with another token.',
       );
   }
+}
+
+/*
+ * ADR-0059 R1.3a: the administration scopes were refused. The two scope
+ * checks name the scopes; the credential checks say where to go instead.
+ */
+function scopeRefusalMessage({ code, scopes }: TokenScopeRefusal): string {
+  if (scopes.length > 0) {
+    return t(
+      'entities.token.form.scopeRefused',
+      'This token cannot have these administration permissions: {{scopes}}. Remove them and create the token again.',
+      { scopes: scopes.join(', ') },
+    );
+  }
+  if (code === 'token_scopes_browser_session_required' || code === 'token_scopes_sealed_session') {
+    return t(
+      'entities.token.form.scopeBrowserRequired',
+      'Administration permissions can be given to a token only after you sign in with your own account in the web app.',
+    );
+  }
+  return t(
+    'entities.token.form.scopeNotSettable',
+    'This sign-in cannot give a token administration permissions. Remove them, or sign in again and retry.',
+  );
+}
+
+/** A recent sign-in is needed, but this session has no browser sign-in to renew it. */
+export function recentSignInUnavailableMessage(): string {
+  return t(
+    'entities.token.form.recentSignInUnavailable',
+    'Administration permissions need a recent sign-in. Sign out, sign in again, and create the token within a few minutes.',
+  );
 }
 
 /* ── the binding disclosure ────────────────────────────────────────────── */

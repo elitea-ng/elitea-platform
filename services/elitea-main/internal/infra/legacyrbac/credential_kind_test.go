@@ -114,14 +114,18 @@ func TestAdministrationSetFollowsTheCredentialsTable(t *testing.T) {
 }
 
 // A scope resolves only when its registry row admits it as a token scope.
-// Until R1.3a opts rows in, none does, so a scoped token resolves nothing even
-// for names its owner holds; super_admin and identity trust never resolve,
-// whatever admin_scopes says.
+// R1.3a opted the eligible rows in: super_admin, identity trust and the legacy
+// names never resolve, whatever admin_scopes says.
 func TestAScopeOutsideTheRegistrysTokenScopesNeverResolves(t *testing.T) {
-	owner := []string{adminaccess.AdminAuthUsers, adminaccess.AdminAuthUsersSuperAdmin, adminaccess.RuntimePlugins}
+	owner := []string{adminaccess.AdminAuthUsers, adminaccess.AdminAuthUsersSuperAdmin,
+		adminaccess.IdentitySSOTrustManage, adminaccess.RuntimePlugins}
 	scoped := TokenAdminAccess{Access: TokenAdminAccessScoped, Scopes: owner}
+	if got := AdministrationSet(auth.CredentialKindToken, scoped, owner); !slices.Equal(got, []string{adminaccess.AdminAuthUsers}) {
+		t.Fatalf("with today's registry a scoped token resolved %v, want only %s", got, adminaccess.AdminAuthUsers)
+	}
+	AllowTokenScopesForTest(t)
 	if got := AdministrationSet(auth.CredentialKindToken, scoped, owner); len(got) != 0 {
-		t.Fatalf("with today's registry a scoped token resolved %v, want nothing", got)
+		t.Fatalf("with no admitted scope a scoped token resolved %v, want nothing", got)
 	}
 	AllowTokenScopesForTest(t, adminaccess.AdminAuthUsers)
 	if got := AdministrationSet(auth.CredentialKindToken, scoped, owner); !slices.Equal(got, []string{adminaccess.AdminAuthUsers}) {

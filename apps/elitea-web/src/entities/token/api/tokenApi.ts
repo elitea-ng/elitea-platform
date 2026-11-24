@@ -80,6 +80,12 @@ export interface CreateTokenParams {
    * caller cannot change it later.
    */
   readonly project_id?: number;
+  /**
+   * OPTIONAL administration scopes (ADR-0059 R1.3b). Omitted, the token is
+   * `none`. Never `inherit`: no request sets it.
+   */
+  readonly admin_access?: 'scoped';
+  readonly admin_scopes?: readonly string[];
 }
 
 export interface CreatedTokenResponse {
@@ -99,7 +105,8 @@ export interface CreatedTokenResponse {
  * e2e/journeys/settings/settings.tokens.spec.ts.
  */
 export async function createToken(params: CreateTokenParams): Promise<CreatedTokenResponse> {
-  const response = await createPersonalTokenRequest({ ...params });
+  const { admin_scopes: scopes, ...rest } = params;
+  const response = await createPersonalTokenRequest({ ...rest, ...(scopes === undefined ? {} : { admin_scopes: [...scopes] }) });
   return (response as { data: CreatedTokenResponse }).data;
 }
 

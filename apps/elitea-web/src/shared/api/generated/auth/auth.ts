@@ -62,6 +62,7 @@ import type {
   ListNativeDevicesParams,
   N401Response,
   N403Response,
+  N500Response,
   NativeDeviceList,
   NativeOAuthError,
   NativeRevokeRequest,
@@ -69,7 +70,9 @@ import type {
   NativeTokenResponse,
   Permission,
   PersonalAccessToken,
+  PersonalAccessTokenAdminScopesRequest,
   PersonalAccessTokenCreateRequest,
+  PersonalAccessTokenScopeOffer,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -1950,7 +1953,7 @@ export type createPersonalTokenResponse400 = {
 };
 
 export type createPersonalTokenResponse401 = {
-  data: N401Response;
+  data: ErrorResponse;
   status: 401;
 };
 
@@ -2010,6 +2013,17 @@ export const getCreatePersonalTokenUrl = () => {
  * hold) is refused rather than silently falling back to unbound, because
  * a caller that typed a project must not receive a key that bills
  * somewhere else.
+ *
+ * ADMINISTRATION SCOPES (ADR-0059 R1.3a,
+ * internal/api/v2/auth/token_admin_scopes.go). A token is created
+ * `admin_access: none` unless the body asks for `scoped`. Scopes are set
+ * only from a browser session of the kind `session` or `form` (never a
+ * sealed session, never under an elevation), only inside the CALLING
+ * credential's own administration set, never a permission the registry
+ * marks `token: never` (identity trust, the global administrator's own
+ * permission, break-glass and the two legacy names), and only after a
+ * sign-in within the deployment's limit (15 minutes by default). Where a
+ * native device session may mint at all, its token is `none`.
  * @summary Mint a personal access token
  */
 export const createPersonalToken = async (
@@ -2056,7 +2070,7 @@ export const getCreatePersonalTokenQueryKey = (
 
 export const getCreatePersonalTokenQueryOptions = <
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse | N401Response,
+  TError = ErrorResponse,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2094,11 +2108,11 @@ export const getCreatePersonalTokenQueryOptions = <
 export type CreatePersonalTokenQueryResult = NonNullable<
   Awaited<ReturnType<typeof createPersonalToken>>
 >;
-export type CreatePersonalTokenQueryError = ErrorResponse | N401Response;
+export type CreatePersonalTokenQueryError = ErrorResponse;
 
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse | N401Response,
+  TError = ErrorResponse,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options: {
@@ -2125,7 +2139,7 @@ export function useCreatePersonalToken<
 };
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse | N401Response,
+  TError = ErrorResponse,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2152,7 +2166,7 @@ export function useCreatePersonalToken<
 };
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse | N401Response,
+  TError = ErrorResponse,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2175,7 +2189,7 @@ export function useCreatePersonalToken<
 
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse | N401Response,
+  TError = ErrorResponse,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2194,6 +2208,485 @@ export function useCreatePersonalToken<
 } {
   const queryOptions = getCreatePersonalTokenQueryOptions(
     personalAccessTokenCreateRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getPersonalTokenAdminScopeOfferResponse200 = {
+  data: PersonalAccessTokenScopeOffer;
+  status: 200;
+};
+
+export type getPersonalTokenAdminScopeOfferResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getPersonalTokenAdminScopeOfferResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getPersonalTokenAdminScopeOfferResponseSuccess =
+  getPersonalTokenAdminScopeOfferResponse200 & {
+    headers: Headers;
+  };
+export type getPersonalTokenAdminScopeOfferResponseError = (
+  | getPersonalTokenAdminScopeOfferResponse401
+  | getPersonalTokenAdminScopeOfferResponse500
+) & {
+  headers: Headers;
+};
+
+export type getPersonalTokenAdminScopeOfferResponse =
+  | getPersonalTokenAdminScopeOfferResponseSuccess
+  | getPersonalTokenAdminScopeOfferResponseError;
+
+export const getGetPersonalTokenAdminScopeOfferUrl = () => {
+  return `/auth/token/admin_scopes`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+ * (TokenAdminScopeOffer).
+ *
+ * The calling credential's own administration set, intersected with the
+ * registry's token scopes (ADR-0059 R1.3a). The token screen offers
+ * these and nothing else (R1.3b); the create and the scope change check
+ * again. A credential that may set no scope (a token, a native device
+ * session, a run token, a sealed or an elevated session) answers
+ * `settable: false` with its `code` and no scopes. This read needs no
+ * recent sign-in; setting the scopes does.
+ * @summary The administration scopes the caller may give a token
+ */
+export const getPersonalTokenAdminScopeOffer = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getPersonalTokenAdminScopeOfferResponse> => {
+  return eliteaFetch<getPersonalTokenAdminScopeOfferResponse>(
+    getGetPersonalTokenAdminScopeOfferUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPersonalTokenAdminScopeOfferQueryKey = () => {
+  return [`/auth/token/admin_scopes`] as const;
+};
+
+export const getGetPersonalTokenAdminScopeOfferQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+  TError = N401Response | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPersonalTokenAdminScopeOfferQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>
+  > = ({ signal }) =>
+    getPersonalTokenAdminScopeOffer({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetPersonalTokenAdminScopeOfferQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>
+>;
+export type GetPersonalTokenAdminScopeOfferQueryError =
+  N401Response | N500Response;
+
+export function useGetPersonalTokenAdminScopeOffer<
+  TData = Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+  TError = N401Response | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+          TError,
+          Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPersonalTokenAdminScopeOffer<
+  TData = Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+          TError,
+          Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetPersonalTokenAdminScopeOffer<
+  TData = Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The administration scopes the caller may give a token
+ */
+
+export function useGetPersonalTokenAdminScopeOffer<
+  TData = Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getPersonalTokenAdminScopeOffer>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetPersonalTokenAdminScopeOfferQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type setPersonalTokenAdminScopesResponse200 = {
+  data: PersonalAccessToken;
+  status: 200;
+};
+
+export type setPersonalTokenAdminScopesResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type setPersonalTokenAdminScopesResponse401 = {
+  data: ErrorResponse;
+  status: 401;
+};
+
+export type setPersonalTokenAdminScopesResponse403 = {
+  data: ErrorResponse;
+  status: 403;
+};
+
+export type setPersonalTokenAdminScopesResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type setPersonalTokenAdminScopesResponseSuccess =
+  setPersonalTokenAdminScopesResponse200 & {
+    headers: Headers;
+  };
+export type setPersonalTokenAdminScopesResponseError = (
+  | setPersonalTokenAdminScopesResponse400
+  | setPersonalTokenAdminScopesResponse401
+  | setPersonalTokenAdminScopesResponse403
+  | setPersonalTokenAdminScopesResponse503
+) & {
+  headers: Headers;
+};
+
+export type setPersonalTokenAdminScopesResponse =
+  | setPersonalTokenAdminScopesResponseSuccess
+  | setPersonalTokenAdminScopesResponseError;
+
+export const getSetPersonalTokenAdminScopesUrl = (tokenUuid: string) => {
+  return `/auth/token/${tokenUuid}/admin_scopes`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+ * (TokenSetAdminScopes).
+ *
+ * `scoped` sets exactly `admin_scopes`, under the rules of the create
+ * (a browser session of the kind `session` or `form`, no elevation,
+ * scopes inside the caller's own set and never `token: never`, a recent
+ * sign-in). `none` drops every scope and needs no recent sign-in. This
+ * is how an `inherit` token moves to `scoped` or `none`; nothing moves a
+ * token to `inherit`. Each change appends one `admin.access.changed`
+ * security audit event (kind `token_scopes`); the same scopes again
+ * change nothing and append nothing. A refusal writes an audit row with
+ * action `token.admin_scopes_refused`.
+ * @summary Replace the administration scopes of one of the caller's tokens
+ */
+export const setPersonalTokenAdminScopes = async (
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<setPersonalTokenAdminScopesResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<setPersonalTokenAdminScopesResponse>(
+    getSetPersonalTokenAdminScopesUrl(tokenUuid),
+    {
+      ...options,
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(personalAccessTokenAdminScopesRequest),
+    },
+  );
+};
+
+export const getSetPersonalTokenAdminScopesQueryKey = (
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest?: PersonalAccessTokenAdminScopesRequest,
+) => {
+  return [
+    "PUT",
+    `/auth/token/${tokenUuid}/admin_scopes`,
+    personalAccessTokenAdminScopesRequest,
+  ] as const;
+};
+
+export const getSetPersonalTokenAdminScopesQueryOptions = <
+  TData = Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+  TError = ErrorResponse,
+>(
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSetPersonalTokenAdminScopesQueryKey(
+      tokenUuid,
+      personalAccessTokenAdminScopesRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>
+  > = ({ signal }) =>
+    setPersonalTokenAdminScopes(
+      tokenUuid,
+      personalAccessTokenAdminScopesRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: tokenUuid !== null && tokenUuid !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SetPersonalTokenAdminScopesQueryResult = NonNullable<
+  Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>
+>;
+export type SetPersonalTokenAdminScopesQueryError = ErrorResponse;
+
+export function useSetPersonalTokenAdminScopes<
+  TData = Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+  TError = ErrorResponse,
+>(
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+          TError,
+          Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetPersonalTokenAdminScopes<
+  TData = Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+  TError = ErrorResponse,
+>(
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+          TError,
+          Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSetPersonalTokenAdminScopes<
+  TData = Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+  TError = ErrorResponse,
+>(
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Replace the administration scopes of one of the caller's tokens
+ */
+
+export function useSetPersonalTokenAdminScopes<
+  TData = Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+  TError = ErrorResponse,
+>(
+  tokenUuid: string,
+  personalAccessTokenAdminScopesRequest: PersonalAccessTokenAdminScopesRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof setPersonalTokenAdminScopes>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSetPersonalTokenAdminScopesQueryOptions(
+    tokenUuid,
+    personalAccessTokenAdminScopesRequest,
     options,
   );
 

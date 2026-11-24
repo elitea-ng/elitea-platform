@@ -47,6 +47,7 @@ import (
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/folders"
+	v2httpactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
 	indexingapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indextypesapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	v2inventory "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/inventory"
@@ -93,6 +94,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/natsbus"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -528,6 +530,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("parse ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: %w", err)
 	}
 	mcpAuthorizationEgressGuard := webhook.NewDestinationGuard(mcpOAuthAllowlist)
+
+	// HTTP action rules (pipeline `type: http` nodes): the operator's outer
+	// bound for a rule's origin, checked when an admin writes the rule. Unset
+	// permits public HTTPS destinations only; a malformed entry fails startup,
+	// as for the allowlists above.
+	httpActionGuard, err := egress.NewHTTPActionGuard(os.Getenv(egress.HTTPActionAllowlistEnv))
+	if err != nil {
+		return fmt.Errorf("build the HTTP action egress guard: %w", err)
+	}
 
 	webhookDeliveries := webhookDeliveriesRepository(pool)
 	// The dispatcher reads each webhook's signing secret from the project
@@ -3359,6 +3370,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		WebhookDispatcher:           webhookDispatcher,
 		WebhookDestinationGuard:     webhookDestinationGuard,
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
+		HTTPActionRules:             httpActionRulesRepository(pool),
+		HTTPActionGuard:             httpActionGuard,
 	})
 	if deletionReconcilerErr != nil {
 		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
@@ -3629,6 +3642,19 @@ func moveWebhookSecretsToVault(ctx context.Context, pool *pgxpool.Pool, logger *
 	}
 	logger.InfoContext(ctx, "moved webhook signing secrets into the project vault",
 		"moved", report.Moved, "generated", report.Generated, "skipped", report.Skipped)
+}
+
+// httpActionRulesRepository backs /httpactions; nil without a pool, never a
+// typed nil inside the interface.
+func httpActionRulesRepository(pool *pgxpool.Pool) v2httpactions.Repository {
+	if pool == nil {
+		return nil
+	}
+	repo, err := dbrepos.NewHTTPActionRulesRepo(pool)
+	if err != nil {
+		return nil
+	}
+	return repo
 }
 
 // webhookDeliveriesRepository backs the delivery log (#876's second half) —

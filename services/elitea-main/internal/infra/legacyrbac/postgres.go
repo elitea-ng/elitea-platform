@@ -264,10 +264,9 @@ type TokenAdminAccess struct {
 // tokenScopeAllowed says whether a name may be a token scope at all: its
 // registry row opts in (adminaccess.Permission.Token). The write path (R1.3a)
 // validates scopes too; this is the read side, so a scope written by hand or
-// by a defect (super_admin, identity trust) never resolves. No row opts in
-// yet, so every scoped token resolves nothing until R1.3a opts rows in: the
-// safe failure. A variable so the package's tests can stand in an
-// eligibility while no row has it.
+// by a defect (super_admin, identity trust) never resolves. R1.3a opted the
+// eligible rows in (adminaccess.tokenScopeEligible). A variable so the
+// package's tests can stand in an eligibility of their own.
 var tokenScopeAllowed = func(name string) bool {
 	row, ok := adminaccess.Lookup(name)
 	return ok && row.Token

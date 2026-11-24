@@ -48,6 +48,33 @@ const CodeReauthenticationRequired = "reauthentication_required"
 // `reauthentication_required` refusal.
 const HeaderReauthenticationMaxAge = "X-Elitea-Reauthentication-Max-Age"
 
+// HeaderReauthenticationMethod names, on a `reauthentication_required`
+// refusal, the sign-in that can renew the session: `oidc`, `saml` or `form`
+// (browsersession.Provider*). The web client picks the re-entry from it
+// (R1.3b): `/auth/oidc/login?max_age=`, `/auth/saml/login?max_age=` or
+// `/auth/form/reauthenticate`. It is absent when the request was not made
+// by a browser session of a known plane: such a caller has no re-entry.
+const HeaderReauthenticationMethod = "X-Elitea-Reauthentication-Method"
+
+// ReauthenticationMethodOf names the plane of the browser session behind r,
+// proven or not, for HeaderReauthenticationMethod. "" for every other
+// credential.
+func ReauthenticationMethodOf(r *http.Request) string {
+	source, ok := auth.AuthenticationSourceFromContext(r.Context())
+	if !ok || source != auth.AuthenticationSourceSession {
+		return ""
+	}
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok || user.TokenID != "" || user.NativeClientID != "" {
+		return ""
+	}
+	switch user.BrowserSessionProvider {
+	case browsersession.ProviderOIDC, browsersession.ProviderSAML, browsersession.ProviderForm:
+		return user.BrowserSessionProvider
+	}
+	return ""
+}
+
 // SessionKind names the kind of browser session that authenticated a
 // request, in the words of ADR-0059 decision 7 ("session", "form",
 // "sealed"). A caller that admits only some kinds (token scopes refuse a
@@ -186,6 +213,9 @@ func (c RecentAuthentication) Check(r *http.Request) (BrowserAuthentication, boo
 func (c RecentAuthentication) Refuse(w http.ResponseWriter, r *http.Request) {
 	logCredentialRefusal(r, refusalSourceOf(r), CodeReauthenticationRequired)
 	w.Header().Set(HeaderReauthenticationMaxAge, strconv.FormatInt(int64(c.MaxAgeFor(r)/time.Second), 10))
+	if method := ReauthenticationMethodOf(r); method != "" {
+		w.Header().Set(HeaderReauthenticationMethod, method)
+	}
 	writeJSONError(w, http.StatusUnauthorized, "authentication_error", CodeReauthenticationRequired,
 		"this action needs a recent sign-in; sign in again and retry")
 }
