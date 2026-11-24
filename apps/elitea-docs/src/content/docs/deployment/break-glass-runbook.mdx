@@ -1,0 +1,51 @@
+---
+title: "Break-glass runbook"
+description: "How to end a break-glass elevation from the workload when the console cannot be used, check that access stopped, and what is recorded."
+---
+
+This runbook is the operator procedure for ending a break-glass elevation without the console. [Break-glass access](/admin/break-glass) explains what an elevation is and how it runs out by itself. This page says what to do when an elevation is misused and the console is the thing that was taken, or cannot be reached.
+
+## Who can run it
+
+The control is access to the workload: whoever can run `kubectl exec` in the `elitea-main` Deployment (or a one-off Job from the same image and Secret) can run the command. It reads `DATABASE_URL`, talks to the database directly and exits. It is not reachable over HTTP or gRPC, and no console permission, token or elevation reaches it.
+
+## End an elevation
+
+<Steps>
+<Step title="Find the elevation">
+The elevation id is a UUID. It is on every security audit event of the elevation (`details.elevation.elevation_id` of `admin.elevation`, see [the audit event schema](/reference/audit-event-schema)), and on every admin audit row written under it (`elevation_id`). If you do not know which elevation is misused, end them all (next step).
+</Step>
+<Step title="End it">
+```bash
+# One elevation (several ids may follow)
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main break-glass end 3f0c9a52-6f0e-4d5b-9b7e-2a8f1c4d6e10
+
+# Every active elevation
+kubectl -n <ns> exec deploy/elitea-main -- /elitea-main break-glass end --all
+```
+
+The command prints one line per elevation it ended: its id, the person, the browser session and the end time. `--all` with nothing active prints `no active elevation`.
+</Step>
+<Step title="Check that access stopped">
+Access stops with the end: the next request of the elevated session resolves only the person's standing roles. The elevation shows the end reason `operator` and the review state `review_pending`.
+</Step>
+</Steps>
+
+## What is recorded
+
+Each end is written through the ledger's end function, like an end from the console:
+
+- the elevation's end reason is `operator`, and it moves to `review_pending`, so it is reviewed like any other elevation;
+- one chained security audit event `admin.elevation` with the action `ended` and the source `operator`, in the same transaction as the end. If the event cannot be written, nothing is ended.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Done: every id was ended (or `--all` found nothing active). |
+| `1` | Failed: the database could not be reached or a write failed. Nothing changed. |
+| `2` | Invalid invocation: no sub-command, an id that is not a UUID, or both ids and `--all`. Nothing was read. |
+| `3` | Refused: an id is unknown, is a request that never started, already ended or already ran out. Nothing changed, the other ids included. |
+
+An elevation that already ran out needs no command: access stopped at its expiry, and the `main.elevation_reconciler` routine records it as `expired` within a minute (see [When an elevation or a request runs out](/admin/break-glass#when-an-elevation-or-a-request-runs-out)).
