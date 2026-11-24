@@ -383,7 +383,7 @@ func TestMemberBudget_GateErrorRefuses(t *testing.T) {
 
 // newHandlerWithScopedGate mirrors newBudgetHandler for the scoped fake.
 func newHandlerWithScopedGate(router *trackingRouter, gate *scopedBudgetChecker, costNano int64) *Handler {
-	return NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: costNano}))
+	return newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: costNano}))
 }
 
 // compile-time assertion that the scoped fake still satisfies the port.

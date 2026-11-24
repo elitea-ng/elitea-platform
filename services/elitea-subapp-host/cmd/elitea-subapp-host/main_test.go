@@ -29,8 +29,17 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// These tests build hosts with no identity secret, so the lookup answers the
+// development flag ELITEA_DEV_INSECURE_IDENTITY=true unless the test sets it
+// itself. A test that proves the fail-closed default sets it to "false".
 func lookup(pairs map[string]string) spi.Lookup {
-	return func(key string) (string, bool) { v, ok := pairs[key]; return v, ok }
+	return func(key string) (string, bool) {
+		v, ok := pairs[key]
+		if !ok && key == spi.InsecureIdentityEnvVar {
+			return "true", true
+		}
+		return v, ok
+	}
 }
 
 // The store's schema comes from the registry entry that composeHost

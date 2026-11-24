@@ -22935,8 +22935,9 @@ components:
           type: string
           description: >
             The signing secret. HMAC-SHA256 of the delivered body keyed by
-            this value is the `X-Webhook-Signature` header. Absent when the
-            webhook was created without one.
+            this value is the `X-Webhook-Signature` header. Every webhook has
+            one: createWebhook generates a random 32-byte value when the body
+            carries none.
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -22964,9 +22965,10 @@ components:
           type: string
           description: >
             Write-only signing secret, sealed into the project vault. On
-            create it is returned once in the response. On update, omit it
-            (or send an empty string) to keep the stored secret, or send a
-            value to replace it; the value is not echoed.
+            create it is returned once in the response; omitted or empty, the
+            server generates one. On update, omit it (or send an empty
+            string) to keep the stored secret, or send a value to replace it;
+            the value is not echoed. A secret cannot be removed.
         active: { type: boolean }
       required: [url, events, active]
 
@@ -51605,7 +51607,9 @@ paths:
       description: >
         handler.go's Create. A `secret` in the body is sealed into the
         project vault and returned in this response only; the web UI
-        generates one client-side (256 random bits, base64url). Answers 503
+        generates one client-side (256 random bits, base64url), and the
+        server generates one when the body carries none, so every webhook
+        signs its deliveries. Answers 503
         when the deployment has no usable project vault, rather than storing
         the secret in plain text.
       tags: [webhooks]

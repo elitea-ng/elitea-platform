@@ -511,6 +511,7 @@ impl OrdinaryNativeAgentAssembler {
                 nested_attachment_library,
                 browser_host.as_ref(),
                 &recalled,
+                plan.execution_deadline().ok(),
             )
             .await?;
         let runtime = runtime
@@ -738,6 +739,7 @@ impl OrdinaryNativeAgentAssembler {
         nested_attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
         browser_host: Option<&elitea_agent_runtime::toolkits::BrowserToolHost>,
         recalled: &Arc<super::agent_memory_tools::RecalledEntries>,
+        execution_deadline: Option<tokio::time::Instant>,
     ) -> Result<(OrdinaryRuntimeBindings, NativeToolExecutionMode), NativeAgentAssemblyError> {
         // propose_agent binds beside the sub-agents (the same rule as their
         // binding in the runner), when the version grants the capability.
@@ -984,6 +986,7 @@ impl OrdinaryNativeAgentAssembler {
             .with_index_tools(index_authority)
             .with_attachments(nested_attachment_library, caller_attachments_enabled)
             .with_agent_memory(nested_agent_memory)
+            .with_execution_deadline(execution_deadline)
             .with_delegation(super::application_tools::root_delegation_scope(
                 runtime_context,
                 profile.kind(),

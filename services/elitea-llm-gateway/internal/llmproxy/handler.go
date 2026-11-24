@@ -35,9 +35,15 @@ type Handler struct {
 	router LLMRouter
 	logger *slog.Logger
 	// identitySecret verifies the edge's signed identity headers. An empty
-	// secret disables verification (the mTLS transport still authenticates the
-	// hop) — matching the edge, which only signs when a secret is configured.
+	// secret refuses every identity-bearing request (verifySignature fails
+	// closed); the gateway does not start without one (startupIdentityCheck).
 	identitySecret []byte
+	// identityCheck is the verifier every identity-bearing route runs. NewHandler
+	// sets it to verifySignature over identitySecret and nothing in production
+	// code replaces it. It is a field only so this package's unit tests, which
+	// exercise routing, billing and guardrails rather than signing, can build a
+	// handler whose requests carry no signature (see handler_test_seam_test.go).
+	identityCheck func(http.Header) bool
 	// admissionKey signs a metered admission (metered.go). It is derived from
 	// identitySecret, so every replica verifies an admission any replica
 	// issued; with no secret it is nil and the metered routes refuse.
@@ -407,8 +413,9 @@ func WithRealtimeOrigins(origins []string) HandlerOption {
 }
 
 // NewHandler builds a /llm Handler over the given router. logger may be nil
-// (a discarding logger is substituted). identitySecret may be empty to disable
-// HMAC verification of the forwarded identity headers. Optional features (the
+// (a discarding logger is substituted). identitySecret is the HMAC key the
+// forwarded identity headers are verified with; with an empty one every
+// identity-bearing request is refused. Optional features (the
 // models resolver) are supplied via HandlerOption.
 func NewHandler(router LLMRouter, logger *slog.Logger, identitySecret []byte, opts ...HandlerOption) *Handler {
 	if logger == nil {
@@ -418,6 +425,9 @@ func NewHandler(router LLMRouter, logger *slog.Logger, identitySecret []byte, op
 		router:         router,
 		logger:         logger,
 		identitySecret: identitySecret,
+		identityCheck: func(hdr http.Header) bool {
+			return verifySignature(hdr, identitySecret)
+		},
 		// Issue #9: the grace-period drain is ON by default so a Handler built
 		// without the option (tests, embedders) still bills a disconnected
 		// stream rather than silently dropping it. Production overrides the
@@ -579,7 +589,7 @@ func (h *Handler) requestContext(w http.ResponseWriter, r *http.Request, streami
 // before; the cancel is still returned so callers can release the context's
 // watcher deterministically.
 func (h *Handler) buildContext(w http.ResponseWriter, r *http.Request, detach bool) (*schemas.BifrostContext, *streamCancel, bool) {
-	if !verifySignature(r.Header, h.identitySecret) {
+	if !h.verifyIdentity(r.Header) {
 		writeError(w, http.StatusForbidden, "permission_error", "invalid identity signature", "")
 		return nil, nil, false
 	}
@@ -1086,7 +1096,7 @@ func (h *Handler) Model(w http.ResponseWriter, r *http.Request) {
 // (matching newContext); a missing project id resolves to "" (an empty model
 // set), never an error.
 func (h *Handler) modelsProjectID(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if !verifySignature(r.Header, h.identitySecret) {
+	if !h.verifyIdentity(r.Header) {
 		writeError(w, http.StatusForbidden, "permission_error", "invalid identity signature", "")
 		return "", false
 	}
@@ -1599,4 +1609,15 @@ var sseActiveConnections = expvar.NewInt(MetricSSEActiveConnections)
 // ends up declared as a counter.
 func SSEMetricNames() []string {
 	return []string{MetricSSEActiveConnections}
+}
+
+// verifyIdentity reports whether the forwarded identity headers on hdr are
+// authentic (see verifySignature).
+// A Handler not built by NewHandler has no identityCheck; it gets the same
+// fail-closed verifier, so a zero value refuses rather than panics.
+func (h *Handler) verifyIdentity(hdr http.Header) bool {
+	if h.identityCheck == nil {
+		return verifySignature(hdr, h.identitySecret)
+	}
+	return h.identityCheck(hdr)
 }

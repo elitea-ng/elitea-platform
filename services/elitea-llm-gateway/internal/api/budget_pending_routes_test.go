@@ -207,7 +207,7 @@ func assertNATSUnavailable(t *testing.T, label string, status int, body []byte) 
 func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 	router := &countingRouter{}
 	dialer := &countingDialer{}
-	h := llmproxy.NewHandler(router, nil, nil,
+	h := llmproxy.NewHandler(router, nil, testIdentitySecret,
 		llmproxy.WithRealtimeDialer(dialer),
 		llmproxy.WithBudgetEnforcementPending())
 	mux := NewRouter(h)
@@ -234,7 +234,7 @@ func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 				req.Header.Set(headerProjectID, project)
 			}
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, req)
+			mux.ServeHTTP(rec, signedRequest(req))
 			assertNATSUnavailable(t, key+" project="+project, rec.Code, rec.Body.Bytes())
 		}
 	}
@@ -251,7 +251,7 @@ func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 	models := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
 	models.Header.Set(headerProjectID, "42")
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, models)
+	mux.ServeHTTP(rec, signedRequest(models))
 	if rec.Code == http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "nats_unavailable") {
 		t.Errorf("GET /llm/v1/models answered %d %s; only provider-calling routes are refused", rec.Code, rec.Body.String())
 	}
@@ -265,7 +265,7 @@ func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 		`{"model":"anthropic/claude-3-5-sonnet","messages":[{"role":"user","content":"hi"}]}`)
 	countTokens.Header.Set(headerProjectID, "42")
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, countTokens)
+	mux.ServeHTTP(rec, signedRequest(countTokens))
 	assertNATSUnavailable(t, "POST /llm/v1/messages/count_tokens", rec.Code, rec.Body.Bytes())
 	if n := router.calls.Load(); n != 0 {
 		t.Fatalf("count_tokens reached the provider while enforcement was pending")
@@ -277,10 +277,10 @@ func TestBudgetPending_EveryInferenceRouteIsRefused(t *testing.T) {
 // refused before Accept with the OpenAI-shaped 503, and no provider is dialled.
 func TestBudgetPending_RealtimeWebSocketHandshakeIsRefused(t *testing.T) {
 	dialer := &countingDialer{}
-	h := llmproxy.NewHandler(&countingRouter{}, nil, nil,
+	h := llmproxy.NewHandler(&countingRouter{}, nil, testIdentitySecret,
 		llmproxy.WithRealtimeDialer(dialer),
 		llmproxy.WithBudgetEnforcementPending())
-	srv := httptest.NewServer(NewRouter(h))
+	srv := httptest.NewServer(signingHandler(NewRouter(h)))
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/llm/v1/realtime?model=gpt-4o-realtime-preview"

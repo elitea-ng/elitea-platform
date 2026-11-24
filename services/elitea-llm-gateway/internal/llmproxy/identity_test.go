@@ -5,13 +5,35 @@ import (
 	"testing"
 )
 
-func TestVerifySignature_EmptySecretDisablesVerification(t *testing.T) {
-	h := http.Header{}
-	if !verifySignature(h, nil) {
-		t.Error("empty secret should disable verification (return true)")
+// TestVerifySignature_EmptySecretRefusesEveryIdentity pins the fail-closed
+// rule: with no secret there is nothing to verify against, so no identity is
+// accepted, signed or not.
+func TestVerifySignature_EmptySecretRefusesEveryIdentity(t *testing.T) {
+	signed := http.Header{}
+	SignIdentityHeaders(signed, []byte("some-other-secret-of-thirty-two-bytes"), "42", "user-7", "tenant-1", "")
+	for name, h := range map[string]http.Header{
+		"no headers":     {},
+		"unsigned":       {headerProjectID: {"42"}},
+		"signed by peer": signed,
+	} {
+		if verifySignature(h, nil) {
+			t.Errorf("%s: nil secret accepted the identity", name)
+		}
+		if verifySignature(h, []byte{}) {
+			t.Errorf("%s: zero-length secret accepted the identity", name)
+		}
 	}
-	if !verifySignature(h, []byte{}) {
-		t.Error("zero-length secret should disable verification (return true)")
+}
+
+// TestNewHandler_EmptySecretRefusesEveryIdentity proves the production
+// constructor wires the fail-closed verifier: a Handler built without a secret
+// refuses an unsigned identity.
+func TestNewHandler_EmptySecretRefusesEveryIdentity(t *testing.T) {
+	h := NewHandler(&fakeRouter{}, nil, nil)
+	hdr := http.Header{}
+	hdr.Set(headerProjectID, "42")
+	if h.verifyIdentity(hdr) {
+		t.Fatal("a Handler without an identity secret accepted an unsigned identity")
 	}
 }
 

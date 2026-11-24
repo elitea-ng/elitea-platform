@@ -1235,7 +1235,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// credential_kind, central_override, reason_code, reason,
 	// reason_missing), outside the chain hash (issue 2508, ADR-0059 R1.4a).
 	// No permission.
-	require.EqualValues(t, 268, Head(shared))
+	//
+	// 269: shared/0269_admin_elevations.sql, the elevation ledger of
+	// break-glass access (elitea_auth.admin_elevations), append-only except
+	// its end and review columns (issue 2515, ADR-0059 R2.1a). No permission.
+	require.EqualValues(t, 269, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

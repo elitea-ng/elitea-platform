@@ -64,6 +64,12 @@ zavora-xlsx = { path = "vendor/zavora-xlsx" }
 zavora-docx-opc = { path = "vendor/zavora-docx-opc" }
 zavora-slide-opc = { path = "vendor/zavora-slide-opc" }
 zavora-slide-xlsx = { path = "vendor/zavora-slide-xlsx" }
+# SQLx 0.9.0 guarded dial + TLS hostname separation and environment-free
+# PostgreSQL options (vendor/README.md): pins the TCP dial target to the
+# egress-checked IP while verifying TLS against the original hostname, and
+# removes ambient PG* TLS-file environment reads.
+sqlx-postgres = { path = "vendor/sqlx-postgres" }
+sqlx-mysql = { path = "vendor/sqlx-mysql" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

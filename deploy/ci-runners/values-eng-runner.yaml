@@ -27,6 +27,10 @@ template:
           # Runs in "Set up runner", before any step; non-zero exit fails the job.
           - name: ACTIONS_RUNNER_HOOK_JOB_STARTED
             value: /etc/eng-runner/job-started.sh
+          # Action tarballs baked into the eng-runner image (image/README.md,
+          # "Action archives"): read before codeload, a miss downloads (#3003).
+          - name: ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE
+            value: /opt/action-archive-cache
         volumeMounts:
           - name: eng-runner-hooks
             mountPath: /etc/eng-runner

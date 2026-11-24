@@ -28,7 +28,7 @@ func TestLoopGuard_Handler_429OnBurst(t *testing.T) {
 	// run. With the wall clock a loaded runner could spread the 5 requests past
 	// the window and flake.
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
-	h := NewHandler(router, nil, nil, WithLoopBreakerClock(testLoopParams(), clk.now))
+	h := newTestHandler(router, nil, nil, WithLoopBreakerClock(testLoopParams(), clk.now))
 
 	// First threshold-1 requests pass.
 	for i := 0; i < testLoopThreshold-1; i++ {
@@ -77,7 +77,7 @@ func TestLoopGuard_Handler_429OnBurst(t *testing.T) {
 func TestLoopGuard_Handler_DisarmedByDefault(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	for i := 0; i < testLoopThreshold*2; i++ {
 		rec := httptest.NewRecorder()
@@ -96,7 +96,7 @@ func TestLoopGuard_Handler_AnonymousNotTracked(t *testing.T) {
 	// Frozen clock so the burst genuinely sits inside one window: a wall-clock
 	// run could pass merely because the requests spread out (see 429OnBurst).
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
-	h := NewHandler(router, nil, nil, WithLoopBreakerClock(testLoopParams(), clk.now))
+	h := newTestHandler(router, nil, nil, WithLoopBreakerClock(testLoopParams(), clk.now))
 
 	for i := 0; i < testLoopThreshold*2; i++ {
 		rec := httptest.NewRecorder()
@@ -130,7 +130,7 @@ func (f *fakeAlertPublisher) PublishSoftAlertEvent(ctx context.Context, projectI
 // documented payload fields, under a bounded context.
 func TestSoftAlertEvent_EnvelopeShape(t *testing.T) {
 	pub := &fakeAlertPublisher{}
-	h := NewHandler(&trackingRouter{}, nil, nil, WithAlertEventPublisher(pub))
+	h := newTestHandler(&trackingRouter{}, nil, nil, WithAlertEventPublisher(pub))
 
 	h.publishSoftAlertEvent(context.Background(), h.budget().alerts, 42, budgetScopeProject, "42", 750_000, 1_750_000_000)
 
@@ -171,7 +171,7 @@ func TestSoftAlertEvent_EnvelopeShape(t *testing.T) {
 // TestSoftAlertEvent_NilPublisherNoOp asserts emission is a safe no-op when no
 // publisher is wired.
 func TestSoftAlertEvent_NilPublisherNoOp(t *testing.T) {
-	h := NewHandler(&trackingRouter{}, nil, nil)
+	h := newTestHandler(&trackingRouter{}, nil, nil)
 	h.publishSoftAlertEvent(context.Background(), h.budget().alerts, 42, budgetScopeProject, "42", 1, 1) // must not panic
 }
 
@@ -181,7 +181,7 @@ func TestSoftAlertEvent_NilPublisherNoOp(t *testing.T) {
 func TestChat_EmitsElapsedHeader(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))

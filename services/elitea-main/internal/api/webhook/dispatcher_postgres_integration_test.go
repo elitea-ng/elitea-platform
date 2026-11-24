@@ -237,19 +237,21 @@ func TestListDeliveriesIsScopedToTheOwningProjectAndWebhook(t *testing.T) {
 	}))
 	defer server.Close()
 
-	webhooksRepo := repos.NewWebhooksRepo(pool)
+	// Every delivery is signed (#2959): the registry seals the secret into
+	// the project vault and the dispatcher reads it back.
+	webhooksRepo, secrets := vaultedWebhooksRepo(t, pool)
 	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
-	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(secrets))
 
-	ownerWebhook, err := webhooksRepo.Create(ctx, "proj-owner", webhook.Webhook{
-		URL: server.URL, Events: []string{"conversation.created"}, Active: true,
+	ownerWebhook, err := webhooksRepo.Create(ctx, "9106", webhook.Webhook{
+		URL: server.URL, Events: []string{"conversation.created"}, Secret: "owner-secret", Active: true,
 	})
 	if err != nil {
 		t.Fatalf("create owner webhook: %v", err)
 	}
 
-	dispatcher.HandleDomainEvent(ctx, "proj-owner", "conversation.created", map[string]any{})
-	items := waitForDeliveries(t, deliveriesRepo, "proj-owner", ownerWebhook.ID, 1)
+	dispatcher.HandleDomainEvent(ctx, "9106", "conversation.created", map[string]any{})
+	items := waitForDeliveries(t, deliveriesRepo, "9106", ownerWebhook.ID, 1)
 	deliveryID := items[0].ID
 
 	if _, err := deliveriesRepo.Get(ctx, "proj-intruder", ownerWebhook.ID, deliveryID); err == nil {

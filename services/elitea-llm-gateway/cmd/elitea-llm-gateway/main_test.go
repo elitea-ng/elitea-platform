@@ -56,7 +56,7 @@ func TestMainWiring(t *testing.T) {
 		{"llmproxy.WithStreamGrace(", "the stream-disconnect grace period is never configured — a client that disconnects mid-stream is billed nothing and the hard budget is bypassable (issue #9)"},
 		{"llmproxy.WithStreamDrainLimit(", "abandoned-stream drains are unbounded — a disconnect storm holds unbounded goroutines and provider sockets (issue #9)"},
 		{"requireVaultMasterKey(", "the vault master key gate is never invoked — the gateway would start with no SECRETS_MASTER_KEY and read every project vault key in the clear, the posture elitea-main already refuses"},
-		{"startupIdentityCheck(", "the identity-secret startup guard is never invoked — the gateway would boot with identity verification disabled while the vault-backed Account resolves per-project credentials from an unauthenticated X-Elitea-Project-Id (issue #11)"},
+		{"startupIdentityCheck(", "the identity-secret startup guard is never invoked — the gateway would boot with no identity secret or a weak one, and either refuse every caller or accept forged X-Elitea-Project-Id headers that select any tenant's credentials (issue #11, #2958, #2959)"},
 		{"shutdownSequence(", "the shutdown sequence is never invoked — stream grace, HTTP drain, billing drain and NATS close would not run in the one order that loses no spend (issue #9)"},
 		{"llmproxy.WithOpsEventPublisher(", "budget.unbilled_stream is never published — a stream the gateway could not bill would be invisible to operators (issue #9)"},
 		{"llmproxy.WithRealtimeDialer(", "the realtime route has no provider side — /llm/v1/realtime answers 501 for every caller, so the legacy indexer keeps the second, unmetered LiteLLM data plane this route exists to delete"},
@@ -342,77 +342,49 @@ func TestReadyz_TypedNilGovStoreReturns200(t *testing.T) {
 	}
 }
 
-// TestStartupIdentityCheck is the issue #11 regression guard. The pre-#11 guard
-// was `cfg.NATSURL != "" && cfg.IdentitySecret == ""` — it covered ONLY the
-// budget-enforcement reason the secret is mandatory, and was blind to the
-// credential-backed Account wired on `pool != nil`. The
-// credentialAccount-without-NATS row below is that exact hole: it is the
-// NATS-less deployment (compose/dev/CI, GATEWAY_NATS_URL unset, DATABASE_URL
-// set) in which an unauthenticated caller setting X-Elitea-Project-Id selects
-// any tenant's decrypted provider credentials.
-//
-// Mutation-proof this test by narrowing startupIdentityCheck's `credentialAccount`
-// arm back to nothing (i.e. deleting the `case credentialAccount:` branch): the
-// "credential Account, no NATS" row MUST fail.
+// TestStartupIdentityCheck pins the start-up rule for the identity and hop
+// secrets (#2958, #2959). The identity secret is required in EVERY shape:
+// the old rule exempted a gateway with no database and no NATS, and the
+// verifier now refuses every identity without a secret, so that row must
+// refuse too. Weak values (short, placeholder, blank) are refused for both
+// secrets; an unset hop secret is the documented unarmed posture.
 func TestStartupIdentityCheck(t *testing.T) {
+	strong := "Zq3v8KJ1m2N4p6R8t0V2x4Z6b8D0f2H4j6L8n0P2r4T="
+	otherStrong := "Hn7cWm1Qe5Ry9Ui3Op7As1Df5Gh9Jk3Lz7Xc1Vb5Nm="
 	cases := []struct {
-		name              string
-		secret            string
-		budgetEnforcement bool
-		credentialAccount bool
-		wantErr           bool
+		name     string
+		identity string
+		hop      string
+		wantErr  string
 	}{
-		{
-			name:              "credential Account, no NATS, no secret — issue #11 credential disclosure",
-			secret:            "",
-			budgetEnforcement: false,
-			credentialAccount: true,
-			wantErr:           true,
-		},
-		{
-			name:              "budget enforcement, no Account, no secret — original FIX #9",
-			secret:            "",
-			budgetEnforcement: true,
-			credentialAccount: false,
-			wantErr:           true,
-		},
-		{
-			name:              "both consumers, no secret",
-			secret:            "",
-			budgetEnforcement: true,
-			credentialAccount: true,
-			wantErr:           true,
-		},
-		{
-			name:              "no consumer wired, no secret — nothing depends on identity",
-			secret:            "",
-			budgetEnforcement: false,
-			credentialAccount: false,
-			wantErr:           false,
-		},
-		{
-			name:              "secret configured with both consumers — verification is on",
-			secret:            "not-a-real-secret",
-			budgetEnforcement: true,
-			credentialAccount: true,
-			wantErr:           false,
-		},
+		{name: "no identity secret, no database, no NATS", identity: "", wantErr: "GATEWAY_IDENTITY_SECRET"},
+		{name: "blank identity secret", identity: "   ", wantErr: "GATEWAY_IDENTITY_SECRET"},
+		{name: "short identity secret", identity: "0123456789", wantErr: "GATEWAY_IDENTITY_SECRET"},
+		{name: "placeholder identity secret", identity: "changeme", wantErr: "GATEWAY_IDENTITY_SECRET"},
+		{name: "strong identity, hop unset (unarmed)", identity: strong},
+		{name: "strong identity, short hop", identity: strong, hop: "hop", wantErr: "GATEWAY_HOP_SECRET"},
+		{name: "strong identity, blank hop", identity: strong, hop: "  ", wantErr: "GATEWAY_HOP_SECRET"},
+		{name: "strong identity, strong hop", identity: strong, hop: otherStrong},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := startupIdentityCheck(tc.secret, tc.budgetEnforcement, tc.credentialAccount)
-			if tc.wantErr && err == nil {
-				t.Fatalf("startupIdentityCheck(secret=%q, budget=%v, account=%v) = nil, want a FATAL error: "+
-					"the gateway would accept traffic with identity verification disabled while a consumer "+
-					"of that identity is wired", tc.secret, tc.budgetEnforcement, tc.credentialAccount)
+			err := startupIdentityCheck(tc.identity, tc.hop)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("startupIdentityCheck = %v, want nil", err)
+				}
+				return
 			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("startupIdentityCheck(secret=%q, budget=%v, account=%v) = %v, want nil",
-					tc.secret, tc.budgetEnforcement, tc.credentialAccount, err)
+			if err == nil {
+				t.Fatal("startupIdentityCheck = nil, want a FATAL error")
 			}
-			if tc.wantErr && !strings.Contains(err.Error(), "GATEWAY_IDENTITY_SECRET") {
-				t.Fatalf("error must name the env var an operator has to set; got %q", err)
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error must name %s; got %q", tc.wantErr, err)
+			}
+			for _, v := range []string{tc.identity, tc.hop} {
+				if len(strings.TrimSpace(v)) >= 8 && strings.Contains(err.Error(), v) {
+					t.Fatalf("error repeats a secret value: %q", err)
+				}
 			}
 		})
 	}

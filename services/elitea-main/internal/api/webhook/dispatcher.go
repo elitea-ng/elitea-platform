@@ -191,6 +191,11 @@ func WithSecretResolver(resolver SecretResolver) DispatcherOption {
 // names no vault id, reference or value.
 var errSigningSecretUnavailable = errors.New("the webhook signing secret could not be read from the project vault")
 
+// errNoSigningSecret is the logged reason a delivery was not sent because the
+// webhook has no signing secret at all (#2959). Every delivery is signed; the
+// start-up pass gives such a row a secret, and rotate_secret sets one at once.
+var errNoSigningSecret = errors.New("the webhook has no signing secret, so the delivery was not sent unsigned; rotate the webhook's secret to resume deliveries")
+
 // DispatcherOption configures a Dispatcher built by NewDispatcher.
 type DispatcherOption func(*Dispatcher)
 
@@ -291,9 +296,8 @@ func (d *Dispatcher) HandleDomainEvent(ctx context.Context, projectID, eventType
 }
 
 // signingSecret is one webhook's resolved signing material for one dispatch.
-// value "" with err nil means the webhook has no secret and its deliveries go
-// out unsigned, which is what such a webhook has always done (issue 2959
-// tracks requiring one).
+// Exactly one of value and err is set: a webhook with no secret resolves to
+// errNoSigningSecret, never to an empty value (#2959).
 type signingSecret struct {
 	value string
 	err   error
@@ -304,6 +308,9 @@ type signingSecret struct {
 // not reached yet, the plaintext the row still holds.
 func (d *Dispatcher) resolveSigningSecret(ctx context.Context, wh Webhook) signingSecret {
 	if wh.SecretRef == "" {
+		if wh.Secret == "" {
+			return signingSecret{err: errNoSigningSecret}
+		}
 		return signingSecret{value: wh.Secret}
 	}
 	if d.secrets == nil {
@@ -378,17 +385,20 @@ func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, secret signi
 // the few milliseconds between the two checks). Either way the outcome is
 // DeliveryStatusBlocked, not DeliveryStatusFailed, and the loop stops.
 func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, secret signingSecret, eventType string, body []byte) deliveryOutcome {
-	if secret.err != nil {
-		// Nothing is sent: an unsigned request to a receiver that expects a
-		// signature is indistinguishable from a forged one. Not retried here,
-		// since the vault answers the same way three times in a row; a
-		// Redeliver re-reads it.
-		return deliveryOutcome{Attempts: 1, Status: DeliveryStatusFailed, LastError: secret.err.Error()}
-	}
+	// A refused destination is reported first: it is the more specific
+	// reason, and an operator must see it even on a row with no secret.
 	if d.guard != nil {
 		if err := d.guard.Validate(ctx, wh.URL); err != nil {
 			return deliveryOutcome{Attempts: 1, Status: DeliveryStatusBlocked, LastError: err.Error()}
 		}
+	}
+	if secret.err != nil {
+		// Nothing is sent: an unsigned request to a receiver that expects a
+		// signature is indistinguishable from a forged one, and every
+		// delivery is signed (#2959). Not retried here, since the vault (or
+		// the missing secret) answers the same way three times in a row; a
+		// Redeliver re-reads it.
+		return deliveryOutcome{Attempts: 1, Status: DeliveryStatusFailed, LastError: secret.err.Error()}
 	}
 	var outcome deliveryOutcome
 	for i := 0; i < maxDeliveryAttempts; i++ {
@@ -446,9 +456,12 @@ func (d *Dispatcher) send(ctx context.Context, wh Webhook, secret, eventType str
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "EliteA-Webhook/1.0")
 	req.Header.Set(EventTypeHeader, eventType)
-	if secret != "" {
-		req.Header.Set(SignatureHeader, "sha256="+signBody(secret, body))
+	if secret == "" {
+		// attempt() never gets here without a secret; refusing again keeps an
+		// unsigned request impossible if a later caller skips that check.
+		return 0, errNoSigningSecret
 	}
+	req.Header.Set(SignatureHeader, "sha256="+signBody(secret, body))
 
 	resp, err := d.client.Do(req)
 	if err != nil {

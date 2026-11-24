@@ -56,7 +56,7 @@ func (g *heldAtBillGate) UpdateUsage(ctx context.Context, projectID int, scope, 
 // release the hold before the settle.
 func TestStreamSettler_PinOutlivesTheHandler(t *testing.T) {
 	for _, pin := range []bool{true, false} {
-		h := NewHandler(&fakeRouter{}, nil, nil)
+		h := newTestHandler(&fakeRouter{}, nil, nil)
 		holds := failmode.NewHolds()
 		req := chatReqWithProject(t, integProjectIDStr, true)
 		req = req.WithContext(failmode.WithHolds(req.Context(), holds))
@@ -108,7 +108,7 @@ func TestDegraded_HoldOutlivesTheStreamCancel(t *testing.T) {
 				usageChunk(1000, 500),
 			),
 		}
-		h := NewHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
+		h := newTestHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
 		rec := httptest.NewRecorder()
 		serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, stream))
 		if rec.Code != http.StatusOK {
@@ -150,7 +150,7 @@ func TestDegraded_ClientDisconnectDoesNotReleaseBeforeTheBill(t *testing.T) {
 	gate := &heldAtBillGate{GovernanceStore: gs, degraded: degraded}
 	clientCtx, disconnect := context.WithCancel(context.Background())
 	router := &disconnectingRouter{disconnect: disconnect}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
 
 	req := chatReqWithProject(t, integProjectIDStr, false).WithContext(clientCtx)
 	serveScoped(h, h.Chat, httptest.NewRecorder(), req)
@@ -175,7 +175,7 @@ func TestDegraded_HoldStaysWhileTheBillIsInFlight(t *testing.T) {
 		entered: make(chan struct{}), block: make(chan struct{}),
 	}
 	router := &fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "c", Model: "gpt-4o", Usage: degradedUsage}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
 	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))

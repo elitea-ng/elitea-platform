@@ -131,6 +131,14 @@ export E2E_OIDC_PORT="${E2E_OIDC_PORT:-9400}"
 OIDC_PORT="${E2E_OIDC_PORT}"
 COMPOSE_F="-p ${PROJECT} -f ${REPO_ROOT}/deploy/docker-compose.standalone-full.yml"
 
+# The stack's signing secrets and vault master key (#2958). The compose file
+# and the native table carry no literal value; every verb below sees the same
+# generated set, kept in deploy/.stack-secrets/<project>.env, and a value
+# already in the environment wins.
+# shellcheck source=lib/stack-secrets.sh
+. "${REPO_ROOT}/deploy/scripts/lib/stack-secrets.sh"
+stack_secrets_load "$PROJECT"
+
 # Overlay files, applied after the base in the order given. Every subcommand
 # has to see the same set: an overlay that replaces a service's image (the Rust
 # agent runtime does exactly that) would otherwise be present for `up` and

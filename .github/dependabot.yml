@@ -131,6 +131,7 @@ updates:
       - /libs/go/observability
       - /libs/go/routines
       - /libs/go/rpclib
+      - /libs/go/secretstrength
       - /libs/proto/gen/go
       - /conformance/nativeclient
       - /conformance/governed
@@ -210,6 +211,21 @@ updates:
       - dependency-name: "adk-runner"
       - dependency-name: "adk-sandbox"
       - dependency-name: "adk-rust"
+      # sqlx-postgres and sqlx-mysql are patched copies in libs/rust/vendor
+      # applied through [patch.crates-io] in /libs/rust and
+      # /services/elitea-worker-rust (see libs/rust/vendor/README.md).
+      # Dependabot cannot move a vendored path crate, so bumping sqlx* in this
+      # first entry would drop the patch or fail the compile-time guard and
+      # break the nightly group PR. Ignored ONLY in this first entry: Entry 2
+      # (elitea-inventory-engine, elitea-deepwiki-engine) stays unignored so
+      # nightly Dependabot still surfaces new sqlx releases, and cargo deny +
+      # GitHub Dependabot Alerts still flag any sqlx advisory immediately.
+      # Lift when upstream sqlx ships separated connect_addr + env-free PG
+      # options.
+      - dependency-name: "sqlx"
+      - dependency-name: "sqlx-core"
+      - dependency-name: "sqlx-postgres"
+      - dependency-name: "sqlx-mysql"
 
   - package-ecosystem: cargo
     directories:

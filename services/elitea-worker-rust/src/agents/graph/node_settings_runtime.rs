@@ -45,6 +45,47 @@ pub(crate) const fn code_failure_fault(class: NodeFailureClass) -> Code {
     }
 }
 
+/// The registered failure code of a settled LLM node failure (5b-2).
+/// Driven strictly by `NodeFailureClass` so live and restored entries are
+/// byte-identical and never carry model, prompt, or provider text.
+pub(crate) const fn llm_failure_fault(class: NodeFailureClass) -> Code {
+    match class {
+        NodeFailureClass::AttemptTimeout => codes::PIPELINE_LLM_TIMEOUT,
+        NodeFailureClass::RateLimited => codes::PIPELINE_LLM_RATE_LIMITED,
+        NodeFailureClass::DependencyUnavailable => codes::PIPELINE_LLM_UNAVAILABLE,
+        _ => codes::PIPELINE_LLM_FAILED,
+    }
+}
+
+/// The registered failure code of a settled Direct Tool (`toolkit` / `mcp`)
+/// node failure (5b-3). Never carries tool arguments, payloads, or server text.
+pub(crate) const fn direct_tool_failure_fault(
+    family: AdmittedNodeFamily,
+    class: NodeFailureClass,
+) -> Code {
+    match (family, class) {
+        (AdmittedNodeFamily::Mcp, NodeFailureClass::AttemptTimeout) => codes::PIPELINE_MCP_TIMEOUT,
+        (AdmittedNodeFamily::Mcp, _) => codes::PIPELINE_MCP_FAILED,
+        (_, NodeFailureClass::AttemptTimeout) => codes::PIPELINE_TOOLKIT_TIMEOUT,
+        (_, _) => codes::PIPELINE_TOOLKIT_FAILED,
+    }
+}
+
+/// The registered failure code of any admitted node family's settled failure.
+pub(crate) const fn settled_failure_fault(
+    family: AdmittedNodeFamily,
+    class: NodeFailureClass,
+) -> Code {
+    match family {
+        AdmittedNodeFamily::Deterministic(family) => family_failure(family),
+        AdmittedNodeFamily::Code => code_failure_fault(class),
+        AdmittedNodeFamily::Llm => llm_failure_fault(class),
+        AdmittedNodeFamily::Toolkit | AdmittedNodeFamily::Mcp => {
+            direct_tool_failure_fault(family, class)
+        }
+    }
+}
+
 /// Fill any declared output the node wrote as `null` with its neutral value
 /// when `always_output_data` is set. Outputs not written keep their state.
 pub(crate) fn fill_neutral_outputs(

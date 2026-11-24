@@ -30,7 +30,7 @@ func TestLedgerReasoningTakesATrailerRecoveredByTheDrain(t *testing.T) {
 		trailer:      trailer,
 		trailerDelay: 20 * time.Millisecond,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(newRecordingEvents()),
 		WithStreamGrace(2*time.Second))
@@ -53,7 +53,7 @@ func TestLedgerReasoningTakesTheAccumulatedCount(t *testing.T) {
 		preamble: []*schemas.BifrostStreamChunk{chatDelta("c1", "hello")},
 		accIn:    11, accOut: 22, accReasoning: 7,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(newRecordingEvents()),
 		WithStreamGrace(50*time.Millisecond))

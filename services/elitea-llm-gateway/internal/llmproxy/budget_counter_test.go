@@ -129,7 +129,7 @@ func TestBudgetCounter_NeverNegative_AcrossEveryExitPath(t *testing.T) {
 			ID:    "resp-1",
 			Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 		}
-		chatHandlers[i] = NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
+		chatHandlers[i] = newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
 	}
 	var wg sync.WaitGroup
 	for _, ch := range chatHandlers {
@@ -144,7 +144,7 @@ func TestBudgetCounter_NeverNegative_AcrossEveryExitPath(t *testing.T) {
 	// Path B: provider error — the response is an error, so nothing is billed.
 	errRouter := &trackingRouter{}
 	errRouter.chatErr = &schemas.BifrostError{Error: &schemas.ErrorField{Message: "upstream boom"}}
-	errH := NewHandler(errRouter, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
+	errH := newTestHandler(errRouter, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
 	errRec := httptest.NewRecorder()
 	errH.Chat(errRec, chatReqWithProject(t, "77", false))
 	if errRec.Code == http.StatusOK {
@@ -161,7 +161,7 @@ func TestBudgetCounter_NeverNegative_AcrossEveryExitPath(t *testing.T) {
 		ID:    "must-not-be-reached",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 	}
-	blockH := NewHandler(blockRouter, nil, nil, WithBudgetGate(blockGate, &fakeCostEstimator{totalNano: perChatNano}))
+	blockH := newTestHandler(blockRouter, nil, nil, WithBudgetGate(blockGate, &fakeCostEstimator{totalNano: perChatNano}))
 	blockRec := httptest.NewRecorder()
 	blockH.Chat(blockRec, chatReqWithProject(t, "77", false))
 	if blockRec.Code != http.StatusPaymentRequired {
@@ -177,7 +177,7 @@ func TestBudgetCounter_NeverNegative_AcrossEveryExitPath(t *testing.T) {
 	imgRouter.imgResp = &schemas.BifrostImageGenerationResponse{
 		Data: []schemas.ImageData{{URL: "https://example.invalid/a.png"}},
 	}
-	imgH := NewHandler(imgRouter, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
+	imgH := newTestHandler(imgRouter, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: perChatNano}))
 	imgRec := httptest.NewRecorder()
 	imgH.ImageGeneration(imgRec, imageReqNoUsage("77"))
 	if imgRec.Code != http.StatusOK {
@@ -241,7 +241,7 @@ func TestCheckBudget_AdmissionPassesNoEstimate(t *testing.T) {
 	}
 	// A deliberately large per-call cost: if any estimate were wired into
 	// admission, this is the value that would show up on the gate.
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: 999_000_000}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: 999_000_000}))
 
 	h.Chat(httptest.NewRecorder(), chatReqWithProject(t, "77", false))
 	h.DrainBilling()
@@ -258,7 +258,7 @@ func TestCheckBudget_AdmissionPassesNoEstimate(t *testing.T) {
 // decremented the reservation on exactly this path.
 func TestBillingRefusedAfterDrain_AppliesNothing(t *testing.T) {
 	gate := &accountingChecker{verdict: failmode.Decision{Verdict: failmode.Allow, State: failmode.StateNATSHealthy}}
-	h := NewHandler(&trackingRouter{}, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: 250_000}))
+	h := newTestHandler(&trackingRouter{}, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: 250_000}))
 
 	h.DrainBilling() // billing closed
 

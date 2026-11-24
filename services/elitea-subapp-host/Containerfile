@@ -17,6 +17,8 @@ COPY libs/proto/gen/go ./libs/proto/gen/go
 COPY libs/go/natsconn ./libs/go/natsconn
 # The shared error registry and fault convention (FU-299).
 COPY libs/go/faults ./libs/go/faults
+# The start-up check of the identity secret.
+COPY libs/go/secretstrength ./libs/go/secretstrength
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
 COPY services/elitea-subapp-host/ ./

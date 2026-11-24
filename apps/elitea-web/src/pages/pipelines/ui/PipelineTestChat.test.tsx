@@ -282,4 +282,94 @@ describe('PipelineTestChat', () => {
     expect(() => slotRef.current?.stopAll()).not.toThrow();
     expect(() => slotRef.current?.onClear()).not.toThrow();
   });
+
+  it('renders restored TERMINAL playback read-only without a composer spinner', async () => {
+    installConversationRoutes();
+    const responseId = '11111111-1111-4111-8111-111111111111';
+    const questionId = '22222222-2222-4222-8222-222222222222';
+    server.use(
+      http.get('*/elitea_core/application/prompt_lib/9/42', () =>
+        HttpResponse.json({
+          id: '42',
+          name: 'My Pipeline',
+          versions: [{ id: '7', name: 'base' }],
+          version_details: { id: '7', agent_type: 'pipeline' },
+        }),
+      ),
+      http.get('*/elitea_core/version/prompt_lib/9/42/7', () =>
+        HttpResponse.json({ id: '7', name: 'base', agent_type: 'pipeline' }),
+      ),
+      http.get('*/elitea_core/message_traces/prompt_lib/9/:id', () =>
+        HttpResponse.json({ rows: [], limit: 50, offset: 0, has_more: false }),
+      ),
+      http.get('*/elitea_core/message_feedback/prompt_lib/9/:id', () =>
+        HttpResponse.json({ likes: 0, dislikes: 0 }),
+      ),
+      http.get('*/elitea_core/conversation_skills/prompt_lib/9/:uuid', () =>
+        HttpResponse.json({ items: [] }),
+      ),
+      http.get('*/elitea_core/conversation/prompt_lib/:projectId/:conversationId', () =>
+        HttpResponse.json({
+          id: 501,
+          uuid: '00000000-0000-4000-8000-000000000abc',
+          name: 'My Pipeline',
+          source: 'editor_test',
+          is_private: true,
+          meta: {
+            is_hidden: true,
+            editor_test: { revision: 1, actor_id: '6', project_id: '9', application_id: '42', application_version_id: '7' },
+          },
+          participants: [
+            { id: '900', entity_name: 'user', entity_meta: { id: 6 } },
+            { id: '901', entity_name: 'application', entity_meta: { id: '42', project_id: '9' }, entity_settings: { version_id: '7', agent_type: 'pipeline' } },
+          ],
+          editor_test_runs: {
+            rows: [
+              {
+                response_message_id: responseId,
+                question_id: questionId,
+                execution_id: responseId,
+                execution_generation: 'gen-1',
+                phase: 'TERMINAL',
+                state: 'COMPLETED',
+                desired_state: 'RUNNING',
+                admitted_at: '2026-11-24T10:00:00Z',
+                settled_at: '2026-11-24T10:00:02Z',
+                input_reference: {
+                  bundle_id: 'admitted',
+                  entry_id: 'request',
+                  immutable_version: '1',
+                  content_digest: 'a'.repeat(64),
+                },
+                can_control: false,
+              },
+            ],
+            limit: 50,
+            offset: 0,
+            has_more: false,
+          },
+          message_groups: [
+            { uuid: questionId, role: 'user', content: 'hello', created_at: '2026-11-24T10:00:00Z', meta: {} },
+            { uuid: responseId, role: 'assistant', content: 'SPIN_OK', created_at: '2026-11-24T10:00:02Z', meta: {} },
+          ],
+        }),
+      ),
+    );
+    renderPane(
+      <PipelineTestChat
+        restore={{ conversationId: '501', onComplete: () => undefined }}
+        settings={{}}
+        disableChat={false}
+        slotRef={undefined}
+        identity={IDENTITY}
+        user={USER}
+      />,
+    );
+
+    const runSelect = await screen.findByLabelText('Existing run');
+    expect(runSelect).toHaveValue(responseId);
+    expect(screen.getByRole('option', { name: /TERMINAL/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
+    expect(screen.getByTestId('chat-message-input')).toBeDisabled();
+  });
 });

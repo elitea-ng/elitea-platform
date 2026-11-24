@@ -173,7 +173,7 @@ func TestStreamDisconnect_NoTrailer_BillsNothingAndMetersLoss(t *testing.T) {
 	events := newRecordingEvents()
 	router := newSilentRouter(chatDelta("c1", "hello "), chatDelta("c2", "world"))
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond))
@@ -224,7 +224,7 @@ func TestStreamDisconnect_SilentProvider_LoopExitsOnClientGone(t *testing.T) {
 	events := newRecordingEvents()
 	router := newSilentRouter(chatDelta("c1", "hello"))
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		// A long grace: the cancel must NOT wait for it.
@@ -298,7 +298,7 @@ func TestStreamDisconnect_UnsentPayload_IsNotBilledAsOutput(t *testing.T) {
 	huge := strings.Repeat("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=", 8192)
 	router := newSilentRouter(chatDelta("c1", huge))
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(MaxStreamGrace))
@@ -340,7 +340,7 @@ func TestStreamDisconnect_DrainSaturated_StillRecoversTheTrailer(t *testing.T) {
 		trailer:      chatTrailer(11, 22),
 		trailerDelay: 100 * time.Millisecond,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(5*time.Second),
@@ -376,7 +376,7 @@ func TestStreamDisconnect_DrainSaturated_MetersLossWhenGraceTooShort(t *testing.
 	gate := allowGate()
 	events := newRecordingEvents()
 	router := newSilentRouter(chatDelta("c1", "hello"), chatDelta("c2", " world"))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(5*time.Second),
@@ -410,7 +410,7 @@ func TestStreamDisconnect_DrainReleasesItsSlot(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
 	router := newSilentRouter(chatDelta("c1", "hello"), chatDelta("c2", " world"))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond),
@@ -432,7 +432,7 @@ func TestStreamDisconnect_DrainReleasesItsSlot(t *testing.T) {
 func TestStreamDisconnect_DrainBillingDoesNotWaitFullGrace(t *testing.T) {
 	gate := allowGate()
 	router := newSilentRouter(chatDelta("c1", "hello"), chatDelta("c2", " world"))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithStreamGrace(MaxStreamGrace)) // 15 s
 
@@ -489,7 +489,7 @@ func TestStreamContext_CancelledWhenBudgetBlocks(t *testing.T) {
 // decouple values. Per-project credential resolution reads the virtual key from
 // this context inside bifrost — losing it would break every streamed request.
 func TestStreamContext_PreservesIdentityValues(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil, WithStreamGrace(DefaultStreamGrace))
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithStreamGrace(DefaultStreamGrace))
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader("{}"))
 	req.Header.Set(headerProjectID, "4242")
 	req.Header.Set(headerUserID, "user-7")
@@ -527,7 +527,7 @@ func TestStreamContext_PreservesIdentityValues(t *testing.T) {
 // bound to the request — so an operator can turn the mechanism off without a
 // deploy of new code.
 func TestStreamGraceDisabled_KeepsRequestBoundContext(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil, WithStreamGrace(0))
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithStreamGrace(0))
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader("{}"))
 	req.Header.Set(headerProjectID, "1")
 	reqCtx, cancelReq := context.WithCancel(context.Background())
@@ -560,7 +560,7 @@ func TestWithStreamGrace_Clamped(t *testing.T) {
 		{time.Hour, MaxStreamGrace},
 	}
 	for _, tc := range cases {
-		h := NewHandler(&fakeRouter{}, nil, nil, WithStreamGrace(tc.in))
+		h := newTestHandler(&fakeRouter{}, nil, nil, WithStreamGrace(tc.in))
 		if h.streamGrace != tc.want {
 			t.Errorf("WithStreamGrace(%v) → %v, want %v", tc.in, h.streamGrace, tc.want)
 		}
@@ -609,7 +609,7 @@ func TestShutdown_RecoveredTrailerIsBilled(t *testing.T) {
 		trailerDelay: 20 * time.Millisecond,
 		holdOpen:     true, // trailer delivered, but the provider has not unwound
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(MaxStreamGrace))
@@ -641,7 +641,7 @@ func TestShutdown_RefusedBillingIsMetered(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(&fakeRouter{}, nil, nil,
+	h := newTestHandler(&fakeRouter{}, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events))
 
@@ -769,7 +769,7 @@ func TestUnbilledStream_ReasonAndOutcomeDimensions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := allowGate()
 			events := newRecordingEvents()
-			h := NewHandler(tc.router, nil, nil,
+			h := newTestHandler(tc.router, nil, nil,
 				WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 				WithOpsEventPublisher(events),
 				WithStreamGrace(tc.grace))
@@ -798,7 +798,7 @@ func TestUnbilledStream_ResponsesDialectCountsObservedBytes(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
 	body := strings.Repeat("x", 4096)
-	h := NewHandler(newSilentRouter(responsesDelta(body), responsesDelta(body)), nil, nil,
+	h := newTestHandler(newSilentRouter(responsesDelta(body), responsesDelta(body)), nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond))
@@ -841,7 +841,7 @@ func TestUnbilledStream_ProjectIDNormalisation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			events := newRecordingEvents()
-			h := NewHandler(&fakeRouter{}, nil, nil, WithOpsEventPublisher(events))
+			h := newTestHandler(&fakeRouter{}, nil, nil, WithOpsEventPublisher(events))
 
 			h.publishUnbilledStreamEvent(tc.projectID, "openai", "gpt-4o",
 				lossReasonWriteError, drainOutcomeGraceExpired, 128)
@@ -941,7 +941,7 @@ func TestAnthropicDialect_PartialUsageIsNotAuthoritative(t *testing.T) {
 			Usage: &schemas.ResponsesResponseUsage{InputTokens: 5000, OutputTokens: 1},
 		},
 	}}
-	h := NewHandler(newSilentRouter(partial, responsesDelta("hello")), nil, nil,
+	h := newTestHandler(newSilentRouter(partial, responsesDelta("hello")), nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(50*time.Millisecond))
@@ -966,7 +966,7 @@ func TestAnthropicDialect_TerminalUsageStillBills(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(&closingResponsesRouter{chunks: []*schemas.BifrostStreamChunk{
+	h := newTestHandler(&closingResponsesRouter{chunks: []*schemas.BifrostStreamChunk{
 		responsesDelta("hello"), responsesTrailer(11, 22),
 	}}, nil, nil,
 		WithBudgetGate(gate, calc),
@@ -1013,7 +1013,7 @@ func TestBillingRefused_OnlyAlarmsOnRealDrops(t *testing.T) {
 	events := newRecordingEvents()
 	// No WithBudgetGate: the composition root produces exactly this whenever
 	// the pool is nil or governance assembly fails.
-	h := NewHandler(&fakeRouter{}, nil, nil, WithOpsEventPublisher(events))
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithOpsEventPublisher(events))
 
 	req := chatReqWithProject(t, "30", true)
 	ctx, sc, ok := h.newStreamContext(httptest.NewRecorder(), req)
@@ -1053,7 +1053,7 @@ func TestShutdown_DisconnectDuringHTTPDrainIsBilled(t *testing.T) {
 		trailer:      chatTrailer(11, 22),
 		trailerDelay: 200 * time.Millisecond,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(MaxStreamGrace))
@@ -1091,7 +1091,7 @@ func TestShutdown_DisconnectDuringHTTPDrainIsBilled(t *testing.T) {
 // every disconnect in that window gets grace=0 and its trailer is destroyed.
 // Reproduced 3/3 before the fix, with a clean control.
 func TestShutdown_GraceDisarmedOnlyAfterTheHTTPDrain(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil, WithStreamGrace(MaxStreamGrace))
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithStreamGrace(MaxStreamGrace))
 
 	// Before the sequence disarms it, a fresh drain must still get a real grace.
 	if got := h.effectiveDrainGrace(); got != MaxStreamGrace {
@@ -1154,7 +1154,7 @@ func TestNextChunk_ClosedChannelWinsOverClientGone(t *testing.T) {
 // leaks the provider stream (and its socket) forever.
 func TestSSELoop_PanicDoesNotLeakTheProviderStream(t *testing.T) {
 	router := &panickingRouter{}
-	h := NewHandler(router, nil, nil, WithStreamGrace(DefaultStreamGrace))
+	h := newTestHandler(router, nil, nil, WithStreamGrace(DefaultStreamGrace))
 
 	req := chatReqWithProject(t, "30", true)
 	func() {
@@ -1212,7 +1212,7 @@ func TestCheckBudget_BoundedOnTheDetachedContext(t *testing.T) {
 		t.Fatal("budgetGateTimeout must be positive or the gate is unbounded")
 	}
 	gate := &deadlineObservingChecker{seen: make(chan bool, 1)}
-	h := NewHandler(&fakeRouter{}, nil, nil,
+	h := newTestHandler(&fakeRouter{}, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1}))
 
 	req := chatReqWithProject(t, "30", true)
@@ -1261,7 +1261,7 @@ func TestDrain_ShutdownShrinksTheHardBackstop(t *testing.T) {
 			"inherits the full backstop", drainShutdownTimeout, drainHardTimeout)
 	}
 	gate := allowGate()
-	h := NewHandler(&wedgedRouter{}, nil, nil,
+	h := newTestHandler(&wedgedRouter{}, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithStreamGrace(MaxStreamGrace))
 

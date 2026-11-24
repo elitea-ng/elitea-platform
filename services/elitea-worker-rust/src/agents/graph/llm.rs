@@ -8,8 +8,9 @@
 //! PAT, model or toolkit client can exist.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use adk_rust::futures::{StreamExt as _, stream};
 use adk_rust::graph::{GraphError, Node, NodeContext, NodeOutput, State};
@@ -19,13 +20,26 @@ use adk_rust::{
     ToolConfirmationDecision, ToolContext, Toolset, tool_call_fingerprint,
 };
 use async_trait::async_trait;
+use elitea_agent_runtime::graph::llm_failure::classify_adk_error;
+use elitea_agent_runtime::graph::node_recovery::{
+    NodeAttemptLedger, NodeAttemptPhase, NodeFailure, NodeFailureClass, NodeRecoveryPolicy,
+    RecoveryDecision, ReplaySafety, StopReason,
+};
+use elitea_agent_runtime::graph::node_settings::{EXECUTED_ONCE_KEY, OnNodeError, executed_once};
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 use tracing::Instrument as _;
 
-use super::compiler::PIPELINE_YAML_BUDGET;
+use super::compiler::{AdmittedNodeSettings, PIPELINE_YAML_BUDGET};
+use super::node_recovery_runtime::{
+    NodeAttemptAuthority, NodeAttemptBody, NodeAttemptReportedFailure, NodeRecoveryClock,
+    NodeRecoveryFactory, RecoverableNode,
+};
+use super::node_settings_runtime::{
+    fill_neutral_outputs, llm_failure_fault, mark_node_executed_once, settle_node_failure,
+};
 use super::yaml::{valid_graph_id, valid_output_key};
 use super::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventScope, PipelineNodeEventSender};
 use crate::agents::direct_hitl::blocked_tool_result;
@@ -1176,12 +1190,19 @@ impl PipelineLlmAgentBinding {
 }
 
 /// Native ADK agent node with Elitea YAML input/output projection.
+#[derive(Clone)]
 pub(super) struct LlmNode {
     definition: LlmNodeDefinition,
     state_types: BTreeMap<String, String>,
     factory: Arc<dyn PipelineLlmAgentFactory>,
     /// A fixed Parallel branch: the input mapping was frozen with the branch.
     parallel_inputs: bool,
+    /// Per-node settings (5b-2): `None` keeps zero-overhead legacy execution.
+    settings: Option<Arc<AdmittedNodeSettings>>,
+    execution_id: Option<Arc<String>>,
+    execution_deadline: Option<tokio::time::Instant>,
+    recovery: Option<Arc<dyn NodeRecoveryFactory>>,
+    clock: Option<Arc<dyn NodeRecoveryClock>>,
 }
 
 impl LlmNode {
@@ -1195,6 +1216,11 @@ impl LlmNode {
             state_types,
             factory,
             parallel_inputs: false,
+            settings: None,
+            execution_id: None,
+            execution_deadline: None,
+            recovery: None,
+            clock: None,
         }
     }
 
@@ -1202,6 +1228,746 @@ impl LlmNode {
     pub(super) fn with_parallel_inputs(mut self) -> Self {
         self.parallel_inputs = true;
         self
+    }
+
+    pub(super) fn with_settings(
+        mut self,
+        admitted: AdmittedNodeSettings,
+        execution_id: Option<Arc<String>>,
+    ) -> Self {
+        self.settings = Some(Arc::new(admitted));
+        self.execution_id = execution_id;
+        self
+    }
+
+    pub(super) fn with_execution_deadline(
+        mut self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Self {
+        self.execution_deadline = deadline;
+        self
+    }
+
+    pub(super) fn with_node_recovery(mut self, authority: Arc<dyn NodeRecoveryFactory>) -> Self {
+        self.recovery = Some(authority);
+        self
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_clock(mut self, clock: Arc<dyn NodeRecoveryClock>) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    fn timeout_ms(&self) -> Option<u64> {
+        self.settings
+            .as_ref()
+            .and_then(|admitted| admitted.settings.timeout_ms)
+    }
+
+    fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        let deadline = self.execution_deadline?;
+        let remaining_ms = deadline
+            .checked_duration_since(tokio::time::Instant::now())
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        // Require at least 1 ms after backoff so a retry past the execution
+        // deadline stops immediately with ElapsedLimit instead of waiting.
+        Some((remaining_ms, 1))
+    }
+
+    async fn execute_single_attempt(
+        &self,
+        context: &NodeContext,
+    ) -> Result<LlmSingleOutcome, LlmAttemptFailure> {
+        tracing::Span::current().record("stage", "input_mapping");
+        let input = if self.parallel_inputs {
+            LlmNodeDefinition::frozen_execution_input(&context.state)
+        } else {
+            self.definition.map_execution_input(&context.state)
+        }
+        .map_err(LlmAttemptFailure::Execution)?;
+        let input_digest = input.digest_label().map_err(LlmAttemptFailure::Execution)?;
+        let (replay, remaining_replays) = self
+            .replay_state(&context.state, &input_digest)
+            .map_err(LlmAttemptFailure::Execution)?;
+        tracing::Span::current().record("stage", "agent_binding");
+        // A JSON Schema output contract is the provider's response format
+        // (ADR-0043 decision 2); a structured node has no contract.
+        let schema = self
+            .definition
+            .output_schema(&self.state_types)
+            .map_err(|_| LlmAttemptFailure::Execution(LlmExecutionError::InvalidInputMapping))?
+            .or_else(|| {
+                self.definition
+                    .output_contract()
+                    .and_then(|contract| contract.response_schema().cloned())
+            });
+        match run_model_agent_attempt(
+            &self.definition,
+            input,
+            &input_digest,
+            schema,
+            &self.factory,
+            replay.as_ref(),
+            context,
+            self.timeout_ms(),
+            self.execution_deadline,
+        )
+        .await?
+        {
+            PipelineLlmRunOutcome::Completed(text) => {
+                // The model binding validated each final answer and retried once
+                // (ADR-0043 decision 2). An answer joined from output
+                // continuations is checked here, with no retry: it never reaches
+                // the next node unchecked.
+                if let Some(contract) = self.definition.output_contract()
+                    && contract.validate(&text).is_err()
+                {
+                    return Err(LlmAttemptFailure::OutputContractViolation);
+                }
+                tracing::Span::current().record("stage", "state_projection");
+                let updates = self
+                    .definition
+                    .project_response(&text, &self.state_types)
+                    .map_err(LlmAttemptFailure::Execution)?;
+                let mut output = NodeOutput::new();
+                if replay.is_some() {
+                    output = output.with_update(LLM_TOOL_RESUME_STATE_KEY, remaining_replays);
+                }
+                for (key, value) in updates {
+                    output = output.with_update(&key, value);
+                }
+                Ok(LlmSingleOutcome::Completed(output))
+            }
+            PipelineLlmRunOutcome::Confirmation(confirmation) => {
+                tracing::Span::current().record("stage", "tool_confirmation");
+                let interrupt = self
+                    .confirmation_interrupt(*confirmation)
+                    .map_err(LlmAttemptFailure::Execution)?;
+                Ok(LlmSingleOutcome::Confirmation(interrupt))
+            }
+        }
+    }
+
+    async fn report_terminal_attempt_failure(
+        &self,
+        failure: &LlmAttemptFailure,
+    ) -> Result<GraphError, GraphError> {
+        match failure {
+            LlmAttemptFailure::Model { error, .. } => {
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_model_failure(error)
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                Ok(
+                    super::agent::model_gateway_graph_error(self.name(), error.code)
+                        .unwrap_or_else(|| node_failure(self.name())),
+                )
+            }
+            LlmAttemptFailure::NodeTimeout { .. } => {
+                let error = AdkError::new(
+                    adk_rust::ErrorComponent::Model,
+                    adk_rust::ErrorCategory::Timeout,
+                    "model_gateway.upstream_timeout",
+                    "the LLM node exceeded its execution timeout",
+                );
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_model_failure(&error)
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                Ok(super::agent::model_gateway_graph_error(
+                    self.name(),
+                    "model_gateway.upstream_timeout",
+                )
+                .unwrap_or_else(|| node_failure(self.name())))
+            }
+            LlmAttemptFailure::ExecutionDeadlineExceeded => {
+                let error = AdkError::new(
+                    adk_rust::ErrorComponent::Model,
+                    adk_rust::ErrorCategory::Timeout,
+                    "model_gateway.upstream_timeout",
+                    "the execution deadline expired before the LLM node completed",
+                );
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_model_failure(&error)
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                Ok(super::agent::model_gateway_graph_error(
+                    self.name(),
+                    "model_gateway.upstream_timeout",
+                )
+                .unwrap_or_else(|| node_failure(self.name())))
+            }
+            LlmAttemptFailure::OutputContractViolation => {
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_execution_failure(
+                            elitea_agent_runtime::output_contract::VIOLATION_CODE,
+                        )
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                Ok(node_failure(self.name()))
+            }
+            LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted) => {
+                if let Some(sender) = self.factory.event_sender() {
+                    sender
+                        .send_model_failure(&recovery_refused_error())
+                        .await
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                Ok(may_have_started(self.name()))
+            }
+            LlmAttemptFailure::Execution(_) => Ok(node_failure(self.name())),
+        }
+    }
+
+    async fn execute_with_settings(
+        &self,
+        context: &NodeContext,
+        admitted: &Arc<AdmittedNodeSettings>,
+    ) -> Result<NodeOutput, GraphError> {
+        // D8: revisit in the same turn runs no body, opens no journal, and
+        // changes no state.
+        if admitted.settings.execute_once
+            && executed_once(context.get(EXECUTED_ONCE_KEY), self.name()).is_some()
+        {
+            return Ok(NodeOutput::new());
+        }
+        let policy = admitted
+            .settings
+            .to_recovery_policy()
+            .map_err(|_| node_failure(self.name()))?;
+        // Tool-free LLM nodes run behind the durable node-attempt journal.
+        // Tool-bearing LLM nodes own their own ADK model/tool checkpoint and
+        // may pause/resume HITL confirmations on the same graph step
+        // (`LLM_TOOL_RESUME_STATE_KEY`), so they use the in-memory ledger to
+        // retry pre-output failures without poisoning a step journal on HITL.
+        if self.definition.tool_selections().is_empty()
+            && !context.state.contains_key(LLM_TOOL_RESUME_STATE_KEY)
+            && let Some(authority) = &self.recovery
+        {
+            return self
+                .execute_journaled(context, admitted, policy, Arc::clone(authority))
+                .await;
+        }
+        self.execute_in_memory_ledger(context, admitted, policy)
+            .await
+    }
+
+    async fn execute_journaled(
+        &self,
+        context: &NodeContext,
+        admitted: &Arc<AdmittedNodeSettings>,
+        policy: NodeRecoveryPolicy,
+        authority: Arc<dyn NodeRecoveryFactory>,
+    ) -> Result<NodeOutput, GraphError> {
+        let control = Arc::new(Mutex::new(None));
+        let may_have_started_flag = Arc::new(AtomicBool::new(false));
+        let last_failure = Arc::new(Mutex::new(None));
+        let body = LlmAttemptBody {
+            node: self.clone(),
+            control: Arc::clone(&control),
+            may_have_started: Arc::clone(&may_have_started_flag),
+            last_failure: Arc::clone(&last_failure),
+        };
+        let mut recoverable = RecoverableNode::new(
+            Arc::new(body),
+            self.definition.config_digest(),
+            policy,
+            authority,
+            None,
+        )
+        .with_settings(admitted.as_ref().clone(), self.execution_id.clone());
+        if let Some(clock) = &self.clock {
+            recoverable = recoverable.with_clock(Arc::clone(clock));
+        }
+        let result = recoverable.execute(context).await;
+        if let Some(confirmation) = control
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            return Ok(confirmation);
+        }
+        if may_have_started_flag.load(Ordering::Acquire) {
+            if last_failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .is_some()
+                && let Some(sender) = self.factory.event_sender()
+            {
+                sender
+                    .send_model_failure(&recovery_refused_error())
+                    .await
+                    .map_err(|_| node_failure(self.name()))?;
+            }
+            return Err(may_have_started(self.name()));
+        }
+        result
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep in-memory retry loop, cancellation check, and settlement cohesive."
+    )]
+    async fn execute_in_memory_ledger(
+        &self,
+        context: &NodeContext,
+        admitted: &Arc<AdmittedNodeSettings>,
+        policy: NodeRecoveryPolicy,
+    ) -> Result<NodeOutput, GraphError> {
+        let mut ledger = NodeAttemptLedger::new(self.definition.config_digest(), policy)
+            .map_err(|_| node_failure(self.name()))?;
+        loop {
+            let now = self.now_ms()?;
+            if let Some(expired) = ledger
+                .expire_wait(now)
+                .map_err(|_| node_failure(self.name()))?
+            {
+                ledger = expired;
+            }
+            if context
+                .config
+                .parent_context
+                .as_ref()
+                .is_some_and(|parent| parent.is_cancelled())
+            {
+                return Err(GraphError::Other(
+                    "pipeline.node_recovery.cancelled".to_owned(),
+                ));
+            }
+            match ledger.phase() {
+                NodeAttemptPhase::Ready => {
+                    ledger = ledger
+                        .start_attempt(now)
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                NodeAttemptPhase::Failed(RecoveryDecision::RetryAt { not_before_ms, .. }) => {
+                    if now < not_before_ms {
+                        self.wait_until(not_before_ms).await?;
+                        continue;
+                    }
+                    ledger = ledger
+                        .start_attempt(now)
+                        .map_err(|_| node_failure(self.name()))?;
+                }
+                _ => return Err(node_failure(self.name())),
+            }
+            match self.execute_single_attempt(context).await {
+                Ok(LlmSingleOutcome::Completed(output)) => {
+                    let output = fill_neutral_outputs(admitted, output);
+                    return mark_node_executed_once(admitted, self.name(), context, output, None);
+                }
+                Ok(LlmSingleOutcome::Confirmation(interrupt)) => {
+                    return Ok(interrupt);
+                }
+                Err(attempt_failure) => {
+                    let (failure, _, retry_after_ms) = classify_llm_attempt_failure(
+                        &attempt_failure,
+                        self.definition.config_digest(),
+                    );
+                    let now = self.now_ms()?;
+                    let run_window =
+                        self.retry_deadline_budget()
+                            .map(|(remaining_ms, required_ms)| {
+                                (now.saturating_add(remaining_ms), required_ms)
+                            });
+                    ledger = if retry_after_ms.is_some() {
+                        ledger.record_failure_with_retry_after(
+                            failure,
+                            now,
+                            retry_after_ms,
+                            run_window,
+                        )
+                    } else if let Some((run_deadline_ms, required_ms)) = run_window {
+                        ledger.record_failure_within(failure, now, run_deadline_ms, required_ms)
+                    } else {
+                        ledger.record_failure(failure, now)
+                    }
+                    .map_err(|_| node_failure(self.name()))?;
+                    match ledger.phase() {
+                        NodeAttemptPhase::Failed(RecoveryDecision::RetryAt { .. }) => {}
+                        NodeAttemptPhase::Failed(RecoveryDecision::Stop(reason)) => {
+                            if can_settle_llm_stop(
+                                admitted.settings.on_error,
+                                reason,
+                                failure.class,
+                            ) {
+                                let attempts =
+                                    u16::try_from(ledger.history().len()).unwrap_or(1).max(1);
+                                return settle_node_failure(
+                                    admitted,
+                                    self.execution_id.as_deref().map(String::as_str),
+                                    self.name(),
+                                    context,
+                                    llm_failure_fault(failure.class),
+                                    failure.class.retry_condition().is_some(),
+                                    attempts,
+                                );
+                            }
+                            let error = self
+                                .report_terminal_attempt_failure(&attempt_failure)
+                                .await?;
+                            return Err(error);
+                        }
+                        _ => {
+                            let error = self
+                                .report_terminal_attempt_failure(&attempt_failure)
+                                .await?;
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn now_ms(&self) -> Result<u64, GraphError> {
+        if let Some(clock) = &self.clock {
+            return clock.now_ms();
+        }
+        u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|_| node_failure(self.name()))?
+                .as_millis(),
+        )
+        .map_err(|_| node_failure(self.name()))
+    }
+
+    async fn wait_until(&self, target_ms: u64) -> Result<(), GraphError> {
+        if let Some(clock) = &self.clock {
+            return clock.wait_until(target_ms).await;
+        }
+        let now = self.now_ms()?;
+        if target_ms > now {
+            tokio::time::sleep(Duration::from_millis((target_ms - now).min(100))).await;
+        }
+        Ok(())
+    }
+}
+
+fn can_settle_llm_stop(on_error: OnNodeError, reason: StopReason, class: NodeFailureClass) -> bool {
+    on_error != OnNodeError::Stop
+        && matches!(
+            reason,
+            StopReason::NotRetryable | StopReason::RetryDisabled | StopReason::AttemptsExhausted
+        )
+        && !class.control_stop()
+        && !class.denial()
+        && !class.deadline()
+}
+
+enum LlmSingleOutcome {
+    Completed(NodeOutput),
+    Confirmation(NodeOutput),
+}
+
+enum LlmAttemptFailure {
+    Execution(LlmExecutionError),
+    Model {
+        error: Box<AdkError>,
+        pre_output: bool,
+    },
+    NodeTimeout {
+        pre_output: bool,
+    },
+    ExecutionDeadlineExceeded,
+    OutputContractViolation,
+}
+
+fn classify_llm_attempt_failure(
+    failure: &LlmAttemptFailure,
+    effect_id: [u8; 32],
+) -> (NodeFailure, Option<&'static str>, Option<u64>) {
+    match failure {
+        LlmAttemptFailure::Model { error, pre_output } => {
+            let class = classify_adk_error(error, *pre_output);
+            let retry_after_ms = if *pre_output {
+                error.retry.retry_after_ms
+            } else {
+                None
+            };
+            (
+                NodeFailure::new(class, ReplaySafety::NoExternalEffect),
+                Some(error.code),
+                retry_after_ms,
+            )
+        }
+        LlmAttemptFailure::NodeTimeout { pre_output } => {
+            let class = if *pre_output {
+                NodeFailureClass::AttemptTimeout
+            } else {
+                NodeFailureClass::ModelOutputIncomplete
+            };
+            (
+                NodeFailure::new(class, ReplaySafety::NoExternalEffect),
+                Some("model_gateway.upstream_timeout"),
+                None,
+            )
+        }
+        LlmAttemptFailure::ExecutionDeadlineExceeded => (
+            NodeFailure::new(
+                NodeFailureClass::DeadlineInsufficient,
+                ReplaySafety::NoExternalEffect,
+            ),
+            Some("model_gateway.upstream_timeout"),
+            None,
+        ),
+        LlmAttemptFailure::OutputContractViolation => (
+            NodeFailure::new(
+                NodeFailureClass::InvalidResult,
+                ReplaySafety::NoExternalEffect,
+            ),
+            Some(elitea_agent_runtime::output_contract::VIOLATION_CODE),
+            None,
+        ),
+        LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted) => (
+            NodeFailure::new(
+                NodeFailureClass::WorkerInterrupted,
+                ReplaySafety::UnknownExternalEffect { effect_id },
+            ),
+            None,
+            None,
+        ),
+        LlmAttemptFailure::Execution(LlmExecutionError::InvalidInputMapping) => (
+            NodeFailure::new(
+                NodeFailureClass::InvalidInput,
+                ReplaySafety::NoExternalEffect,
+            ),
+            None,
+            None,
+        ),
+        LlmAttemptFailure::Execution(
+            LlmExecutionError::InvalidStructuredOutput | LlmExecutionError::ResourceExhausted,
+        ) => (
+            NodeFailure::new(
+                NodeFailureClass::InvalidResult,
+                ReplaySafety::NoExternalEffect,
+            ),
+            None,
+            None,
+        ),
+        LlmAttemptFailure::Execution(LlmExecutionError::Unavailable) => (
+            NodeFailure::new(NodeFailureClass::Unknown, ReplaySafety::NoExternalEffect),
+            None,
+            None,
+        ),
+    }
+}
+
+struct LlmAttemptBody {
+    node: LlmNode,
+    control: Arc<Mutex<Option<NodeOutput>>>,
+    may_have_started: Arc<AtomicBool>,
+    last_failure: Arc<Mutex<Option<LlmAttemptFailure>>>,
+}
+
+#[async_trait]
+impl Node for LlmAttemptBody {
+    fn name(&self) -> &str {
+        self.node.name()
+    }
+
+    async fn execute(&self, _: &NodeContext) -> Result<NodeOutput, GraphError> {
+        Err(node_failure(self.name()))
+    }
+}
+
+#[async_trait]
+impl NodeAttemptBody for LlmAttemptBody {
+    async fn execute_attempt(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<NodeOutput, NodeFailure> {
+        self.execute_attempt_reported(context, authority)
+            .await
+            .map_err(|reported| reported.failure)
+    }
+
+    async fn execute_attempt_reported(
+        &self,
+        context: &NodeContext,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<NodeOutput, NodeAttemptReportedFailure> {
+        if !authority.matches(
+            self.name(),
+            self.node.definition.config_digest(),
+            context.step,
+        ) {
+            return Err(NodeFailure::new(
+                NodeFailureClass::AuthorizationDenied,
+                ReplaySafety::NoExternalEffect,
+            )
+            .into());
+        }
+        // A Started attempt from an earlier crashed process: if the node has
+        // tools, we cannot prove no tool ran; if it has no tools, pre-output
+        // interruption is safe to retry.
+        if authority.recovering_started() {
+            let replay = if self.node.definition.tool_selections().is_empty() {
+                ReplaySafety::NoExternalEffect
+            } else {
+                ReplaySafety::UnknownExternalEffect {
+                    effect_id: authority.dispatch_activation(),
+                }
+            };
+            return Err(NodeFailure::new(NodeFailureClass::WorkerInterrupted, replay).into());
+        }
+        match self.node.execute_single_attempt(context).await {
+            Ok(LlmSingleOutcome::Completed(output)) => Ok(output),
+            Ok(LlmSingleOutcome::Confirmation(interrupt)) => {
+                *self
+                    .control
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(interrupt);
+                Err(NodeFailure::new(
+                    NodeFailureClass::AuthenticationDenied,
+                    ReplaySafety::NoExternalEffect,
+                )
+                .into())
+            }
+            Err(attempt_failure) => {
+                if matches!(
+                    attempt_failure,
+                    LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted)
+                ) {
+                    self.may_have_started.store(true, Ordering::Release);
+                }
+                let (failure, terminal_code, retry_after_ms) =
+                    classify_llm_attempt_failure(&attempt_failure, authority.dispatch_activation());
+                *self
+                    .last_failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(attempt_failure);
+                Err(NodeAttemptReportedFailure {
+                    failure,
+                    terminal_code,
+                    failure_detail: None,
+                    retry_after_ms,
+                })
+            }
+        }
+    }
+
+    async fn report_terminal_failure_classified(
+        &self,
+        _: &NodeContext,
+        _: &NodeAttemptAuthority,
+        code: &'static str,
+        _: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        let recorded = self
+            .last_failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(failure) = recorded {
+            let _ = self.node.report_terminal_attempt_failure(&failure).await?;
+            return Ok(());
+        }
+        if let Some(sender) = self.node.factory.event_sender()
+            && let Some((category, static_code, message)) =
+                super::agent::model_gateway_error_spec(code)
+        {
+            let error = AdkError::new(
+                adk_rust::ErrorComponent::Model,
+                category,
+                static_code,
+                message,
+            );
+            sender
+                .send_model_failure(&error)
+                .await
+                .map_err(|_| node_failure(self.name()))?;
+        }
+        Ok(())
+    }
+
+    async fn report_restored_terminal_failure(
+        &self,
+        _: &NodeContext,
+        class: NodeFailureClass,
+    ) -> Result<(), GraphError> {
+        // SEC-5B2-05: only model-gateway failure classes emit `send_model_failure`;
+        // local non-model errors (`InvalidInput`, `InvalidResult`, `Unknown`)
+        // must never emit a spurious `model_gateway.incomplete_stream`.
+        if let Some(sender) = self.node.factory.event_sender()
+            && let Some((category, code, message)) = restored_model_gateway_spec(class)
+        {
+            let error = AdkError::new(adk_rust::ErrorComponent::Model, category, code, message);
+            sender
+                .send_model_failure(&error)
+                .await
+                .map_err(|_| node_failure(self.name()))?;
+        }
+        Ok(())
+    }
+
+    fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        self.node.retry_deadline_budget()
+    }
+
+    fn terminal_stop_graph_error(
+        &self,
+        code: &'static str,
+        _: NodeFailureClass,
+    ) -> Option<GraphError> {
+        super::agent::model_gateway_graph_error(self.name(), code)
+    }
+
+    fn restored_stop_graph_error(&self, class: NodeFailureClass) -> Option<GraphError> {
+        restored_model_gateway_spec(class)
+            .and_then(|(_, code, _)| super::agent::model_gateway_graph_error(self.name(), code))
+    }
+}
+
+const fn restored_model_gateway_spec(
+    class: NodeFailureClass,
+) -> Option<(adk_rust::ErrorCategory, &'static str, &'static str)> {
+    match class {
+        NodeFailureClass::RateLimited => Some((
+            adk_rust::ErrorCategory::RateLimited,
+            "model_gateway.rate_limited",
+            "the model gateway rate limit was reached",
+        )),
+        NodeFailureClass::AttemptTimeout | NodeFailureClass::DeadlineInsufficient => Some((
+            adk_rust::ErrorCategory::Timeout,
+            "model_gateway.upstream_timeout",
+            "the model gateway timed out",
+        )),
+        NodeFailureClass::DependencyUnavailable => Some((
+            adk_rust::ErrorCategory::Unavailable,
+            "model_gateway.unavailable",
+            "the model gateway is unavailable",
+        )),
+        NodeFailureClass::ModelOutputIncomplete => Some((
+            adk_rust::ErrorCategory::Internal,
+            "model_gateway.incomplete_stream",
+            "the model gateway stream ended before completion",
+        )),
+        NodeFailureClass::AuthenticationDenied => Some((
+            adk_rust::ErrorCategory::Unauthorized,
+            "model_gateway.unauthorized",
+            "the model gateway rejected the execution credential",
+        )),
+        NodeFailureClass::AuthorizationDenied => Some((
+            adk_rust::ErrorCategory::Forbidden,
+            "model_gateway.forbidden",
+            "the model gateway rejected the execution project",
+        )),
+        _ => None,
     }
 }
 
@@ -1230,82 +1996,14 @@ impl Node for LlmNode {
             error_code = tracing::field::Empty,
         );
         let result = async {
-            tracing::Span::current().record("stage", "input_mapping");
-            let input = if self.parallel_inputs {
-                LlmNodeDefinition::frozen_execution_input(&context.state)
-            } else {
-                self.definition.map_execution_input(&context.state)
+            if let Some(admitted) = &self.settings {
+                return self.execute_with_settings(context, admitted).await;
             }
-            .map_err(|_| node_failure(self.name()))?;
-            let input_digest = input
-                .digest_label()
-                .map_err(|_| node_failure(self.name()))?;
-            let (replay, remaining_replays) = self
-                .replay_state(&context.state, &input_digest)
-                .map_err(|_| node_failure(self.name()))?;
-            tracing::Span::current().record("stage", "agent_binding");
-            // A JSON Schema output contract is the provider's response format
-            // (ADR-0043 decision 2); a structured node has no contract.
-            let schema = self
-                .definition
-                .output_schema(&self.state_types)
-                .map_err(|_| node_failure(self.name()))?
-                .or_else(|| {
-                    self.definition
-                        .output_contract()
-                        .and_then(|contract| contract.response_schema().cloned())
-                });
-            match run_model_agent(
-                &self.definition,
-                input,
-                &input_digest,
-                schema,
-                &self.factory,
-                replay.as_ref(),
-                context,
-            )
-            .await
-            .map_err(|error| match error {
-                LlmExecutionError::MayHaveStarted => may_have_started(self.name()),
-                _ => node_failure(self.name()),
-            })? {
-                PipelineLlmRunOutcome::Completed(text) => {
-                    // The model binding validated each final answer and
-                    // retried once (ADR-0043 decision 2). An answer joined
-                    // from output continuations is checked here, with no
-                    // retry: it never reaches the next node unchecked.
-                    if let Some(contract) = self.definition.output_contract()
-                        && contract.validate(&text).is_err()
-                    {
-                        if let Some(sender) = self.factory.event_sender() {
-                            sender
-                                .send_execution_failure(
-                                    elitea_agent_runtime::output_contract::VIOLATION_CODE,
-                                )
-                                .await
-                                .map_err(|_| node_failure(self.name()))?;
-                        }
-                        return Err(node_failure(self.name()));
-                    }
-                    tracing::Span::current().record("stage", "state_projection");
-                    let updates = self
-                        .definition
-                        .project_response(&text, &self.state_types)
-                        .map_err(|_| node_failure(self.name()))?;
-                    let mut output = NodeOutput::new();
-                    if replay.is_some() {
-                        output = output.with_update(LLM_TOOL_RESUME_STATE_KEY, remaining_replays);
-                    }
-                    for (key, value) in updates {
-                        output = output.with_update(&key, value);
-                    }
-                    Ok(output)
-                }
-                PipelineLlmRunOutcome::Confirmation(confirmation) => {
-                    tracing::Span::current().record("stage", "tool_confirmation");
-                    self.confirmation_interrupt(*confirmation)
-                        .map_err(|_| node_failure(self.name()))
-                }
+            match self.execute_single_attempt(context).await {
+                Ok(
+                    LlmSingleOutcome::Completed(output) | LlmSingleOutcome::Confirmation(output),
+                ) => Ok(output),
+                Err(failure) => Err(self.report_terminal_attempt_failure(&failure).await?),
             }
         }
         .instrument(span.clone())
@@ -1512,7 +2210,7 @@ pub(super) async fn run_model_agent_text(
     factory: &Arc<dyn PipelineLlmAgentFactory>,
     context: &NodeContext,
 ) -> Result<String, LlmExecutionError> {
-    match run_model_agent(
+    match run_model_agent_attempt(
         definition,
         input,
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -1520,16 +2218,68 @@ pub(super) async fn run_model_agent_text(
         factory,
         None,
         context,
+        None,
+        None,
     )
-    .await?
+    .await
     {
-        PipelineLlmRunOutcome::Completed(text) => Ok(text),
-        PipelineLlmRunOutcome::Confirmation(_) => Err(LlmExecutionError::Unavailable),
+        Ok(PipelineLlmRunOutcome::Completed(text)) => Ok(text),
+        Err(LlmAttemptFailure::Model { error, .. }) => {
+            if let Some(sender) = factory.event_sender() {
+                sender
+                    .send_model_failure(&error)
+                    .await
+                    .map_err(|_| LlmExecutionError::Unavailable)?;
+            }
+            Err(model_error(&error))
+        }
+        Err(LlmAttemptFailure::Execution(LlmExecutionError::MayHaveStarted)) => {
+            if let Some(sender) = factory.event_sender() {
+                sender
+                    .send_model_failure(&recovery_refused_error())
+                    .await
+                    .map_err(|_| LlmExecutionError::Unavailable)?;
+            }
+            Err(LlmExecutionError::MayHaveStarted)
+        }
+        Err(LlmAttemptFailure::Execution(error)) => Err(error),
+        Ok(PipelineLlmRunOutcome::Confirmation(_))
+        | Err(
+            LlmAttemptFailure::NodeTimeout { .. }
+            | LlmAttemptFailure::ExecutionDeadlineExceeded
+            | LlmAttemptFailure::OutputContractViolation,
+        ) => Err(LlmExecutionError::Unavailable),
     }
 }
 
-#[allow(clippy::too_many_lines)] // Keep checkpoint admission, instruction restoration, and event ordering together.
-async fn run_model_agent(
+/// Whether `event` carries any visible output delta (non-empty text, thinking,
+/// media, or a tool call). Empty metadata/usage chunks do not flip the
+/// pre-output boundary (T-5B §9).
+fn event_has_visible_delta(event: &adk_rust::Event) -> bool {
+    if event.tool_progress_stream().is_some() {
+        return false;
+    }
+    event.content().is_some_and(|content| {
+        content.parts.iter().any(|part| match part {
+            Part::Text { text } => !text.is_empty(),
+            Part::Thinking { thinking, .. } => !thinking.is_empty(),
+            Part::FunctionCall { .. }
+            | Part::InlineData { .. }
+            | Part::FileData { .. }
+            | Part::ServerToolCall { .. }
+            | Part::ServerToolResponse { .. }
+            | Part::EmbeddedResource { .. } => true,
+            Part::FunctionResponse { .. } => false,
+        })
+    })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    reason = "Keep checkpoint admission, timeout clamping, pre-output tracking, and event ordering together."
+)]
+async fn run_model_agent_attempt(
     definition: &LlmNodeDefinition,
     mut input: LlmExecutionInput,
     input_digest: &str,
@@ -1537,7 +2287,23 @@ async fn run_model_agent(
     factory: &Arc<dyn PipelineLlmAgentFactory>,
     replay: Option<&PipelineLlmReplayEnvelope>,
     context: &NodeContext,
-) -> Result<PipelineLlmRunOutcome, LlmExecutionError> {
+    timeout_ms: Option<u64>,
+    execution_deadline: Option<tokio::time::Instant>,
+) -> Result<PipelineLlmRunOutcome, LlmAttemptFailure> {
+    let now = tokio::time::Instant::now();
+    let remaining_run = execution_deadline.map(|deadline| deadline.saturating_duration_since(now));
+    if remaining_run.is_some_and(|remaining| remaining.is_zero()) {
+        return Err(LlmAttemptFailure::ExecutionDeadlineExceeded);
+    }
+    let attempt_limit = match (timeout_ms.map(Duration::from_millis), remaining_run) {
+        (Some(node_limit), Some(run_limit)) => {
+            Some((node_limit.min(run_limit), run_limit < node_limit))
+        }
+        (Some(node_limit), None) => Some((node_limit, false)),
+        (None, Some(run_limit)) => Some((run_limit, true)),
+        (None, None) => None,
+    };
+
     let predecessor = context
         .state
         .get(LLM_TOOL_RESUME_STATE_KEY)
@@ -1545,7 +2311,7 @@ async fn run_model_agent(
         .and_then(|replays| replays.get(definition.id()));
     let event_scope =
         PipelineNodeEventScope::from_state(context.state.get(PIPELINE_NODE_EVENT_SCOPE_STATE_KEY))
-            .map_err(|_| LlmExecutionError::InvalidInputMapping)?;
+            .map_err(|_| LlmAttemptFailure::Execution(LlmExecutionError::InvalidInputMapping))?;
     let mut transcript = replay.map_or_else(
         || input.initial_transcript(),
         PipelineLlmReplayEnvelope::replay_history,
@@ -1553,127 +2319,172 @@ async fn run_model_agent(
     if let Some(replay) = replay {
         input.history = replay.replay_history();
     }
-    let scope = PipelineModelScope::for_node(definition, context, event_scope.as_ref())?;
-    let binding = factory.build(definition, &input, output_schema, replay, &scope)?;
+    let scope = PipelineModelScope::for_node(definition, context, event_scope.as_ref())
+        .map_err(LlmAttemptFailure::Execution)?;
+    let binding = factory
+        .build(definition, &input, output_schema, replay, &scope)
+        .map_err(LlmAttemptFailure::Execution)?;
     let agent = binding.agent();
-    let invocation = Arc::new(PipelineLlmInvocationContext::new(
-        &context.config.thread_id,
-        input,
-        agent.clone(),
-        context.config.parent_context.clone(),
-        replay,
-        binding.inherit_root_instructions,
-    )?);
+    let invocation = Arc::new(
+        PipelineLlmInvocationContext::new(
+            &context.config.thread_id,
+            input,
+            agent.clone(),
+            context.config.parent_context.clone(),
+            replay,
+            binding.inherit_root_instructions,
+        )
+        .map_err(LlmAttemptFailure::Execution)?,
+    );
     tracing::Span::current().record("stage", "model_tool_loop");
-    let stream = match agent.run(invocation.clone()).await {
-        Ok(stream) => stream,
-        Err(error) => {
-            if let Some(sender) = factory.event_sender() {
-                sender
-                    .send_model_failure(&error)
-                    .await
-                    .map_err(|_| LlmExecutionError::Unavailable)?;
-            }
-            return Err(model_error(&error));
-        }
-    };
-    tokio::pin!(stream);
-    let mut events = Vec::new();
-    let mut pending_prefix = None;
-    let mut pending_content = None;
-    while let Some(event) = stream.next().await {
-        let mut event = match event {
-            Ok(event) => event,
+    let saw_visible_delta = Arc::new(AtomicBool::new(false));
+    let seen_flag = Arc::clone(&saw_visible_delta);
+    let drive = async move {
+        let stream = match agent.run(invocation.clone()).await {
+            Ok(stream) => stream,
             Err(error) => {
-                if let Some(sender) = factory.event_sender() {
-                    sender
-                        .send_model_failure(&error)
-                        .await
-                        .map_err(|_| LlmExecutionError::Unavailable)?;
+                if model_error(&error) == LlmExecutionError::MayHaveStarted {
+                    return Err(LlmAttemptFailure::Execution(
+                        LlmExecutionError::MayHaveStarted,
+                    ));
                 }
-                return Err(model_error(&error));
+                return Err(LlmAttemptFailure::Model {
+                    error: Box::new(error),
+                    pre_output: !seen_flag.load(Ordering::Acquire),
+                });
             }
         };
-        if let Some(request) = event.actions.tool_confirmation.clone() {
-            let pending_content = pending_content
-                .take()
-                .ok_or(LlmExecutionError::Unavailable)?;
-            let pending_prefix = pending_prefix
-                .take()
-                .ok_or(LlmExecutionError::Unavailable)?;
-            let mut replay = PipelineLlmReplayEnvelope::new(
-                definition,
-                input_digest.to_owned(),
-                predecessor,
-                pending_prefix,
-                pending_content,
-                replay,
-            )?;
-            replay.instruction_state = adk_rust::State::all(&invocation.session.state);
-            replay.validate()?;
-            let guard = binding
-                .guard(&request.tool_name)
-                .ok_or(LlmExecutionError::Unavailable)?;
-            return Ok(PipelineLlmRunOutcome::Confirmation(Box::new(
-                PipelineLlmConfirmation {
-                    request,
+        tokio::pin!(stream);
+        let mut events = Vec::new();
+        let mut pending_prefix = None;
+        let mut pending_content = None;
+        while let Some(event) = stream.next().await {
+            let mut event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    if model_error(&error) == LlmExecutionError::MayHaveStarted {
+                        return Err(LlmAttemptFailure::Execution(
+                            LlmExecutionError::MayHaveStarted,
+                        ));
+                    }
+                    return Err(LlmAttemptFailure::Model {
+                        error: Box::new(error),
+                        pre_output: !seen_flag.load(Ordering::Acquire),
+                    });
+                }
+            };
+            if let Some(request) = event.actions.tool_confirmation.clone() {
+                let pending_content = pending_content
+                    .take()
+                    .ok_or(LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))?;
+                let pending_prefix = pending_prefix
+                    .take()
+                    .ok_or(LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))?;
+                let mut replay = PipelineLlmReplayEnvelope::new(
+                    definition,
+                    input_digest.to_owned(),
+                    predecessor,
+                    pending_prefix,
+                    pending_content,
                     replay,
-                    guard,
-                },
-            )));
-        }
-        if crate::agents::instruction_authority::valid_state_delta(&event.actions.state_delta) {
-            invocation
-                .session
-                .state
-                .values
-                .write()
-                .map_err(|_| LlmExecutionError::Unavailable)?
-                .extend(event.actions.state_delta.clone());
-        }
-        let restates_turn = crate::agents::events::restates_streamed_turn(&event);
-        if !event.llm_response.partial
-            && let Some(event_content) = event.llm_response.content.as_mut()
-        {
-            let has_calls = event_content
-                .parts
-                .iter()
-                .any(|part| matches!(part, Part::FunctionCall { .. }));
-            if has_calls {
-                normalize_replay_call_ids(event_content, &event.invocation_id)?;
+                )
+                .map_err(LlmAttemptFailure::Execution)?;
+                replay.instruction_state = adk_rust::State::all(&invocation.session.state);
+                replay.validate().map_err(LlmAttemptFailure::Execution)?;
+                let guard = binding
+                    .guard(&request.tool_name)
+                    .ok_or(LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))?;
+                return Ok(PipelineLlmRunOutcome::Confirmation(Box::new(
+                    PipelineLlmConfirmation {
+                        request,
+                        replay,
+                        guard,
+                    },
+                )));
             }
-            // Replay needs the whole model turn, not just the terminal delta.
-            // Do not change the event forwarded to the live browser stream.
-            // A 2.3.0 streamed terminal already carries the whole turn.
-            let mut completed_content = event_content.clone();
-            if !restates_turn {
-                completed_content.parts = events
+            if crate::agents::instruction_authority::valid_state_delta(&event.actions.state_delta) {
+                invocation
+                    .session
+                    .state
+                    .values
+                    .write()
+                    .map_err(|_| LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))?
+                    .extend(event.actions.state_delta.clone());
+            }
+            let restates_turn = crate::agents::events::restates_streamed_turn(&event);
+            if !event.llm_response.partial
+                && let Some(event_content) = event.llm_response.content.as_mut()
+            {
+                let has_calls = event_content
+                    .parts
                     .iter()
-                    .filter(|previous: &&adk_rust::Event| previous.id == event.id)
-                    .filter_map(adk_rust::Event::content)
-                    .flat_map(|content| content.parts.iter().cloned())
-                    .chain(event_content.parts.iter().cloned())
-                    .collect();
+                    .any(|part| matches!(part, Part::FunctionCall { .. }));
+                if has_calls {
+                    normalize_replay_call_ids(event_content, &event.invocation_id)
+                        .map_err(LlmAttemptFailure::Execution)?;
+                }
+                // Replay needs the whole model turn, not just the terminal delta.
+                // Do not change the event forwarded to the live browser stream.
+                // A 2.3.0 streamed terminal already carries the whole turn.
+                let mut completed_content = event_content.clone();
+                if !restates_turn {
+                    completed_content.parts = events
+                        .iter()
+                        .filter(|previous: &&adk_rust::Event| previous.id == event.id)
+                        .filter_map(adk_rust::Event::content)
+                        .flat_map(|content| content.parts.iter().cloned())
+                        .chain(event_content.parts.iter().cloned())
+                        .collect();
+                }
+                if has_calls {
+                    pending_prefix = Some(transcript.clone());
+                    pending_content = Some(completed_content.clone());
+                }
+                transcript.push(completed_content);
             }
-            if has_calls {
-                pending_prefix = Some(transcript.clone());
-                pending_content = Some(completed_content.clone());
+            if event_has_visible_delta(&event) {
+                seen_flag.store(true, Ordering::Release);
             }
-            transcript.push(completed_content);
+            if event.tool_progress_stream().is_none()
+                && let Some(sender) = factory.event_sender()
+            {
+                sender
+                    .send(definition.id(), event_scope.as_ref(), event.clone())
+                    .await
+                    .map_err(|_| LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))?;
+            }
+            events.push(event);
         }
-        if event.tool_progress_stream().is_none()
-            && let Some(sender) = factory.event_sender()
-        {
-            sender
-                .send(definition.id(), event_scope.as_ref(), event.clone())
-                .await
-                .map_err(|_| LlmExecutionError::Unavailable)?;
-        }
-        events.push(event);
+        last_model_text(&events)
+            .map(PipelineLlmRunOutcome::Completed)
+            .ok_or(LlmAttemptFailure::Execution(LlmExecutionError::Unavailable))
+    };
+    match attempt_limit {
+        Some((limit, bound_by_run_deadline)) => match tokio::time::timeout(limit, drive).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                if bound_by_run_deadline
+                    || execution_deadline.is_some_and(|d| tokio::time::Instant::now() >= d)
+                {
+                    Err(LlmAttemptFailure::ExecutionDeadlineExceeded)
+                } else {
+                    Err(LlmAttemptFailure::NodeTimeout {
+                        pre_output: !saw_visible_delta.load(Ordering::Acquire),
+                    })
+                }
+            }
+        },
+        None => drive.await,
     }
-    last_model_text(&events)
-        .map(PipelineLlmRunOutcome::Completed)
-        .ok_or(LlmExecutionError::Unavailable)
+}
+
+fn recovery_refused_error() -> AdkError {
+    AdkError::new(
+        adk_rust::ErrorComponent::Agent,
+        adk_rust::ErrorCategory::Unsupported,
+        crate::protocol::output::RECOVERY_REFUSED_UPSTREAM_CODE,
+        crate::protocol::output::RECOVERY_REFUSED_DETAIL,
+    )
 }
 
 /// A tool of this node crossed its boundary in an earlier run without a

@@ -138,21 +138,22 @@ fn deterministic_families_refuse_retry_and_timeout() {
             "{node_type}"
         );
     }
-    for node_type in [
-        "llm", "decision", "toolkit", "mcp", "agent", "parallel", "map",
-    ] {
+    for node_type in ["decision", "agent", "parallel", "map"] {
         assert_eq!(
             admitted.check_family(SettingsFamily::of(node_type)),
             Err(NodeSettingsRefusal::FamilyNotYet),
             "{node_type}"
         );
     }
-    assert_eq!(
-        parse("{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1000, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}")
-            .unwrap()
-            .check_family(SettingsFamily::of("code")),
-        Ok(())
-    );
+    let full = parse("{retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 1000, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}")
+        .unwrap();
+    for node_type in ["code", "llm", "toolkit", "mcp"] {
+        assert_eq!(
+            full.check_family(SettingsFamily::of(node_type)),
+            Ok(()),
+            "{node_type}"
+        );
+    }
     for node_type in ["hitl", "printer"] {
         assert_eq!(
             admitted.check_family(SettingsFamily::of(node_type)),
@@ -212,7 +213,7 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         .iter()
         .map(|family| family.node_type())
         .collect();
-    expected_families.insert("code");
+    expected_families.extend(["code", "llm", "toolkit", "mcp"]);
     assert_eq!(
         families.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         expected_families
@@ -220,7 +221,12 @@ fn the_constants_tables_and_texts_are_the_contracts() {
     for (node_type, family) in DeterministicFamily::ALL
         .iter()
         .map(|family| (family.node_type(), SettingsFamily::Deterministic(*family)))
-        .chain(std::iter::once(("code", SettingsFamily::Code)))
+        .chain([
+            ("code", SettingsFamily::Code),
+            ("llm", SettingsFamily::Llm),
+            ("toolkit", SettingsFamily::Toolkit),
+            ("mcp", SettingsFamily::Mcp),
+        ])
     {
         let listed: Vec<&str> = families[node_type]
             .as_array()

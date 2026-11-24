@@ -172,7 +172,7 @@ func postJSON(t *testing.T, h http.Handler, path, body string) *httptest.Respons
 
 func TestChatUnary(t *testing.T) {
 	fake := &fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "cmpl-1", Model: "gpt-4o"}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK {
@@ -195,7 +195,7 @@ func TestChatUnaryError_BudgetIs402(t *testing.T) {
 		StatusCode: intPtr(http.StatusPaymentRequired),
 		Error:      &schemas.ErrorField{Message: "over budget"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{"model":"gpt-4o","messages":[]}`)
 	if rec.Code != http.StatusPaymentRequired {
@@ -214,7 +214,7 @@ func TestChatStreamOpenAI_FlushesEachChunkThenDone(t *testing.T) {
 		&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c2", Object: "chat.completion.chunk"}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{"model":"gpt-4o","messages":[],"stream":true}`)
 	if rec.Code != http.StatusOK {
@@ -247,7 +247,7 @@ func TestChatStreamMidStreamError_NoDone(t *testing.T) {
 		}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{"model":"gpt-4o","messages":[],"stream":true}`)
 	body := rec.Body.String()
@@ -264,7 +264,7 @@ func TestChatStreamPreError(t *testing.T) {
 		StatusCode: intPtr(http.StatusUnauthorized),
 		Error:      &schemas.ErrorField{Message: "bad key"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{"model":"gpt-4o","messages":[],"stream":true}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -274,7 +274,7 @@ func TestChatStreamPreError(t *testing.T) {
 
 func TestMessagesUnaryAnthropic(t *testing.T) {
 	fake := &fakeRouter{respResp: &schemas.BifrostResponsesResponse{ID: strPtr("resp-1")}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"anthropic/claude-3-5-sonnet","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK {
@@ -289,7 +289,7 @@ func TestMessagesStreamAnthropic_EventFramesNoDone(t *testing.T) {
 	}
 	chunks := newChunkChan(&schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: created})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[],"stream":true}`)
 	if rec.Code != http.StatusOK {
@@ -309,7 +309,7 @@ func TestMessagesStreamAnthropic_MidStreamError(t *testing.T) {
 		Error: &schemas.ErrorField{Type: strPtr("overloaded_error"), Message: "overloaded"},
 	}})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude","max_tokens":1,"messages":[],"stream":true}`)
 	body := rec.Body.String()
@@ -320,7 +320,7 @@ func TestMessagesStreamAnthropic_MidStreamError(t *testing.T) {
 
 func TestCountTokensSynchronous(t *testing.T) {
 	fake := &fakeRouter{countResp: &schemas.BifrostCountTokensResponse{}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages/count_tokens", `{"model":"claude","max_tokens":1,"messages":[]}`)
 	if rec.Code != http.StatusOK {
@@ -333,7 +333,7 @@ func TestCountTokensSynchronous(t *testing.T) {
 
 func TestUnknownMessagesSubPathIs404(t *testing.T) {
 	fake := &fakeRouter{}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages/bogus", `{}`)
 	if rec.Code != http.StatusNotFound {
@@ -343,7 +343,7 @@ func TestUnknownMessagesSubPathIs404(t *testing.T) {
 
 func TestResponsesUnary(t *testing.T) {
 	fake := &fakeRouter{respResp: &schemas.BifrostResponsesResponse{ID: strPtr("resp-9")}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses", `{"model":"gpt-4o","input":"hi"}`)
 	if rec.Code != http.StatusOK {
@@ -356,7 +356,7 @@ func TestTextCompletionAndEmbeddings(t *testing.T) {
 		textResp: &schemas.BifrostTextCompletionResponse{ID: "txt-1"},
 		embResp:  &schemas.BifrostEmbeddingResponse{},
 	}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	if rec := postJSON(t, h.route(), "/llm/v1/completions", `{"model":"gpt-3.5-turbo-instruct","prompt":"hi"}`); rec.Code != http.StatusOK {
 		t.Fatalf("completions status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -368,7 +368,7 @@ func TestTextCompletionAndEmbeddings(t *testing.T) {
 
 func TestImageGenerationUnary(t *testing.T) {
 	fake := &fakeRouter{imgResp: &schemas.BifrostImageGenerationResponse{}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/images/generations", `{"model":"dall-e-3","prompt":"a cat"}`)
 	if rec.Code != http.StatusOK {
@@ -377,7 +377,7 @@ func TestImageGenerationUnary(t *testing.T) {
 }
 
 func TestBadJSONIs400(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil)
+	h := newTestHandler(&fakeRouter{}, nil, nil)
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions", `{not json`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
@@ -386,7 +386,7 @@ func TestBadJSONIs400(t *testing.T) {
 
 func TestHeaderHygieneStripsLeakedHeaders(t *testing.T) {
 	fake := &fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "x"}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	// Seed the recorder with headers a naive downstream might set; the handler
 	// must strip them via finish().
@@ -415,7 +415,7 @@ func (h *Handler) route() http.Handler {
 // vkCapture asserts the identity header flows into the Bifrost virtual key.
 func TestVirtualKeyInjectedFromHeader(t *testing.T) {
 	fake := &fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "x"}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
 	req.Header.Set(headerProjectID, "4242")
@@ -429,7 +429,7 @@ func TestVirtualKeyInjectedFromHeader(t *testing.T) {
 
 func TestIdentitySignatureRejectedWhenInvalid(t *testing.T) {
 	secret := []byte("s3cr3t")
-	h := NewHandler(&fakeRouter{}, nil, secret)
+	h := newTestHandler(&fakeRouter{}, nil, secret)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
 	req.Header.Set(headerProjectID, "1")
@@ -445,7 +445,7 @@ func TestIdentitySignatureRejectedWhenInvalid(t *testing.T) {
 func TestIdentitySignatureAcceptedWhenValid(t *testing.T) {
 	secret := []byte("s3cr3t")
 	fake := &fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "ok"}}
-	h := NewHandler(fake, nil, secret)
+	h := newTestHandler(fake, nil, secret)
 
 	id := identity{projectID: "77"}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[]}`))
@@ -469,7 +469,7 @@ func TestResponsesStream_EventFramesNoDone(t *testing.T) {
 	}
 	chunks := newChunkChan(&schemas.BifrostStreamChunk{BifrostResponsesStreamResponse: created})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses", `{"model":"gpt-4o","input":"hi","stream":true}`)
 	if rec.Code != http.StatusOK {
@@ -490,7 +490,7 @@ func TestResponsesStream_MidStreamError(t *testing.T) {
 		Error:      &schemas.ErrorField{Message: "unavailable"},
 	}})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses", `{"model":"gpt-4o","input":"hi","stream":true}`)
 	body := rec.Body.String()
@@ -504,7 +504,7 @@ func TestResponsesStreamPreError(t *testing.T) {
 		StatusCode: intPtr(http.StatusServiceUnavailable),
 		Error:      &schemas.ErrorField{Message: "down"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses", `{"model":"gpt-4o","input":"hi","stream":true}`)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -517,7 +517,7 @@ func TestMessagesUnaryError_Anthropic(t *testing.T) {
 		StatusCode: intPtr(http.StatusUnauthorized),
 		Error:      &schemas.ErrorField{Message: "bad key"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude","max_tokens":1,"messages":[]}`)
 	if rec.Code != http.StatusUnauthorized {
@@ -546,7 +546,7 @@ func TestMessagesUnaryError_IsOpenAIShaped(t *testing.T) {
 		StatusCode: intPtr(http.StatusTooManyRequests),
 		Error:      &schemas.ErrorField{Message: "rate limited", Type: strPtr("rate_limit_error")},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude","max_tokens":1,"messages":[]}`)
 	if rec.Code != http.StatusTooManyRequests {
@@ -572,7 +572,7 @@ func TestMessagesStreamPreError_IsOpenAIShaped(t *testing.T) {
 		StatusCode: intPtr(http.StatusServiceUnavailable),
 		Error:      &schemas.ErrorField{Message: "overloaded"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude","max_tokens":1,"messages":[],"stream":true}`)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -592,7 +592,7 @@ func TestMessagesStreamPreError_Anthropic(t *testing.T) {
 		StatusCode: intPtr(http.StatusTooManyRequests),
 		Error:      &schemas.ErrorField{Message: "slow"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages", `{"model":"claude","max_tokens":1,"messages":[],"stream":true}`)
 	if rec.Code != http.StatusTooManyRequests {
@@ -605,7 +605,7 @@ func TestCountTokensError_Anthropic(t *testing.T) {
 		StatusCode: intPtr(http.StatusBadRequest),
 		Error:      &schemas.ErrorField{Message: "bad"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages/count_tokens", `{"model":"claude","max_tokens":1,"messages":[]}`)
 	if rec.Code != http.StatusBadRequest {
@@ -635,7 +635,7 @@ func TestUnaryErrorPaths_OpenAIDialects(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(tc.fake, nil, nil)
+			h := newTestHandler(tc.fake, nil, nil)
 			rec := postJSON(t, h.route(), tc.path, tc.body)
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, want 401", rec.Code)
@@ -656,7 +656,7 @@ func TestUnaryErrorPaths_OpenAIDialects(t *testing.T) {
 }
 
 func TestNotFoundAndMethodNotAllowedHandlers(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil)
+	h := newTestHandler(&fakeRouter{}, nil, nil)
 
 	recNF := httptest.NewRecorder()
 	h.NotFound(recNF, httptest.NewRequest(http.MethodPost, "/whatever", nil))
@@ -691,7 +691,7 @@ func (n *nonFlushWriter) WriteHeader(s int)           { n.status = s }
 func TestStreamingUnsupportedWriter(t *testing.T) {
 	chunks := newChunkChan(&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c1"}})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	w := &nonFlushWriter{}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions", strings.NewReader(`{"model":"m","messages":[],"stream":true}`))

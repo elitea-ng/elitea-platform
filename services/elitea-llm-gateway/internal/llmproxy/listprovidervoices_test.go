@@ -64,7 +64,7 @@ func contains(ids []string, want string) bool {
 // TestListProviderVoices_OpenAIDialect — the nine OpenAI publishes, for every
 // provider that speaks the dialect.
 func TestListProviderVoices_OpenAIDialect(t *testing.T) {
-	h := &Handler{}
+	h := newTestHandler(nil, nil, nil)
 	for _, providerType := range []string{"open_ai", "azure_open_ai", "open_ai_azure", "ai_dial", "vllm", "ollama"} {
 		t.Run(providerType, func(t *testing.T) {
 			resp := doListProviderVoices(t, h, stubVoiceProvider{providerType, "tts-1"})
@@ -92,7 +92,7 @@ func TestListProviderVoices_OpenAIDialect(t *testing.T) {
 // and `verse` on top. A build that ignored the model name would return nine
 // here and an operator could never select either.
 func TestListProviderVoices_RealtimeAddsTwo(t *testing.T) {
-	h := &Handler{}
+	h := newTestHandler(nil, nil, nil)
 	resp := doListProviderVoices(t, h, stubVoiceProvider{"open_ai", "gpt-4o-realtime-preview"})
 	ids := voiceIDs(resp.Voices)
 	if len(ids) != 11 {
@@ -125,7 +125,7 @@ func TestListProviderVoices_RealtimeAddsTwo(t *testing.T) {
 // passed through literally and answered with 400 by the Google API, so
 // offering them puts three broken options in the picker.
 func TestListProviderVoices_VertexOmitsTheThreeGoogleRejects(t *testing.T) {
-	resp := doListProviderVoices(t, &Handler{}, stubVoiceProvider{"vertex_ai", "tts-1"})
+	resp := doListProviderVoices(t, newTestHandler(nil, nil, nil), stubVoiceProvider{"vertex_ai", "tts-1"})
 	ids := voiceIDs(resp.Voices)
 	if len(ids) != 6 {
 		t.Fatalf("vertex_ai returned %d voices, want the six that map: %v", len(ids), ids)
@@ -141,7 +141,7 @@ func TestListProviderVoices_VertexOmitsTheThreeGoogleRejects(t *testing.T) {
 // voice name on the Gemini code path, so the native names are the only ones
 // that work. Dispatch is on the MODEL, under the same vertex_ai credential.
 func TestListProviderVoices_GeminiUsesNativeNames(t *testing.T) {
-	resp := doListProviderVoices(t, &Handler{}, stubVoiceProvider{"vertex_ai", "gemini-2.5-flash-preview-tts"})
+	resp := doListProviderVoices(t, newTestHandler(nil, nil, nil), stubVoiceProvider{"vertex_ai", "gemini-2.5-flash-preview-tts"})
 	ids := voiceIDs(resp.Voices)
 	if len(ids) != 30 {
 		t.Fatalf("a gemini model returned %d voices, want the 30 native ones", len(ids))
@@ -161,7 +161,7 @@ func TestListProviderVoices_GeminiUsesNativeNames(t *testing.T) {
 // its own default voice. Reporting it as a failure would put an error in front
 // of a user whose TTS works perfectly.
 func TestListProviderVoices_UnknownProviderIsAnEmptyListNotAFailure(t *testing.T) {
-	resp := doListProviderVoices(t, &Handler{}, stubVoiceProvider{"elevenlabs", "eleven_multilingual_v2"})
+	resp := doListProviderVoices(t, newTestHandler(nil, nil, nil), stubVoiceProvider{"elevenlabs", "eleven_multilingual_v2"})
 	if !resp.Success {
 		t.Fatalf("an unknown provider reported failure: %+v", resp)
 	}
@@ -183,7 +183,7 @@ func TestListProviderVoices_VoicesIsNeverNull(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/list_provider_voices", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	(&Handler{}).ListProviderVoices(rec, req)
+	(newTestHandler(nil, nil, nil)).ListProviderVoices(rec, req)
 	if body := rec.Body.String(); !bytes.Contains([]byte(body), []byte(`"voices":[]`)) {
 		t.Fatalf("the empty answer does not carry an empty array: %s", body)
 	}
@@ -193,7 +193,7 @@ func TestListProviderVoices_VoicesIsNeverNull(t *testing.T) {
 // only. A type this build does not know must fall through to "no catalogue"
 // rather than be matched by prefix onto a set it does not accept.
 func TestListProviderVoices_TypeIsNormalisedButNotGuessed(t *testing.T) {
-	h := &Handler{}
+	h := newTestHandler(nil, nil, nil)
 	if resp := doListProviderVoices(t, h, stubVoiceProvider{"  Open_AI ", "tts-1"}); len(resp.Voices) != 9 {
 		t.Fatalf("a padded, mixed-case type resolved to %d voices, want 9", len(resp.Voices))
 	}
