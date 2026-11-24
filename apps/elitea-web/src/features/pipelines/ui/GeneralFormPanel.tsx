@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useCallback } from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -57,6 +58,9 @@ export interface GeneralFormPanelProps {
   readonly onCollapsed: (collapsed: boolean) => void;
   /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); a click overrides it. */
   readonly autoFolded?: boolean | undefined;
+  /** Controlled collapsed state (used by `ConfigurationTab` for auto-collapse on first node interaction). */
+  readonly collapsed?: boolean | undefined;
+  readonly onCollapsedChange?: ((collapsed: boolean) => void) | undefined;
   readonly viewMode?: (typeof ViewMode)[keyof typeof ViewMode] | undefined;
   readonly renderConfigurationForm: (props: { applicationId: string | number | undefined; viewMode: (typeof ViewMode)[keyof typeof ViewMode] | undefined }) => ReactNode;
 }
@@ -78,9 +82,33 @@ const containerSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme>
 });
 const collapseButtonSx: SxProps<Theme> = { padding: '0', marginLeft: '0', position: 'absolute', top: '0', right: '0', zIndex: 100 };
 
-export function GeneralFormPanel({ applicationId, onCollapsed, autoFolded = false, viewMode, renderConfigurationForm }: GeneralFormPanelProps): ReactNode {
+export function GeneralFormPanel({
+  applicationId,
+  onCollapsed,
+  autoFolded = false,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
+  viewMode,
+  renderConfigurationForm,
+}: GeneralFormPanelProps): ReactNode {
   const { isSmallWindow } = useIsSmallWindow();
-  const { collapsed, toggle: onClickCollapsed } = usePaneFold(autoFolded, isSmallWindow, onCollapsed);
+  const isControlled = controlledCollapsed !== undefined;
+  const { collapsed: uncontrolledCollapsed, toggle: toggleUncontrolled } = usePaneFold(
+    autoFolded,
+    isSmallWindow,
+    isControlled ? undefined : onCollapsed,
+  );
+  const collapsed = isSmallWindow ? false : (isControlled ? controlledCollapsed : uncontrolledCollapsed);
+
+  const onClickCollapsed = useCallback(() => {
+    if (isControlled) {
+      const next = !collapsed;
+      if (onCollapsedChange) onCollapsedChange(next);
+      else onCollapsed(next);
+      return;
+    }
+    toggleUncontrolled();
+  }, [collapsed, isControlled, onCollapsed, onCollapsedChange, toggleUncontrolled]);
 
   return (
     <Box
@@ -89,6 +117,7 @@ export function GeneralFormPanel({ applicationId, onCollapsed, autoFolded = fals
     >
       {!isSmallWindow && (
         <IconButton
+          data-testid="pipeline-config-collapse-button"
           sx={collapseButtonSx}
           onClick={onClickCollapsed}
           // #135: icon-only, so without a name axe reports a critical

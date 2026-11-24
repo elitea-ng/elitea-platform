@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { ViewMode } from '@/shared/lib/enums';
 
 import { useEditorPaneRoom } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
@@ -20,6 +21,7 @@ import type {
 import { usePipelineMCPToolsStatusMonitor } from '../lib/hooks/usePipelineMCPToolsStatusMonitor';
 import type { PipelineMcpToolLike } from '../lib/hooks/usePipelineMCPToolsStatusMonitor';
 import { PipelineTriggerScopeContext } from '../lib/flow-editor/flowEditorContext';
+import { getUnsavedTestReason } from '../lib/flow-editor/helpers/pipelineReadiness.helpers';
 import { useSelectedProjectId } from '../lib/flow-editor/hooks/useSelectedProjectId';
 import { extractExistingToolkitIds, mainOverflow, triggerScope } from './configurationTab.lib';
 import { DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from '../lib/flowEditorVersionInputs.helpers';
@@ -63,16 +65,7 @@ function useConfigurationTabSettings(args: UseConfigurationTabSettingsArgs): Rea
   const conversationStarters = conversation_starters ?? EMPTY_ARRAY;
   const existingToolkitIds = useMemo(() => extractExistingToolkitIds(tools), [tools]);
 
-  // A plain object literal, NOT wrapped in `useMemo` — this codebase's own `hook-deps` budget
-  // (§3.5, enforced by `scripts/check-budgets.mjs`) caps a `useMemo`'s dependency array at 8
-  // entries; this object has 13 real, independently-reactive inputs (matching the baseline's own
-  // `ConfigurationTab.jsx` 25-entry `settings` `useMemo` deps array, lines 190-226 — the ORIGINAL
-  // was already past what a hand-audited dependency array can track correctly). `chat`/
-  // `memoizedLlmSettings`/`existingToolkitIds` are already independently memoised above (and
-  // `usePipelineChat`'s own return, `ConfigurationTab`'s own `useCallback`s) — this object is
-  // cheap to rebuild (no work beyond the property list itself), so recomputing it every render
-  // trades a negligible allocation for a genuinely correct, budget-compliant dependency story
-  // instead of a hand-maintained 13-entry array that would immediately breach the same budget.
+  // Plain object literal (kept unmemoized to stay within the §3.5 8-entry hook-deps budget; sub-values above are already memoized).
   return {
     ...chat,
     llmSettings: memoizedLlmSettings,
@@ -131,52 +124,56 @@ export interface ConfigurationTabProps {
 }
 
 /**
- * Ported from `apps/elitea-ui/src/pages/Pipelines/Components/
- * ConfigurationTab.jsx` — the composition root tying `GeneralFormPanel` +
- * `EditorPanel` + `ChatPanel` together for the standalone pipeline-editing
- * page (`pages/Pipelines/EditPipeline.jsx` — a DIFFERENT, not-yet-built page
- * from `features/pipelines/ui/PipelineEditor.tsx`'s own NewChat-embedded
- * composition; both use `EditorPanel`, see that file's own doc comment).
- *
- * **DISCLOSED REDESIGN — no Formik, explicit `versionDetails`/`setFieldValue`
- * props instead of `useFormikContext()`:** this app has no Formik (§2.3);
- * matches `features/agents/ui/ConfigurationTab.tsx`'s own identical
- * redesign for the sibling baseline file.
- *
- * **DISCLOSED REDESIGN — no `react-split`:** the baseline's `<Split>`
- * (`react-split`) provides a draggable gutter between `EditorPanel` and
- * `ChatPanel`. `react-split` is not a dependency of this app (verified:
- * no hit in package.json). Replaced
- * with a plain flex `Box` (`flexDirection: row`/`column` by `isSmallWindow`,
- * matching the baseline's own direction logic). The REAL, load-bearing
- * width behaviour survives untouched: both panels' own collapse states
- * still drive their real `minWidth`/`maxWidth` via `GeneralFormPanel.tsx`/
- * `ChatPanel.tsx`'s own `sx`, and both fold while the canvas lacks room
- * (`useEditorPaneRoom`). Only the "drag to fine-tune" affordance is dropped.
- *
- * **DISCLOSED REDESIGN — `RunHistoryContainer`/`useShowRunHistoryFromUrl`
- * dropped, matching `features/agents/ui/ConfigurationTab.tsx`'s own
- * identical precedent for the sibling baseline file:** `entities/
- * run-history` does not exist in this worktree; `renderRunHistory` is a
- * slot, `showHistory` is local component state (not URL-search-param
- * driven).
- *
- * **DISCLOSED GAP — `useUploadAttachments` dropped:** the baseline's
- * `uploadAttachments`/`isUploadingAttachments`/`uploadProgress` (from
- * `hooks/chat/useUploadAttachments`, chat-domain machinery, not in this
- * sub-unit's owned list and no promoted equivalent) lived inside the
- * chat-attachment upload flow — that flow now lives inside the slotted
- * `renderChat` pane, matching `features/agents/ui/ConfigurationTab.tsx`'s
- * own identical "lives inside the (slotted) test pane" disclosure for
- * `useUploadAttachments`.
- *
- * **`usePipelineMCPToolsStatusMonitor`/`usePipelineAttachmentYamlSync`** are
- * wired directly — real, already-landed (this sub-unit's own
- * `usePipelineMCPToolsStatusMonitor`/`usePipelineAttachmentYamlSync`), not
- * slots. `onToolsChange` (the monitor's write side) calls `setFieldValue`
- * directly rather than taking its own prop — the caller already supplies
- * `setFieldValue`, and this is the only real write target for it.
+ * Ported from `EliteaUI` `widgets/pipeline-editor/ui/PipelineEditorWorkspace.jsx`.
+ * Composes `GeneralFormPanel` (auto-collapses on first node interaction) +
+ * `EditorPanel` (Flow/YAML + `"Test Pipeline"` toolbar button) + on-demand resizable `ChatPanel`.
  */
+function useGeneralAutoCollapse(isSmallWindow: boolean, foldGeneral: boolean, onFitView: () => void) {
+  const [userChoice, setUserChoice] = useState<boolean | null>(null);
+  const hasAutoCollapsedRef = useRef(false);
+  const effectiveCollapsed = isSmallWindow ? false : (userChoice ?? foldGeneral);
+
+  useEffect(() => {
+    if (isSmallWindow) setUserChoice(null);
+  }, [isSmallWindow]);
+
+  const handleCollapsedGeneralPane = useCallback(
+    (collapsed: boolean) => {
+      setUserChoice(collapsed);
+      onFitView();
+    },
+    [onFitView],
+  );
+
+  const handleCanvasNodeInteraction = useCallback(() => {
+    if (hasAutoCollapsedRef.current || isSmallWindow || effectiveCollapsed) return;
+    hasAutoCollapsedRef.current = true;
+    setUserChoice(true);
+    onFitView();
+  }, [effectiveCollapsed, isSmallWindow, onFitView]);
+
+  return { effectiveCollapsed, handleCollapsedGeneralPane, handleCanvasNodeInteraction };
+}
+
+function resolveUnsavedTestReason(applicationId: string | number | undefined): string {
+  return applicationId === undefined ? getUnsavedTestReason() : '';
+}
+
+function resolveShowHistoryHandler(
+  isReadOnly: boolean,
+  applicationId: string | number | undefined,
+  onShowHistory: () => void,
+): (() => void) | undefined {
+  return !isReadOnly && applicationId !== undefined ? onShowHistory : undefined;
+}
+
+function buildRestoreProp(restoredConversationID: string | number | null, onComplete: () => void) {
+  return {
+    conversationId: restoredConversationID == null ? undefined : String(restoredConversationID),
+    onComplete,
+  };
+}
+
 export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   const {
     isFetching,
@@ -195,19 +192,22 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   } = props;
 
   const [restoredConversationID, setRestoredConversationID] = useState<string | number | null>(null);
-  const [isGeneralPaneCollapsed, setIsGeneralPaneCollapsed] = useState(false);
-  const [isChatPaneCollapsed, setIsChatPaneCollapsed] = useState(false);
+  const [isTestPanelOpen, setIsTestPanelOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
   const chatPanelRef = useRef<ChatPanelHandle>(null);
   const editorPanelRef = useRef<EditorPanelHandle>(null);
 
   const projectId = useSelectedProjectId();
   const room = useEditorPaneRoom();
 
-  const { isSmallWindow } = useIsSmallWindow(() => {
+  const handleFitView = useCallback(() => {
     setTimeout(() => editorPanelRef.current?.fitView(), 0);
-  });
+  }, []);
+
+  const { isSmallWindow } = useIsSmallWindow(handleFitView);
+  const generalPane = useGeneralAutoCollapse(isSmallWindow, room.foldGeneral, handleFitView);
 
   const onRestoreConversationComplete = useCallback(() => {
     setRestoredConversationID(null);
@@ -260,24 +260,25 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   // `FlowWrapper.tsx`'s own module doc comment names this component as the real, missing source.
   const { versionTools, llmSettings: flowEditorLlmSettings } = useFlowEditorVersionInputs(versionDetails);
 
-  const handleCollapsedGeneralPane = useCallback((collapsed: boolean) => {
-    setIsGeneralPaneCollapsed(collapsed);
-    setTimeout(() => editorPanelRef.current?.fitView(), 0);
-  }, []);
-
-  const handleCollapsedChatPane = useCallback((collapsed: boolean) => {
-    setIsChatPaneCollapsed(collapsed);
-    setTimeout(() => editorPanelRef.current?.fitView(), 0);
-  }, []);
+  const handleOpenTestPanel = useCallback(() => setIsTestPanelOpen(true), []);
+  const handleCloseTestPanel = useCallback(() => setIsTestPanelOpen(false), []);
 
   const handleShowHistory = useCallback(() => setShowHistory(true), []);
   const handleRestoreConversation = useCallback((id: string | number) => {
     setRestoredConversationID(id);
     setShowHistory(false);
+    setIsTestPanelOpen(true);
   }, []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);
 
-  const styles = useMemo(() => configurationTabStyles(isSmallWindow, isChatPaneCollapsed, isGeneralPaneCollapsed), [isSmallWindow, isChatPaneCollapsed, isGeneralPaneCollapsed]);
+  const isReadOnly = viewMode === ViewMode.Public;
+  const styles = useMemo(() => configurationTabStyles(isSmallWindow, generalPane.effectiveCollapsed), [isSmallWindow, generalPane.effectiveCollapsed]);
+  const testDisabledReason = resolveUnsavedTestReason(applicationId);
+  const showHistoryHandler = resolveShowHistoryHandler(isReadOnly, applicationId, handleShowHistory);
+  const testPanelOptions = useMemo(
+    () => ({ isOpen: isTestPanelOpen, onClose: handleCloseTestPanel, workspaceRef: splitContainerRef, onResized: handleFitView }),
+    [isTestPanelOpen, handleCloseTestPanel, handleFitView],
+  );
 
   useEffect(() => {
     editorPanelRef.current?.fitView();
@@ -318,12 +319,13 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
     <Box ref={room.measureRef} sx={styles.mainContainer}>
       <GeneralFormPanel
         applicationId={applicationId}
-        onCollapsed={handleCollapsedGeneralPane}
+        onCollapsed={generalPane.handleCollapsedGeneralPane}
+        collapsed={generalPane.effectiveCollapsed}
         autoFolded={room.foldGeneral}
         viewMode={viewMode}
         renderConfigurationForm={slots.renderConfigurationForm}
       />
-      <Box sx={styles.splitContainer}>
+      <Box ref={splitContainerRef} sx={styles.splitContainer}>
         {/* #899: the Entrypoint node's Trigger surface addresses THIS project and version — see `PipelineTriggerScopeContext`. */}
         <PipelineTriggerScopeContext.Provider value={triggerScope(projectId, versionDetails)}>
           <EditorPanel
@@ -331,23 +333,30 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
             setYamlDirty={setYamlDirty}
             stopRun={() => chatPanelRef.current?.stopRun()}
             sx={styles.editorPanel}
+            disabled={isReadOnly}
             versionTools={versionTools}
             llmSettings={flowEditorLlmSettings}
+            onTestPipeline={isReadOnly ? undefined : handleOpenTestPanel}
+            onShowHistory={showHistoryHandler}
+            testDisabledReason={testDisabledReason}
+            isTestPanelOpen={isTestPanelOpen}
+            onCanvasNodeInteraction={generalPane.handleCanvasNodeInteraction}
           />
         </PipelineTriggerScopeContext.Provider>
-        <ChatPanel
-          ref={chatPanelRef}
-          settings={settings}
-          restore={{ conversationId: restoredConversationID == null ? undefined : String(restoredConversationID), onComplete: onRestoreConversationComplete }}
-          onCollapsed={handleCollapsedChatPane}
-          autoFolded={room.foldChat}
-          setActiveConversation={chat.setActiveConversation}
-          hasRunsInProgress={handleHasRunsInProgress}
-          onShowHistory={applicationId !== undefined ? handleShowHistory : undefined}
-          renderChat={slots.renderChat}
-          renderClearChatButton={slots.renderClearChatButton}
-          renderContextBudget={slots.renderContextBudget}
-        />
+        {!isReadOnly && (
+          <ChatPanel
+            ref={chatPanelRef}
+            settings={settings}
+            restore={buildRestoreProp(restoredConversationID, onRestoreConversationComplete)}
+            panel={testPanelOptions}
+            setActiveConversation={chat.setActiveConversation}
+            hasRunsInProgress={handleHasRunsInProgress}
+            onShowHistory={showHistoryHandler}
+            renderChat={slots.renderChat}
+            renderClearChatButton={slots.renderClearChatButton}
+            renderContextBudget={slots.renderContextBudget}
+          />
+        )}
       </Box>
     </Box>
   );
@@ -361,38 +370,23 @@ interface ConfigurationTabStyles {
   readonly editorPanel: SxProps<Theme>;
 }
 
-function editorPanelStyles(isSmallWindow: boolean, isChatPaneCollapsed: boolean): SxProps<Theme> {
+function editorPanelStyles(isSmallWindow: boolean): SxProps<Theme> {
   if (isSmallWindow) return { minWidth: '100%', minHeight: '32rem', flex: '0 0 auto', maxWidth: '100%', marginRight: '0rem' };
-  return {
-    minHeight: '100%',
-    maxWidth: `calc(100% - ${isChatPaneCollapsed ? '1.75rem' : '21.5625rem'})`,
-    marginRight: isChatPaneCollapsed ? '1.5rem' : '0rem',
-  };
+  return { flex: 1, minWidth: 0, minHeight: '100%', maxWidth: '100%' };
 }
 
 function splitContainerStyles(isSmallWindow: boolean, isGeneralPaneCollapsed: boolean): SxProps<Theme> {
-  if (isSmallWindow) {
-    return { flex: '0 0 auto', height: 'auto', width: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', gap: '0.75rem' };
-  }
+  if (isSmallWindow) return { flex: '0 0 auto', height: 'auto', width: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', gap: '0.75rem' };
   const maxWidth = isGeneralPaneCollapsed ? 'calc(100% - 3.75rem)' : 'calc(100% - 21.875rem)';
-  return { flex: 1, height: '100%', display: 'flex', flexDirection: 'row', maxWidth, gap: '0.625rem' };
+  return { flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'row', maxWidth, gap: '0.75rem' };
 }
 
-function configurationTabStyles(isSmallWindow: boolean, isChatPaneCollapsed: boolean, isGeneralPaneCollapsed: boolean): ConfigurationTabStyles {
+function configurationTabStyles(isSmallWindow: boolean, isGeneralPaneCollapsed: boolean): ConfigurationTabStyles {
   return {
     errorContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' },
     spinnerContainer: { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' },
-    mainContainer: {
-      height: '100%',
-      overflow: mainOverflow(isSmallWindow),
-      padding: '0.75rem 1.5rem 1.5rem',
-      gap: '2rem',
-      display: 'flex',
-      boxSizing: 'border-box',
-      width: '100%',
-      flexDirection: isSmallWindow ? 'column' : 'row',
-    },
+    mainContainer: { height: '100%', overflow: mainOverflow(isSmallWindow), padding: '0.75rem 1.5rem 1.5rem', gap: '2rem', display: 'flex', boxSizing: 'border-box', width: '100%', flexDirection: isSmallWindow ? 'column' : 'row' },
     splitContainer: splitContainerStyles(isSmallWindow, isGeneralPaneCollapsed),
-    editorPanel: editorPanelStyles(isSmallWindow, isChatPaneCollapsed),
+    editorPanel: editorPanelStyles(isSmallWindow),
   };
 }

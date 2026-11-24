@@ -1,43 +1,43 @@
-import type { ReactNode, Ref } from 'react';
+import type { MouseEvent, ReactNode, Ref, RefObject } from 'react';
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef } from 'react';
 
 import Box from '@mui/material/Box';
+import CloseIcon from '@mui/icons-material/Close';
+import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import type { SxProps, Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 
 import { t } from '@/shared/i18n';
 import { ViewRunHistoryButton } from '@/shared/ui/ViewRunHistoryButton';
 
+import {
+  chatContentSx,
+  closeButtonSx,
+  closeDividerSx,
+  collapseButtonSx,
+  controlsContainerSx,
+  legacyContainerSx,
+  onDemandContainerSx,
+  resizeHandleSx,
+  topBarSx,
+} from './ChatPanel.styles';
+
 import { usePaneFold } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { useIsPipelineYamlCodeDirty } from '../lib/hooks/useIsPipelineYamlCodeDirty';
+import { useTestPanelWidth } from '../lib/hooks/useTestPanelWidth';
 import type { ChatConversation } from '../lib/hooks/pipelineChat.types';
 
 /**
- * Ported from `apps/elitea-ui/src/pages/Pipelines/Components/ChatPanel.jsx`.
+ * Ported from `EliteaUI` `features/pipelines/test-panel/ui/TestPanel.jsx` and
+ * `widgets/entity-test-panel/ui/EntityTestPanelShell.jsx`.
  *
- * **DISCLOSED REDESIGN — slot-based test-chat content, matching the exact
- * precedent `features/agents/ui/ConfigurationTab.tsx`'s own `renderTestPane`
- * doc comment establishes for the identical baseline shape:**
- *  - `ChatBox`/`ChatButton.ClearChatButton` (baseline: `@/[fsd]/features/
- *    chat/ui`) — `no-sideways-features` forbids `features/pipelines`
- *    importing a `features/chat` slice (no carve-on), and that slice does
- *    not exist anywhere in this worktree (verified: `ls src/features/chat`
- *    — no such directory). `renderChat`/`renderClearChatButton` are slots.
- *  - `ContextBudgetUI.ContextBudgetInfo` (baseline: `@/[fsd]/widgets/
- *    context-budget`) — `features/` may not import `widgets/` at all
- *    (`no-upward-from-features`, R-L1), regardless of whether that widget
- *    exists. `renderContextBudget` is a slot.
- *  - `ViewRunHistoryButton` (`@/shared/ui/button`) IS wired directly — real,
- *    landed, layer-legal (`shared/ui` is freely importable from `features/`).
- *
- * `isPipelineDirty` (baseline: `useSelector(state => state.pipeline)`'s
- * `yamlCode !== initState.yamlCode` comparison) is recomputed here via this
- * sub-unit's own `useIsPipelineYamlCodeDirty` hook (real, exact port of the
- * same comparison — see that hook's own doc comment) rather than a
- * `useSelector` read.
+ * Supports the Wave U3 on-demand resizable TestPanel (`panel` prop: closed by default,
+ * stays mounted while hidden so live runs survive toggling, resizable left edge, header
+ * Run History / Clear / Close controls) while preserving legacy standalone collapse mode
+ * when `panel` is omitted.
  */
 export interface ChatPanelSlotProps {
   readonly settings: Readonly<Record<string, unknown>>;
@@ -46,10 +46,16 @@ export interface ChatPanelSlotProps {
   readonly ref: Ref<ChatBoxSlotHandle> | undefined;
 }
 
-/** The imperative surface `ChatPanel`'s own `stopRun`/clear-button wiring needs from whatever real chat component `renderChat` eventually mounts (baseline: `ChatBox`'s own `ref.stopAll`/`ref.onClear`, `ChatPanel.jsx:101-103,161-166`). */
 export interface ChatBoxSlotHandle {
   readonly stopAll: () => void;
   readonly onClear: () => void;
+}
+
+export interface TestPanelShellOptions {
+  readonly isOpen: boolean;
+  readonly onClose: () => void;
+  readonly workspaceRef?: RefObject<HTMLDivElement | null> | undefined;
+  readonly onResized?: (() => void) | undefined;
 }
 
 export interface ChatPanelProps {
@@ -57,8 +63,10 @@ export interface ChatPanelProps {
   readonly settings: Readonly<Record<string, unknown>> & { readonly isStreaming?: boolean; readonly activeConversation?: ChatConversation | null };
   readonly display?: string | undefined;
   readonly onCollapsed?: ((collapsed: boolean) => void) | undefined;
-  /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); a click overrides it. */
+  /** Starts folded while the canvas lacks room (`useEditorPaneRoom`); ignored when `panel` is given. */
   readonly autoFolded?: boolean | undefined;
+  /** On-demand resizable TestPanel shell options (`isOpen`, `onClose`, `workspaceRef`, `onResized`). */
+  readonly panel?: TestPanelShellOptions | undefined;
   readonly setActiveConversation: (
     update: ChatConversation | null | ((prev: ChatConversation | null) => ChatConversation | null),
   ) => void;
@@ -80,58 +88,8 @@ export interface ChatPanelHandle {
   readonly stopRun: () => void;
 }
 
-/*
- * Beside the flow editor the pane is exactly 20rem, not its content's width:
- * the editor is `flex: 1` (a zero basis), so a pane sized by a long unwrapped
- * line ("Save the pipeline to test it…") took ~440px and crushed the canvas
- * to ~125px in the shell's 1032px page at a 1280px window. 20rem is also what
- * `ConfigurationTab`'s editor `maxWidth` already reserves for it.
- */
-const chatContainerSx = (isSmallWindow: boolean, collapsed: boolean, display: string | undefined): SxProps<Theme> => ({
-  minWidth: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
-  width: isSmallWindow ? '100%' : collapsed ? '1.75rem' : '20rem',
-  flex: isSmallWindow ? '0 0 auto' : undefined,
-  flexShrink: 0,
-  maxWidth: '100%',
-  position: 'relative',
-  height: isSmallWindow ? 'auto' : '100%',
-  display: display ?? 'flex',
-  flexDirection: 'row',
-  boxSizing: 'border-box',
-  gap: '0.75rem',
-});
-const collapseButtonSx: SxProps<Theme> = { padding: '0', marginLeft: '0', position: 'absolute', top: '0.25rem', left: '0', zIndex: 100 };
-const chatContentSx = (isSmallWindow: boolean): SxProps<Theme> => ({
-  display: 'flex',
-  flexDirection: 'column',
-  height: isSmallWindow ? 'auto' : '100%',
-  width: '100%',
-  maxWidth: '100%',
-  flex: 1,
-  minHeight: 0,
-  overflowY: isSmallWindow ? 'visible' : 'auto',
-  gap: '0.75rem',
-  boxSizing: 'border-box',
-});
-const topBarSx = (isSmallWindow: boolean, collapsed: boolean): SxProps<Theme> => ({
-  display: !collapsed ? 'flex' : 'none',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  gap: '0.5rem',
-  width: '100%',
-  paddingLeft: isSmallWindow ? '0' : '2.25rem',
-});
-const clearButtonContainerSx = (isSmallWindow: boolean, hasActiveConversationId: boolean): SxProps<Theme> => ({
-  display: 'flex',
-  flex: 1,
-  justifyContent: 'flex-end',
-  marginRight: !isSmallWindow && hasActiveConversationId ? '0.25rem' : '0',
-  gap: '0.5rem',
-});
-
 const WELCOME_MESSAGE_ID = 'welcome_message_id';
 
-/** `ChatPanel.jsx:118-122`'s `shouldDisableClear` — extracted to a pure function to keep the component's own cyclomatic complexity under this codebase's gate. */
 function computeShouldDisableClear(activeConversation: ChatConversation | null | undefined, isStreaming: boolean | undefined): boolean {
   const history = activeConversation?.chat_history ?? [];
   if (!history.length) return true;
@@ -146,7 +104,6 @@ interface ContextBudgetSlotProps {
   readonly conversationInstructions: unknown;
 }
 
-/** Builds `renderContextBudget`'s props from `activeConversation`, or `undefined` when there is no conversation id yet — extracted to keep the component's own cyclomatic complexity under this codebase's gate. */
 function buildContextBudgetSlotProps(
   activeConversation: ChatConversation | null | undefined,
   setActiveConversation: ChatPanelProps['setActiveConversation'],
@@ -160,12 +117,172 @@ function buildContextBudgetSlotProps(
   };
 }
 
+function TestPanelResizeHandle({ onResizeStart }: { readonly onResizeStart: (event: MouseEvent) => void }): ReactNode {
+  return (
+    <Box
+      component="hr"
+      aria-orientation="vertical"
+      aria-label={t('features.pipelines.chatPanel.resize', 'Resize test panel')}
+      data-testid="pipeline-test-panel-resize-handle"
+      onMouseDown={onResizeStart}
+      sx={resizeHandleSx}
+    />
+  );
+}
+
+function TestPanelCloseButton({ onClose }: { readonly onClose: () => void }): ReactNode {
+  return (
+    <>
+      <Divider
+        orientation="vertical"
+        flexItem
+        sx={closeDividerSx}
+      />
+      <Tooltip
+        title={t('features.pipelines.chatPanel.close', 'Close')}
+        placement="top"
+      >
+        <Box component="span">
+          <IconButton
+            size="small"
+            onClick={onClose}
+            aria-label={t('features.pipelines.chatPanel.closePanel', 'Close test panel')}
+            data-testid="pipeline-test-panel-close"
+            sx={closeButtonSx}
+          >
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        </Box>
+      </Tooltip>
+    </>
+  );
+}
+
+function LegacyCollapseToggle({ collapsed, onToggle }: { readonly collapsed: boolean; readonly onToggle: () => void }): ReactNode {
+  return (
+    <IconButton
+      sx={collapseButtonSx}
+      onClick={onToggle}
+      aria-label={
+        collapsed
+          ? t('features.pipelines.chatPanel.expand', 'Expand the chat panel')
+          : t('features.pipelines.chatPanel.collapse', 'Collapse the chat panel')
+      }
+    >
+      {collapsed ? <KeyboardDoubleArrowLeftIcon fontSize="small" /> : <KeyboardDoubleArrowRightIcon fontSize="small" />}
+    </IconButton>
+  );
+}
+
+interface ChatPanelHeaderProps {
+  readonly isSmallWindow: boolean;
+  readonly isVisible: boolean;
+  readonly isOnDemand: boolean;
+  readonly hasActiveConversationId: boolean;
+  readonly contextBudgetNode: ReactNode;
+  readonly clearButtonNode: ReactNode;
+  readonly onShowHistory: (() => void) | undefined;
+  readonly onClose: (() => void) | undefined;
+}
+
+function ChatPanelHeader({
+  isSmallWindow,
+  isVisible,
+  isOnDemand,
+  hasActiveConversationId,
+  contextBudgetNode,
+  clearButtonNode,
+  onShowHistory,
+  onClose,
+}: ChatPanelHeaderProps): ReactNode {
+  return (
+    <Box sx={topBarSx(isSmallWindow, !isVisible, isOnDemand)}>
+      {contextBudgetNode}
+      <Box
+        data-testid="pipeline-test-panel-controls"
+        sx={controlsContainerSx(isSmallWindow, hasActiveConversationId)}
+      >
+        {isOnDemand ? (
+          <>
+            {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
+            {clearButtonNode}
+            {onClose && <TestPanelCloseButton onClose={onClose} />}
+          </>
+        ) : (
+          <>
+            {clearButtonNode}
+            {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
+          </>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+interface ChatPanelEdgeControlProps {
+  readonly isSmallWindow: boolean;
+  readonly isOnDemand: boolean;
+  readonly collapsed: boolean;
+  readonly onResizeStart: (event: MouseEvent) => void;
+  readonly onToggleCollapsed: () => void;
+}
+
+function ChatPanelEdgeControl({
+  isSmallWindow,
+  isOnDemand,
+  collapsed,
+  onResizeStart,
+  onToggleCollapsed,
+}: ChatPanelEdgeControlProps): ReactNode {
+  if (isSmallWindow) return null;
+  if (isOnDemand) return <TestPanelResizeHandle onResizeStart={onResizeStart} />;
+  return <LegacyCollapseToggle collapsed={collapsed} onToggle={onToggleCollapsed} />;
+}
+
+function resolvePanelLayout(
+  panel: TestPanelShellOptions | undefined,
+  isSmallWindow: boolean,
+  collapsed: boolean,
+  width: number,
+  display: string | undefined,
+  containerRef: RefObject<HTMLDivElement | null>,
+) {
+  const isOnDemand = panel !== undefined;
+  return {
+    isOnDemand,
+    isVisible: isOnDemand ? panel.isOpen : !collapsed,
+    shouldRenderChat: isOnDemand || !collapsed,
+    rootRef: isOnDemand ? containerRef : undefined,
+    ariaHidden: isOnDemand ? !panel.isOpen : undefined,
+    rootSx: isOnDemand
+      ? onDemandContainerSx(isSmallWindow, panel.isOpen, width)
+      : legacyContainerSx(isSmallWindow, collapsed, display),
+  };
+}
+
 export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function ChatPanel(props, ref): ReactNode {
-  const { restore, settings, display, onCollapsed, autoFolded = false, setActiveConversation, hasRunsInProgress, onShowHistory, renderChat, renderClearChatButton, renderContextBudget } = props;
+  const {
+    restore,
+    settings,
+    display,
+    onCollapsed,
+    autoFolded = false,
+    panel,
+    setActiveConversation,
+    hasRunsInProgress,
+    onShowHistory,
+    renderChat,
+    renderClearChatButton,
+    renderContextBudget,
+  } = props;
   const { isStreaming, activeConversation } = settings;
   const boxRef = useRef<ChatBoxSlotHandle | null>(null);
   const { isSmallWindow } = useIsSmallWindow();
   const { collapsed, toggle: onClickCollapsed } = usePaneFold(autoFolded, isSmallWindow, onCollapsed);
+  const { containerRef, width, handleResizeStart } = useTestPanelWidth({
+    workspaceRef: panel?.workspaceRef,
+    onResized: panel?.onResized,
+  });
   const isPipelineDirty = useIsPipelineYamlCodeDirty();
 
   useImperativeHandle(ref, () => ({ stopRun: () => boxRef.current?.stopAll() }), []);
@@ -173,46 +290,44 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(function Ch
   const shouldDisableClear = computeShouldDisableClear(activeConversation, isStreaming);
 
   const onClear = useCallback(() => {
-    // Baseline `ChatPanel.jsx`'s `onClear` handler — stop any in-progress flow-editor
-    // run before clearing chat history, so a live run isn't left orphaned mid-flight.
     if (hasRunsInProgress?.()) boxRef.current?.stopAll();
     boxRef.current?.onClear();
   }, [hasRunsInProgress]);
 
   const disableChat = Boolean(settings['disableChat']) || isPipelineDirty;
-
   const slotProps = useMemo<ChatPanelSlotProps>(
     () => ({ settings, disableChat, ref: boxRef, restore }),
     [settings, disableChat, restore],
   );
   const contextBudgetSlotProps = buildContextBudgetSlotProps(activeConversation, setActiveConversation);
+  const layout = resolvePanelLayout(panel, isSmallWindow, collapsed, width, display, containerRef);
 
   return (
-    <Box sx={chatContainerSx(isSmallWindow, collapsed, display)}>
-      {!isSmallWindow && (
-        <IconButton
-          sx={collapseButtonSx}
-          onClick={onClickCollapsed}
-          // #135: same critical `button-name` violation as
-          // `GeneralFormPanel.tsx`'s own collapse button — see its comment.
-          aria-label={
-            collapsed
-              ? t('features.pipelines.chatPanel.expand', 'Expand the chat panel')
-              : t('features.pipelines.chatPanel.collapse', 'Collapse the chat panel')
-          }
-        >
-          {collapsed ? <KeyboardDoubleArrowLeftIcon fontSize="small" /> : <KeyboardDoubleArrowRightIcon fontSize="small" />}
-        </IconButton>
-      )}
+    <Box
+      ref={layout.rootRef}
+      aria-hidden={layout.ariaHidden}
+      data-testid="pipeline-test-panel"
+      sx={layout.rootSx}
+    >
+      <ChatPanelEdgeControl
+        isSmallWindow={isSmallWindow}
+        isOnDemand={layout.isOnDemand}
+        collapsed={collapsed}
+        onResizeStart={handleResizeStart}
+        onToggleCollapsed={onClickCollapsed}
+      />
       <Box data-testid="pipeline-chat-content" sx={chatContentSx(isSmallWindow)}>
-        <Box sx={topBarSx(isSmallWindow, collapsed)}>
-          {contextBudgetSlotProps && renderContextBudget?.(contextBudgetSlotProps)}
-          <Box sx={clearButtonContainerSx(isSmallWindow, activeConversation?.id !== undefined)}>
-            {renderClearChatButton?.({ disabled: shouldDisableClear, onClear })}
-            {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
-          </Box>
-        </Box>
-        {!collapsed && renderChat(slotProps)}
+        <ChatPanelHeader
+          isSmallWindow={isSmallWindow}
+          isVisible={layout.isVisible}
+          isOnDemand={layout.isOnDemand}
+          hasActiveConversationId={activeConversation?.id !== undefined}
+          contextBudgetNode={contextBudgetSlotProps ? renderContextBudget?.(contextBudgetSlotProps) : null}
+          clearButtonNode={renderClearChatButton?.({ disabled: shouldDisableClear, onClear })}
+          onShowHistory={onShowHistory}
+          onClose={panel?.onClose}
+        />
+        {layout.shouldRenderChat && renderChat(slotProps)}
       </Box>
     </Box>
   );

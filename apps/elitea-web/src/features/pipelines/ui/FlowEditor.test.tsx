@@ -348,6 +348,39 @@ describe('FlowEditor', () => {
     expect(screen.getByTestId('pipeline-state-toggle-wrapper')).toHaveAttribute('data-right-offset', '0');
   });
 
+  it('docks StateDrawer beside FlowNodeConfigDrawer, offsets CanvasMiniMap past both, and fires onCanvasNodeInteraction', async () => {
+    const user = userEvent.setup();
+    const onCanvasNodeInteraction = vi.fn();
+    const selectedNode = { id: 'Printer_1', type: 'printer', position: { x: 0, y: 0 }, data: { label: 'Printer_1' }, selected: true };
+    renderFlowEditor(
+      baseProps({
+        yamlJsonObject: { entry_point: 'Other', nodes: [{ id: 'Printer_1', type: 'printer' }] },
+        initialNodes: [selectedNode],
+        onCanvasNodeInteraction,
+      }),
+    );
+
+    expect(onCanvasNodeInteraction).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'State' }));
+    expect(getComputedStyle(screen.getByTestId('pipeline-state-drawer')).right).toBe('400px');
+
+    await user.click(screen.getByTestId('pipeline-canvas-minimap-toggle'));
+    const minimap = screen.getByTestId('rf__minimap');
+    // 400px node drawer + 310px default StateDrawer = 710px = 44.375rem
+    expect(minimap.style.right).toBe('44.375rem');
+  });
+
+  it('refuses ref.onAddNode when disabled (read-only guard)', () => {
+    const ref = createRef<FlowEditorHandle>();
+    const setYamlJsonObject = vi.fn();
+    const onCanvasNodeInteraction = vi.fn();
+    renderFlowEditor(baseProps({ disabled: true, setYamlJsonObject, onCanvasNodeInteraction }), ref);
+
+    expect(ref.current?.onAddNode('printer')).toBeUndefined();
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
+    expect(onCanvasNodeInteraction).not.toHaveBeenCalled();
+  });
+
   // NOT COVERABLE HERE: `useFlowEditorLayoutVersionSync`'s `onReLayout` callback (the
   // `layoutVersion` mismatch -> re-layout path) only fires once xyflow's own
   // `useNodesInitialized()` reports every node measured. jsdom has no real layout engine

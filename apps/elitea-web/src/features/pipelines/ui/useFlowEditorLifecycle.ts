@@ -228,6 +228,17 @@ export function getCanvasInteractionFlags(disabled: boolean, isLocked: boolean, 
   return { canEditCanvas: !disabled && !isLocked, canArrange: !disabled && !isRunning && !isEmpty };
 }
 
+/** Computes right-edge docking offsets so `StateDrawer`, `FlowEditorStateToggle`, and `CanvasMiniMap` never overlap `FlowNodeConfigDrawer` or each other. */
+export function computeDockingOffsets(
+  isNodeDrawerOpen: boolean,
+  isStateDrawerOpen: boolean,
+  stateDrawerWidth: number,
+): { readonly drawerRightOffset: number; readonly minimapRightOffset: number } {
+  const drawerRightOffset = isNodeDrawerOpen ? 400 : 0;
+  const minimapRightOffset = drawerRightOffset + (isStateDrawerOpen ? stateDrawerWidth : 0);
+  return { drawerRightOffset, minimapRightOffset };
+}
+
 export interface FlowEditorNodeSelectionState {
   readonly selectedNodeId: string | null;
   readonly isNodeDrawerOpen: boolean;
@@ -239,6 +250,7 @@ export interface FlowEditorNodeSelectionState {
 export function useFlowEditorNodeSelection(
   visibleFlowNodes: readonly FlowNode[],
   setFlowNodes: SetFlowNodes,
+  onNodeInteraction?: () => void,
 ): FlowEditorNodeSelectionState {
   const { selectedNodeId, isNodeDrawerOpen } = useMemo(() => {
     const selected = visibleFlowNodes.filter(node => node.selected);
@@ -250,6 +262,16 @@ export function useFlowEditorNodeSelection(
     );
     return { selectedNodeId: single?.id ?? null, isNodeDrawerOpen: isConfigurable };
   }, [visibleFlowNodes]);
+
+  const onNodeInteractionRef = useRef(onNodeInteraction);
+  onNodeInteractionRef.current = onNodeInteraction;
+  const prevDrawerOpenRef = useRef(false);
+  useEffect(() => {
+    if (isNodeDrawerOpen && !prevDrawerOpenRef.current) {
+      onNodeInteractionRef.current?.();
+    }
+    prevDrawerOpenRef.current = isNodeDrawerOpen;
+  }, [isNodeDrawerOpen]);
 
   const handleSelectNode = useCallback(
     (nextId: string | null) => {

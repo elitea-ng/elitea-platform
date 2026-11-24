@@ -2,11 +2,12 @@ import type { ComponentProps } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { ViewMode } from '@/shared/lib/enums';
 import { ThemeProvider } from '@mui/material/styles';
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
@@ -152,7 +153,9 @@ describe('ConfigurationTab', () => {
     await screen.findByTestId('chat-slot');
     expect(screen.queryByTestId('run-history')).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    // Visible Run History button in EditorPanel toolbar while TestPanel is closed
+    const historyButtons = screen.getAllByTestId('pipeline-history-tab');
+    await user.click(historyButtons[0] as HTMLElement);
 
     expect(await screen.findByTestId('run-history')).toBeInTheDocument();
     expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
@@ -176,13 +179,13 @@ describe('ConfigurationTab', () => {
     });
 
     await screen.findByTestId('chat-slot');
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    await user.click(screen.getAllByTestId('pipeline-history-tab')[0] as HTMLElement);
     await user.click(await screen.findByRole('button', { name: 'close-history' }));
 
     expect(await screen.findByTestId('configuration-form')).toBeInTheDocument();
   });
 
-  it('restoring History mounts the test pane with the original conversation target', async () => {
+  it('restoring History mounts the test pane with the original conversation target and opens TestPanel', async () => {
     const user = userEvent.setup();
     renderConfigurationTab({
       slots: {
@@ -200,9 +203,10 @@ describe('ConfigurationTab', () => {
     });
 
     await screen.findByTestId('chat-slot');
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    await user.click(screen.getAllByTestId('pipeline-history-tab')[0] as HTMLElement);
     await user.click(await screen.findByRole('button', { name: 'restore-conversation' }));
     expect(await screen.findByTestId('chat-slot')).toHaveTextContent('42');
+    expect(screen.getByTestId('pipeline-test-panel')).toHaveAttribute('aria-hidden', 'false');
     expect(screen.queryByRole('button', { name: 'restore-conversation' })).not.toBeInTheDocument();
   });
 
@@ -243,23 +247,45 @@ describe('ConfigurationTab', () => {
     expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
   });
 
-  it('collapsing the chat pane (ChatPanel\'s own collapse button) exercises handleCollapsedChatPane', async () => {
+  it('opens the on-demand TestPanel via Test Pipeline button and closes it via Close button', async () => {
+    const user = userEvent.setup();
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+      initYamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      initYamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+    });
     renderConfigurationTab();
 
-    await screen.findByTestId('chat-slot');
-    // `ChatPanel`'s collapse button starts showing the "expand" (Right) icon since it
-    // starts uncollapsed — the config pane's own collapse button shows "Left" instead
-    // (`GeneralFormPanel`'s `!collapsed` ternary is inverted relative to `ChatPanel`'s),
-    // so this is how the two otherwise-identical, unlabelled icon buttons are told apart.
-    const chatCollapseIcon = document.querySelector('[data-testid="KeyboardDoubleArrowRightIcon"]');
-    expect(chatCollapseIcon).not.toBeNull();
-    fireEvent.click(chatCollapseIcon!.closest('button')!);
+    const panel = await screen.findByTestId('pipeline-test-panel');
+    expect(panel).toHaveAttribute('aria-hidden', 'true');
 
-    expect(screen.queryByTestId('chat-slot')).not.toBeInTheDocument();
+    const testBtn = screen.getByTestId('pipeline-test-button');
+    expect(testBtn).toBeEnabled();
+    await user.click(testBtn);
+
+    expect(panel).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('pipeline-test-panel-close'));
+    expect(panel).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('pipeline-test-button')).toBeInTheDocument();
   });
 
-  it('a real renderClearChatButton slot wires onClear through to handleHasRunsInProgress (editorPanelRef gone, so it safely resolves to false)', async () => {
+  it('disables Test Pipeline button when pipeline is unsaved or has no nodes connected to End', async () => {
+    renderConfigurationTab({ applicationId: undefined });
+    const testBtn = await screen.findByTestId('pipeline-test-button');
+    expect(testBtn).toBeDisabled();
+  });
+
+  it('a real renderClearChatButton slot wires onClear through to handleHasRunsInProgress once TestPanel is opened', async () => {
     const user = userEvent.setup();
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+      initYamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      initYamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+    });
     renderConfigurationTab({
       slots: {
         renderConfigurationForm: () => <div data-testid="configuration-form" />,
@@ -275,7 +301,7 @@ describe('ConfigurationTab', () => {
       },
     });
 
-    await screen.findByTestId('chat-slot');
+    await user.click(await screen.findByTestId('pipeline-test-button'));
     // Does not throw even though `editorPanelRef.current` is null (the `?? false` fallback).
     await user.click(screen.getByRole('button', { name: 'Clear' }));
   });
@@ -345,5 +371,31 @@ describe('ConfigurationTab', () => {
     expect(getComputedStyle(editorBox).minWidth).toBe('100%');
     expect(getComputedStyle(chatBox).height).toBe('auto');
     expect(getComputedStyle(screen.getByTestId('pipeline-chat-content')).overflowY).toBe('visible');
+  });
+
+  it('withholds Test Pipeline, ChatPanel, Run History, and disables Add node in Public read-only viewMode', async () => {
+    renderConfigurationTab({ viewMode: ViewMode.Public });
+    expect(await screen.findByRole('button', { name: 'Add node' })).toBeDisabled();
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-test-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-history-tab')).not.toBeInTheDocument();
+  });
+
+  it('allows expanding GeneralFormPanel even when room.foldGeneral auto-folds it on narrow desktop widths', async () => {
+    const user = userEvent.setup();
+    const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 800 });
+    try {
+      renderConfigurationTab();
+      const configTab = await screen.findByTestId('pipeline-config-tab');
+      // Folded automatically because 800 - CHAT_FOLDED_PX < 480
+      expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
+
+      await user.click(within(configTab).getByTestId('pipeline-config-collapse-button'));
+      expect(await screen.findByTestId('configuration-form')).toBeInTheDocument();
+    } finally {
+      if (originalClientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+    }
   });
 });

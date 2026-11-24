@@ -7430,5 +7430,14 @@
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentLifecycle.import.teamOnAgents": "This zip is a team. Import it from the Agents list.",
   "features.agentTeams.exportAction": "Export",
-  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read."
+  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read.",
+  "features.pipelines.chatPanel.close": "Close",
+  "features.pipelines.chatPanel.closePanel": "Close test panel",
+  "features.pipelines.chatPanel.resize": "Resize test panel",
+  "features.pipelines.editorPanel.testPipeline": "Test Pipeline",
+  "features.pipelines.testPanel.blockReason.noEntryPoint": "Set an entry point to test the pipeline.",
+  "features.pipelines.testPanel.blockReason.noNodes": "Add and configure at least one node connected to End.",
+  "features.pipelines.testPanel.blockReason.noPathToEnd": "Connect the entry point to End to test the pipeline.",
+  "features.pipelines.testPanel.blockReason.nodeNotConfigured": "Configure node \"{{nodeId}}\": {{issue}}",
+  "features.pipelines.testPanel.blockReason.unsaved": "Save the pipeline to test it"
 }

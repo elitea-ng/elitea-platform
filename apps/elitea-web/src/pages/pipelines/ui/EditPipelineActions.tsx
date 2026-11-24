@@ -139,4 +139,4 @@ export function EditPipelineActions({ applicationId, detail, activeVersion, proj
   );
 }
 
-const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.25rem' };
+const wrapperSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', gap: '0.5rem' };

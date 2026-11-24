@@ -9,6 +9,7 @@ import { FormProvider } from 'react-hook-form';
 import { ConfigurationTab, resetPipelineDraft, usePipelineVersionSync } from '@/features/pipelines';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { ViewMode } from '@/shared/lib/enums';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 import { PageToolbar, pageSx } from '@/widgets/page-header';
@@ -71,8 +72,12 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
 }
 
-/** The editor's controls (versions, chat, save) in the page toolbar. */
-const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: '0.5rem' };
+function resolvePipelineViewMode(isReadOnly: boolean) {
+  return isReadOnly ? ViewMode.Public : ViewMode.Owner;
+}
+
+/** The editor's controls (versions, save/cancel, actions) in the page toolbar. */
+const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: '0.75rem' };
 const contentSx: SxProps<Theme> = {
   flex: 1,
   minHeight: 0,
@@ -344,21 +349,19 @@ export function EditPipeline(): ReactNode {
               />
               {!isEditorLoading && !isReadOnlyView && (
                 <>
-                  {/* The Chat action — the only way to actually TALK to this
-                      pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
-                      participant mapping and why it is writer-only. */}
+                  <EditPipelineSaveBar
+                    onSave={handleSave}
+                    canSave={form.formState.isValid && !isSaving}
+                    isSaving={isSaving}
+                    onDiscarded={handleDiscarded}
+                  />
+                  {/* Chat + kebab (Share, Fork, Export, Delete; Publish hidden) */}
                   <EditPipelineActions
                     applicationId={params.agentId}
                     detail={detail}
                     activeVersion={activeVersion}
                     projectId={projectId}
                     tab={params.tab}
-                  />
-                  <EditPipelineSaveBar
-                    onSave={handleSave}
-                    canSave={form.formState.isValid && !isSaving}
-                    isSaving={isSaving}
-                    onDiscarded={handleDiscarded}
                   />
                 </>
               )}
@@ -378,6 +381,7 @@ export function EditPipeline(): ReactNode {
               setFieldValue={setFieldValue}
               setYamlDirty={setIsYamlDirty}
               adapter={chatAdapter}
+              viewMode={resolvePipelineViewMode(isReadOnlyView)}
               slots={configurationTabSlots}
             />
           </PipelineConfigurationTabBoundary>

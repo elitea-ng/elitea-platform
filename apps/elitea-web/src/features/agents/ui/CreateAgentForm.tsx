@@ -40,53 +40,7 @@ import { ConversationStartersEditor } from './ConversationStartersEditor';
 import { InstructionsInput } from './InstructionsInput';
 import { WelcomeMessageInput } from './WelcomeMessageInput';
 
-/**
- * Ported from `apps/elitea-ui/src/[fsd]/features/agent/ui/agent-details/
- * configurations/form/CreateAgentForm.jsx`.
- *
- * DISCLOSED REDESIGN — no ambient form context (see `../model/types.ts`'s
- * module doc comment): `values`/`onFieldChange` replace every
- * `useFormikContext()` read/`setFieldValue` call. `onFieldChange` mirrors
- * Formik's own `setFieldValue(path, value)` signature exactly — see that
- * file's doc comment for why this is the ONE generic escape hatch instead
- * of one typed callback per field.
- *
- * Cross-sub-unit slots, all disclosed, all EXPECTED not to have landed yet
- * per this batch's own brief:
- *  - `generateAgentButtonSlot` — the baseline's `GenerateAgentButton`
- *    (`ui/generate-agent-modal/`, this batch's own A1d designation). Only
- *    `GenerateAgentReviewForm`/`SuggestionItem`/`ResourceSuggestions` of
- *    that cluster had landed in this worktree at the time this file was
- *    written — no `GenerateAgentButton` itself. Rendered only outside
- *    pipeline mode (`entityType !== 'pipeline'`), matching the baseline's
- *    own conditional.
- *  - `generalSlots.icon` — the baseline's editable `EntityIcon`
- *    (`components/EntityIcon.jsx`, `editable={true}`, `onChangeIcon`,
- *    upload flow). Sibling A1h's own scoped `EntityIcon.tsx`
- *    (`../ui/EntityIcon.tsx`) explicitly does NOT cover this: its own doc
- *    comment states it is "for `ToolCard.jsx`'s ONE call site... which
- *    always passes `editable={false}`" and that the editable/upload mode
- *    "is a separate, large feature... no owner in this sub-unit's file
- *    list." A real gap, not a naming mismatch.
- *  - `generalSlots.tags` — the baseline's `TagEditor`
- *    (`pages/Common/Components/TagEditor.jsx`), consumed by three
- *    different domains (`CreateSkillForm`, this file, `ApplicationEditForm`)
- *    with no `shared/ui` port anywhere in this worktree
- *    (`find shared/ui -iname '*Tag*'` — only `HeadingChip`, a read-only
- *    display chip, no editable tag-input equivalent).
- *  - `conversationStartersSlot` — CLOSED, and the prop is GONE (#307). Every
- *    caller left that slot empty, so the one field the agent edit page did
- *    save had no input anywhere in the app. `./ConversationStartersEditor
- *    .tsx` is the port, rendered DIRECTLY here — which is what the baseline
- *    does too (`CreateAgentForm.jsx:206`, reading the same
- *    `version_details.conversation_starters` off its form context).
- *
- * Each slot keeps this file's LAYOUT position faithful to the baseline
- * (same accordion, same ordering) even where its CONTENT cannot be filled
- * yet — matching `entities/application-form/ui/ApplicationConfigurationLayout
- * .tsx`'s own established "take the panel as an injected slot" precedent for
- * exactly this kind of not-yet-buildable dependency.
- */
+/** Ported from `EliteaUI` `features/agent/ui/agent-details/configurations/form/CreateAgentForm.jsx`. */
 interface GeneralFieldsNameProps {
   readonly value: string;
   readonly atMax: boolean;
@@ -236,8 +190,15 @@ export interface CreateAgentFormProps {
    * as a non-button interactive element (an MUI `Chip`, a `role="button"` `Box`).
    */
   readonly generateAgentButtonSlot?: ReactNode | undefined;
-  /** The general block's editable icon and tag controls (see the module doc for both). */
-  readonly generalSlots?: { readonly icon?: ReactNode | undefined; readonly tags?: ReactNode | undefined } | undefined;
+  /** The general block's editable icon/tag controls plus optional section slots for pipeline accordion ordering (`General -> Tools -> Welcome -> Starters -> Triggers & schedules -> Advanced`). */
+  readonly generalSlots?:
+    | {
+        readonly icon?: ReactNode | undefined;
+        readonly tags?: ReactNode | undefined;
+        readonly afterGeneral?: ReactNode | undefined;
+        readonly beforeAdvanced?: ReactNode | undefined;
+      }
+    | undefined;
   /**
    * The model picker (`widgets/agent-model-settings`), rendered inside the
    * "Advanced" panel where the baseline puts it. Injected rather than
@@ -273,6 +234,23 @@ function InstructionsAiEditRow({ slot }: { readonly slot?: ReactNode | undefined
   return <Box data-testid="agent-instructions-ai-edit-slot" sx={instructionsAiEditSlotSx}>{slot}</Box>;
 }
 
+const sectionSlotSx: SxProps<Theme> = { marginTop: '1rem' };
+
+function SectionSlot({ slot }: { readonly slot: ReactNode }): ReactNode {
+  if (!slot) return null;
+  return <Box sx={sectionSlotSx}>{slot}</Box>;
+}
+
+function readSectionSlots(generalSlots: CreateAgentFormProps['generalSlots']): {
+  readonly afterGeneral: ReactNode;
+  readonly beforeAdvanced: ReactNode;
+} {
+  return {
+    afterGeneral: generalSlots?.afterGeneral ?? null,
+    beforeAdvanced: generalSlots?.beforeAdvanced ?? null,
+  };
+}
+
 export function CreateAgentForm({
   values,
   onFieldChange,
@@ -290,6 +268,7 @@ export function CreateAgentForm({
   const versionDetails = values.version_details;
   const lockDefinition = definitionLock(definitionDisabled, disabled);
   const state = useCreateAgentFormState(values, onFieldChange);
+  const sectionSlots = readSectionSlots(generalSlots);
 
   // Client-side "required" validation-error state, restored to parity with
   // the baseline's `formik.touched?.name && Boolean(formik.errors.name)` —
@@ -371,6 +350,7 @@ export function CreateAgentForm({
         variables={state.variables}
         onChangeVariable={state.onChangeVariable}
       />
+      <SectionSlot slot={sectionSlots.afterGeneral} />
       <Box sx={welcomeMessageInputSx}>
         <WelcomeMessageInput
           welcomeMessage={versionDetails?.welcome_message}
@@ -385,6 +365,7 @@ export function CreateAgentForm({
         disabled={lockDefinition}
         sx={conversationStartersSx}
       />
+      <SectionSlot slot={sectionSlots.beforeAdvanced} />
       <Box sx={advanceSettingsSx}>
         <ApplicationAdvanceSettings
           stepLimit={versionDetails?.meta?.step_limit}
