@@ -4980,5 +4980,10 @@
   "features.agentLifecycle.import.teamName": "團隊：{{name}}",
   "features.agentTeams.exportAction": "匯出",
   "features.agentTeams.exportMemberFailed": "無法匯出團隊：無法讀取代理 {{name}}。",
-  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一個團隊，請從代理清單匯入。"
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一個團隊，請從代理清單匯入。",
+  "pages.admin.console.error.explanation": "這並不是關於您存取權限的回覆。請稍後再試。",
+  "pages.admin.console.error.retry": "重試",
+  "pages.admin.console.error.title": "無法載入主控台",
+  "pages.admin.console.loading": "正在載入主控台…",
+  "pages.admin.console.refused": "您無權存取管理主控台。"
 }
