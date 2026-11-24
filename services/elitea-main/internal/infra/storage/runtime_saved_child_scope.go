@@ -56,6 +56,9 @@ func FreezeHTTPChildVersion(applicationID, versionID int64, raw []byte) ([]byte,
 	}
 	_, hadReceipt := fields["http_action_snapshot"]
 	delete(fields, "http_action_snapshot")
+	_, hadDBReceipt := fields["db_action_snapshot"]
+	delete(fields, "db_action_snapshot")
+	hadReceipt = hadReceipt || hadDBReceipt
 	if json.Unmarshal(fields["instructions"], &instructions) != nil {
 		return nil, scope.ErrDenied
 	}

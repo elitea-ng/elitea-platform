@@ -987,7 +987,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // updateHttpActionRule, listHttpActionRuleNames.
 // 593 -> 594 (issue 3010): importTeam, the Workshop Import of a team zip (all agents and the
 // saved team in one transaction). The import dialog calls it, so MANIFEST_ENTRY_COUNT moves too.
-const GENERATED_OPERATION_COUNT = 594;
+// 594 -> 599 (5e-2 DB actions): listDbActionRules, createDbActionRule, getDbActionRule,
+// updateDbActionRule, listDbActionRuleNames.
+const GENERATED_OPERATION_COUNT = 599;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1334,8 +1336,10 @@ const GENERATED_OPERATION_COUNT = 594;
  * 395 -> 400 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
  *
  * 400 -> 401 (issue 3010): applications.importTeam, the Workshop Import of a team zip. Generated.
+ *
+ * 401 -> 405 (5e-2 DB actions): the four DB action rule operations for Settings › DB Actions.
  */
-const MANIFEST_ENTRY_COUNT = 401;
+const MANIFEST_ENTRY_COUNT = 405;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

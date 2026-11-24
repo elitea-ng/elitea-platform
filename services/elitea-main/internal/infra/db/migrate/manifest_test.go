@@ -1247,7 +1247,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// deadline), and the grants models.http_action_rules.manage (admin) and
 	// models.http_action_rules.list (admin, editor, viewer), including the
 	// per-project override rows. No foreign key to centry.project.
-	require.EqualValues(t, 270, Head(shared))
+	//
+	// 271: shared/0271_db_action_rules.sql, the project DB action rules and
+	// their write audit (elitea_runtime.db_action_rules,
+	// db_action_rule_audit), plus the grants models.db_action_rules.manage
+	// (admin) and models.db_action_rules.list (admin, editor, viewer),
+	// including the per-project override rows. No foreign key to
+	// centry.project.
+	require.EqualValues(t, 271, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

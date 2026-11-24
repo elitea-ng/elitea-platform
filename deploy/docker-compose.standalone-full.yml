@@ -1175,6 +1175,9 @@ services:
       # rule's origin. Unset permits public HTTPS destinations only; name a
       # private host or block (egresslib grammar) to let rules reach it.
       ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: "${ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST:-}"
+      # DB action rules (pipeline `type: db` nodes): the outer bound for a
+      # rule's SQL configuration host/port, matching the Worker's guard.
+      ELITEA_DB_EGRESS_ALLOWLIST: "${ELITEA_DB_EGRESS_ALLOWLIST:-}"
       # ELITEA_VAULT_MASTER_KEY_FILE is deliberately NOT set, and the material is
       # still minted so a deployment that wants key wrapping can point at it.
       #

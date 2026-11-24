@@ -71,6 +71,15 @@
 {{- $env = merge (deepCopy $env) (dict "ELITEA_MEMORY_EMBEDDING_MODEL" (($.Values.worker.runtime).memoryEmbeddingModel | toString)) }}
 {{- end }}
 {{- /*
+  ELITEA_DB_EGRESS_ALLOWLIST (T-5E 5e-1/5e-2): default Main's DB action rule
+  egress allowlist from worker.dbEgressAllowlist when main.env leaves it empty
+  so operators configuring worker.dbEgressAllowlist never hit silent write-time
+  vs dial-time drift; an explicit main.env entry still wins.
+*/ -}}
+{{- if and (($.Values.worker | default dict).dbEgressAllowlist) (not (get $env "ELITEA_DB_EGRESS_ALLOWLIST")) }}
+{{- $env = merge (deepCopy $env) (dict "ELITEA_DB_EGRESS_ALLOWLIST" ($.Values.worker.dbEgressAllowlist | toString)) }}
+{{- end }}
+{{- /*
   The application engines' platform gRPC targets (#1243, #1244): where
   elitea-main deletes a project's (and a toolkit's) data in DeepWiki and
   Inventory. DERIVED from the engine's own values — <service name>:<platformGrpc

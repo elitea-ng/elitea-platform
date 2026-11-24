@@ -46,6 +46,7 @@ describe('buildSettingsSections — PROJECT', () => {
       'webhooks',
       'agent-workforce',
       'http-actions',
+      'db-actions',
       'analytics',
       'usage',
     ]);

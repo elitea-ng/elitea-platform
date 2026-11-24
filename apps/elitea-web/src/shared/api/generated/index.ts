@@ -13,6 +13,7 @@ export * from "./branding/branding";
 export * from "./budgets/budgets";
 export * from "./chat/chat";
 export * from "./configurations/configurations";
+export * from "./dbactions/dbactions";
 export * from "./deepwiki/deepwiki";
 export * from "./default/default";
 export * from "./discovery/discovery";

@@ -3950,6 +3950,11 @@ main:
     # same grammar and split as ELITEA_MCP_EGRESS_ALLOWLIST above. A malformed
     # entry fails Main's startup.
     ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: ""
+    # DB action rules (pipeline `type: db` nodes): the outer bound for the SQL
+    # configuration host/port a project admin may reference in a DB rule,
+    # matching the Worker's ELITEA_DB_EGRESS_ALLOWLIST. Unset permits public
+    # destinations only. A malformed entry fails Main's startup.
+    ELITEA_DB_EGRESS_ALLOWLIST: ""
     # The worker's private permit (#2950), merged with Configuration > Worker
     # Egress > Private Permit: the private destinations agent toolkits and
     # remote MCP servers may reach (an on-premises Jira or GitLab), comma

@@ -41,6 +41,7 @@ import (
 	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
+	v2dbactions "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/dbactions"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
@@ -538,6 +539,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	httpActionGuard, err := egress.NewHTTPActionGuard(os.Getenv(egress.HTTPActionAllowlistEnv))
 	if err != nil {
 		return fmt.Errorf("build the HTTP action egress guard: %w", err)
+	}
+
+	// DB action rules (pipeline `type: db` nodes): the operator's outer bound
+	// for a rule's referenced SQL configuration host/port, checked on write
+	// and enforced again by the Worker at dial time (5e-1). Unset permits
+	// public targets only; a malformed entry fails startup.
+	dbActionGuard, err := egress.NewDBActionGuard(os.Getenv(egress.DBActionAllowlistEnv))
+	if err != nil {
+		return fmt.Errorf("build the DB action egress guard: %w", err)
 	}
 
 	webhookDeliveries := webhookDeliveriesRepository(pool)
@@ -3372,6 +3382,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		MCPAuthorizationEgressGuard: mcpAuthorizationEgressGuard,
 		HTTPActionRules:             httpActionRulesRepository(pool),
 		HTTPActionGuard:             httpActionGuard,
+		DBActionRules:               dbActionRulesRepository(pool),
+		DBActionGuard:               dbActionGuard,
 	})
 	if deletionReconcilerErr != nil {
 		return fmt.Errorf("start project deletion reconciler: %w", deletionReconcilerErr)
@@ -3651,6 +3663,19 @@ func httpActionRulesRepository(pool *pgxpool.Pool) v2httpactions.Repository {
 		return nil
 	}
 	repo, err := dbrepos.NewHTTPActionRulesRepo(pool)
+	if err != nil {
+		return nil
+	}
+	return repo
+}
+
+// dbActionRulesRepository backs /dbactions; nil without a pool, never a typed
+// nil inside the interface.
+func dbActionRulesRepository(pool *pgxpool.Pool) v2dbactions.Repository {
+	if pool == nil {
+		return nil
+	}
+	repo, err := dbrepos.NewDBActionRulesRepo(pool)
 	if err != nil {
 		return nil
 	}

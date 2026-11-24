@@ -571,6 +571,15 @@ func projectOwnedDeletes() []referencingDelete {
 			table:     "elitea_runtime.http_action_rules",
 			statement: `DELETE FROM elitea_runtime.http_action_rules WHERE project_id = $1`,
 		},
+		{
+			// The DB action rule audit rows reference their rule; they go first.
+			table:     "elitea_runtime.db_action_rule_audit",
+			statement: `DELETE FROM elitea_runtime.db_action_rule_audit WHERE project_id = $1`,
+		},
+		{
+			table:     "elitea_runtime.db_action_rules",
+			statement: `DELETE FROM elitea_runtime.db_action_rules WHERE project_id = $1`,
+		},
 	}
 }
 

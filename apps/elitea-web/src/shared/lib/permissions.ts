@@ -199,6 +199,15 @@ export const PERMISSIONS = {
     manage: 'models.http_action_rules.manage',
     list: 'models.http_action_rules.list',
   },
+  /**
+   * Project DB action rules (T-5E 5e-2). `manage` (project admins) reads and
+   * writes full rules; `list` (admin, editor, viewer) reads redacted names,
+   * dialect, mode and enabled flags only. Granted by migrations/shared/0271.
+   */
+  dbActionRules: {
+    manage: 'models.db_action_rules.manage',
+    list: 'models.db_action_rules.list',
+  },
 } as const;
 
 /**

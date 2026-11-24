@@ -52,6 +52,7 @@ import { Route as ShellSettingsAiPersonalityRouteImport } from './routes/_shell/
 import { Route as ShellSettingsAnalyticsRouteImport } from './routes/_shell/settings/analytics'
 import { Route as ShellSettingsCreateConfigurationRouteImport } from './routes/_shell/settings/create-configuration'
 import { Route as ShellSettingsCreatePersonalTokenRouteImport } from './routes/_shell/settings/create-personal-token'
+import { Route as ShellSettingsDbActionsRouteImport } from './routes/_shell/settings/db-actions'
 import { Route as ShellSettingsDevicesRouteImport } from './routes/_shell/settings/devices'
 import { Route as ShellSettingsEnvironmentRouteImport } from './routes/_shell/settings/environment'
 import { Route as ShellSettingsHttpActionsRouteImport } from './routes/_shell/settings/http-actions'
@@ -324,6 +325,11 @@ const ShellSettingsCreatePersonalTokenRoute =
     path: '/create-personal-token',
     getParentRoute: () => ShellSettingsRouteRoute,
   } as any)
+const ShellSettingsDbActionsRoute = ShellSettingsDbActionsRouteImport.update({
+  id: '/db-actions',
+  path: '/db-actions',
+  getParentRoute: () => ShellSettingsRouteRoute,
+} as any)
 const ShellSettingsDevicesRoute = ShellSettingsDevicesRouteImport.update({
   id: '/devices',
   path: '/devices',
@@ -640,6 +646,7 @@ export interface FileRoutesByFullPath {
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/settings/db-actions': typeof ShellSettingsDbActionsRoute
   '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/settings/http-actions': typeof ShellSettingsHttpActionsRoute
@@ -734,6 +741,7 @@ export interface FileRoutesByTo {
   '/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/settings/db-actions': typeof ShellSettingsDbActionsRoute
   '/settings/devices': typeof ShellSettingsDevicesRoute
   '/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/settings/http-actions': typeof ShellSettingsHttpActionsRoute
@@ -831,6 +839,7 @@ export interface FileRoutesById {
   '/_shell/settings/analytics': typeof ShellSettingsAnalyticsRoute
   '/_shell/settings/create-configuration': typeof ShellSettingsCreateConfigurationRouteWithChildren
   '/_shell/settings/create-personal-token': typeof ShellSettingsCreatePersonalTokenRoute
+  '/_shell/settings/db-actions': typeof ShellSettingsDbActionsRoute
   '/_shell/settings/devices': typeof ShellSettingsDevicesRoute
   '/_shell/settings/environment': typeof ShellSettingsEnvironmentRoute
   '/_shell/settings/http-actions': typeof ShellSettingsHttpActionsRoute
@@ -928,6 +937,7 @@ export interface FileRouteTypes {
     | '/settings/analytics'
     | '/settings/create-configuration'
     | '/settings/create-personal-token'
+    | '/settings/db-actions'
     | '/settings/devices'
     | '/settings/environment'
     | '/settings/http-actions'
@@ -1022,6 +1032,7 @@ export interface FileRouteTypes {
     | '/settings/analytics'
     | '/settings/create-configuration'
     | '/settings/create-personal-token'
+    | '/settings/db-actions'
     | '/settings/devices'
     | '/settings/environment'
     | '/settings/http-actions'
@@ -1118,6 +1129,7 @@ export interface FileRouteTypes {
     | '/_shell/settings/analytics'
     | '/_shell/settings/create-configuration'
     | '/_shell/settings/create-personal-token'
+    | '/_shell/settings/db-actions'
     | '/_shell/settings/devices'
     | '/_shell/settings/environment'
     | '/_shell/settings/http-actions'
@@ -1489,6 +1501,13 @@ declare module '@tanstack/react-router' {
       path: '/create-personal-token'
       fullPath: '/settings/create-personal-token'
       preLoaderRoute: typeof ShellSettingsCreatePersonalTokenRouteImport
+      parentRoute: typeof ShellSettingsRouteRoute
+    }
+    '/_shell/settings/db-actions': {
+      id: '/_shell/settings/db-actions'
+      path: '/db-actions'
+      fullPath: '/settings/db-actions'
+      preLoaderRoute: typeof ShellSettingsDbActionsRouteImport
       parentRoute: typeof ShellSettingsRouteRoute
     }
     '/_shell/settings/devices': {
@@ -1873,6 +1892,7 @@ interface ShellSettingsRouteRouteChildren {
   ShellSettingsAnalyticsRoute: typeof ShellSettingsAnalyticsRoute
   ShellSettingsCreateConfigurationRoute: typeof ShellSettingsCreateConfigurationRouteWithChildren
   ShellSettingsCreatePersonalTokenRoute: typeof ShellSettingsCreatePersonalTokenRoute
+  ShellSettingsDbActionsRoute: typeof ShellSettingsDbActionsRoute
   ShellSettingsDevicesRoute: typeof ShellSettingsDevicesRoute
   ShellSettingsEnvironmentRoute: typeof ShellSettingsEnvironmentRoute
   ShellSettingsHttpActionsRoute: typeof ShellSettingsHttpActionsRoute
@@ -1902,6 +1922,7 @@ const ShellSettingsRouteRouteChildren: ShellSettingsRouteRouteChildren = {
   ShellSettingsCreateConfigurationRoute:
     ShellSettingsCreateConfigurationRouteWithChildren,
   ShellSettingsCreatePersonalTokenRoute: ShellSettingsCreatePersonalTokenRoute,
+  ShellSettingsDbActionsRoute: ShellSettingsDbActionsRoute,
   ShellSettingsDevicesRoute: ShellSettingsDevicesRoute,
   ShellSettingsEnvironmentRoute: ShellSettingsEnvironmentRoute,
   ShellSettingsHttpActionsRoute: ShellSettingsHttpActionsRoute,

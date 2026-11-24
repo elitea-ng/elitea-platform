@@ -151,6 +151,9 @@ var Capabilities = map[string][]Capability{
 	// HTTP action rules control which outbound origins, methods and credentials
 	// project pipelines may call.
 	"models.http_action_rules.manage": {ConfigureToolkits},
+	// DB action rules control which database configurations, dialects, modes
+	// and write marker tables project pipelines may execute against.
+	"models.db_action_rules.manage": {ConfigureToolkits},
 
 	// Credentials.
 	"configurations.configuration.create":   {ConfigureCredentials},
@@ -392,6 +395,7 @@ var NotGovernanceRelevant = map[string]bool{
 	"models.chat.task.delete":                           true,
 	"models.credentials.governed.probe":                 true,
 	"models.credentials.governed.use":                   true,
+	"models.db_action_rules.list":                       true,
 	"models.http_action_rules.list":                     true,
 	"models.monitoring.tracing.view":                    true,
 	"models.notifications.notification.delete":          true,

@@ -20,6 +20,7 @@ func freezeCurrentHTTPActionRequests(applicationID, versionID int64, version, st
 		return nil, app.ErrInvalid
 	}
 	delete(fields, "http_action_snapshot")
+	delete(fields, "db_action_snapshot")
 	var kind string
 	if json.Unmarshal(fields["agent_type"], &kind) != nil {
 		kind = ""
