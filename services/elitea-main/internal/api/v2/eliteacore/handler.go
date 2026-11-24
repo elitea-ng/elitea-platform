@@ -885,6 +885,10 @@ func (h *Handler) writeProjectIcon(
 // `r.mode = 'administration'` every holder of a same-named role joined every
 // project's member list as a phantom member.
 //
+// The central administrators are found by the role NAME super_admin, on
+// purpose and with the scope of projectaccess.Membership (ADR-0059 decision 7,
+// story R0.13): a custom role or an elevation is not listed.
+//
 // They are package constants rather than locals for a second reason:
 // scripts/validate_contract_static.sh reads only the first 80 lines of the
 // Users function to find its writeJSON call. Inline, the two queries pushed

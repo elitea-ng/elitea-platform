@@ -9,6 +9,14 @@
 // (name, mode), so a database also carries `super_admin` in the `default` and
 // `developer` modes; only the administration mode grants cross-project access.
 //
+// The administrator branch tests the role NAME on purpose (ADR-0059 decision
+// 7, "Checks by role name", story R0.13): an elevation gives permissions, not
+// the name, so break-glass repairs the platform and does not open project
+// content, and a custom role does not either, whatever it holds. Do not turn
+// it into a permission check. internal/api/middleware's
+// project_authorization_elevation_postgres_integration_test.go pins it, and
+// internal/api/testdata/role_name_literals.reviewed lists it as kept.
+//
 // Suspension is the same refusal the default-mode RBAC resolver makes
 // (internal/infra/legacyrbac/postgres.go requireUser and requireActiveProject):
 // a suspended account acts nowhere and a suspended project grants nothing, the

@@ -171,6 +171,7 @@ function RolesBody({ state }: { readonly state: AdminRolesPageState }) {
     <PermissionMatrix
       rows={state.rows}
       roles={state.roles}
+      deprecated={state.deprecated}
       search={state.search}
       readOnly={!state.canEdit}
       onChange={state.onChange}

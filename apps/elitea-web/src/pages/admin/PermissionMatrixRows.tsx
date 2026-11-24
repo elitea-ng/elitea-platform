@@ -19,6 +19,7 @@ import { memo, useMemo } from 'react';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import TableCell from '@mui/material/TableCell';
 import TableRow from '@mui/material/TableRow';
@@ -28,6 +29,7 @@ import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { t } from '@/shared/i18n';
 
 import type { PermissionMatrixRow } from './api/adminRolesApi';
+import { isLockedGrant, type DeprecatedGrants } from './deprecatedGrants';
 
 /** The one role the server will not write, whatever the body says. */
 const READ_ONLY_ROLE = 'system';
@@ -52,6 +54,8 @@ export interface PermissionGroupRowProps {
   readonly expanded: boolean;
   readonly onToggleExpand: (groupName: string) => void;
   readonly onToggleGroupRole: (groupName: string, role: string, value: boolean) => void;
+  /** Deprecated names and their holders: a cell a role cannot be given is left out of its aggregate. */
+  readonly deprecated?: DeprecatedGrants | undefined;
   readonly readOnly: boolean;
 }
 
@@ -62,16 +66,18 @@ export const PermissionGroupRow = memo(function PermissionGroupRow({
   expanded,
   onToggleExpand,
   onToggleGroupRole,
+  deprecated,
   readOnly,
 }: PermissionGroupRowProps) {
   const aggregates = useMemo(() => {
     const result: Record<string, Aggregate> = {};
     for (const role of roles) {
-      const checked = permissions.filter((permission) => permission[role] === true).length;
-      result[role] = checked === 0 ? 'none' : checked === permissions.length ? 'all' : 'some';
+      const open = permissions.filter((permission) => !isLockedGrant(deprecated, permission.name, role));
+      const checked = open.filter((permission) => permission[role] === true).length;
+      result[role] = checked === 0 ? 'none' : checked === open.length ? 'all' : 'some';
     }
     return result;
-  }, [roles, permissions]);
+  }, [roles, permissions, deprecated]);
 
   const expandLabel = expanded
     ? t('pages.admin.roles.action.collapseGroup', 'Collapse permission group')
@@ -116,6 +122,13 @@ export const PermissionGroupRow = memo(function PermissionGroupRow({
 export interface PermissionCellRowProps {
   readonly permission: PermissionMatrixRow;
   readonly roles: readonly string[];
+  /**
+   * Set when the server marks the name deprecated (ADR-0059 R0.14a): the roles
+   * that hold it on the server. It keeps working where it is granted until its
+   * sunset date, and a save that adds it to any other role is refused with
+   * `permission_deprecated`, so that role's checkbox is disabled.
+   */
+  readonly deprecatedHolders?: ReadonlySet<string> | undefined;
   readonly onToggle: (permissionName: string, role: string, value: boolean) => void;
   readonly readOnly: boolean;
 }
@@ -123,22 +136,40 @@ export interface PermissionCellRowProps {
 export const PermissionCellRow = memo(function PermissionCellRow({
   permission,
   roles,
+  deprecatedHolders,
   onToggle,
   readOnly,
 }: PermissionCellRowProps) {
   return (
     <TableRow data-testid="admin-roles-permission-row" hover>
       <TableCell sx={{ paddingY: '0.125rem', paddingLeft: '2.5rem' }}>
-        <Typography variant="bodySmall" color="text.secondary">
-          {shortPermissionName(permission.name)}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Typography variant="bodySmall" color="text.secondary">
+            {shortPermissionName(permission.name)}
+          </Typography>
+          {deprecatedHolders ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              color="warning"
+              data-testid="admin-roles-deprecated-mark"
+              label={t('pages.admin.roles.deprecated', 'Deprecated')}
+              title={t(
+                'pages.admin.roles.deprecatedHint',
+                'Ends on a sunset date. Existing grants keep working; it can no longer be added to a role.',
+              )}
+            />
+          ) : null}
+        </Box>
       </TableCell>
       {roles.map((role) => (
         <TableCell key={role} align="center" sx={{ paddingY: '0.125rem' }}>
           <BaseCheckbox
             size="small"
             checked={permission[role] === true}
-            disabled={readOnly || role === READ_ONLY_ROLE}
+            disabled={
+              readOnly || role === READ_ONLY_ROLE || (deprecatedHolders !== undefined && !deprecatedHolders.has(role))
+            }
             aria-label={`${humaniseRole(role)}: ${permission.name}`}
             onChange={() => onToggle(permission.name, role, permission[role] !== true)}
           />

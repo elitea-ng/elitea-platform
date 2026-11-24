@@ -713,7 +713,9 @@ const fn map_nats_error(error: &NatsJetStreamError) -> ProductionBootstrapError 
 
 fn map_control_error(error: ControlGrpcError) -> ProductionBootstrapError {
     match error {
-        ControlGrpcError::InvalidConfiguration(_) => ProductionBootstrapError::InvalidConfiguration,
+        ControlGrpcError::InvalidConfiguration(_) | ControlGrpcError::UnknownFieldRejected(_) => {
+            ProductionBootstrapError::InvalidConfiguration
+        }
         ControlGrpcError::ResourceExhausted(_) => ProductionBootstrapError::ResourceExhausted,
         ControlGrpcError::Unavailable(_) => ProductionBootstrapError::DependencyUnavailable,
     }

@@ -8,8 +8,9 @@
  * an invitation needs to find them without knowing that "E-mail" is a
  * Configuration section. One component, so the two entry points cannot drift.
  *
- * Authorisation: `runtime.plugins`, server-side, on every route the editor
- * calls. The nav item's permission list is presentation only — see
+ * Authorisation: `runtime.plugins` or the narrow `platform.email.manage`,
+ * server-side, on every route the editor calls; the nav item lists both
+ * (ADR-0059 R0.16). That list is presentation only — see
  * `./adminUiConfig`.
  */
 import Typography from '@mui/material/Typography';
