@@ -93,7 +93,7 @@ Updated in `services/elitea-worker-rust/docs/recovery-guarantees.md`:
 | Component × phase | Class | Enforced by | Proven by |
 | --- | --- | --- | --- |
 | Main × P05 HTTP action save-time admission & rule check (5d-2) | **F** typed (`400`) | `pipelinelimits.CheckPipeline` + `repos/applications.go` `CheckHTTPActionOperations` (REST + MCP version writes) | `internal/domain/pipelinelimits/...` (`http_nodes_test.go`, `node_types_test.go`, `node_settings_test.go`), `internal/infra/db/repos` (`applications_http_action_test.go`) |
-| Worker × P05 HTTP Request node execution & recovery (5d-2) | **I** (safe methods or `replay: idempotency_key` + bound key) / **C** (non-idempotent writes -> Reconcile card with `effect_id`) | `RecoverableNode` + `HttpActionAttempt` + `HttpActionCommittedProjector` (`HTTP_RECEIPT_AUDIENCE`) + `x-elitea-http-action-retryable` fail-closed header | `services/elitea-worker-rust` `agents::graph::http_action_tests::*` (9 tests: GET, Class I retry, Class C uncertain reconcile, 503 same-invocation retry, journal replay, 5b settings continue/always_output_data/execute_once, policy_denied stop, 30s timeout cap, fan-out refusal, committed projector audience check) |
+| Worker × P05 HTTP Request node execution & recovery (5d-2) | **I** (safe methods or `replay: idempotency_key` + bound key) / **C** (non-idempotent writes -> Reconcile card with `effect_id`) | `RecoverableNode` + `HttpActionAttempt` + `HttpActionCommittedProjector` (`HTTP_RECEIPT_AUDIENCE`) + `x-elitea-http-action-retryable` fail-closed header | `services/elitea-worker-rust` `agents::graph::http_action_tests::*` (16 tests: GET, Class I 2-try/3-try retry, Class I exhaustion + continue, Class I attempt-2 RPC timeout reconcile, Class C uncertain reconcile, 503 same-invocation retry, journal replay, crash recovery after deadline, post-dispatch auth denial reconcile, 5b settings continue/always_output_data/execute_once, policy_denied stop, 30s timeout cap, fan-out refusal, committed projector audience check) |
 
 ## `rules/security.md` category status
 
@@ -120,8 +120,8 @@ Updated in `services/elitea-worker-rust/docs/recovery-guarantees.md`:
   - `cargo clippy --offline --locked --all-targets -- -D warnings`: **PASS** (0 warnings)
 - **Rust `services/elitea-worker-rust`** (via `slot.sh`, `--offline --locked`):
   - `cargo fmt --all -- --check`: **PASS**
-  - `cargo test --offline --locked --lib -- agents::graph::http_action_tests agents::graph::node_admission_parity_tests agents::graph::fanout_families_parity_tests agents::graph::node_settings_tests transport::runtime_context_tests::execute_http_action`: **47 passed, 0 failed** (11 HTTP runtime/compiler/recovery/fan-out tests + 34 parity & settings tests + 2 gRPC transport tests)
-  - `cargo test --offline --locked --lib -- agents::graph::`: **768 passed, 0 failed, 3 ignored**
+  - `cargo test --offline --locked --lib -- agents::graph::http_action_tests agents::graph::node_admission_parity_tests agents::graph::fanout_families_parity_tests agents::graph::node_settings_tests transport::runtime_context_tests::execute_http_action`: **52 passed, 0 failed** (16 HTTP runtime/compiler/recovery/fan-out tests + 34 parity & settings tests + 2 gRPC transport tests)
+  - `cargo test --offline --locked --lib -- agents::graph::`: **773 passed, 0 failed, 3 ignored**
   - `cargo clippy --offline --locked --all-targets -- -D warnings`: **PASS** (0 warnings)
   - `cargo deny --all-features check advisories`: **PASS** (`advisories ok`)
 - **Go (`libs/go/faults` & `services/elitea-main`)**:

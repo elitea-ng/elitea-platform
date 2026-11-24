@@ -1054,3 +1054,377 @@ async fn rpc_timeout_after_execution_deadline_emits_valid_attempt_timeout_reconc
         elitea_agent_runtime::graph::node_recovery::ReplaySafety::UnknownExternalEffect { .. }
     ));
 }
+
+#[tokio::test]
+async fn class_i_three_try_retry_succeeds_on_attempt_three() {
+    const RETRY3_PIPELINE: &str = r#"state:
+  run_id: {type: str, value: "run-42"}
+  fx: {type: dict}
+entry_point: fetch_fx
+nodes:
+  - id: fetch_fx
+    type: http
+    revision: 2
+    operation: fx_reference.rates
+    request:
+      path:
+        run_id: {from: run_id}
+    response:
+      mode: json
+      accepted_statuses:
+        - {first: 200, last: 200}
+      max_bytes: 16384
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 100
+      timeout_ms: 5000
+    output: [fx]
+    transition: END
+"#;
+    let definition = PipelineDefinition::from_yaml(RETRY3_PIPELINE).expect("parse");
+    let snapshot = snapshot_for_yaml(RETRY3_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let executor = ScriptedHttpExecutor::new(vec![
+        Box::new(|inv| Ok(uncertain_receipt(inv, true))),
+        Box::new(|inv| Ok(failed_receipt(inv, "timeout", true))),
+        Box::new(|inv| Ok(completed_receipt(inv, 200, json!({"try": 3}), true))),
+    ]);
+    let runtimes = PipelineNodeRuntimes::default()
+        .with_execution_id(EXEC_ID)
+        .with_execution_generation(GENERATION)
+        .with_node_recovery_authority(scoped())
+        .with_http_action(executor.clone(), snapshot);
+    let graph = definition
+        .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+        .expect("compile");
+
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let out = graph
+        .invoke(state, ExecutionConfig::new("thread-http-retry-3"))
+        .await
+        .expect("3-try Class I must succeed on attempt 3");
+
+    let calls = executor.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0].attempt, 0);
+    assert_eq!(calls[1].attempt, 1);
+    assert_eq!(calls[2].attempt, 2);
+    assert_eq!(out["fx"]["data"], json!({"try": 3}));
+}
+
+#[tokio::test]
+async fn class_i_two_try_exhaustion_continues_without_ledger_error() {
+    const EXHAUST_PIPELINE: &str = r#"state:
+  run_id: {type: str, value: "run-42"}
+  fx: {type: dict}
+entry_point: fetch_fx
+nodes:
+  - id: fetch_fx
+    type: http
+    revision: 2
+    operation: fx_reference.rates
+    request:
+      path:
+        run_id: {from: run_id}
+    response:
+      mode: json
+      accepted_statuses:
+        - {first: 200, last: 200}
+      max_bytes: 16384
+    settings:
+      retry_on_fail: true
+      max_tries: 2
+      wait_between_tries_ms: 100
+      on_error: continue
+      always_output_data: true
+    output: [fx]
+    transition: END
+"#;
+    let definition = PipelineDefinition::from_yaml(EXHAUST_PIPELINE).expect("parse");
+    let snapshot = snapshot_for_yaml(EXHAUST_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let executor = ScriptedHttpExecutor::new(vec![
+        Box::new(|inv| Ok(uncertain_receipt(inv, true))),
+        Box::new(|inv| Ok(uncertain_receipt(inv, true))),
+    ]);
+    let runtimes = PipelineNodeRuntimes::default()
+        .with_execution_id(EXEC_ID)
+        .with_execution_generation(GENERATION)
+        .with_node_recovery_authority(scoped())
+        .with_http_action(executor.clone(), snapshot);
+    let graph = definition
+        .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+        .expect("compile");
+
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let out = graph
+        .invoke(state, ExecutionConfig::new("thread-http-exhaust-continue"))
+        .await
+        .expect("2-try exhaustion with on_error: continue must settle cleanly");
+
+    let calls = executor.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].attempt, 0);
+    assert_eq!(calls[1].attempt, 1);
+    assert_eq!(out.get("fx"), Some(&json!({})));
+    let errors = out["node_errors"].as_array().expect("node_errors array");
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["node"], json!("fetch_fx"));
+}
+
+#[tokio::test]
+async fn class_i_attempt_two_rpc_timeout_reconciles_with_attempt_two_effect_id() {
+    let def = HttpActionNodeDefinition::from_yaml(SIMPLE_GET_NODE).expect("parse");
+    let snapshot = snapshot_for_yaml(SIMPLE_GET_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let (binding_bytes, binding_hex) = snapshot
+        .binding_digest_for_node(&def)
+        .expect("binding digest");
+    let executor = ScriptedHttpExecutor::new(vec![
+        Box::new(|inv| Ok(uncertain_receipt(inv, true))),
+        Box::new(|_| Err(HttpActionRpcError::Timeout)),
+    ]);
+    let attempt = HttpActionAttempt::new(
+        def.clone(),
+        binding_bytes,
+        binding_hex,
+        BTreeMap::from([("fx".to_owned(), "dict".to_owned())]),
+        executor.clone(),
+        EXEC_ID.to_owned(),
+        GENERATION,
+        Some(5_000),
+        true,
+        None,
+    );
+    let settings = elitea_agent_runtime::graph::node_settings::NodeSettings::parse(
+        serde_yaml_ng::from_str("retry_on_fail: true\nmax_tries: 3\nwait_between_tries_ms: 100\n")
+            .expect("yaml"),
+    )
+    .expect("settings");
+    let policy = settings.to_recovery_policy().expect("policy");
+    let node = RecoverableNode::new(
+        Arc::new(attempt),
+        def.config_digest(),
+        policy,
+        scoped(),
+        None,
+    );
+
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let ctx = NodeContext::new(
+        state,
+        ExecutionConfig::new("thread-http-attempt2-timeout"),
+        0,
+    );
+    let output = node.execute(&ctx).await.expect("reconcile interrupt");
+
+    let calls = executor.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].attempt, 0);
+    assert_eq!(calls[1].attempt, 1);
+
+    let Some(Interrupt::Dynamic {
+        data: Some(data), ..
+    }) = output.interrupt
+    else {
+        panic!("expected dynamic reconcile interrupt");
+    };
+    let receipt: super::node_recovery_receipt::NodeRecoveryRequiredReceipt =
+        serde_json::from_value(data["receipt"].clone()).expect("decode recovery receipt");
+    assert!(receipt.validate(), "receipt must pass validate()");
+    assert_eq!(receipt.failure_class, NodeFailureClass::AttemptTimeout);
+    let expected_effect_attempt2 = elitea_agent_runtime::graph::http_action::effect_id_v3(
+        EXEC_ID,
+        GENERATION,
+        &calls[1].activation_id,
+        1,
+        &calls[1].binding_digest,
+        &calls[1].inputs_digest,
+    );
+    assert_eq!(
+        receipt.replay_safety,
+        elitea_agent_runtime::graph::node_recovery::ReplaySafety::UnknownExternalEffect {
+            effect_id: expected_effect_attempt2
+        }
+    );
+}
+
+struct HangingHttpExecutor {
+    entered: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl PipelineHttpActionExecutor for HangingHttpExecutor {
+    async fn execute(
+        &self,
+        _invocation: &HttpActionInvocationV3,
+        _call_timeout: Duration,
+    ) -> Result<HttpActionRpcResponse, HttpActionRpcError> {
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn recovering_started_after_deadline_emits_valid_reconcile_receipt_and_never_continues() {
+    let def = HttpActionNodeDefinition::from_yaml(SIMPLE_GET_NODE).expect("parse");
+    let snapshot = snapshot_for_yaml(SIMPLE_GET_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let (binding_bytes, binding_hex) = snapshot
+        .binding_digest_for_node(&def)
+        .expect("binding digest");
+    let journals = scoped();
+
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let ctx = NodeContext::new(
+        state.clone(),
+        ExecutionConfig::new("thread-crash-deadline"),
+        0,
+    );
+
+    // Worker 1 starts attempt 1 (durably writing AttemptStarted / Running) and crashes mid-RPC.
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let attempt1 = HttpActionAttempt::new(
+        def.clone(),
+        binding_bytes,
+        binding_hex.clone(),
+        BTreeMap::from([("fx".to_owned(), "dict".to_owned())]),
+        Arc::new(HangingHttpExecutor {
+            entered: Arc::clone(&entered),
+        }),
+        EXEC_ID.to_owned(),
+        GENERATION,
+        Some(5_000),
+        false,
+        None,
+    );
+    let node1 = RecoverableNode::new(
+        Arc::new(attempt1),
+        def.config_digest(),
+        NodeRecoveryPolicy::default(),
+        journals.clone(),
+        None,
+    );
+    let worker1 = tokio::spawn(async move {
+        let _ = node1.execute(&ctx).await;
+    });
+    entered.notified().await;
+    worker1.abort();
+    let _ = worker1.await;
+
+    // Worker 2 recovers the Running attempt after execution_deadline has already elapsed.
+    let executor2 = ScriptedHttpExecutor::new(vec![]);
+    let expired = tokio::time::Instant::now()
+        .checked_sub(Duration::from_millis(10))
+        .unwrap_or_else(tokio::time::Instant::now);
+    let attempt2 = HttpActionAttempt::new(
+        def.clone(),
+        binding_bytes,
+        binding_hex.clone(),
+        BTreeMap::from([("fx".to_owned(), "dict".to_owned())]),
+        executor2.clone(),
+        EXEC_ID.to_owned(),
+        GENERATION,
+        Some(5_000),
+        false,
+        Some(expired),
+    );
+    let settings_continue = elitea_agent_runtime::graph::node_settings::NodeSettings::parse(
+        serde_yaml_ng::from_str("on_error: continue\nalways_output_data: true\n").expect("yaml"),
+    )
+    .expect("settings");
+    let policy_continue = settings_continue.to_recovery_policy().expect("policy");
+    let node2 = RecoverableNode::new(
+        Arc::new(attempt2),
+        def.config_digest(),
+        policy_continue,
+        journals,
+        None,
+    );
+    let ctx2 = NodeContext::new(state, ExecutionConfig::new("thread-crash-deadline"), 0);
+    let output = node2.execute(&ctx2).await.expect("reconcile interrupt");
+    assert!(
+        executor2.calls().is_empty(),
+        "must not dispatch after deadline"
+    );
+
+    let Some(Interrupt::Dynamic {
+        data: Some(data), ..
+    }) = output.interrupt
+    else {
+        panic!("expected dynamic reconcile interrupt");
+    };
+    let receipt: super::node_recovery_receipt::NodeRecoveryRequiredReceipt =
+        serde_json::from_value(data["receipt"].clone()).expect("decode recovery receipt");
+    assert!(receipt.validate(), "receipt must pass validate()");
+    assert_eq!(receipt.failure_class, NodeFailureClass::AttemptTimeout);
+    assert!(matches!(
+        receipt.replay_safety,
+        elitea_agent_runtime::graph::node_recovery::ReplaySafety::UnknownExternalEffect { .. }
+    ));
+}
+
+#[tokio::test]
+async fn post_dispatch_auth_denied_after_unavailable_reconciles_with_unknown_external_effect() {
+    let def = HttpActionNodeDefinition::from_yaml(SIMPLE_GET_NODE).expect("parse");
+    let snapshot = snapshot_for_yaml(SIMPLE_GET_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let (binding_bytes, binding_hex) = snapshot
+        .binding_digest_for_node(&def)
+        .expect("binding digest");
+    let executor = ScriptedHttpExecutor::new(vec![
+        Box::new(|_| Err(HttpActionRpcError::Unavailable)),
+        Box::new(|_| Err(HttpActionRpcError::AuthenticationDenied)),
+    ]);
+    let attempt = HttpActionAttempt::new(
+        def.clone(),
+        binding_bytes,
+        binding_hex,
+        BTreeMap::from([("fx".to_owned(), "dict".to_owned())]),
+        executor.clone(),
+        EXEC_ID.to_owned(),
+        GENERATION,
+        Some(5_000),
+        false,
+        None,
+    )
+    .with_transport_retry_config(2, 1);
+    let node = RecoverableNode::new(
+        Arc::new(attempt),
+        def.config_digest(),
+        NodeRecoveryPolicy::default(),
+        scoped(),
+        None,
+    );
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let ctx = NodeContext::new(state, ExecutionConfig::new("thread-post-dispatch-auth"), 0);
+    let output = node.execute(&ctx).await.expect("reconcile interrupt");
+
+    let calls = executor.calls();
+    assert_eq!(calls.len(), 2);
+    let Some(Interrupt::Dynamic {
+        data: Some(data), ..
+    }) = output.interrupt
+    else {
+        panic!("expected dynamic reconcile interrupt");
+    };
+    let receipt: super::node_recovery_receipt::NodeRecoveryRequiredReceipt =
+        serde_json::from_value(data["receipt"].clone()).expect("decode recovery receipt");
+    assert!(receipt.validate(), "receipt must pass validate()");
+    assert_eq!(receipt.failure_class, NodeFailureClass::Unknown);
+    let expected_effect = elitea_agent_runtime::graph::http_action::effect_id_v3(
+        EXEC_ID,
+        GENERATION,
+        &calls[0].activation_id,
+        0,
+        &calls[0].binding_digest,
+        &calls[0].inputs_digest,
+    );
+    assert_eq!(
+        receipt.replay_safety,
+        elitea_agent_runtime::graph::node_recovery::ReplaySafety::UnknownExternalEffect {
+            effect_id: expected_effect
+        }
+    );
+}
