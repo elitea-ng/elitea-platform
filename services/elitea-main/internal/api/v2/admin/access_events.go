@@ -9,7 +9,6 @@ package admin
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -18,7 +17,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit/accessevent"
 )
@@ -141,63 +139,16 @@ func sortedSet(names []string) []string {
 
 // projectMemberRoles is the person's roles in the project, by name.
 func projectMemberRoles(ctx context.Context, q adminaccess.Querier, projectID, userID int64) ([]string, error) {
-	rows, err := q.Query(ctx, `
-SELECT DISTINCT role.name
-FROM public.auth_core__project_user_role assignment
-JOIN public.auth_core__project_role role ON role.id = assignment.role_id
-WHERE assignment.project_id = $1 AND assignment.user_id = $2
-ORDER BY 1`, projectID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("read the project roles: %w", err)
-	}
-	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		return nil, fmt.Errorf("read the project roles: %w", err)
-	}
-	return names, nil
+	return accessevent.ProjectMemberRoles(ctx, q, projectID, userID)
 }
 
 // appendMembershipChange appends the project_membership event of a
-// membership written through a central route, with the three facts R1.6
-// rates it by: whether the actor is a member of the project, whether the new
-// member holds an administration role, and whether the write is a bulk
-// invite. The partition is the project's.
+// membership written through a central route (accessevent.AppendMembershipChange).
 func (h *Handler) appendMembershipChange(
 	ctx context.Context, tx pgx.Tx, r *http.Request, projectID, userID int64, before []string, bulk bool,
 ) error {
-	after, err := projectMemberRoles(ctx, tx, projectID, userID)
-	if err != nil {
-		return err
+	if h.accessAudit == nil {
+		return errNoAccessAppender
 	}
-	if slices.Equal(sortedSet(before), sortedSet(after)) {
-		return nil
-	}
-	facts := securityaudit.MembershipFacts{Bulk: bulk}
-	if principal, ok := auth.UserFromContext(r.Context()); ok {
-		if actor, resolved := principal.OwningUserID(); resolved && actor > 0 {
-			var member bool
-			if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
-               WHERE project_id = $1 AND user_id = $2)`, projectID, actor).Scan(&member); err != nil {
-				return fmt.Errorf("read the actor's membership: %w", err)
-			}
-			facts.ActorIsMember = member
-		}
-	}
-	held, err := adminaccess.UserCentralRoles(ctx, tx, int(userID), adminaccess.ModeAdministration)
-	if err != nil {
-		return err
-	}
-	facts.MemberHoldsAdminRole = len(held) > 0
-	return h.appendAccessChange(ctx, tx, r, securityaudit.AdminAccessChanged{
-		SubjectType:     "user",
-		SubjectID:       strconv.FormatInt(userID, 10),
-		TenantProjectID: projectID,
-		Change: securityaudit.AccessChange{
-			Kind:       securityaudit.AccessProjectMembership,
-			Before:     sortedSet(before),
-			After:      sortedSet(after),
-			Membership: &facts,
-		},
-	})
+	return accessevent.AppendMembershipChange(ctx, tx, h.accessAudit, r.Context(), projectID, userID, before, bulk)
 }

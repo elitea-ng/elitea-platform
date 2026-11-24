@@ -328,7 +328,11 @@ Some administration actions are **critical**: changing who is an administrator, 
 
 One exception keeps a broken sign-in repairable: the identity provider and SCIM trust actions (create, change the trust settings of, turn off, delete or re-bind an identity provider; create or rotate a SCIM client) accept an `inherit` token whose owner is a global administrator by their standing role. A `scoped` token, or an `inherit` token of any other administrator, is refused them. The exception ends at the sunset date of `inherit`.
 
-On the gateway governance, global provider update and retention routes, a token is refused every change for now, not only the critical ones.
+On three routes the danger depends on what the request changes, and only the critical change is refused to a token:
+
+- **Gateway governance rows**: creating, changing or deleting a guardrail is refused. A change that turns a guardrail into another kind of row, or another row into a guardrail, counts as a guardrail change. Routing rules, throttles and the other kinds of rows stay open.
+- **Global provider update**: a change of the endpoint, the credential, the keyless identity, the type or any field that is not a setting is refused. A change of only the label, the display name, the description or the tags is allowed. The update is compared with the stored provider, so a body that repeats the stored endpoint unchanged is still a settings change. If the provider changes while a token's settings update is in flight, the update gets `409`: read the provider again and retry.
+- **Retention**: a change that lets data be deleted sooner is refused. That covers a lower maximum, a maximum where data was kept forever, a lower minimum, a project override below what applies now, and turning on project overrides for a class (a stored override below the platform maximum then takes effect). A change that keeps data as long or longer is allowed, and so is deleting an override: an override never applies above the platform maximum, so the project falls back to as long or longer.
 
 Every refusal is recorded in the admin audit trail with the action `admin.token_refused`. The upgrade note lists every critical action.
 

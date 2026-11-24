@@ -69,21 +69,28 @@ var classifierOutcomes = map[Classifier][]string{
 }
 
 // RetentionBounds are the bounds of a retention policy. A nil MaxAgeDays keeps
-// data forever.
+// data forever. OverridesApply is set on a platform policy whose project
+// overrides apply (the class is overridable and the policy allows them).
 type RetentionBounds struct {
-	MinAgeDays int
-	MaxAgeDays *int
+	MinAgeDays     int
+	MaxAgeDays     *int
+	OverridesApply bool
 }
 
 // RetentionAction answers OutcomeShorten when moving from old to new lets data
-// be deleted sooner: the maximum drops (forever to a number counts), or the
-// minimum drops. Anything else lengthens or keeps the policy.
+// be deleted sooner: the maximum drops (forever to a number counts), the
+// minimum drops, or the project overrides start to apply (a stored override
+// below the platform maximum then takes effect, and one may be stored while
+// they did not apply). Anything else lengthens or keeps the policy.
 //
 // The three retention writes call it: a platform policy save (old and new
 // platform rows), a project override save (old effective maximum, new
 // override) and an override delete (the override, then the platform maximum
 // it falls back to).
 func RetentionAction(old, new RetentionBounds) string {
+	if new.OverridesApply && !old.OverridesApply {
+		return OutcomeShorten
+	}
 	if new.MinAgeDays < old.MinAgeDays {
 		return OutcomeShorten
 	}

@@ -216,6 +216,63 @@ func Effective(platform Policy, override *Policy) *int {
 	return &days
 }
 
+// Bounds are what a retention write moves: the minimum and the maximum that
+// apply. A nil MaxAgeDays keeps data forever. OverridesApply is set on a
+// platform policy whose project overrides take effect: turning it on lets a
+// stored override below the platform maximum delete sooner.
+type Bounds struct {
+	MinAgeDays     int
+	MaxAgeDays     *int
+	OverridesApply bool
+}
+
+// WriteCheck is called by a store with the bounds before and after a write,
+// read under the write's own locks, before the write. An error refuses the
+// write and is returned by the store as it is. A nil WriteCheck checks
+// nothing. The handler classifies with it (ADR-0059 R1.2b: a token may
+// lengthen a policy, not shorten it).
+type WriteCheck func(before, after Bounds) error
+
+// Run calls the check, when there is one.
+func (c WriteCheck) Run(before, after Bounds) error {
+	if c == nil {
+		return nil
+	}
+	return c(before, after)
+}
+
+// PlatformChange is the move of a platform policy save: the stored row
+// (nil when the class has none yet, which keeps data forever with no
+// minimum) to the new row.
+func PlatformChange(stored *Policy, next Policy) (before, after Bounds) {
+	if stored != nil {
+		before = Bounds{MinAgeDays: stored.MinAgeDays, MaxAgeDays: stored.MaxAgeDays,
+			OverridesApply: overridesApply(*stored)}
+	}
+	return before, Bounds{MinAgeDays: next.MinAgeDays, MaxAgeDays: next.MaxAgeDays,
+		OverridesApply: overridesApply(next)}
+}
+
+// overridesApply reports whether a platform policy lets project overrides
+// take effect.
+func overridesApply(p Policy) bool { return p.AllowProjectOverride && Overridable(p.Class) }
+
+// OverrideChange is the move of a project override save: the maximum that
+// applies to the project with the stored override (nil for none) to the
+// maximum with the new one. The platform minimum applies on both sides.
+func OverrideChange(platform Policy, stored *Policy, next Policy) (before, after Bounds) {
+	return Bounds{MinAgeDays: platform.MinAgeDays, MaxAgeDays: Effective(platform, stored)},
+		Bounds{MinAgeDays: platform.MinAgeDays, MaxAgeDays: Effective(platform, &next)}
+}
+
+// OverrideDelete is the move of an override delete: the maximum the override
+// gives the project to the platform maximum it falls back to. Effective caps
+// an override at the platform maximum, so a delete never shortens.
+func OverrideDelete(platform Policy, stored Policy) (before, after Bounds) {
+	return Bounds{MinAgeDays: platform.MinAgeDays, MaxAgeDays: Effective(platform, &stored)},
+		Bounds{MinAgeDays: platform.MinAgeDays, MaxAgeDays: platform.MaxAgeDays}
+}
+
 // HoldScope is what a legal hold covers.
 type HoldScope string
 
