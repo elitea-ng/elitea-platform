@@ -1,8 +1,8 @@
 # Per-node settings: LLM & direct toolkit/MCP tools, FU-343, and FU-067 (5b-2, 5b-3)
 
-Date: 2026-11-23.
+Date: 2026-11-24.
 Scope: Point 5 Wave 2 (`T-5B-node-settings.md` §4 `5b-2` + `FU-343` prerequisite and `5b-3` + `FU-067`).
-Status: `partial` (all Rust, Go, Faults, and Web unit/component gates pass; live PostgreSQL `ELITEA_TEST_DATABASE_URL` crash suite and disposable Docker/browser stack rehearsal are deferred while local Docker builds/stacks remain paused for host EKG builds).
+Status: `partial` (all Rust, Go, Faults, and Web unit/component gates pass; `p5b2v` live production-profile Docker + browser UI/YAML/reload/Worker-retry rehearsal completed; live PostgreSQL `ELITEA_TEST_DATABASE_URL` crash suite runs in `ci-rust` and a `200 OK` streamed reply stays pending upstream `dev.elitea.ai/llm/v1` recovery).
 
 ## 1. Business behavior and deliberate non-ports
 
@@ -62,7 +62,19 @@ All checks ran offline/locked on the final worktree state:
   - Secret scan on full branch diff: `0` hits; AI/Claude commit trailers: `0`
 - **Deferred (honestly noted):**
   - `cargo deny --offline --all-features check advisories` blocked in sandbox by read-only `~/.cargo/advisory-dbs/db.lock` (no `Cargo.toml` or `Cargo.lock` dependency changed in this PR; runs in CI).
-  - Live PostgreSQL (`ELITEA_TEST_DATABASE_URL`) crash tests and live Docker/browser stack rehearsal deferred while local Docker builds/stacks remain paused for EKG.
+  - Live PostgreSQL (`ELITEA_TEST_DATABASE_URL`) crash suite runs in CI (`ci-rust / Test with PostgreSQL 18`).
+- **Disposable production-profile Docker & real-browser rehearsal (`p5b2v`, `2026-11-24`, torn down):**
+  - **Stack & dump:** `elitea-p5b2v` at `http://p5b2v.localhost:18420/app/`, restored from `product-real-models-main-ce2756fad.dump` over merged `origin/main` `d463a8a66` (commit `c4c04d321`); `stack.sh verify-profile --name p5b2v`: **`50 passed, 0 failed`** (exit `0`).
+  - **Built images & `stack.sh binary-check` receipts:**
+    - `ghcr.io/elitea-ng/elitea-main:p5b2-c4c04d321` (`sha256:773e8065c56a14ce2df42d7d7e06dcc3ed05a8f163fb35bb1f4641cc9d63a126`, `/elitea-main`, marker `pipeline.llm.rate_limited`, `count=1` OK)
+    - `ghcr.io/elitea-ng/elitea-web:p5b2-c4c04d321` (`sha256:ee6317cb7d0a4bdeb124e31d3ef6823da2979fa0df73116738584748f16d460d`, `/usr/share/nginx/html/spa`, marker `wait_between_tries_ms`, `count=3` OK)
+    - `ghcr.io/elitea-ng/elitea-worker-rust:p5b2-c4c04d321` (`sha256:36efcbcf388ee280032ee37ea77af6de4cb55ffe57d9afe4f24dae352323dbd1`, `/usr/local/bin/elitea-worker-rust`, marker `pipeline.llm.rate_limited`, `count=2` OK)
+    - Support runtime pins: `elitea-sandbox-supervisor:pm-778e5beb8`, `elitea-code-runner:pm-2d7f7d3e8-deno`, `elitea-code-runner:pm-2d7f7d3e8-rust`.
+  - **Real-browser verification & fixture honesty:** All test fixtures were created directly through the UI as `admin@centry.user` (no DB seeding, no response mocks): Pipeline ID `170` (Version `196`, Name `p5b2-browser-verify`, Project `Private` ID `2`, `START -> LLM_1 -> END`). Confirmed Wave U2 right-side drawer (`399px` measured) renders `Advanced -> Settings` on `LLM_1` and temporary `Toolkit_1` and omits `Settings` on temporary `Agent_1` (temporary nodes deleted before save), YAML round-trip preserves `settings: { retry_on_fail: true, timeout_ms: 30000, max_tries: 2, wait_between_tries_ms: 500 }` (`on_error: stop` default elided), hard reload preserves all 5 configured fields plus selected model (`gpt-5.4-mini`), and `View run history -> Restore Test` restores persisted Test Chat conversation `891` (`570e4f60-7707-49d3-8a18-0504e781fe6a`) with `0` HUD console errors and `0` HTTP 4xx/5xx responses after reload/restore.
+  - **Live Worker runtime & upstream boundary:** External `https://dev.elitea.ai/llm/v1` (`provider: "vllm"`, `gateway_origin: false`) returned HTTP 500/503 across all 5 real models (`gpt-5.4-mini`, `gpt-5.4`, `eu.anthropic.claude-haiku-4-5-20251001-v1:0`, `eu.anthropic.claude-sonnet-4-6`, `global.openai.gpt-5.6-luna`) and standalone `/app/chat`, so a `200 OK` streamed assistant reply remains pending upstream provider recovery. Against those live upstream failures, `elitea-worker` logs proved `5b-2` settings execution and `FU-343` typed error propagation end-to-end:
+    - Run 1 (`gpt-5.4-mini`, execution `98246c9feef88e91ea3fb7140f2683c0`): Attempt 1 at `09:27:32.399Z`, `30000 ms` `timeout_ms`, `500 ms` `wait_between_tries_ms` -> Attempt 2 at `09:28:02.902Z` (`+30.502 s`) -> `model_gateway.upstream_timeout` (`MODEL_TIMEOUT`).
+    - Run 5 (`global.openai.gpt-5.6-luna`, execution `bff4141188e121b23614d4b78009a998`): Attempt 1 upstream `503` at `09:31:34.589Z` -> Attempt 2 at `09:31:35.168Z` (`+579 ms`) -> `model_gateway.unavailable` (`MODEL_UNAVAILABLE`).
+    - Standalone `/app/chat` control (`bafea6a9d2c04866a282fb5d4820c1a2`, no node `settings:`): failed on Attempt 1 with `0` retries (`09:32:22.831Z`).
 
 ## 4. Engineering and security self-audit (`replatform-delivery-gate.md §3a` / `rules/security.md`)
 
@@ -90,5 +102,6 @@ All checks ran offline/locked on the final worktree state:
 
 - Updated `services/elitea-worker-rust/docs/recovery-guarantees.md` for `Worker x P02, P03` (LLM with `settings:`), `Worker x P04, P05` (Direct `toolkit`/`mcp` with `settings:` + FU-067), and `gateway x P02` (G-GW-01 for pipeline LLM nodes).
 - Follow-ups:
-  - Run PostgreSQL 18 crash-recovery tests and disposable Docker/browser acceptance once consolidated stack testing resumes.
+  - Re-verify a `200 OK` streamed live-model pipeline turn once `dev.elitea.ai/llm/v1` recovers and run the full `ci-rust` PostgreSQL 18 suite when taking PR #2937 out of Draft.
+  - Refresh `apps/elitea-web/e2e/snapshots/visual/pipeline-editor.visual.spec.ts-snapshots/pipeline-editor-interrupts-enabled-visual-linux.png` on Linux CI (`ci-web-e2e / Visual regression`) once Ready-for-Review runs, because admitting `llm` renders `Settings` under `LLM_1`'s Wave U2 `Advanced` section.
   - Land `5b-4` (`agent` / nested pipeline settings) and `5b-5` (fan-out member settings) in separate PRs.
