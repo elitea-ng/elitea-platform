@@ -191,6 +191,7 @@ allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section auth
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section branding
+allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section browser
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
@@ -232,6 +233,7 @@ allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section auth
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section branding
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section browser
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
 allowed allowed allowed refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
