@@ -322,6 +322,16 @@ The upgrade that added these values set `inherit` on each existing personal acce
 
 The platform enforces the value. A `none` token gets `403` on every administration API, also when its owner is an administrator. Choosing administration scopes for a token comes in a later release.
 
+### Tokens and critical actions
+
+Some administration actions are **critical**: changing who is an administrator, editing the permissions of a role, deleting a role or a project, the identity provider and SCIM trust actions, releasing a legal hold, shortening retention, and the LLM provider routes. A personal access token with `scoped` or `inherit` access gets `403` with the code `token_critical_action_refused` on a critical action. Sign in to the console to do it. The same token keeps working on every other administration action its access covers.
+
+One exception keeps a broken sign-in repairable: the identity provider and SCIM trust actions (create, change the trust settings of, turn off, delete or re-bind an identity provider; create or rotate a SCIM client) accept an `inherit` token whose owner is a global administrator by their standing role. A `scoped` token, or an `inherit` token of any other administrator, is refused them. The exception ends at the sunset date of `inherit`.
+
+On the gateway governance, global provider update and retention routes, a token is refused every change for now, not only the critical ones.
+
+Every refusal is recorded in the admin audit trail with the action `admin.token_refused`. The upgrade note lists every critical action.
+
 ## Which credential carries which administration rights
 
 The administration permissions of a request come from the credential that sent it, not only from the person who owns it:

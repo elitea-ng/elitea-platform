@@ -59,6 +59,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/identityproviders"
 )
 
@@ -296,6 +297,14 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 	// a body that changes any trust field is a trust action as a whole, and
 	// turning a provider off is one too (its own entry, OutcomeDisable).
 	action := adminaccess.IdentityProviderSaveAction(trustFields, validated.Enabled)
+	// The token rule of the action table, on the entry the save classified
+	// (ADR-0059 R1.2b): a personal access token reaches a trust action only
+	// as an inherit token of a standing global administrator.
+	if refusal := adminaccess.CheckTokenRule(r.Context(), http.MethodPut,
+		adminaccess.IdentityProviderSavePattern, action); refusal != nil {
+		writeTokenRefusal(w, r, "PUT "+adminaccess.IdentityProviderSavePattern+" "+action, refusal)
+		return
+	}
 	if action != adminaccess.OutcomeSettings && !h.requireIdentityTrust(w, r, trustGate{
 		code: CodeIdentityTrustSuperAdminRequired,
 		message: "only a super admin can create or delete an identity provider, turn it on or off, replace " +
@@ -530,4 +539,15 @@ func writeIdentityProviderValidationError(w http.ResponseWriter, err error) {
 // It is derived rather than stored so a row and its secret cannot drift apart.
 func identityProviderSecretName(key string) string {
 	return secrets.AdminHiddenSecretName(identityProviderSecretFeature, key, "secret")
+}
+
+// writeTokenRefusal answers the token rule's refusal of an action the handler
+// classified, the way the middleware of internal/api answers it.
+func writeTokenRefusal(w http.ResponseWriter, r *http.Request, action string, refusal *adminaccess.Refusal) {
+	audit.Annotate(r.Context(), audit.Annotation{
+		Action:     adminaccess.TokenRefusedAuditAction,
+		EntityType: "admin_action",
+		EntityName: action,
+	})
+	writeJSON(w, http.StatusForbidden, map[string]any{"error": refusal.Message, "code": refusal.Code})
 }

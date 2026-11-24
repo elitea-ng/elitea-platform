@@ -70,6 +70,13 @@ jobs:
       - name: What's new entries are one file per change
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-whats-new.mjs
+      # The upgrade note of ADR-0059 R1.2b lists every critical action of the
+      # administration action table (its golden), generated; a registry
+      # change that adds or drops one fails here until the note is
+      # regenerated with --write.
+      - name: The critical-actions upgrade note matches the registry
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-critical-actions-note.mjs
       # One Rust version everywhere (PR #1297): every rust-toolchain.toml, every
       # `FROM rust:` image (same digest in every stage) and every crate's
       # rust-version, held to the repository-root pin. This workflow has no
@@ -121,7 +128,9 @@ jobs:
           # brand-check, its secrets match the packaging actions.
           # check-sunset.mjs is the ADR-0059 sunset check (history-gates runs
           # it); sunset-reminder.mjs is the decision of sunset-reminder.yml.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template check-sunset sunset-reminder; do
+          # check-critical-actions-note.mjs holds the R1.2b upgrade note to the
+          # action table; it runs above.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template check-sunset sunset-reminder check-critical-actions-note; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?

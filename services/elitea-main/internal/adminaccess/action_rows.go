@@ -16,6 +16,10 @@ const ConfigurationValuesPattern = adminPrefix + "/plugin_config_values/administ
 // `action` of the body (AuthUsersAction in internal/api/v2/admin/users.go).
 const AuthUsersActionPattern = adminPrefix + "/auth_users/{mode}"
 
+// IdentityProviderSavePattern is the identity provider save, whose handler
+// classifies the save and applies the token rule itself (TokenRuleInHandler).
+const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
+
 // write is an entry with no danger: no reason, elevation `allow`, token
 // `allowed`.
 func write(method, pattern, permission string) Action {
@@ -33,8 +37,9 @@ func (a Action) critical(e Elevation) Action  { a.Danger = DangerCritical; a.Ele
 func (a Action) selected(s Selector) Action   { a.Selector = s; a.Name = s.Value; return a }
 
 // tokenAllowed lets a token call a critical action, with the written reason
-// ADR-0059 decision 7 requires. No entry uses it yet: story R1.2 declares the
-// identity trust exception with it.
+// ADR-0059 decision 7 requires. The token rule (token_rule.go) still admits
+// only an inherit token of a standing global administrator. The identity
+// trust entries use it (R1.2b); R4.2 turns them to never.
 func (a Action) tokenAllowed(reason string) Action {
 	a.Token, a.TokenReason = TokenAllowed, reason
 	return a
@@ -95,6 +100,13 @@ func actionRows() []Action {
 		}
 	}
 
+	// The identity trust repair path (ADR-0059 decision 5, "Emergency
+	// mechanisms that exist today"): an automation that holds an inherit
+	// token of a standing global administrator can still repair a broken
+	// sign-in until the sunset of decision 7 (R4.2 removes the exception).
+	const trustRepair = "identity trust repair path until the sunset: an inherit token of a standing " +
+		"global administrator (ADR-0059 decision 5)"
+
 	rows := []Action{
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),
@@ -131,8 +143,9 @@ func actionRows() []Action {
 		// and deleting a client are trust actions (identity.sso.trust.manage or
 		// super_admin, in the handler); a revoke and the bindings are settings.
 		// A binding write also meets the role rule of #2555.
-		post(admin("/scim_clients/administration"), IdentitySSOTrustManage).critical(sealed),
-		post(admin("/scim_clients/administration/{id}/rotate"), IdentitySSOTrustManage).critical(sealed),
+		post(admin("/scim_clients/administration"), IdentitySSOTrustManage).critical(sealed).tokenAllowed(trustRepair),
+		post(admin("/scim_clients/administration/{id}/rotate"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
 		post(admin("/scim_clients/administration/{id}/revoke"), IdentitySSOSettingsManage).dangerous(),
 		del(admin("/scim_clients/administration/{id}"), IdentitySSOTrustManage).dangerous(),
 		post(admin("/scim_group_bindings/administration"), IdentitySSOSettingsManage).critical(deny),
@@ -149,16 +162,18 @@ func actionRows() []Action {
 		// that the handler (requireIdentityTrust) writes the refusal; the
 		// handler accepts identity.sso.trust.manage or
 		// admin.auth.users.super_admin, which only super_admin holds.
+		put(IdentityProviderSavePattern, IdentitySSOTrustManage).
+			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed).tokenAllowed(trustRepair),
 		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
-			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed),
-		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
-			outcome(ClassifyIdentityProvider, OutcomeDisable).critical(flag),
+			outcome(ClassifyIdentityProvider, OutcomeDisable).critical(flag).tokenAllowed(trustRepair),
 		put(admin("/identity_providers/administration/{key}"), IdentitySSOSettingsManage).
 			outcome(ClassifyIdentityProvider, OutcomeSettings).elevation(flag),
-		del(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).critical(sealed),
+		del(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
 		// Moves linked accounts onto the provider's issuer: the identity
 		// mapping.
-		post(admin("/identity_providers/administration/{key}/rebind"), IdentitySSOTrustManage).critical(sealed),
+		post(admin("/identity_providers/administration/{key}/rebind"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
 
 		// Security: retention and legal holds.
 		post(admin("/legal_holds"), LegalHoldManage),
