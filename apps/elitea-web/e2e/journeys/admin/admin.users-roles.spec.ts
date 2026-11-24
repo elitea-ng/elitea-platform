@@ -44,6 +44,7 @@ async function setRoles(request: APIRequestContext, userId: number, roleNames: r
 }
 
 adminTest('a global administrator gives a person two roles, and both survive a reload', async ({ page, request }, testInfo) => {
+  adminTest.setTimeout(90_000);
   const subject = subjectFor(testInfo.project.name);
   const { id } = await listedUser(request, subject);
   await setRoles(request, id, []);
@@ -51,11 +52,15 @@ adminTest('a global administrator gives a person two roles, and both survive a r
   try {
     await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
     await page.getByTestId('admin-users-search').fill(subject);
-    // Scoped to the subject's row: the search narrows the table, but the
-    // first page can still be on screen when the assertion runs.
-    const row = page.getByRole('main').getByRole('row').filter({ hasText: subject });
-    const picker = row.getByRole('combobox', { name: 'Administration roles' });
-    await expect(picker).toHaveText('None', { timeout: 20_000 });
+    // Wait for the search to narrow the table to the subject before touching
+    // the picker: the unfiltered first page can hold the same row, and the
+    // filtered listing arriving re-renders it, closing an open menu.
+    const pickers = page.getByRole('main').getByRole('combobox', { name: 'Administration roles' });
+    const picker = page.getByRole('main').getByRole('row').filter({ hasText: subject }).getByRole('combobox', {
+      name: 'Administration roles',
+    });
+    await expect(pickers).toHaveCount(1, { timeout: 20_000 });
+    await expect(picker).toHaveText('None');
     await picker.click();
     await page.getByRole('option', { name: /^LLM manager/ }).click();
     await page.getByRole('option', { name: /^Security auditor/ }).click();
@@ -74,7 +79,8 @@ adminTest('a global administrator gives a person two roles, and both survive a r
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByTestId('admin-users-search').fill(subject);
-    await expect(picker).toHaveText('LLM manager, Security auditor', { timeout: 20_000 });
+    await expect(pickers).toHaveCount(1, { timeout: 20_000 });
+    await expect(picker).toHaveText('LLM manager, Security auditor');
 
     await checkA11y(page);
   } finally {

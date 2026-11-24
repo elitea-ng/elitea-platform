@@ -32,8 +32,8 @@ vi.setConfig({ testTimeout: testTimeout(30_000) });
 
 const USERS_BODY = {
   rows: [
-    { id: 11, name: 'Ada Admin', email: 'ada@example.com', last_login: null, suspended: false, is_admin: true, admin_role: 'admin' },
-    { id: 12, name: 'Bo Builder', email: 'bo@example.com', last_login: null, suspended: false, is_admin: false, admin_role: null },
+    { id: 11, name: 'Ada Admin', email: 'ada@example.com', last_login: null, suspended: false, is_admin: true, admin_roles: ['admin'] },
+    { id: 12, name: 'Bo Builder', email: 'bo@example.com', last_login: null, suspended: false, is_admin: false, admin_roles: [] },
   ],
   total: 2,
   counts: { platform: 2, system: 0 },
