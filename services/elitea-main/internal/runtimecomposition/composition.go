@@ -2673,6 +2673,16 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		}
 		contentServer.WithGovernedPins(contentPins)
 	}
+	// HTTP actions (T-5D 5d-1). The runtime-context ExecuteHTTPAction RPC is
+	// live wherever agent dispatch and the configurations vault are composed,
+	// and absent otherwise; its Worker caller (the `http` node) arrives in 5d-2.
+	if config.AgentExecutionDispatchEnabled && dependencies.CurrentConfigurations != nil {
+		httpActions, err := newRuntimeHTTPActions(config, dependencies)
+		if err != nil {
+			return nil, err
+		}
+		contentServer.WithRuntimeHTTPActions(httpActions)
+	}
 	if originalCodeIntents != nil {
 		contentServer.WithOriginalCodeIntents(originalCodeIntents)
 	}

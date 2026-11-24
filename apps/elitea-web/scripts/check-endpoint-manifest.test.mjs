@@ -983,7 +983,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 585 -> 588 (issues 2507/2593, ADR-0059 R1.3a/R1.3b): getPersonalTokenAdminScopeOffer,
 // setPersonalTokenAdminScopes and listAdministrationAccessTokens. The offer is consumed by the
 // token screen, so MANIFEST_ENTRY_COUNT 394 -> 395 (tokens.adminScopeOffer).
-const GENERATED_OPERATION_COUNT = 588;
+// 588 -> 593 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
+// updateHttpActionRule, listHttpActionRuleNames.
+const GENERATED_OPERATION_COUNT = 593;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1323,8 +1325,13 @@ const GENERATED_OPERATION_COUNT = 588;
  *
  * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
  * now that the signing secret is write-only. Generated.
+ *
+ * 394 -> 395 (issues 2507/2593, ADR-0059 R1.3a/R1.3b): tokens.adminScopeOffer,
+ * consumed by the personal-token screen. Generated.
+ *
+ * 395 -> 400 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
  */
-const MANIFEST_ENTRY_COUNT = 395;
+const MANIFEST_ENTRY_COUNT = 400;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

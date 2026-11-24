@@ -2,9 +2,9 @@ package repos
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +27,7 @@ func (row httpProofRow) Scan(dest ...any) error {
 		return row.err
 	}
 	r := row.record
-	values := []any{r.state, r.activation, r.effect, r.requestDigest, r.bindingDigest, r.policyDigest, r.outputBucket, r.request, r.receiptWire, r.receiptSHA, r.input, r.tenant, r.project, r.projection}
+	values := []any{r.state, r.activation, r.effect, r.requestDigest, r.bindingDigest, r.policyDigest, r.outputBucket, r.request, r.receiptWire, r.receiptSHA, r.input, r.tenant, r.project, r.projection, r.inputs, r.ruleWire, r.inputsDigest, r.attempt}
 	if len(dest) != len(values) {
 		return errors.New("invalid scan")
 	}
@@ -54,58 +54,69 @@ func (*httpProofTX) Query(context.Context, string, ...any) (sqlRows, error) {
 	panic("proof issuer expanded scope")
 }
 
+const httpProofPipeline = `entry_point: fetch
+nodes:
+  - id: fetch
+    type: http
+    revision: 2
+    operation: tracker.create_item
+    request:
+      path: {item: {from: item_key}}
+      body: {kind: json, value: {a: 2, n: 1}}
+    response: {mode: json}
+    output: [report]
+    transition: END
+`
+
+// httpProofFixture is a committed revision-2 effect built through the real
+// freeze, render, effect-id and projection contracts.
 func httpProofFixture(t *testing.T) (string, uint64, recovery.Receipt, httpRecoveryRecord) {
 	t.Helper()
-	raw, err := os.ReadFile("../../../../../../libs/proto/elitea/runtime/v1/http_frozen_request.fixture.json")
+	// Main runtime IDs are hex encodings of 16 random bytes, not UUIDs.
+	execution, generation := "0123456789abcdef0123456789abcdef", uint64(2)
+	snapshot, err := app.FreezeSnapshot(31, 41, httpProofPipeline)
+	if err != nil || snapshot == nil {
+		t.Fatal(err)
+	}
+	application, _ := json.Marshal(map[string]any{"id": 31, "version_id": 41, "version_details": map[string]any{"instructions": httpProofPipeline, "http_action_snapshot": snapshot}})
+	input, err := proto.Marshal(&runtimev1.AgentExecutionInputV1{ThreadId: proto.String("root-thread"), Application: application})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fixture struct {
-		Cases []struct {
-			Application json.RawMessage `json:"application"`
-			Execution   string          `json:"execution_id"`
-			Generation  uint64          `json:"generation"`
-			Wire        string          `json:"request_wire_utf8"`
-		} `json:"cases"`
-	}
-	if json.Unmarshal(raw, &fixture) != nil {
-		t.Fatal("fixture invalid")
-	}
-	f := fixture.Cases[0]
-	// Main runtime IDs are hex encodings of16 random bytes, not UUIDs.
-	f.Execution = "0123456789abcdef0123456789abcdef"
-	var application struct {
-		Version struct {
-			Snapshot app.FrozenSnapshot `json:"http_action_snapshot"`
-		} `json:"version_details"`
-	}
-	_ = json.Unmarshal(f.Application, &application)
-	node := application.Version.Snapshot.Nodes[0]
-	input, err := proto.Marshal(&runtimev1.AgentExecutionInputV1{ThreadId: proto.String("root-thread"), Application: f.Application})
-	if err != nil {
-		t.Fatal(err)
-	}
+	rule := app.Rule{ID: 5, ProjectID: 7, Revision: 3, Name: "tracker.create_item", Origin: "https://api.example.com", PathTemplate: "/items/{item}", Method: "POST", ConfigurationID: 9, Toolkit: "tracker", Tool: "create_item", OutputBucket: "outputs", Enabled: true}
+	rule.Normalize()
+	inputs := []byte(`{"path":{"item":"i-1"}}`)
 	thread := app.RootGraphThread("tenant", 7, 7, "root-thread")
-	inv := app.Invocation{SchemaVersion: app.Schema, NodeID: "fetch", ThreadID: thread, Step: 3, RequestDigest: node.RequestDigest, BindingDigest: node.BindingDigest, RequestWireB64: node.RequestWireB64, Request: []byte(f.Wire)}
+	node := snapshot.Nodes[0]
+	inv := app.Invocation{SchemaVersion: app.Schema, NodeID: "fetch", ThreadID: thread, Step: 3, Attempt: 1, BindingDigest: node.BindingDigest, InputsB64: base64.StdEncoding.EncodeToString(inputs), InputsDigest: app.Digest(inputs)}
 	inv.ActivationID = app.VisitID(thread, "fetch", 3, app.BindingBytes(node.BindingDigest))
-	effect := app.EffectID(f.Execution, f.Generation, inv)
-	request, err := app.Parse(inv)
+	inv, err = app.ParseInvocation(inv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projection, failure := app.Project(request, 200, "application/json", []byte(`null`), nil)
+	template, err := snapshot.Verify(31, 41, httpProofPipeline, inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := app.Render(rule, template, inputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effect := app.EffectID(execution, generation, inv)
+	projection, failure := app.Project(rendered.Request, 200, "application/json", []byte(`null`), nil)
 	if failure != "" {
 		t.Fatal(failure)
 	}
-	receipt := app.Receipt{SchemaVersion: app.ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: node.RequestDigest, BindingDigest: node.BindingDigest, EffectID: effect, State: "completed", Result: projection}
+	receipt := app.Receipt{SchemaVersion: app.ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: rendered.Digest, BindingDigest: node.BindingDigest, EffectID: effect, State: "completed", Result: projection}
 	wire, _ := json.Marshal(receipt)
 	sha := app.Digest(wire)
-	record := httpRecoveryRecord{state: "completed", activation: inv.ActivationID, effect: effect, requestDigest: node.RequestDigest, bindingDigest: node.BindingDigest, policyDigest: app.Digest([]byte("operator-policy")), outputBucket: "outputs", request: []byte(f.Wire), receiptWire: wire, receiptSHA: &sha, input: input, tenant: "tenant", project: 7, projection: 7}
+	inputsDigest := app.Digest(inputs)
+	record := httpRecoveryRecord{state: "completed", activation: inv.ActivationID, effect: effect, requestDigest: rendered.Digest, bindingDigest: node.BindingDigest, policyDigest: rule.PolicyDigest(), outputBucket: "outputs", request: rendered.Wire, receiptWire: wire, receiptSHA: &sha, input: input, tenant: "tenant", project: 7, projection: 7, inputs: inputs, ruleWire: rule.PolicyWire(), inputsDigest: &inputsDigest, attempt: 1}
 	journal := recovery.Receipt{Schema: recovery.Schema, ActivationID: strings.Repeat("c", 64), JournalRevision: 4, NodeID: "fetch", GraphThread: thread, Step: 3, Attempt: 1, FailureClass: "invalid_result", StopReason: "effect_reconciliation_required", ReplaySafety: recovery.ReplaySafety{Kind: "completed_external_effect", ReceiptID: effect}, AllowedActions: []string{"resume_result"}}
 	if journal.Validate() != nil {
 		t.Fatal("journal fixture invalid")
 	}
-	return f.Execution, f.Generation, journal, record
+	return execution, generation, journal, record
 }
 
 func TestHTTPRecoveryProofIssuesOnlyExactCommittedOwnerReceipt(t *testing.T) {
@@ -155,6 +166,14 @@ func TestHTTPRecoveryProofBindsOriginalEffectNodeVisitVersionAndWire(t *testing.
 		func(r *httpRecoveryRecord, _ *recovery.Receipt) {
 			r.request = []byte(strings.Replace(string(r.request), `"n":1`, `"n":1.0`, 1))
 		},
+		// The stored inputs, the stored rule and the attempt all re-render.
+		func(r *httpRecoveryRecord, _ *recovery.Receipt) { r.inputs = []byte(`{"path":{"item":"i-2"}}`) },
+		func(r *httpRecoveryRecord, _ *recovery.Receipt) {
+			r.ruleWire = []byte(strings.Replace(string(r.ruleWire), `"origin":"https://api.example.com"`, `"origin":"https://evil.example.com"`, 1))
+		},
+		func(r *httpRecoveryRecord, _ *recovery.Receipt) { r.policyDigest = strings.Repeat("e", 64) },
+		func(r *httpRecoveryRecord, _ *recovery.Receipt) { r.attempt = 0 },
+		func(r *httpRecoveryRecord, _ *recovery.Receipt) { r.inputsDigest = nil },
 		func(r *httpRecoveryRecord, _ *recovery.Receipt) { r.bindingDigest = strings.Repeat("a", 64) },
 		func(r *httpRecoveryRecord, _ *recovery.Receipt) {
 			r.receiptWire = append([]byte(" "), r.receiptWire...)

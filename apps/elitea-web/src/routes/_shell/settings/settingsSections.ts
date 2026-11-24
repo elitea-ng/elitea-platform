@@ -81,6 +81,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
     // ADR-0050 decisions 5c and 5k (issue 1617): the automatic hiring and
     // dismissal policy, for agent managers only.
     ...(workforceManager ? [{ id: 'agent-workforce', label: 'Agent workforce' }] : []),
+    { id: 'http-actions', label: 'HTTP actions' },
     ...(isPersonalProject ? [] : [{ id: 'users', label: 'Users' }]),
     ...(analyticsVisible ? [{ id: 'analytics', label: 'Analytics' }] : []),
     ...(usageVisible ? [{ id: 'usage', label: 'Usage' }] : []),

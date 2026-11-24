@@ -1,5 +1,5 @@
 {
-  "$comment": "endpoints.manifest.json — the R-A5 contract (spec §3.4/§5.3, unit S4). Every network call the app makes must have an entry here; scripts/check-endpoint-manifest.mjs enforces it in CI. Seeded 2026-07-27 from the 78 operations orval's react-query generator produced (npx orval, src/shared/api/generated/**). APPEND CONVENTION for later Wave-2 units: add one object to `endpoints`, id unique (`<domain>.<action>`), source:'handwritten', operationId:null, responseSchema names the hand-authored zod export, fixture points at its Channel-B recording once M1's recorder has run, usedBy lists the consuming feature slice(s) — keep it current. Append only; never remove or renumber another unit's entries. See scripts/check-endpoint-manifest.mjs's header for the full convention.",
+  "$comment": "endpoints.manifest.json \u2014 the R-A5 contract (spec \u00a73.4/\u00a75.3, unit S4). Every network call the app makes must have an entry here; scripts/check-endpoint-manifest.mjs enforces it in CI. Seeded 2026-07-27 from the 78 operations orval's react-query generator produced (npx orval, src/shared/api/generated/**). APPEND CONVENTION for later Wave-2 units: add one object to `endpoints`, id unique (`<domain>.<action>`), source:'handwritten', operationId:null, responseSchema names the hand-authored zod export, fixture points at its Channel-B recording once M1's recorder has run, usedBy lists the consuming feature slice(s) \u2014 keep it current. Append only; never remove or renumber another unit's entries. See scripts/check-endpoint-manifest.mjs's header for the full convention.",
   "version": 1,
   "generatedFrom": {
     "spec": "services/elitea-main/api/openapi/v2.yaml",
@@ -407,7 +407,9 @@
       "source": "generated",
       "responseSchema": "DocumentLoadersResponse",
       "fixture": null,
-      "usedBy": ["entities/attachment"]
+      "usedBy": [
+        "entities/attachment"
+      ]
     },
     {
       "id": "applications.getPipelineTrigger",
@@ -1148,7 +1150,7 @@
       ]
     },
     {
-      "$comment": "Issue #93 — SSE dispatch for an index_data run. Body is the Go `currentStartBody` contract (toolkit_config + tool_name index_data + tool_params), query `await_response=false&execution_contract=index.ingest.v1`; the response's `task_id` names the execution whose stream is `runtime.executionEvents` below. A `task_id` does NOT prove the Go runtime answered (the legacy runtime returns one too), so the caller also treats a stream that fails to open as the socket.io fallback signal.",
+      "$comment": "Issue #93 \u2014 SSE dispatch for an index_data run. Body is the Go `currentStartBody` contract (toolkit_config + tool_name index_data + tool_params), query `await_response=false&execution_contract=index.ingest.v1`; the response's `task_id` names the execution whose stream is `runtime.executionEvents` below. A `task_id` does NOT prove the Go runtime answered (the legacy runtime returns one too), so the caller also treats a stream that fails to open as the socket.io fallback signal.",
       "id": "toolkits.startIndexExecution",
       "method": "POST",
       "path": "/elitea_core/test_toolkit_tool/prompt_lib/{projectId}",
@@ -1161,7 +1163,7 @@
       ]
     },
     {
-      "$comment": "Issue #93 — SSE dispatch for a chat message. `execution_contract` is agent.execute.application.v1 or agent.execute.adhoc.v1 (services/elitea-main/internal/api/v2/agentexecution/route.go). The response's `events_url` is the stream to follow. REST LAYER ONLY, NO UI CALL SITE YET: the chat surface has no consumer for the streamed execution.node_event envelope (the chat_predict streaming reducer was never ported), so widgets/chat-box deliberately still sends over socket.io. Note the Go route wants the prompt at payload.user_input with a numeric project_id — a caller must build that body, not reuse the socket predict payload.",
+      "$comment": "Issue #93 \u2014 SSE dispatch for a chat message. `execution_contract` is agent.execute.application.v1 or agent.execute.adhoc.v1 (services/elitea-main/internal/api/v2/agentexecution/route.go). The response's `events_url` is the stream to follow. REST LAYER ONLY, NO UI CALL SITE YET: the chat surface has no consumer for the streamed execution.node_event envelope (the chat_predict streaming reducer was never ported), so widgets/chat-box deliberately still sends over socket.io. Note the Go route wants the prompt at payload.user_input with a numeric project_id \u2014 a caller must build that body, not reuse the socket predict payload.",
       "id": "conversation.startAgentExecution",
       "method": "POST",
       "path": "/elitea_core/messages/prompt_lib/{projectId}/{conversationUuid}",
@@ -1174,7 +1176,7 @@
       ]
     },
     {
-      "$comment": "Issue #93 — the durable execution-replay SSE stream shared by every long-running execution (index ingest, agent chat, agent regeneration). text/event-stream; event names are the durable replay event types: execution.node_event, index.ingest.completed, execution.failed. Opened with EventSource, so it carries the session cookie and no Authorization header.",
+      "$comment": "Issue #93 \u2014 the durable execution-replay SSE stream shared by every long-running execution (index ingest, agent chat, agent regeneration). text/event-stream; event names are the durable replay event types: execution.node_event, index.ingest.completed, execution.failed. Opened with EventSource, so it carries the session cookie and no Authorization header.",
       "id": "runtime.executionEvents",
       "method": "GET",
       "path": "/executions/{projectId}/{executionId}/events",
@@ -1187,7 +1189,7 @@
       ]
     },
     {
-      "$comment": "Server-Sent Events stream, not a request/response call (issue #92): opened with EventSource via features/notifications' useNotificationsSSE, served by services/elitea-main/internal/api/v2/notifications/events.go. It replaces the notifications_notify socket.io push. Events: notifications_ready (cursor handshake / oversized-payload substitute) and notifications_notify (one new notification). No response body schema exists to name — the payload is a text/event-stream, and the durable list endpoint above stays authoritative for content.",
+      "$comment": "Server-Sent Events stream, not a request/response call (issue #92): opened with EventSource via features/notifications' useNotificationsSSE, served by services/elitea-main/internal/api/v2/notifications/events.go. It replaces the notifications_notify socket.io push. Events: notifications_ready (cursor handshake / oversized-payload substitute) and notifications_notify (one new notification). No response body schema exists to name \u2014 the payload is a text/event-stream, and the durable list endpoint above stays authoritative for content.",
       "id": "notifications.eventStream",
       "method": "GET",
       "path": "/notifications/events/prompt_lib/{projectId}",
@@ -1647,7 +1649,7 @@
       ]
     },
     {
-      "$comment": "The SAVE half of the Indexes tab's Save / Save & Reindex split (ELITEA-2880). Persists one index's configuration WITHOUT starting a run — until it existed the only writer of `index_configuration` was the indexing run itself, so a configuration change could be persisted only by re-indexing, and a scheduled reindex kept using the last RUN's configuration. Go: internal/api/v2/indexing/index_meta_configuration.go, permission models.applications.index_meta.edit.",
+      "$comment": "The SAVE half of the Indexes tab's Save / Save & Reindex split (ELITEA-2880). Persists one index's configuration WITHOUT starting a run \u2014 until it existed the only writer of `index_configuration` was the indexing run itself, so a configuration change could be persisted only by re-indexing, and a scheduled reindex kept using the last RUN's configuration. Go: internal/api/v2/indexing/index_meta_configuration.go, permission models.applications.index_meta.edit.",
       "id": "toolkits.saveIndexConfiguration",
       "method": "PUT",
       "path": "/elitea_core/index_meta/prompt_lib/{projectId}/{toolkitId}/{indexName}/configuration",
@@ -1772,7 +1774,7 @@
       ]
     },
     {
-      "$comment": "Issue 851 — conversation export. Described in v2.yaml as exportConversation, but called through a HAND-WRITTEN fetcher: the generated client goes through eliteaFetch, which reads every body as text and returns an envelope, so it can neither produce a Blob nor reach Content-Disposition for the browser save-as flow. entities/conversation/api/conversationExportApi.ts uses shared/lib/download.ts (the sanctioned raw-fetch path) and still builds the URL with the GENERATED getExportConversationUrl, so the path stays derived from the spec.",
+      "$comment": "Issue 851 \u2014 conversation export. Described in v2.yaml as exportConversation, but called through a HAND-WRITTEN fetcher: the generated client goes through eliteaFetch, which reads every body as text and returns an envelope, so it can neither produce a Blob nor reach Content-Disposition for the browser save-as flow. entities/conversation/api/conversationExportApi.ts uses shared/lib/download.ts (the sanctioned raw-fetch path) and still builds the URL with the GENERATED getExportConversationUrl, so the path stays derived from the spec.",
       "id": "conversation.export",
       "method": "GET",
       "path": "/elitea_core/conversation_export/prompt_lib/{projectId}/{conversationId}",
@@ -2320,7 +2322,7 @@
       ]
     },
     {
-      "$comment": "HANDWRITTEN, YET IT NAMES AN operationId — the first entry of that shape, and deliberate. `source` says how the APP calls the route; `operationId` says which api/openapi/v2.yaml operation describes it. v2.yaml now describes both tool-catalogue reads, so orval generates a hook for each, but the app keeps calling them through src/entities/toolkit/api/toolkitToolsApi.ts, which holds the error-is-not-emptiness contract of #381/#440. Leave the id in place: the elitea-main gate TestSpecRouterConformance/manifest_reverse_check matches a manifest entry to the spec BY operationId, and its path fallback compares the spec path under the /api/v2 server base against a manifest path that carries no base, so a null id here reads as 'the spec does not describe this'.",
+      "$comment": "HANDWRITTEN, YET IT NAMES AN operationId \u2014 the first entry of that shape, and deliberate. `source` says how the APP calls the route; `operationId` says which api/openapi/v2.yaml operation describes it. v2.yaml now describes both tool-catalogue reads, so orval generates a hook for each, but the app keeps calling them through src/entities/toolkit/api/toolkitToolsApi.ts, which holds the error-is-not-emptiness contract of #381/#440. Leave the id in place: the elitea-main gate TestSpecRouterConformance/manifest_reverse_check matches a manifest entry to the spec BY operationId, and its path fallback compares the spec path under the /api/v2 server base against a manifest path that carries no base, so a null id here reads as 'the spec does not describe this'.",
       "id": "toolkits.availableTools",
       "method": "GET",
       "path": "/elitea_core/toolkit_available_tools/prompt_lib/{project_id}/{toolkit_id}",
@@ -2335,7 +2337,7 @@
       ]
     },
     {
-      "$comment": "HANDWRITTEN, YET IT NAMES AN operationId — the first entry of that shape, and deliberate. `source` says how the APP calls the route; `operationId` says which api/openapi/v2.yaml operation describes it. v2.yaml now describes both tool-catalogue reads, so orval generates a hook for each, but the app keeps calling them through src/entities/toolkit/api/toolkitToolsApi.ts, which holds the error-is-not-emptiness contract of #381/#440. Leave the id in place: the elitea-main gate TestSpecRouterConformance/manifest_reverse_check matches a manifest entry to the spec BY operationId, and its path fallback compares the spec path under the /api/v2 server base against a manifest path that carries no base, so a null id here reads as 'the spec does not describe this'.",
+      "$comment": "HANDWRITTEN, YET IT NAMES AN operationId \u2014 the first entry of that shape, and deliberate. `source` says how the APP calls the route; `operationId` says which api/openapi/v2.yaml operation describes it. v2.yaml now describes both tool-catalogue reads, so orval generates a hook for each, but the app keeps calling them through src/entities/toolkit/api/toolkitToolsApi.ts, which holds the error-is-not-emptiness contract of #381/#440. Leave the id in place: the elitea-main gate TestSpecRouterConformance/manifest_reverse_check matches a manifest entry to the spec BY operationId, and its path fallback compares the spec path under the /api/v2 server base against a manifest path that carries no base, so a null id here reads as 'the spec does not describe this'.",
       "id": "toolkits.discoverTools",
       "method": "POST",
       "path": "/elitea_core/toolkit_discover_tools/prompt_lib/{project_id}/{toolkit_type}",
@@ -2350,7 +2352,7 @@
       ]
     },
     {
-      "$comment": "Stored-connection-check family — no baseline (apps/elitea-ui) precedent and no P1 parity-census API-* id; coded directly to this Go-native backend route's contract while it is built in parallel. See features/credentials/api/configurations.ts's header for the full account. These three carry an operationId even though source is handwritten, which the append convention above does not anticipate: api/openapi/v2.yaml now DESCRIBES them, and elitea-main's TestSpecRouterConformance/manifest_reverse_check covers a manifest endpoint by operationId only (its path branch compares against server-based candidates, so a root-relative manifest path never matches). Setting it back to null turns that gate red, and the allowlist it would otherwise need is at its pinned maximum and may only shrink. Rules (a) and (b) of check-endpoint-manifest.mjs constrain source:generated entries only, so a handwritten entry with an operationId is legal there.",
+      "$comment": "Stored-connection-check family \u2014 no baseline (apps/elitea-ui) precedent and no P1 parity-census API-* id; coded directly to this Go-native backend route's contract while it is built in parallel. See features/credentials/api/configurations.ts's header for the full account. These three carry an operationId even though source is handwritten, which the append convention above does not anticipate: api/openapi/v2.yaml now DESCRIBES them, and elitea-main's TestSpecRouterConformance/manifest_reverse_check covers a manifest endpoint by operationId only (its path branch compares against server-based candidates, so a root-relative manifest path never matches). Setting it back to null turns that gate red, and the allowlist it would otherwise need is at its pinned maximum and may only shrink. Rules (a) and (b) of check-endpoint-manifest.mjs constrain source:generated entries only, so a handwritten entry with an operationId is legal there.",
       "id": "credentials.checkStoredConfigurationConnection",
       "method": "POST",
       "path": "/configurations/check_stored_connection/{projectId}/{configId}",
@@ -2363,7 +2365,7 @@
       ]
     },
     {
-      "$comment": "Stored-connection-check family — see credentials.checkStoredConfigurationConnection's $comment above.",
+      "$comment": "Stored-connection-check family \u2014 see credentials.checkStoredConfigurationConnection's $comment above.",
       "id": "credentials.batchCheckStoredConfigurationConnections",
       "method": "POST",
       "path": "/configurations/check_stored_connections/{projectId}",
@@ -2376,7 +2378,7 @@
       ]
     },
     {
-      "$comment": "Stored-connection-check family — see credentials.checkStoredConfigurationConnection's $comment above.",
+      "$comment": "Stored-connection-check family \u2014 see credentials.checkStoredConfigurationConnection's $comment above.",
       "id": "credentials.revalidateConfiguration",
       "method": "POST",
       "path": "/configurations/revalidate/{projectId}/{configId}",
@@ -2389,7 +2391,7 @@
       ]
     },
     {
-      "$comment": "Blocking-mode sibling of pipelines.generateContentStreaming / agents.generateContentBlocking on the SAME path: await_task_timeout 60 instead of 0, so the generated text comes back in this HTTP response rather than over the application_predict socket event. Called by the canvas mermaid quick-fix (features/chat-messages/api/canvasQuickFix.ts). ROUTED: elitea-main serves the blocking mode by calling the LLM gateway directly. The STREAMING sibling is still unserved — the Go stack has no application_predict socket channel — which is why shared/config/backendCapabilities.ts splits this path into llmPredictBlocking (this entry) and llmPredictStreaming (pipelines.generateContentStreaming).",
+      "$comment": "Blocking-mode sibling of pipelines.generateContentStreaming / agents.generateContentBlocking on the SAME path: await_task_timeout 60 instead of 0, so the generated text comes back in this HTTP response rather than over the application_predict socket event. Called by the canvas mermaid quick-fix (features/chat-messages/api/canvasQuickFix.ts). ROUTED: elitea-main serves the blocking mode by calling the LLM gateway directly. The STREAMING sibling is still unserved \u2014 the Go stack has no application_predict socket channel \u2014 which is why shared/config/backendCapabilities.ts splits this path into llmPredictBlocking (this entry) and llmPredictStreaming (pipelines.generateContentStreaming).",
       "id": "chatMessages.generateContentBlocking",
       "method": "POST",
       "path": "/elitea_core/predict_llm/prompt_lib/{projectId}",
@@ -2529,7 +2531,7 @@
       "usedBy": [
         "features/agent-skills"
       ],
-      "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express — skills.updateSkill covers only the plain update on the same URL."
+      "$comment": "Attach (201) or detach (200) one skill on one agent VERSION. A `has_relation` key in the body selects a second operation inside the same handler (internal/api/v2/skills/handler.go updateSkillRelation), which one OpenAPI operation cannot express \u2014 skills.updateSkill covers only the plain update on the same URL."
     },
     {
       "id": "inventory.invokeTool",
@@ -2940,7 +2942,7 @@
       "usedBy": []
     },
     {
-      "$comment": "WP16b/platform-parity-wave — the synchronous \"Test tool\" run, every toolkit tool but `index_data` (which keeps the SSE `toolkits.startIndexExecution` path above). `toolkits.Handler.TestTool` (services/elitea-main/internal/api/v2/toolkitrun/response.go), shadowed by nothing and reachable in every deployment (unlike the sibling `/test_toolkit_tool/{projectId}` path, which the index-start handler claims wherever a runtime is composed). DESCRIBED IN v2.yaml as `testToolkitTool`: this entry first said \"not in v2.yaml\", and the Go reverse check refused it, because the allowlist that holds undescribed endpoints is at its cap and may only shrink. STILL source handwritten: features/toolkits/api/toolkitTestRun.ts folds the six status codes into one settled-outcome union and never rejects, which the generated hook does not do. Answers 200 ok:true with the result, 200 ok:false with the tool's own error, 422 naming unsupported_toolkit/unknown_tool, 503 where no runtime is composed, or 504 with a task_id on a bounded-wait timeout.",
+      "$comment": "WP16b/platform-parity-wave \u2014 the synchronous \"Test tool\" run, every toolkit tool but `index_data` (which keeps the SSE `toolkits.startIndexExecution` path above). `toolkits.Handler.TestTool` (services/elitea-main/internal/api/v2/toolkitrun/response.go), shadowed by nothing and reachable in every deployment (unlike the sibling `/test_toolkit_tool/{projectId}` path, which the index-start handler claims wherever a runtime is composed). DESCRIBED IN v2.yaml as `testToolkitTool`: this entry first said \"not in v2.yaml\", and the Go reverse check refused it, because the allowlist that holds undescribed endpoints is at its cap and may only shrink. STILL source handwritten: features/toolkits/api/toolkitTestRun.ts folds the six status codes into one settled-outcome union and never rejects, which the generated hook does not do. Answers 200 ok:true with the result, 200 ok:false with the tool's own error, 422 naming unsupported_toolkit/unknown_tool, 503 where no runtime is composed, or 504 with a task_id on a bounded-wait timeout.",
       "id": "toolkits.testTool",
       "method": "POST",
       "path": "/elitea_core/test_tool/prompt_lib/{projectId}/{toolId}",
@@ -3338,7 +3340,7 @@
       ]
     },
     {
-      "$comment": "Issue #880 — thumbs up/down + optional comment on an assistant message. Described in v2.yaml as getMessageFeedback, but called through a HAND-WRITTEN wrapper (entities/conversation/api/messageFeedbackApi.ts): orval types the generated per-operation function's return as the union across every documented status code, and eliteaFetch already throws on non-2xx, so a caller reading `.data` off that union cannot narrow to MessageFeedbackSummary alone. The URL is still built with the GENERATED getGetMessageFeedbackUrl, so the path stays derived from the spec.",
+      "$comment": "Issue #880 \u2014 thumbs up/down + optional comment on an assistant message. Described in v2.yaml as getMessageFeedback, but called through a HAND-WRITTEN wrapper (entities/conversation/api/messageFeedbackApi.ts): orval types the generated per-operation function's return as the union across every documented status code, and eliteaFetch already throws on non-2xx, so a caller reading `.data` off that union cannot narrow to MessageFeedbackSummary alone. The URL is still built with the GENERATED getGetMessageFeedbackUrl, so the path stays derived from the spec.",
       "id": "chat.getMessageFeedback",
       "method": "GET",
       "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
@@ -3351,7 +3353,7 @@
       ]
     },
     {
-      "$comment": "Issue #880, same reason as chat.getMessageFeedback above: `query.useQuery: true` is global in orval.config.ts with no per-operation mutation override, so useSetMessageFeedback generates as a useQuery hook rather than a useMutation — the wrong shape for a POST that upserts on click. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getSetMessageFeedbackUrl for the path.",
+      "$comment": "Issue #880, same reason as chat.getMessageFeedback above: `query.useQuery: true` is global in orval.config.ts with no per-operation mutation override, so useSetMessageFeedback generates as a useQuery hook rather than a useMutation \u2014 the wrong shape for a POST that upserts on click. messageFeedbackApi.ts's hand-written useMutation wraps eliteaFetch directly, reusing the GENERATED getSetMessageFeedbackUrl for the path.",
       "id": "chat.setMessageFeedback",
       "method": "POST",
       "path": "/elitea_core/message_feedback/prompt_lib/{projectID}/{messageID}",
@@ -3470,7 +3472,9 @@
       "source": "generated",
       "responseSchema": "ProjectCloudExecutorSwitch",
       "fixture": null,
-      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
+      "usedBy": [
+        "pages/admin/AdminProjectCloudExecutorDialog.tsx"
+      ]
     },
     {
       "id": "admin.setAdminProjectCloudExecutor",
@@ -3480,7 +3484,9 @@
       "source": "generated",
       "responseSchema": "ProjectCloudExecutorSwitch",
       "fixture": null,
-      "usedBy": ["pages/admin/AdminProjectCloudExecutorDialog.tsx"]
+      "usedBy": [
+        "pages/admin/AdminProjectCloudExecutorDialog.tsx"
+      ]
     },
     {
       "id": "settings.getProjectCloudExecutor",
@@ -3490,7 +3496,9 @@
       "source": "generated",
       "responseSchema": "ProjectCloudExecutorSwitch",
       "fixture": null,
-      "usedBy": ["features/cloud-executor-switch"]
+      "usedBy": [
+        "features/cloud-executor-switch"
+      ]
     },
     {
       "id": "settings.setProjectCloudExecutor",
@@ -3500,7 +3508,9 @@
       "source": "generated",
       "responseSchema": "ProjectCloudExecutorSwitch",
       "fixture": null,
-      "usedBy": ["features/cloud-executor-switch"]
+      "usedBy": [
+        "features/cloud-executor-switch"
+      ]
     },
     {
       "id": "conversation.archive",
@@ -3510,7 +3520,11 @@
       "source": "generated",
       "responseSchema": "OkResponse",
       "fixture": null,
-      "usedBy": ["features/chat-conversation-list", "processes/chat", "widgets/desktop-shell"]
+      "usedBy": [
+        "features/chat-conversation-list",
+        "processes/chat",
+        "widgets/desktop-shell"
+      ]
     },
     {
       "id": "conversation.unarchive",
@@ -3520,7 +3534,10 @@
       "source": "generated",
       "responseSchema": "OkResponse",
       "fixture": null,
-      "usedBy": ["features/chat-conversation-list", "pages/chat-archived"]
+      "usedBy": [
+        "features/chat-conversation-list",
+        "pages/chat-archived"
+      ]
     },
     {
       "id": "conversation.fork",
@@ -3530,7 +3547,13 @@
       "source": "generated",
       "responseSchema": "ConversationSummary",
       "fixture": null,
-      "usedBy": ["features/chat-conversation-list", "processes/chat", "pages/chat", "widgets/desktop-shell", "pages/workspace"]
+      "usedBy": [
+        "features/chat-conversation-list",
+        "processes/chat",
+        "pages/chat",
+        "widgets/desktop-shell",
+        "pages/workspace"
+      ]
     },
     {
       "id": "conversation.read",
@@ -3540,7 +3563,9 @@
       "source": "generated",
       "responseSchema": "ConversationReadState",
       "fixture": null,
-      "usedBy": ["features/chat-conversation-list"]
+      "usedBy": [
+        "features/chat-conversation-list"
+      ]
     },
     {
       "id": "chat.listExecutionInterrupts",
@@ -3550,7 +3575,9 @@
       "source": "generated",
       "responseSchema": "ExecutionInterruptList",
       "fixture": null,
-      "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
+      "usedBy": [
+        "features/chat-messages/api/interruptLedgerApi.ts"
+      ]
     },
     {
       "id": "chat.getMessageContextView",
@@ -3560,7 +3587,9 @@
       "source": "generated",
       "responseSchema": "MessageContextView",
       "fixture": null,
-      "usedBy": ["features/chat-messages/api/contextViewApi.ts"]
+      "usedBy": [
+        "features/chat-messages/api/contextViewApi.ts"
+      ]
     },
     {
       "id": "chat.listRunGuardrailNotices",
@@ -3570,7 +3599,9 @@
       "source": "generated",
       "responseSchema": "RunGuardrailNotices",
       "fixture": null,
-      "usedBy": ["features/chat-messages/api/guardrailNoticesApi.ts"]
+      "usedBy": [
+        "features/chat-messages/api/guardrailNoticesApi.ts"
+      ]
     },
     {
       "id": "chat.decideExecutionInterrupt",
@@ -3580,7 +3611,9 @@
       "source": "generated",
       "responseSchema": "ExecutionInterruptDecisionResult",
       "fixture": null,
-      "usedBy": ["features/chat-messages/api/interruptLedgerApi.ts"]
+      "usedBy": [
+        "features/chat-messages/api/interruptLedgerApi.ts"
+      ]
     },
     {
       "id": "workspaceHandoff.changes",
@@ -3590,7 +3623,9 @@
       "source": "generated",
       "responseSchema": "WorkspaceHandoffChanges",
       "fixture": null,
-      "usedBy": ["pages/chat"]
+      "usedBy": [
+        "pages/chat"
+      ]
     },
     {
       "id": "workspaceHandoff.diff",
@@ -3600,7 +3635,9 @@
       "source": "generated",
       "responseSchema": "WorkspaceHandoffDiff",
       "fixture": null,
-      "usedBy": ["pages/chat"]
+      "usedBy": [
+        "pages/chat"
+      ]
     },
     {
       "id": "workspaceHandoff.setPullRequestCredential",
@@ -3610,7 +3647,9 @@
       "source": "generated",
       "responseSchema": "WorkspaceHandoffPullRequestCredential",
       "fixture": null,
-      "usedBy": ["pages/chat"]
+      "usedBy": [
+        "pages/chat"
+      ]
     },
     {
       "id": "configurations.listForPullRequests",
@@ -3620,7 +3659,9 @@
       "source": "generated",
       "responseSchema": "ConfigurationListResponse",
       "fixture": null,
-      "usedBy": ["pages/chat"]
+      "usedBy": [
+        "pages/chat"
+      ]
     },
     {
       "id": "settings.listProjectExecutionSuspensions",
@@ -3630,7 +3671,9 @@
       "source": "generated",
       "responseSchema": "ExecutionSuspensionList",
       "fixture": null,
-      "usedBy": ["features/kill-switch"]
+      "usedBy": [
+        "features/kill-switch"
+      ]
     },
     {
       "id": "settings.createProjectExecutionSuspension",
@@ -3640,7 +3683,9 @@
       "source": "generated",
       "responseSchema": "ExecutionSuspension",
       "fixture": null,
-      "usedBy": ["features/kill-switch"]
+      "usedBy": [
+        "features/kill-switch"
+      ]
     },
     {
       "id": "settings.createRunCapOverride",
@@ -3650,7 +3695,9 @@
       "source": "generated",
       "responseSchema": "RunCapOverride",
       "fixture": null,
-      "usedBy": ["features/chat-messages"]
+      "usedBy": [
+        "features/chat-messages"
+      ]
     },
     {
       "id": "settings.resumeProjectExecutionSuspension",
@@ -3660,7 +3707,9 @@
       "source": "generated",
       "responseSchema": "ExecutionSuspension",
       "fixture": null,
-      "usedBy": ["features/kill-switch"]
+      "usedBy": [
+        "features/kill-switch"
+      ]
     },
     {
       "id": "applications.getAgentRegistry",
@@ -3670,7 +3719,9 @@
       "source": "generated",
       "responseSchema": "AgentRegistryRecord",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.updateAgentRegistry",
@@ -3680,7 +3731,9 @@
       "source": "generated",
       "responseSchema": "AgentRegistryRecord",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.listAgentChangeRequests",
@@ -3690,7 +3743,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequestList",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.createAgentChangeRequest",
@@ -3700,7 +3755,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.getAgentChangeRequest",
@@ -3710,7 +3767,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.submitAgentChangeRequest",
@@ -3720,7 +3779,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.approveAgentChangeRequest",
@@ -3730,7 +3791,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeApprovalOutcome",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.rejectAgentChangeRequest",
@@ -3740,7 +3803,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.withdrawAgentChangeRequest",
@@ -3750,7 +3815,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.overrideAgentChangeRequestGate",
@@ -3760,7 +3827,9 @@
       "source": "generated",
       "responseSchema": "AgentChangeRequest",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.listAgentAttestations",
@@ -3770,7 +3839,9 @@
       "source": "generated",
       "responseSchema": "AgentAttestationList",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.recordAgentAttestation",
@@ -3780,7 +3851,9 @@
       "source": "generated",
       "responseSchema": "AgentAttestation",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.revokeAgentAttestation",
@@ -3790,7 +3863,9 @@
       "source": "generated",
       "responseSchema": "AgentAttestation",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.getReleaseGate",
@@ -3800,7 +3875,9 @@
       "source": "generated",
       "responseSchema": "ReleaseGate",
       "fixture": null,
-      "usedBy": ["features/agent-lifecycle"]
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
     },
     {
       "id": "applications.listReleaseGateSuites",
@@ -3810,7 +3887,9 @@
       "source": "generated",
       "responseSchema": "ReleaseGateSuiteList",
       "fixture": null,
-      "usedBy": ["features/agent-evaluation"]
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
     },
     {
       "id": "applications.putReleaseGateSuite",
@@ -3820,7 +3899,9 @@
       "source": "generated",
       "responseSchema": "ReleaseGateSuite",
       "fixture": null,
-      "usedBy": ["features/agent-evaluation"]
+      "usedBy": [
+        "features/agent-evaluation"
+      ]
     },
     {
       "id": "toolkits.listConnectorRequests",
@@ -3830,7 +3911,9 @@
       "source": "generated",
       "responseSchema": "ConnectorRequestList",
       "fixture": null,
-      "usedBy": ["features/connector-requests"]
+      "usedBy": [
+        "features/connector-requests"
+      ]
     },
     {
       "id": "toolkits.createConnectorRequest",
@@ -3840,7 +3923,9 @@
       "source": "generated",
       "responseSchema": "ConnectorRequest",
       "fixture": null,
-      "usedBy": ["features/connector-requests"]
+      "usedBy": [
+        "features/connector-requests"
+      ]
     },
     {
       "id": "notifications.pushConfig",
@@ -3850,7 +3935,9 @@
       "source": "generated",
       "responseSchema": "PushConfig",
       "fixture": null,
-      "usedBy": ["features/notifications"]
+      "usedBy": [
+        "features/notifications"
+      ]
     },
     {
       "id": "notifications.pushSubscribe",
@@ -3860,7 +3947,9 @@
       "source": "generated",
       "responseSchema": "PushSubscriptionSaved",
       "fixture": null,
-      "usedBy": ["features/notifications"]
+      "usedBy": [
+        "features/notifications"
+      ]
     },
     {
       "id": "notifications.pushUnsubscribe",
@@ -3870,7 +3959,9 @@
       "source": "generated",
       "responseSchema": null,
       "fixture": null,
-      "usedBy": ["features/notifications"]
+      "usedBy": [
+        "features/notifications"
+      ]
     },
     {
       "$comment": "Agent memory Memory tab and remembered chip (ADR-0050 1b, #1608). Routes landed in #1607.",
@@ -4652,6 +4743,66 @@
       "fixture": null,
       "usedBy": [
         "pages/marketplace"
+      ]
+    },
+    {
+      "id": "httpactions.listHttpActionRules",
+      "method": "GET",
+      "path": "/httpactions/prompt_lib/{projectID}/rules",
+      "operationId": "listHttpActionRules",
+      "source": "generated",
+      "responseSchema": "ListHttpActionRules200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.createHttpActionRule",
+      "method": "POST",
+      "path": "/httpactions/prompt_lib/{projectID}/rules",
+      "operationId": "createHttpActionRule",
+      "source": "generated",
+      "responseSchema": "HttpActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.updateHttpActionRule",
+      "method": "PUT",
+      "path": "/httpactions/prompt_lib/{projectID}/rules/{ruleID}",
+      "operationId": "updateHttpActionRule",
+      "source": "generated",
+      "responseSchema": "HttpActionRule",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "httpactions.listHttpActionRuleNames",
+      "method": "GET",
+      "path": "/httpactions/prompt_lib/{projectID}/rule-names",
+      "operationId": "listHttpActionRuleNames",
+      "source": "generated",
+      "responseSchema": "ListHttpActionRuleNames200",
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/HttpActions.tsx"
+      ]
+    },
+    {
+      "id": "configurations.listConfigurations",
+      "method": "GET",
+      "path": "/configurations/configurations/{project_id}",
+      "operationId": "listConfigurations",
+      "source": "generated",
+      "responseSchema": "ConfigurationListResponse",
+      "fixture": null,
+      "usedBy": [
+        "features/settings/lib/http-actions/useOpenApiCredentialOptions.ts"
       ]
     }
   ]

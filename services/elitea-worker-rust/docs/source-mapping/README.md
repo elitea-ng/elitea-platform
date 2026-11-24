@@ -52,6 +52,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [HTTP action Main foundation (5d-1)](http-action-main-foundation-20261123.md) adds project HTTP action rules (migration `shared/0270`, admin API, Settings > HTTP actions UI), revision-2 rendering and start snapshots, invocation v3, the fenced effect ledger, `openapi` credential resolution with singleflight OAuth2 token fetching, dedicated 32/8 pool isolation, and the HTTPS-only egress-guarded `http.RoundTripper` transport (closes FU-073 and Main half of FU-072).
+
 - [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
 - [Chat playback composer spinner fix 2026-11-24](chat-playback-composer-spinner-20261124.md) separates `isComposerLoading` from static read-only `isTestPlayback` / withdrawn-agent composer gates so `UploadProgressIndicator` no longer spins during restored `TERMINAL` playback or withdrawn chats.
 - [Protocol capability negotiation and 3-hop delegation grant closure 2026-11-23](protocol-capabilities-and-closure-grants-20261123.md) adds bounded domain-named two-way capability negotiation on `ClaimCommandRequestV1`/`ClaimReceiptV1` with zero-deployment-order compatibility and fixes `workerdelegation.Resolver.closureGrants` to walk reachable saved-application/pipeline graph edges across ungranted intermediate hops.
