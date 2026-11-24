@@ -481,6 +481,10 @@ func (h *Handler) insertRole(r *http.Request, target roleTarget, name string) er
 // a central role is "<mode>:<name>" on the platform partition, a project role
 // "<project>:<name>" on the project's. permissions is the set the deleted
 // role held (empty for a created one).
+// roleDeleteProjectCopiesField is the Fields value of a role_deleted event
+// whose delete also removed the same-named project roles of every project.
+const roleDeleteProjectCopiesField = "project_role_copies"
+
 func roleLifecycleChange(
 	target roleTarget, name string, kind securityaudit.AccessChangeKind, permissions []string,
 ) securityaudit.AdminAccessChanged {
@@ -801,8 +805,13 @@ func (h *Handler) deleteRole(
 		projectRolesRemoved = copyTag.RowsAffected()
 	}
 
-	if err := h.appendAccessChange(ctx, transaction, r,
-		roleLifecycleChange(target, name, securityaudit.AccessRoleDeleted, held)); err != nil {
+	deleted := roleLifecycleChange(target, name, securityaudit.AccessRoleDeleted, held)
+	if projectRolesRemoved > 0 {
+		// The same-named project roles went with it, with their permission
+		// rows (none had a member: counted above).
+		deleted.Change.Fields = []string{roleDeleteProjectCopiesField}
+	}
+	if err := h.appendAccessChange(ctx, transaction, r, deleted); err != nil {
 		return 0, fmt.Errorf("record role delete: %w", err)
 	}
 	if err := transaction.Commit(ctx); err != nil {

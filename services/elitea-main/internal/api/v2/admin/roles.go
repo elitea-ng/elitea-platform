@@ -938,6 +938,8 @@ func (h *Handler) appendRolePermissionChanges(
 			change.SubjectType = "project_role"
 			change.SubjectID = strconv.Itoa(projectID) + ":" + role
 			change.TenantProjectID = int64(projectID)
+			// As roleLifecycleChange: a project role has no central mode.
+			change.Change.Mode = ""
 		}
 		if err := h.appendAccessChange(ctx, tx, r, change); err != nil {
 			return err

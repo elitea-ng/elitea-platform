@@ -291,3 +291,27 @@ SELECT count(*) FROM public.auth_core__user_role WHERE user_id = $1`, plain).Sca
 		t.Fatalf("events = %+v, want none", events)
 	}
 }
+
+// Deleting a central `default` role also removes its same-named project
+// copies; the one role_deleted event says so.
+func TestADefaultRoleDeleteRecordsTheProjectCopiesItRemoved(t *testing.T) {
+	env := newEscalationEnvironment(t)
+	router := env.as(escalationSuper)
+	expectStatus(t, adminDo(t, router, http.MethodPost, "/r/admin/roles/administration/default",
+		map[string]any{"name": "reviewers"}), http.StatusCreated)
+	if _, err := env.pool.Exec(context.Background(),
+		`INSERT INTO public.auth_core__project_role (project_id, name) VALUES (7, 'reviewers')`); err != nil {
+		t.Fatal(err)
+	}
+	expectStatus(t, adminDo(t, router, http.MethodDelete, "/r/admin/roles/administration/default",
+		map[string]any{"name": "reviewers"}), http.StatusOK)
+	events := accessEvents(t, env.pool)
+	if len(events) != 2 {
+		t.Fatalf("events = %+v, want the create and the delete", events)
+	}
+	if deleted := events[1]; deleted.Action != "admin.access.role_deleted" ||
+		strings.Join(deleted.Access.Fields, ",") != "project_role_copies" {
+		t.Fatalf("deleted = %+v, want fields [project_role_copies]", deleted)
+	}
+	requireChainsVerify(t, env.pool, 0)
+}

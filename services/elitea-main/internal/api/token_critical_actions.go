@@ -16,9 +16,15 @@ package api
 //
 //   - one entry with no name: that entry;
 //   - a body selector (the `action` field of POST /admin/auth_users/{mode}):
-//     the body is read, bounded, and put back for the handler; a body that
-//     names no known action reaches no entry and the handler answers it;
+//     the body is read and put back whole for the handler. The field is
+//     matched without regard to case, as the handler's struct decode matches
+//     it;
 //   - a path selector: the placeholder's value;
+//   - a selector value the request does not state unambiguously (no field,
+//     two spellings with different values, a body that is not one JSON
+//     object, a body over maxTokenRuleBody) or that the table does not list:
+//     every entry of the route, so a route with a critical entry refuses the
+//     token rather than trust the handler to read the value the same way;
 //   - classifier outcomes the request alone cannot tell apart: when every
 //     outcome gives the same answer, that answer; otherwise, when the
 //     classifier's handler applies the rule itself
@@ -41,8 +47,8 @@ import (
 )
 
 // maxTokenRuleBody bounds the body read to find a body selector's value. A
-// larger body is not read and reaches no entry: the multiplexed routes take
-// small JSON bodies, and the handler applies its own bound.
+// larger body is put back whole and its value counts as unknown: the
+// multiplexed routes take small JSON bodies.
 const maxTokenRuleBody = 1 << 20
 
 type tokenCriticalActions struct {
@@ -66,13 +72,13 @@ func (g *tokenCriticalActions) middleware(next http.Handler) http.Handler {
 			return
 		}
 		candidates, r = selectEntries(candidates, r, rctx)
-		if len(candidates) == 0 || !anyMayRefuse(candidates) {
+		if !anyMayRefuse(candidates) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		caller, resolved := g.tokenCaller(r, principal)
 		if !resolved {
-			refuseToken(w, r, candidates[0], &adminaccess.Refusal{
+			refuseToken(w, r, candidates, &adminaccess.Refusal{
 				Code:    adminaccess.CodeTokenCriticalAction,
 				Message: "the access of this personal access token could not be read, so the action was refused",
 			})
@@ -90,11 +96,11 @@ func (g *tokenCriticalActions) middleware(next http.Handler) http.Handler {
 		case agree && refusals[0] == nil:
 			next.ServeHTTP(w, r)
 		case agree:
-			refuseToken(w, r, candidates[0], refusals[0])
+			refuseToken(w, r, candidates, refusals[0])
 		case adminaccess.TokenRuleInHandler[candidates[0].Classifier]:
 			next.ServeHTTP(w, r.WithContext(adminaccess.ContextWithTokenCaller(r.Context(), caller)))
 		default:
-			refuseToken(w, r, candidates[0], &adminaccess.Refusal{
+			refuseToken(w, r, candidates, &adminaccess.Refusal{
 				Code: adminaccess.CodeTokenCriticalAction,
 				Message: "a personal access token cannot call this administration route, whose danger depends " +
 					"on what the request changes: sign in to the console to do it",
@@ -125,7 +131,9 @@ func (g *tokenCriticalActions) candidates(r *http.Request) ([]adminaccess.Action
 }
 
 // selectEntries narrows the entries of a route that multiplexes actions to
-// the request's action. The request it returns carries the body it read.
+// the request's action. A value it cannot read, or one the table does not
+// list, keeps every entry of the route: the closed failure. The request it
+// returns carries the body it read.
 func selectEntries(entries []adminaccess.Action, r *http.Request, rctx *chi.Context) ([]adminaccess.Action, *http.Request) {
 	selector := entries[0].Selector
 	var value string
@@ -139,35 +147,49 @@ func selectEntries(entries []adminaccess.Action, r *http.Request, rctx *chi.Cont
 	}
 	var out []adminaccess.Action
 	for _, entry := range entries {
-		if entry.Selector.Value == value {
+		if value != "" && entry.Selector.Value == value {
 			out = append(out, entry)
 		}
+	}
+	if len(out) == 0 {
+		return entries, r
 	}
 	return out, r
 }
 
-// bodyField reads the top-level string field of a JSON body and puts the body
-// back. Anything it cannot read answers "".
+// bodyField reads the top-level string field of a JSON body, matching its
+// name without regard to case as encoding/json does for a struct, and puts
+// the whole body back. A body over maxTokenRuleBody, a body that is not one
+// JSON object, a field that is not a string, and two spellings of the field
+// with different values answer "": unknown.
 func bodyField(r *http.Request, field string) (string, *http.Request) {
 	if r.Body == nil || r.Body == http.NoBody {
 		return "", r
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxTokenRuleBody+1))
-	_ = r.Body.Close()
+	original := r.Body
+	raw, err := io.ReadAll(io.LimitReader(original, maxTokenRuleBody+1))
 	restored := r.Clone(r.Context())
-	restored.Body = io.NopCloser(bytes.NewReader(raw))
+	restored.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(raw), original), original}
 	if err != nil || len(raw) > maxTokenRuleBody {
-		// Too large to read here: the handler sees the bytes that were read
-		// and applies its own bound.
 		return "", restored
 	}
 	var body map[string]json.RawMessage
 	if json.Unmarshal(raw, &body) != nil {
 		return "", restored
 	}
-	var value string
-	if json.Unmarshal(body[field], &value) != nil {
-		return "", restored
+	value, seen := "", false
+	for key, encoded := range body {
+		if !strings.EqualFold(key, field) {
+			continue
+		}
+		var spelled string
+		if json.Unmarshal(encoded, &spelled) != nil || (seen && spelled != value) {
+			return "", restored
+		}
+		value, seen = spelled, true
 	}
 	return value, restored
 }
@@ -202,15 +224,20 @@ func (g *tokenCriticalActions) tokenCaller(r *http.Request, principal auth.User)
 }
 
 // refuseToken answers 403 with the stable code and annotates the admin audit
-// row of the request.
-func refuseToken(w http.ResponseWriter, r *http.Request, entry adminaccess.Action, refusal *adminaccess.Refusal) {
+// row of the request with the entry, or the route when no single entry was
+// picked.
+func refuseToken(w http.ResponseWriter, r *http.Request, entries []adminaccess.Action, refusal *adminaccess.Refusal) {
+	name := entries[0].Key()
+	if len(entries) > 1 {
+		name = entries[0].Method + " " + entries[0].Pattern
+	}
 	audit.Annotate(r.Context(), audit.Annotation{
 		Action:     adminaccess.TokenRefusedAuditAction,
 		EntityType: "admin_action",
-		EntityName: entry.Key(),
+		EntityName: name,
 	})
 	slog.WarnContext(r.Context(), "a personal access token was refused on an administration action",
-		"code", refusal.Code, "action", entry.Key())
+		"code", refusal.Code, "action", name)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusForbidden)

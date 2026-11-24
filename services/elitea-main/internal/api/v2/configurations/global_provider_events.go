@@ -13,6 +13,7 @@ package configurations
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"slices"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +42,18 @@ func (h *Handler) accessAppender() securityaudit.Appender {
 	return accessevent.DefaultAppender(globalProviderEventSource)
 }
 
+// globalProviderFieldName is a data key the event names as it is: a plain
+// identifier, which the event's string rules always admit (no dot, so no
+// credential-shaped value).
+var globalProviderFieldName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// maxGlobalProviderFieldNames bounds the data keys an event names, well
+// under the event's set cap.
+const maxGlobalProviderFieldNames = 128
+
+// globalProviderOtherField stands for every data key not named.
+const globalProviderOtherField = "data.<other>"
+
 // The operations a global provider event names in Fields beside the data
 // fields.
 const (
@@ -59,10 +72,17 @@ func globalProviderFields(body map[string]any, operation string) []string {
 		fields = append(fields, operation)
 	}
 	if data, ok := body["data"].(map[string]any); ok {
+		named := 0
 		for key := range data {
-			if key != "" {
-				fields = append(fields, "data."+key)
+			if !globalProviderFieldName.MatchString(key) || named >= maxGlobalProviderFieldNames {
+				// A key the event cannot carry by name (too long, unusual
+				// characters, past the cap) is still a change: it is
+				// recorded as one other field, never refused.
+				fields = append(fields, globalProviderOtherField)
+				continue
 			}
+			named++
+			fields = append(fields, "data."+key)
 		}
 	}
 	if _, ok := body["type"]; ok {

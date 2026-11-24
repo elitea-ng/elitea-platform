@@ -16,6 +16,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,9 +94,10 @@ func tokenRuleAnswer(t *testing.T, router http.Handler, method, path, body strin
 
 const tokenRuleUsersPath = "/api/v2/admin/auth_users/administration"
 
-// An inherit token of an admin is refused set_admin_role, and reaches the
-// same route's non-critical actions; the body the rule read still reaches the
-// handler.
+// An inherit token is refused set_admin_role, and reaches the same route's
+// non-critical action (delete: the route carries no other; a user suspend is
+// PUT /admin/user_suspend, not on this route); the body the rule read still
+// reaches the handler.
 func TestAnInheritTokenIsRefusedSetAdminRoleOnly(t *testing.T) {
 	router := newTokenRuleRouter(t, auth.CredentialKindToken, adminaccess.TokenAccessInherit, tokenRuleSuperAdmin)
 	if status, code := tokenRuleAnswer(t, router, http.MethodPost, tokenRuleUsersPath,
@@ -103,7 +105,7 @@ func TestAnInheritTokenIsRefusedSetAdminRoleOnly(t *testing.T) {
 		code != adminaccess.CodeTokenCriticalAction {
 		t.Errorf("set_admin_role = %d %q, want 403 %s", status, code, adminaccess.CodeTokenCriticalAction)
 	}
-	for _, action := range []string{"delete", "user_suspend"} {
+	for _, action := range []string{"delete"} {
 		status, code := tokenRuleAnswer(t, router, http.MethodPost, tokenRuleUsersPath,
 			`{"action":"`+action+`","user_ids":[2]}`)
 		if code == adminaccess.CodeTokenCriticalAction {
@@ -207,5 +209,39 @@ func TestATokenWhoseAccessCannotBeReadIsRefused(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+// The selector is read the way the handler's struct decode reads it, and a
+// value the rule cannot read unambiguously refuses the token: a key in
+// another case, two spellings, a padded body, a body that is not one object,
+// an unknown action.
+func TestATokenCannotHideTheActionFromTheRule(t *testing.T) {
+	router := newTokenRuleRouter(t, auth.CredentialKindToken, adminaccess.TokenAccessInherit, tokenRuleSuperAdmin)
+	padded := `{"action":"set_admin_role","user_ids":[2],"role":"admin"}` + strings.Repeat(" ", maxTokenRuleBody+1)
+	for name, body := range map[string]string{
+		"another case":   `{"Action":"set_admin_role","user_ids":[2],"role":"admin"}`,
+		"upper case":     `{"ACTION":"set_admin_role","user_ids":[2],"role":"admin"}`,
+		"two spellings":  `{"action":"delete","Action":"set_admin_role","user_ids":[2]}`,
+		"padded":         padded,
+		"two objects":    `{"action":"delete"} {"action":"set_admin_role"}`,
+		"unknown action": `{"action":"set_admin_role_v2","user_ids":[2]}`,
+		"no action":      `{"user_ids":[2]}`,
+	} {
+		if status, code := tokenRuleAnswer(t, router, http.MethodPost, tokenRuleUsersPath, body); code != adminaccess.CodeTokenCriticalAction {
+			t.Errorf("%s = %d %q, want the token refusal", name, status, code)
+		}
+	}
+}
+
+// The body the rule read reaches the handler whole, past the bound too.
+func TestTheRulePutsTheWholeBodyBack(t *testing.T) {
+	for _, body := range []string{`{"action":"delete"}`, `{"action":"delete"}` + strings.Repeat(" ", maxTokenRuleBody+10)} {
+		req := httptest.NewRequest(http.MethodPost, tokenRuleUsersPath, strings.NewReader(body))
+		_, restored := bodyField(req, "action")
+		got, err := io.ReadAll(restored.Body)
+		if err != nil || string(got) != body {
+			t.Fatalf("restored %d bytes (%v), want %d", len(got), err, len(body))
+		}
 	}
 }

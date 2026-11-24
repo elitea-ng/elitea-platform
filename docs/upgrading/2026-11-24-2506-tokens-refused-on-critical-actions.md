@@ -17,7 +17,9 @@ sunset of decision 7.
 
 **Routes decided whole.** On a route whose danger depends on what the
 request changes, the entry is picked from the request: the `action` field of
-`POST /api/v2/admin/auth_users/{mode}` (only `set_admin_role` is refused), or
+`POST /api/v2/admin/auth_users/{mode}` (only `set_admin_role` is refused; a
+body whose `action` the rule cannot read unambiguously, or that names no
+action of the route, is refused to a token too), or
 the identity provider save's own classification (only a trust change or a
 turn-off is held to the rule; a rename is not). The gateway governance rows
 (`guardrail`), the global provider update (`route`) and the retention writes

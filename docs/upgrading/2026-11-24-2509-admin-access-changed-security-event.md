@@ -36,8 +36,11 @@ event type. Ignore it, or route it to the identity and access dashboards; the
 **Not yet recorded.** The project member routes of a project's own Users page
 (central membership by route waits on the central project gates, ADR-0059
 R0.6), the estate-wide "Apply to Projects" and personal-project permission
-pushes, and the IdP re-bind (it has its own `identity.link.changed` event)
-append no `admin.access.changed` event in this release.
+pushes, a role rename, and the IdP re-bind (it has its own
+`identity.link.changed` event) append no `admin.access.changed` event in this
+release. A `role_deleted` event of a central `default` role carries
+`fields: ["project_role_copies"]` when the same-named project roles of every
+project went with it.
 
 **Rollback.** The previous release does not write the type. Events already
 appended stay in the chain and still verify.
