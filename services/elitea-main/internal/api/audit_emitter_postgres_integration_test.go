@@ -127,6 +127,19 @@ func TestAdministrativeWriteLandsInTheAuditTrailTheAdminPageReads(t *testing.T) 
 	// 001_initial.sql seeds user 1 with the administration `admin` role, and
 	// privilegedAuditTestUser() IS user 1 — so this request is authorised and
 	// actually suspends a user, rather than testing the refusal path twice.
+	// User 1 is the only administrator in this database, and the last
+	// administrator cannot be suspended (ADR-0059 R0.11): a second holder of
+	// `admin` keeps the suspension a successful write.
+	if _, err := pool.Exec(t.Context(), `
+WITH spare AS (
+    INSERT INTO public.auth_core__user (email, name)
+    VALUES ('spare-admin@test.local', 'spare-admin@test.local') RETURNING id
+)
+INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT spare.id, role.id FROM spare, public.auth_core__role role
+WHERE role.mode = 'administration' AND role.name = 'admin'`); err != nil {
+		t.Fatalf("seed a second administrator: %v", err)
+	}
 	response := httptest.NewRecorder()
 	request := testAuthHeader(httptest.NewRequest(
 		http.MethodPut, "/api/v2/admin/user_suspend/administration/1",

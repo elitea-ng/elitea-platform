@@ -333,6 +333,11 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, transaction)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
 	held, err := adminaccess.UserCentralRoles(ctx, transaction, userID, mode)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
@@ -358,6 +363,15 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	if !removed {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "assignment not found"})
+		return
+	}
+	// The last-administrator rule (issue 2500), measured after the removal
+	// in this transaction.
+	if refusal, err := lastAdministrator.Check(ctx, transaction); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	// The security audit event, in this transaction (ADR-0059 R1.5).

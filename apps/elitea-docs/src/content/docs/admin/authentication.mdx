@@ -109,7 +109,7 @@ Re-bind only when you are sure that the new issuer is the same directory as the 
 - While nobody holds `super_admin`, the first listed account to sign in gets it. A suspended `super_admin` does not count, so the list can still recover a deployment whose only global administrator is suspended.
 - Once an active account holds `super_admin`, a listed account that signs in gets no role. The server logs a warning that says which kind of entry matched (`reference` or `email`), but not the address, and how to add an administrator instead.
 - Add later administrators from the console of an existing administrator (or with `POST /api/v2/admin/auth_users/administration`). Then empty the list: anyone who can edit it and owns an account at your identity provider could otherwise become global administrator while no `super_admin` is active.
-- An operator command, `elitea-main admin-role grant`, for a deployment with no administrator left ships in a later release.
+- A deployment with no administrator left, or one where the list was never set, gets one with the operator command [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line), run inside the main workload.
 
 ## OIDC sign-in rules
 
@@ -439,6 +439,17 @@ Some accounts are off limits to SCIM. Any write to them is refused with `403` (`
     The next provisioning cycle repeats the request, and this time it succeeds.
   </Step>
 </Steps>
+
+### Deprovision the last administrator
+
+The [last administrator](/admin/users-and-roles#the-last-administrator) of the deployment is never deactivated, by SCIM or anyone else: the deployment would have nobody left to administer it. But when your identity provider deactivates that person (`PATCH` with `active: false`, `PUT` with `active: false`, or `DELETE`), the organisation has said that the person left, so the access ends anyway:
+
+- the account stays active and keeps its roles, so the deployment keeps an administrator on record;
+- the person's browser sessions, device sessions and personal access tokens are revoked at once: the next request with any of them is refused;
+- one `critical` security audit event is written (action `admin.access.deprovision_refused`), and the Audit Trail records `role.last_administrator_refused`. A retry that finds no session or token left to end writes no second critical event; one that ends a new sign-in does;
+- the identity provider gets a SCIM error with status `409` that says to give a successor the role.
+
+Then give someone else the role: from the console of another administrator, or, when there is none, with [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line). The next provisioning cycle repeats the deactivation. While a second administrator exists, it is refused as for any administrator (above): remove the person's role, and the cycle after that deactivates the account.
 
 <Note>
 SCIM stores one address per account, and that address is the SCIM `userName`. A change to the work email alone is accepted but does not change the account's address. Only a `userName` change does.

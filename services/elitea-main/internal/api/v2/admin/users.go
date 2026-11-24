@@ -339,6 +339,15 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}
+	// The last-administrator rule (issue 2500): the delete is measured after
+	// it runs, in this transaction, and a delete that removed the last
+	// administrator rolls back whole, the other accounts of a bulk selection
+	// included.
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, tx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
 	origin := grantOrigin(r, caller)
 	for _, id := range ids {
 		heldBefore, err := adminaccess.UserCentralRoles(ctx, tx, id, adminaccess.ModeAdministration)
@@ -379,6 +388,13 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		`DELETE FROM public.auth_core__user WHERE id = ANY($1::int[])`, ids)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	if refusal, err := lastAdministrator.Check(ctx, tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	if h.memoryUsers != nil {
@@ -512,6 +528,11 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
 		return
 	}
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, transaction)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
 	held, err = adminaccess.UserCentralRoles(ctx, transaction, targetID, mode)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
@@ -543,6 +564,15 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 			return
 		}
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	// The last-administrator rule (issue 2500), measured after the change in
+	// this transaction: a set that takes the last holder's role is a 409.
+	if refusal, err := lastAdministrator.Check(ctx, transaction); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	// The security audit event of the change, in this transaction: a failed
@@ -704,6 +734,13 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	// The last-administrator rule (issue 2500) runs under the role-writes
+	// lock, taken first, like every write that can remove an administrator.
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(r.Context(), tx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
 	tag, err := tx.Exec(r.Context(),
 		`UPDATE public.auth_core__user SET suspended = $1 WHERE id = $2`, *body.Suspended, userID)
 	if err != nil {
@@ -712,6 +749,13 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		apierr.WriteStatus(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if refusal, err := lastAdministrator.Check(r.Context(), tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	if *body.Suspended {
