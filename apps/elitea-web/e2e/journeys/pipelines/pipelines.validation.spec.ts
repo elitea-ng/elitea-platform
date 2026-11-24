@@ -176,8 +176,10 @@ async function saveAndAwaitPersist(page: Page): Promise<void> {
     { timeout: 30_000 },
   );
   await page.getByTestId('pipeline-save-button').click();
-  await persisted;
-  await reloaded;
+  // Awaited together: a PUT that fails rejects at once, and the refetch
+  // waiter, armed before the click, is never left rejecting with nobody
+  // listening (it would be reported against a later test).
+  await Promise.all([persisted, reloaded]);
   if (panelWasOpen) {
     await expect(panel, 'the post-save re-initialisation closes the open node panel').toHaveCount(0, { timeout: 10_000 });
   }

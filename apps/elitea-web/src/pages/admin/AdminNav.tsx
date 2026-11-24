@@ -198,7 +198,12 @@ export function AdminNav({ areas }: AdminNavProps = {}): ReactNode {
               }}
             >
               {group.label !== undefined && (
-                <AdminNavAreaLabel id={`admin-nav-area-label-${group.id}`} label={group.label} collapsed={collapsed} />
+                <AdminNavAreaLabel
+                  id={`admin-nav-area-label-${group.id}`}
+                  label={group.label}
+                  collapsed={collapsed}
+                  first={index === 0}
+                />
               )}
               {group.items.map((item) => (
                 <AdminNavLink
@@ -261,13 +266,15 @@ interface AdminNavAreaLabelProps {
   readonly id: string;
   readonly label: string;
   readonly collapsed: boolean;
+  /** The first area has nothing above it to separate from. */
+  readonly first: boolean;
 }
 
 /** An area's label. Collapsed, it is kept for assistive technology and a rule shows in its place. */
-function AdminNavAreaLabel({ id, label, collapsed }: AdminNavAreaLabelProps): ReactNode {
+function AdminNavAreaLabel({ id, label, collapsed, first }: AdminNavAreaLabelProps): ReactNode {
   return (
     <>
-      {collapsed && <AdminNavDivider />}
+      {collapsed && !first && <AdminNavDivider />}
       <Typography
         id={id}
         component="h2"

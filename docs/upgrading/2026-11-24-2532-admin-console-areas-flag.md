@@ -22,12 +22,18 @@ capability document carries it as `admin_console_areas`.
   release. It never overwrites a stored value, and it does nothing on a
   database without the role tables.
 
-**Who is affected.** Every administrator of an upgraded deployment: nothing
-changes until the setting is turned on. On a new deployment, administrators
-see the six areas from the start.
+**Who is affected.** Every administrator of an upgraded deployment: the
+navigation keeps its two groups until the setting is turned on. One thing
+changes on every deployment: the sidebar now waits for the capability
+document, because the document carries the setting. While it loads, the
+sidebar says so; if `GET /api/v2/admin/console` fails, the sidebar shows an
+error with **Try again** instead of the links (ADR-0059: a failed read must
+not look like "no access"). The pages themselves still open, by address. On
+a new deployment, administrators see the six areas from the start.
 
 **What to do.** Tell your administrators about the new navigation, then turn
-on **Six labelled areas** under **Admin › Features**. A later release (#2623)
+on **Six labelled areas** under **Admin › Features**. The sidebar redraws
+when the section is saved. A later release (#2623)
 removes the setting and the two-group navigation.
 
 **Rollback.** The previous release ignores the setting and shows the two
