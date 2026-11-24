@@ -474,6 +474,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err := startRunSpendCap(ctx, pool, logger); err != nil {
 		return err
 	}
+	// The break-glass elevation reconciler (ADR-0059 R2.16): the
+	// main.elevation_reconciler routine, every minute. It records what ran
+	// out and stops with ctx; access itself never waits for it.
+	if _, err := startElevationReconciler(ctx, pool, logger); err != nil {
+		return err
+	}
 
 	// The domain-events Publisher — #876's second half. Every producer that
 	// wires it (pipeline run admission, agent version publish/unpublish,
