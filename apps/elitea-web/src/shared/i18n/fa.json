@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "مالک استقرار.",
   "pages.admin.users.roles.superAdmin.label": "مدیر سراسری",
   "pages.admin.users.roles.viewer.description": "یک نقش قدیمی. مجوزهایی را که هنگام ارتقا داشت حفظ می‌کند.",
-  "pages.admin.users.roles.viewer.label": "بیننده"
+  "pages.admin.users.roles.viewer.label": "بیننده",
+  "entities.token.form.adminScopesHelp": "مجوزهای مدیریتی را که این توکن می‌تواند استفاده کند انتخاب کنید. برای توکنی بدون دسترسی مدیریتی هیچ‌کدام را انتخاب نکنید. انتخاب هر کدام به ورود اخیر نیاز دارد.",
+  "entities.token.form.adminScopesTitle": "دسترسی مدیریتی",
+  "entities.token.form.recentSignInUnavailable": "مجوزهای مدیریتی به ورود اخیر نیاز دارند. خارج شوید، دوباره وارد شوید و توکن را ظرف چند دقیقه بسازید.",
+  "entities.token.form.scopeBrowserRequired": "مجوزهای مدیریتی را فقط پس از ورود با حساب خودتان در برنامهٔ وب می‌توان به توکن داد.",
+  "entities.token.form.scopeNotSettable": "این ورود نمی‌تواند به توکن مجوز مدیریتی بدهد. آن‌ها را حذف کنید، یا دوباره وارد شوید و دوباره تلاش کنید.",
+  "entities.token.form.scopeRefused": "این توکن نمی‌تواند این مجوزهای مدیریتی را داشته باشد: {{scopes}}. آن‌ها را حذف کنید و توکن را دوباره بسازید.",
+  "entities.token.table.adminAccess": "مدیریت",
+  "entities.token.table.adminInherit": "همهٔ مجوزهای مدیریتی شما",
+  "entities.token.table.adminInheritEnds": "همهٔ مجوزهای مدیریتی شما، تا {{date}}",
+  "entities.token.table.adminNone": "هیچ"
 }

@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "Le propriétaire du déploiement.",
   "pages.admin.users.roles.superAdmin.label": "Administrateur global",
   "pages.admin.users.roles.viewer.description": "Un rôle hérité. Il conserve les autorisations qu'il avait lors de la mise à niveau.",
-  "pages.admin.users.roles.viewer.label": "Lecteur"
+  "pages.admin.users.roles.viewer.label": "Lecteur",
+  "entities.token.form.adminScopesHelp": "Choisissez les autorisations d'administration que ce jeton peut utiliser. N'en choisissez aucune pour un jeton sans accès d'administration. En choisir une demande une connexion récente.",
+  "entities.token.form.adminScopesTitle": "Accès d'administration",
+  "entities.token.form.recentSignInUnavailable": "Les autorisations d'administration demandent une connexion récente. Déconnectez-vous, reconnectez-vous et créez le jeton dans les minutes qui suivent.",
+  "entities.token.form.scopeBrowserRequired": "Des autorisations d'administration ne peuvent être données à un jeton qu'après une connexion avec votre propre compte dans l'application web.",
+  "entities.token.form.scopeNotSettable": "Cette connexion ne peut pas donner d'autorisations d'administration à un jeton. Retirez-les, ou reconnectez-vous et réessayez.",
+  "entities.token.form.scopeRefused": "Ce jeton ne peut pas avoir ces autorisations d'administration : {{scopes}}. Retirez-les et créez à nouveau le jeton.",
+  "entities.token.table.adminAccess": "Administration",
+  "entities.token.table.adminInherit": "Toutes vos autorisations d'administration",
+  "entities.token.table.adminInheritEnds": "Toutes vos autorisations d'administration, jusqu'au {{date}}",
+  "entities.token.table.adminNone": "Aucune"
 }

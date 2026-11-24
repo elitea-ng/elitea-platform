@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "הבעלים של הפריסה.",
   "pages.admin.users.roles.superAdmin.label": "מנהל גלובלי",
   "pages.admin.users.roles.viewer.description": "תפקיד מדור קודם. הוא שומר את ההרשאות שהיו לו בעת השדרוג.",
-  "pages.admin.users.roles.viewer.label": "צופה"
+  "pages.admin.users.roles.viewer.label": "צופה",
+  "entities.token.form.adminScopesHelp": "בחרו את הרשאות הניהול שהאסימון הזה רשאי להשתמש בהן. אל תבחרו אף אחת עבור אסימון ללא גישת ניהול. בחירה של הרשאה כלשהי דורשת כניסה אחרונה.",
+  "entities.token.form.adminScopesTitle": "גישת ניהול",
+  "entities.token.form.recentSignInUnavailable": "הרשאות ניהול דורשות כניסה אחרונה. התנתקו, היכנסו שוב וצרו את האסימון בתוך כמה דקות.",
+  "entities.token.form.scopeBrowserRequired": "אפשר לתת לאסימון הרשאות ניהול רק אחרי כניסה עם החשבון שלכם באפליקציית האינטרנט.",
+  "entities.token.form.scopeNotSettable": "הכניסה הזו לא יכולה לתת לאסימון הרשאות ניהול. הסירו אותן, או היכנסו שוב ונסו שוב.",
+  "entities.token.form.scopeRefused": "לאסימון הזה לא יכולות להיות הרשאות הניהול האלה: {{scopes}}. הסירו אותן וצרו את האסימון שוב.",
+  "entities.token.table.adminAccess": "ניהול",
+  "entities.token.table.adminInherit": "כל הרשאות הניהול שלכם",
+  "entities.token.table.adminInheritEnds": "כל הרשאות הניהול שלכם, עד {{date}}",
+  "entities.token.table.adminNone": "ללא"
 }

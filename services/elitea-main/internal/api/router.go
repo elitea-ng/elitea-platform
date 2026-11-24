@@ -2960,6 +2960,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					adminaccess.AdminAuthUsers, adminaccess.ModesUsers)
 				r.With(requireAccessRolesView).Get("/access/roles", adminHandler.AccessRoles)
 				r.With(requireAccessRolesView).Get("/access/history", adminHandler.AccessHistory)
+				// The tokens with administration access, with their owners
+				// (ADR-0059 R1.3a): no secret, no digest.
+				r.With(requireAccessRolesView).Get("/access/tokens", adminHandler.AccessTokens)
 				// The MODES registry and the GLOBAL invite (#255). Both are
 				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC

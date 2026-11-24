@@ -45,4 +45,17 @@ export interface PersonalAccessToken {
    * bills nothing in particular" — so treat `undefined` and `null` alike.
    */
   readonly project_id?: number | null;
+  /**
+   * The token's administration access (ADR-0059 decision 7). Optional for
+   * the same reason as `project_id`: an older backend sends none, which
+   * means `none`.
+   */
+  readonly admin_access?: TokenAdminAccess;
+  /** The scopes of a `scoped` token, sorted; empty otherwise. */
+  readonly admin_scopes?: readonly string[];
+  /** The date (YYYY-MM-DD) an `inherit` token ends; absent until the sunset date is set. */
+  readonly inherit_ends_on?: string;
 }
+
+/** `inherit` is a backfill value only: no screen offers it. */
+type TokenAdminAccess = 'none' | 'scoped' | 'inherit';

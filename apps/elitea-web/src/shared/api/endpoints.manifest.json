@@ -3109,6 +3109,18 @@
       ]
     },
     {
+      "id": "tokens.adminScopeOffer",
+      "method": "GET",
+      "path": "/auth/token/admin_scopes",
+      "operationId": "getPersonalTokenAdminScopeOffer",
+      "source": "generated",
+      "responseSchema": "PersonalAccessTokenScopeOffer",
+      "fixture": null,
+      "usedBy": [
+        "features/settings"
+      ]
+    },
+    {
       "id": "resources.getConfigValues",
       "method": "GET",
       "path": "/admin/plugin_config_values/prompt_lib/resources",

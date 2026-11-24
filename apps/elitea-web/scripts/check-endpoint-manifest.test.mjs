@@ -980,7 +980,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 583 -> 585 (issue 2531, ADR-0059 R3.1a): getAdminConsoleDocument and getAdminConsoleItem, the
 // console capability document and its item route. The web consumer is R3.1b (issue 2611), so
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 585;
+// 585 -> 588 (issues 2507/2593, ADR-0059 R1.3a/R1.3b): getPersonalTokenAdminScopeOffer,
+// setPersonalTokenAdminScopes and listAdministrationAccessTokens. The offer is consumed by the
+// token screen, so MANIFEST_ENTRY_COUNT 394 -> 395 (tokens.adminScopeOffer).
+const GENERATED_OPERATION_COUNT = 588;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1321,7 +1324,7 @@ const GENERATED_OPERATION_COUNT = 585;
  * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
  * now that the signing secret is write-only. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 394;
+const MANIFEST_ENTRY_COUNT = 395;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

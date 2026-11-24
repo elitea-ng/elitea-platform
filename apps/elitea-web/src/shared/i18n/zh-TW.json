@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "部署的擁有者。",
   "pages.admin.users.roles.superAdmin.label": "全域管理員",
   "pages.admin.users.roles.viewer.description": "舊版角色。它保留升級時擁有的權限。",
-  "pages.admin.users.roles.viewer.label": "檢視者"
+  "pages.admin.users.roles.viewer.label": "檢視者",
+  "entities.token.form.adminScopesHelp": "選擇此權杖可以使用的管理權限。不選擇任何權限則權杖沒有管理存取權。選擇任何權限都需要最近登入。",
+  "entities.token.form.adminScopesTitle": "管理存取權",
+  "entities.token.form.recentSignInUnavailable": "管理權限需要最近登入。請登出、重新登入，並在幾分鐘內建立權杖。",
+  "entities.token.form.scopeBrowserRequired": "只有在您以自己的帳戶登入 Web 應用程式後，才能為權杖授予管理權限。",
+  "entities.token.form.scopeNotSettable": "此登入無法為權杖授予管理權限。請移除這些權限，或重新登入後再試一次。",
+  "entities.token.form.scopeRefused": "此權杖不能擁有下列管理權限：{{scopes}}。請移除它們並重新建立權杖。",
+  "entities.token.table.adminAccess": "管理",
+  "entities.token.table.adminInherit": "您的所有管理權限",
+  "entities.token.table.adminInheritEnds": "您的所有管理權限，至 {{date}}",
+  "entities.token.table.adminNone": "無"
 }

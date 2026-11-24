@@ -37,6 +37,19 @@ func TestApplyRetriesDeadlockAgainstConcurrentTransaction(t *testing.T) {
 	defer func() {
 		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
 	}()
+	// WHICH SIDE IS THE VICTIM is decided by timing: a backend runs the
+	// deadlock check once, deadlock_timeout (1s by default) after it starts
+	// waiting, and aborts ITSELF if it finds the cycle. The migrator waits
+	// first, so it is the victim only if the other side is already waiting
+	// when the migrator's check runs. On a loaded runner the other side's
+	// poll-then-LOCK took longer than one second, the migrator's check found
+	// no cycle, and the other side became the victim (the flake of PR 3001).
+	// A longer deadlock_timeout on this throwaway database gives the other
+	// side that long to queue. It needs a superuser; without one the test
+	// keeps the default and its old timing.
+	if _, err := admin.Exec(ctx, "ALTER DATABASE "+pgx.Identifier{name}.Sanitize()+" SET deadlock_timeout = '5s'"); err != nil {
+		t.Logf("keeping the default deadlock_timeout: %v", err)
+	}
 	childConfig := adminConfig.Copy()
 	childConfig.ConnConfig.Database = name
 	pool, err := pgxpool.NewWithConfig(ctx, childConfig)
@@ -60,7 +73,9 @@ CREATE TABLE lock_a (id int); CREATE TABLE lock_b (id int);`)
 	require.NoError(t, err)
 
 	otherDone := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		for {
 			var waiting bool
 			if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks l
@@ -80,6 +95,16 @@ WHERE c.relname = 'lock_b' AND NOT l.granted)`).Scan(&waiting); err != nil {
 			return
 		}
 		otherDone <- other.Commit(ctx)
+	}()
+	// Runs before pool.Close (defers are last in, first out): a transaction
+	// left open, aborted or not, holds its connection, and pool.Close waits
+	// for it for ever. That turned one failed assertion into a 45-minute
+	// package timeout. cancel unblocks the goroutine when the test failed
+	// before it finished.
+	defer func() {
+		cancel()
+		<-finished
+		_ = other.Rollback(context.Background())
 	}()
 
 	original := deadlockBackoff
