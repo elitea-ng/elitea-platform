@@ -91,4 +91,21 @@ describe('DeleteApplicationButton', () => {
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
   });
+
+  it("shows the server's reason for a refused delete inside the dialog", async () => {
+    server.use(
+      http.delete('*/elitea_core/application/prompt_lib/:projectId/:applicationId', () =>
+        HttpResponse.json({ error: 'Unpublish first. Cannot delete application with published versions.' }, { status: 400 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderButton();
+
+    await user.click(await screen.findByRole('button', { name: 'delete entity' }));
+    await user.type(screen.getByLabelText('Name'), 'My Agent');
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unpublish first. Cannot delete application with published versions.');
+    expect(screen.getByText('Delete confirmation')).toBeInTheDocument();
+  });
 });

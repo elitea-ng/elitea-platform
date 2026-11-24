@@ -761,6 +761,30 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 		}
 		return fmt.Errorf("applications: delete: lock: %w", err)
 	}
+	// The embedded sub-agent copies the agent's versions link go with it, in
+	// this transaction. A hire (and a publish) writes one application with an
+	// `embedded` version per nested agent, and nothing else deleted them: the
+	// delete route refuses a copy that a parent still holds. So once a hired
+	// agent was deleted, its copies stayed in the Workshop list for good, and
+	// no Delete could remove them.
+	copies, err := embeddedCopiesOf(ctx, tx, s, applicationID)
+	if err != nil {
+		return err
+	}
+	for _, copyID := range copies {
+		if err := deleteApplicationRows(ctx, tx, s, projectID, copyID); err != nil {
+			return err
+		}
+	}
+	if err := deleteApplicationRows(ctx, tx, s, projectID, applicationID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// deleteApplicationRows deletes one application and every row it owns, inside
+// the caller's transaction.
+func deleteApplicationRows(ctx context.Context, tx pgx.Tx, s, projectID, applicationID string) error {
 	// Imported tenants preserve non-cascading foreign keys. Delete owned rows
 	// explicitly and atomically for both imported and native schemas.
 	var applicationTools *string
@@ -784,6 +808,9 @@ func (r *ApplicationsRepo) Delete(ctx context.Context, projectID, applicationID 
 		if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.%s WHERE %s IN (SELECT id FROM %s.application_versions WHERE application_id = $1)`, s, child.table, child.column, s), applicationID); err != nil {
 			return fmt.Errorf("applications: delete %s: %w", child.table, err)
 		}
+	}
+	if err := deleteSubAgentReferencesOf(ctx, tx, s, applicationID); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.application_versions WHERE application_id = $1`, s), applicationID); err != nil {
 		return fmt.Errorf("applications: delete versions: %w", err)
@@ -817,7 +844,105 @@ ON CONFLICT (application_id) DO NOTHING`, s), applicationID); err != nil {
 			return fmt.Errorf("applications: delete: record the agent's memory orphan: %w", err)
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
+}
+
+// embeddedCopyDepth bounds the walk the way embedSubAgentsRecursive bounds the
+// copy it makes.
+const embeddedCopyDepth = 6
+
+// embeddedCopiesOf returns the applications that hold the embedded sub-agent
+// copies applicationID's versions link, at every depth, deepest first. A copy
+// is an application whose referenced version has `status = 'embedded'`. A
+// copy that a version of some other application also references is left
+// alone: it is not this agent's to delete.
+func embeddedCopiesOf(ctx context.Context, tx pgx.Tx, s, applicationID string) ([]string, error) {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+WITH RECURSIVE copies (app_id, depth) AS (
+    SELECT $1::bigint, 0
+    UNION
+    SELECT child_version.application_id::bigint, copies.depth + 1
+    FROM copies
+    JOIN %[1]s.application_versions AS parent_version ON parent_version.application_id = copies.app_id
+    JOIN %[1]s.entity_tool_mapping AS mapping
+      ON mapping.entity_version_id = parent_version.id AND mapping.entity_type = 'agent'
+    JOIN %[1]s.elitea_tools AS tool ON tool.id = mapping.tool_id AND tool.type = 'application'
+    JOIN %[1]s.application_versions AS child_version
+      ON child_version.status = 'embedded'
+     AND child_version.id::text = %[3]s
+     AND child_version.application_id::text = tool.settings->>'application_id'
+    WHERE copies.depth < %[2]d
+), doomed AS (
+    SELECT app_id, max(depth) AS depth FROM copies GROUP BY app_id
+)
+SELECT doomed.app_id::text
+FROM doomed
+WHERE doomed.depth > 0 AND doomed.app_id <> $1::bigint
+  AND NOT EXISTS (
+    SELECT 1
+    FROM %[1]s.elitea_tools AS tool
+    JOIN %[1]s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id AND mapping.entity_type = 'agent'
+    JOIN %[1]s.application_versions AS holder ON holder.id = mapping.entity_version_id
+    WHERE tool.type = 'application'
+      AND tool.settings->>'application_id' = doomed.app_id::text
+      AND holder.application_id NOT IN (SELECT app_id FROM doomed))
+ORDER BY doomed.depth DESC, doomed.app_id`, s, embeddedCopyDepth, ApplicationToolSettingsVersionSQL), applicationID)
+	if err != nil {
+		return nil, fmt.Errorf("applications: delete: read the embedded copies: %w", err)
+	}
+	defer rows.Close()
+	var copies []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("applications: delete: read the embedded copies: %w", err)
+		}
+		copies = append(copies, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("applications: delete: read the embedded copies: %w", err)
+	}
+	return copies, nil
+}
+
+// deleteSubAgentReferencesOf removes the sub-agent references the versions of
+// one application hold, and each reference row nothing maps once they are
+// gone. The toolkits the agent used are project rows and stay.
+func deleteSubAgentReferencesOf(ctx context.Context, tx pgx.Tx, s, applicationID string) error {
+	rows, err := tx.Query(ctx, fmt.Sprintf(`
+DELETE FROM %[1]s.entity_tool_mapping AS mapping
+USING %[1]s.elitea_tools AS tool
+WHERE mapping.tool_id = tool.id AND tool.type = 'application' AND mapping.entity_type = 'agent'
+  AND mapping.entity_version_id IN (SELECT id FROM %[1]s.application_versions WHERE application_id = $1)
+RETURNING tool.id`, s), applicationID)
+	if err != nil {
+		return fmt.Errorf("applications: delete sub-agent references: %w", err)
+	}
+	var toolIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("applications: delete sub-agent references: %w", err)
+		}
+		toolIDs = append(toolIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("applications: delete sub-agent references: %w", err)
+	}
+	if len(toolIDs) == 0 {
+		return nil
+	}
+	// A second statement: a data-modifying CTE's outer query reads the
+	// pre-delete snapshot and would still see the mappings removed above.
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`
+DELETE FROM %[1]s.elitea_tools AS tool
+WHERE tool.id = ANY($1)
+  AND NOT EXISTS (SELECT 1 FROM %[1]s.entity_tool_mapping AS other WHERE other.tool_id = tool.id)`, s), toolIDs); err != nil {
+		return fmt.Errorf("applications: delete orphaned sub-agent references: %w", err)
+	}
+	return nil
 }
 
 func (r *ApplicationsRepo) GetVersion(ctx context.Context, projectID, applicationID, versionID string) (applications.Version, error) {
