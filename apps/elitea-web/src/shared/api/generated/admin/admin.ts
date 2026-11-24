@@ -57,6 +57,8 @@ import type {
   AdminAuthUsersActionRequest,
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
+  AdminConsoleDocument,
+  AdminConsoleItem,
   AdminRoleRefusal,
   AdministrationRoleHistory,
   AdministrationRoleHolders,
@@ -3632,6 +3634,425 @@ export function useAdminAuthUsersAction<
     adminAuthUsersActionRequest,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAdminConsoleDocumentResponse200 = {
+  data: AdminConsoleDocument;
+  status: 200;
+};
+
+export type getAdminConsoleDocumentResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAdminConsoleDocumentResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAdminConsoleDocumentResponseSuccess =
+  getAdminConsoleDocumentResponse200 & {
+    headers: Headers;
+  };
+export type getAdminConsoleDocumentResponseError = (
+  getAdminConsoleDocumentResponse401 | getAdminConsoleDocumentResponse500
+) & {
+  headers: Headers;
+};
+
+export type getAdminConsoleDocumentResponse =
+  getAdminConsoleDocumentResponseSuccess | getAdminConsoleDocumentResponseError;
+
+export const getGetAdminConsoleDocumentUrl = () => {
+  return `/admin/console`;
+};
+
+/**
+ * For the caller: the console areas, the items of each area they can
+ * open, each at `read` or `write`, their administration roles and their
+ * active elevation (ADR-0059 decision 6). The server computes it from the
+ * console item table and the permission table that the route gates use,
+ * and the caller's administration set, resolved with the call the gates
+ * make. An item the caller cannot open, an area with no such item and an
+ * item whose page has not shipped are absent. The document carries no
+ * permission name and no person's name.
+ *
+ * Any signed-in caller may read it. A caller with no administration
+ * permission gets 200 with an empty `areas`, never 403, so a console can
+ * tell "no access" from "failed". A native device session opens no item,
+ * as no administration route gate admits one. `elevation` is null until
+ * the elevation ledger ships. The document is a statement of what the
+ * server will answer, not an enforcement: every route keeps its own gate.
+ * It supersedes the permission names the admin SPA reads today
+ * (`window.admin_ui_config.permissions` and the checked-in
+ * adminPermissionRegistry.json); those go when the console reads this.
+ * @summary Read the console capability document of the caller
+ */
+export const getAdminConsoleDocument = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAdminConsoleDocumentResponse> => {
+  return eliteaFetch<getAdminConsoleDocumentResponse>(
+    getGetAdminConsoleDocumentUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAdminConsoleDocumentQueryKey = () => {
+  return [`/admin/console`] as const;
+};
+
+export const getGetAdminConsoleDocumentQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+  TError = N401Response | N500Response,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminConsoleDocumentQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminConsoleDocument>>
+  > = ({ signal }) => getAdminConsoleDocument({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminConsoleDocumentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminConsoleDocument>>
+>;
+export type GetAdminConsoleDocumentQueryError = N401Response | N500Response;
+
+export function useGetAdminConsoleDocument<
+  TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+  TError = N401Response | N500Response,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminConsoleDocument>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminConsoleDocument<
+  TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminConsoleDocument>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminConsoleDocument<
+  TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the console capability document of the caller
+ */
+
+export function useGetAdminConsoleDocument<
+  TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+  TError = N401Response | N500Response,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleDocument>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminConsoleDocumentQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAdminConsoleItemResponse200 = {
+  data: AdminConsoleItem;
+  status: 200;
+};
+
+export type getAdminConsoleItemResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAdminConsoleItemResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type getAdminConsoleItemResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAdminConsoleItemResponseSuccess =
+  getAdminConsoleItemResponse200 & {
+    headers: Headers;
+  };
+export type getAdminConsoleItemResponseError = (
+  | getAdminConsoleItemResponse401
+  | getAdminConsoleItemResponse404
+  | getAdminConsoleItemResponse500
+) & {
+  headers: Headers;
+};
+
+export type getAdminConsoleItemResponse =
+  getAdminConsoleItemResponseSuccess | getAdminConsoleItemResponseError;
+
+export const getGetAdminConsoleItemUrl = (itemId: string) => {
+  return `/admin/console/items/${itemId}`;
+};
+
+/**
+ * One item of the console item table: its label keys, whether its page
+ * has shipped, and the administration roles, built-in and custom, that
+ * open it with the level each gives. Roles are named; people never are.
+ * Any signed-in caller may read it: the access-denied page reads it for
+ * an item the caller cannot open.
+ * @summary Read one console item and the roles that grant it
+ */
+export const getAdminConsoleItem = async (
+  itemId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAdminConsoleItemResponse> => {
+  return eliteaFetch<getAdminConsoleItemResponse>(
+    getGetAdminConsoleItemUrl(itemId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAdminConsoleItemQueryKey = (itemId: string) => {
+  return [`/admin/console/items/${itemId}`] as const;
+};
+
+export const getGetAdminConsoleItemQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
+  TError = N401Response | N404Response | N500Response,
+>(
+  itemId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAdminConsoleItemQueryKey(itemId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminConsoleItem>>
+  > = ({ signal }) =>
+    getAdminConsoleItem(itemId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: itemId !== null && itemId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminConsoleItem>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAdminConsoleItemQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminConsoleItem>>
+>;
+export type GetAdminConsoleItemQueryError =
+  N401Response | N404Response | N500Response;
+
+export function useGetAdminConsoleItem<
+  TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
+  TError = N401Response | N404Response | N500Response,
+>(
+  itemId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleItem>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminConsoleItem>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminConsoleItem>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminConsoleItem<
+  TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
+  TError = N401Response | N404Response | N500Response,
+>(
+  itemId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleItem>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAdminConsoleItem>>,
+          TError,
+          Awaited<ReturnType<typeof getAdminConsoleItem>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAdminConsoleItem<
+  TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
+  TError = N401Response | N404Response | N500Response,
+>(
+  itemId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read one console item and the roles that grant it
+ */
+
+export function useGetAdminConsoleItem<
+  TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
+  TError = N401Response | N404Response | N500Response,
+>(
+  itemId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAdminConsoleItem>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAdminConsoleItemQueryOptions(itemId, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

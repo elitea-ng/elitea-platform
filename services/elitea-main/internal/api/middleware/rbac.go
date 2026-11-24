@@ -338,6 +338,14 @@ func nativeAtAdministrationGate(user auth.User, mode string) bool {
 	return user.CredentialKind == auth.CredentialKindNative && isAdministrationMode(mode)
 }
 
+// AdministrationGatesRefuse reports whether every administration-mode route
+// gate of this package refuses user before it resolves anything: a native
+// device session. The console capability document (ADR-0059 R3.1a) asks it,
+// so the document opens no item a gate would refuse.
+func AdministrationGatesRefuse(user auth.User) bool {
+	return nativeAtAdministrationGate(user, auth.PermissionModeAdministration)
+}
+
 type resolvedProjectPermissionsKey struct{}
 
 type resolvedProjectPermissions struct {
