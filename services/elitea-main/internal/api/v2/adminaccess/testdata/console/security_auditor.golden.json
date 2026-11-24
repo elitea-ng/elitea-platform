@@ -1,0 +1,23 @@
+{
+  "areas": [
+    {
+      "id": "security",
+      "label_key": "pages.admin.console.area.security",
+      "items": [
+        {
+          "id": "audit-trail",
+          "label_key": "pages.admin.console.item.audit-trail",
+          "level": "read"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "security_auditor",
+      "display_name": "Security auditor",
+      "built_in": true
+    }
+  ],
+  "elevation": null
+}

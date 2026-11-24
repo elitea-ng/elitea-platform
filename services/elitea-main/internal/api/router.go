@@ -30,6 +30,7 @@ import (
 	nativeapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/nativeauth"
 	scimapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/scim"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
+	v2adminconsole "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/adminaccess"
 	v2agentheartbeat "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentheartbeat"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2agentlifecycle "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentlifecycle"
@@ -843,6 +844,14 @@ type RouterConfig struct {
 	// routes are registered unconditionally; nil answers 503 naming
 	// LLM_GATEWAY_URL, for the reason PredictCompleter states.
 	ImageGateway llmproxy.Gateway
+	// ConsoleRoles reads the administration roles the console capability
+	// document names (ADR-0059 R3.1a). Nil reads them from Pool; a test
+	// router with an unconnected pool sets a reader of its own.
+	ConsoleRoles v2adminconsole.RoleReader
+	// ConsoleElevations reads the caller's active elevation for the
+	// capability document. Nil answers none until the elevation ledger
+	// ships (story R3.10a).
+	ConsoleElevations v2adminconsole.ElevationReader
 	// AgentIdentityAdmin serves the agent identity binding and mandate admin
 	// API (ADR-0039, issue 1112). The composition root sets it only with
 	// the credential governance flag on; nil mounts none of
@@ -3513,6 +3522,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(approve).Get(v2connectorrequests.AdminInventoryPath, connectors.AdminInventory)
 					r.With(approve).Post(v2connectorrequests.AdminInventoryRequestsPath, connectors.CreateInventoryRequests)
 				}
+
+				// The console capability document (ADR-0059 R3.1a): the
+				// areas and items the caller can open, their roles and their
+				// elevation. Not gated: a caller with no administration
+				// permission gets 200 with no area. The handler resolves
+				// the caller's set with the call the gates above make.
+				//
+				// Marked as an administration route so that, during a
+				// maintenance window, a holder of any administration
+				// permission still reads the document of the console the
+				// window leaves open to them; anybody else meets the
+				// window. The document grants nothing, so the mark opens
+				// no other route.
+				consoleRoles := cfg.ConsoleRoles
+				if consoleRoles == nil && cfg.Pool != nil {
+					consoleRoles = v2adminconsole.NewPostgresRoles(cfg.Pool)
+				}
+				v2adminconsole.NewHandler(permissionResolver, consoleRoles, cfg.ConsoleElevations).
+					Register(r, apimw.MarkAdministrationRoute)
 
 				// The entitlement export (ADR-0044 decision 5, #1501): who
 				// holds which role on which project and agent, and which

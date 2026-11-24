@@ -1436,3 +1436,100 @@ describe('#1028 — project 1 grants the strings the new gates check', () => {
     expect(seed()).not.toContain("('models.project_settings.edit')");
   });
 });
+
+/* ── ADR-0059 R3.13a: the built-in role personas ────────────────────────── */
+
+/** The six built-in administration roles with a declared set, in console order. */
+const BUILT_IN_ADMIN_ROLES = [
+  'super_admin',
+  'admin',
+  'llm_manager',
+  'project_administrator',
+  'security_auditor',
+  'emergency_access',
+];
+
+/** `{ role, email }` of each entry of e2e/fixtures/adminPersonas.ts. */
+export function declaredAdminPersonas(source) {
+  return [...source.matchAll(/role:\s*'([a-z_]+)',\s*email:\s*'([^']+)'/g)].map((m) => ({ role: m[1], email: m[2] }));
+}
+
+/** `{ role, email }` of each row of the seed's `e2e_admin_personas` VALUES list. */
+export function seededAdminPersonas(seed) {
+  const start = seed.indexOf('INSERT INTO e2e_admin_personas (email, name, role) VALUES');
+  if (start < 0) return [];
+  const block = seed.slice(start, seed.indexOf(';', start));
+  return [...block.matchAll(/\('([^']+)',\s*'[^']+',\s*'([a-z_]+)'\)/g)].map((m) => ({ role: m[2], email: m[1] }));
+}
+
+/** The addresses the seed provisions in the identity provider mock. */
+export function oidcMockPersonaEmails(seed) {
+  return [...seed.matchAll(/^\s*'([a-z0-9-]+@autotest\.local)\|[^']+'/gm)].map((m) => m[1]);
+}
+
+/**
+ * Every problem with the personas: the declared list is not one persona per
+ * built-in role, the seed's SQL rows or its identity provider users differ
+ * from it, or the setup does not sign each in.
+ */
+export function adminPersonaProblems({ personas, seed, setup }) {
+  const problems = [];
+  const declared = declaredAdminPersonas(personas);
+  const roles = declared.map((p) => p.role);
+  if (JSON.stringify(roles) !== JSON.stringify(BUILT_IN_ADMIN_ROLES)) {
+    problems.push(`declared roles ${JSON.stringify(roles)}, want ${JSON.stringify(BUILT_IN_ADMIN_ROLES)}`);
+  }
+  if (new Set(declared.map((p) => p.email)).size !== declared.length) problems.push('two personas share an address');
+  const key = (list) => JSON.stringify([...list].map((p) => `${p.email}=${p.role}`).sort());
+  if (key(seededAdminPersonas(seed)) !== key(declared)) problems.push('the seed SQL rows differ from adminPersonas.ts');
+  const oidc = oidcMockPersonaEmails(seed);
+  for (const persona of declared) {
+    if (!oidc.includes(persona.email)) problems.push(`the identity provider mock has no ${persona.email}`);
+  }
+  if (!/for \(const persona of ADMIN_PERSONAS\)/.test(setup) || !/STORAGE_STATE\.personas\[persona\.role\]/.test(setup)) {
+    problems.push('auth.setup.ts does not sign every persona in to its own storage state');
+  }
+  return problems;
+}
+
+describe('ADR-0059 R3.13a — one persona per built-in role, seeded and signed in', () => {
+  const inputs = () => ({
+    personas: read('e2e/fixtures/adminPersonas.ts'),
+    seed: read(SEED_SCRIPT),
+    setup: read('e2e/auth.setup.ts'),
+  });
+
+  it('declares six personas the seed creates and the setup signs in', () => {
+    const current = inputs();
+    expect(declaredAdminPersonas(current.personas)).toHaveLength(6);
+    expect(adminPersonaProblems(current)).toEqual([]);
+  });
+
+  it('rejects a seed row with another role', () => {
+    const current = inputs();
+    const seed = current.seed.replace("'E2E Auditor', 'security_auditor'", "'E2E Auditor', 'admin'");
+    expect(adminPersonaProblems({ ...current, seed })).toContain('the seed SQL rows differ from adminPersonas.ts');
+  });
+
+  it('rejects a persona the identity provider mock does not know', () => {
+    const current = inputs();
+    const seed = current.seed.replace("'e2e-emergency@autotest.local|E2E Emergency'", "'e2e-other@autotest.local|E2E Other'");
+    expect(adminPersonaProblems({ ...current, seed })).toContain(
+      'the identity provider mock has no e2e-emergency@autotest.local',
+    );
+  });
+
+  it('rejects a list that misses a built-in role', () => {
+    const current = inputs();
+    const personas = current.personas.replace("role: 'emergency_access'", "role: 'viewer'");
+    expect(adminPersonaProblems({ ...current, personas }).length).toBeGreaterThan(0);
+  });
+
+  it('rejects a setup that signs the personas in to one shared state', () => {
+    const current = inputs();
+    const setup = current.setup.replace('STORAGE_STATE.personas[persona.role]', 'STORAGE_STATE.admin');
+    expect(adminPersonaProblems({ ...current, setup })).toContain(
+      'auth.setup.ts does not sign every persona in to its own storage state',
+    );
+  });
+});

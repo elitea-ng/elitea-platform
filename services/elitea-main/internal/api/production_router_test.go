@@ -1851,6 +1851,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/connector_inventory",
 		"GET /api/v2/admin/connector_requests",
 		"GET /api/v2/admin/connector_requests/{requestID}",
+		"GET /api/v2/admin/console",
+		"GET /api/v2/admin/console/items/{item_id}",
 		"GET /api/v2/admin/credential_inventory",
 		"GET /api/v2/admin/delegation_review",
 		"GET /api/v2/admin/email/administration",
