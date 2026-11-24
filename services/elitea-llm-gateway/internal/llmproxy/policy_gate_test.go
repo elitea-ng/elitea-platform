@@ -90,7 +90,7 @@ func TestModelAllowlistRefusesAndDoesNotCallTheProvider(t *testing.T) {
 	snap := snapshotOf(t, govRow(policy.TypeModelConfig, "openai-only", map[string]any{
 		"scope": map[string]any{"project_ids": []any{42.0}, "providers": []any{"openai"}},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 
@@ -116,7 +116,7 @@ func TestModelAllowlistAdmitsAPermittedModel(t *testing.T) {
 	snap := snapshotOf(t, govRow(policy.TypeModelConfig, "anthropic-ok", map[string]any{
 		"scope": map[string]any{"project_ids": []any{42.0}, "providers": []any{"anthropic"}},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 
@@ -136,7 +136,7 @@ func TestModelAllowlistAdmitsAPermittedModel(t *testing.T) {
 func TestNoPolicyMeansNoRestriction(t *testing.T) {
 	router := &trackingRouter{}
 	router.respResp = &schemas.BifrostResponsesResponse{ID: strptr("ok")}
-	h := NewHandler(router, nil, nil, WithBudgetGate(allowingGate(), &fakeCostEstimator{}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(allowingGate(), &fakeCostEstimator{}))
 
 	rec := httptest.NewRecorder()
 	h.Messages(rec, messagesReqWithProject(t, "42"))
@@ -164,7 +164,7 @@ func TestMCPAllowlistRefusesAnUnlistedServer(t *testing.T) {
 		"scope": map[string]any{"project_ids": []any{42.0}},
 		"mcp":   map[string]any{"allowlist": []any{"github"}},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 
@@ -184,7 +184,7 @@ func TestMCPAllowlistRefusesAnUnlistedServer(t *testing.T) {
 	// The allowlisted server goes through.
 	router2 := &trackingRouter{}
 	router2.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h2 := NewHandler(router2, nil, nil,
+	h2 := newTestHandler(router2, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 	rec2 := httptest.NewRecorder()
@@ -221,7 +221,7 @@ func TestRateLimitRefusesWithRetryAfter(t *testing.T) {
 		Counter: newStubCounter(),
 		Subject: func(kind, key string, window int64) string { return kind + key },
 	})
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, limiter, nil))
 
@@ -257,7 +257,7 @@ func TestRateLimitOfAnotherProjectDoesNotApply(t *testing.T) {
 		Counter: newStubCounter(),
 		Subject: func(kind, key string, window int64) string { return kind + key },
 	})
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, limiter, nil))
 
@@ -282,7 +282,7 @@ func TestRoutingRuleRewritesTheDispatchedTarget(t *testing.T) {
 			map[string]any{"provider": "anthropic", "model": "claude-sonnet", "weight": 1.0},
 		},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil),
 		WithRoutingPick(func(total float64) float64 { return 0 }))
@@ -320,7 +320,7 @@ func TestRoutingCannotEscapeTheModelAllowlist(t *testing.T) {
 			"scope": map[string]any{"project_ids": []any{42.0}, "providers": []any{"openai"}},
 		}),
 	)
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil),
 		WithRoutingPick(func(total float64) float64 { return 0 }))
@@ -348,7 +348,7 @@ func TestRoutingRuleWithAnUnknownProviderIsIgnored(t *testing.T) {
 			map[string]any{"provider": "not-a-real-provider", "model": "x", "weight": 1.0},
 		},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 
@@ -378,7 +378,7 @@ func TestExcludedRatePolicyRecordsNoSpend(t *testing.T) {
 		"scope":      map[string]any{"project_ids": []any{42.0}},
 		"credential": map[string]any{"rate_policy": policy.RatePolicyExcluded},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_500_000}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 
@@ -408,7 +408,7 @@ func TestBilledRatePolicyStillBills(t *testing.T) {
 		"scope":      map[string]any{"project_ids": []any{42.0}},
 		"credential": map[string]any{"rate_policy": policy.RatePolicyBilled},
 	}))
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_500_000}),
 		WithGovernancePolicy(fixedPolicy{snap}, nil, nil))
 

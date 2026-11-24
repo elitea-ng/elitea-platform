@@ -26,7 +26,7 @@ import (
 // backstop cannot see it because a 404 never reaches admission.
 func TestRouterMountsHopGuardOnEveryRoute(t *testing.T) {
 	marker := hopmarker.New([]byte("hop-secret"))
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil, llmproxy.WithHopMarker(marker))
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret, llmproxy.WithHopMarker(marker))
 	r := NewRouter(h)
 
 	for _, tc := range []struct {
@@ -48,7 +48,7 @@ func TestRouterMountsHopGuardOnEveryRoute(t *testing.T) {
 			req.Header.Set(hopmarker.Header, marker.Value())
 
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, req)
+			r.ServeHTTP(rec, signedRequest(req))
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400. The router does not mount the hop guard on this path, "+
@@ -66,7 +66,7 @@ func TestRouterMountsHopGuardOnEveryRoute(t *testing.T) {
 // the root, so a mistake here would break the whole surface at once.
 func TestRouterLeavesUnmarkedTrafficAlone(t *testing.T) {
 	marker := hopmarker.New([]byte("hop-secret"))
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil, llmproxy.WithHopMarker(marker))
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret, llmproxy.WithHopMarker(marker))
 	r := NewRouter(h)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions",
@@ -74,7 +74,7 @@ func TestRouterLeavesUnmarkedTrafficAlone(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, signedRequest(req))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for a request with no hop marker: %s", rec.Code, rec.Body.String())

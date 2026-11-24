@@ -250,13 +250,20 @@ var errMintAdministrationUnknown = errors.New("the owner's administration permis
 // /api/v2/auth/ request; without the annotation the row says only
 // "POST /api/v2/auth/token/" with status 403.
 func writeTokenMintRefusal(w http.ResponseWriter, r *http.Request, refusal *tokenMintRefusal) {
+	writeTokenRefusal(w, r, TokenMintRefusedAuditAction, refusal)
+}
+
+// writeTokenRefusal answers 403 with refusal and annotates the request's
+// audit row with action: the one writer of every token refusal, the mint
+// rule's and the administration scope rule's (R1.3a).
+func writeTokenRefusal(w http.ResponseWriter, r *http.Request, action string, refusal *tokenMintRefusal) {
 	audit.Annotate(r.Context(), audit.Annotation{
-		Action:     TokenMintRefusedAuditAction,
+		Action:     action,
 		EntityType: "token",
 		EntityName: refusal.Code,
 	})
-	slog.WarnContext(r.Context(), "personal token mint refused by the credential-kind rule",
-		"code", refusal.Code, "credential_kind", string(refusal.CredentialKind),
+	slog.WarnContext(r.Context(), "personal token request refused",
+		"action", action, "code", refusal.Code, "credential_kind", string(refusal.CredentialKind),
 		"method", r.Method, "path", r.URL.Path)
 	writeTokenMintJSON(w, refusal)
 }
@@ -265,13 +272,19 @@ func writeTokenMintRefusal(w http.ResponseWriter, r *http.Request, refusal *toke
 // the store did not answer. It is a 500, not a refusal, but it is logged with
 // its cause and annotated so the audit row says why no token was made.
 func writeTokenMintFault(w http.ResponseWriter, r *http.Request, kind mintCredential, err error) {
+	writeTokenFault(w, r, TokenMintRefusedAuditAction, kind, err)
+}
+
+// writeTokenFault is writeTokenMintFault for any token request: action is the
+// audit action of the request (the mint's, or the scope change's).
+func writeTokenFault(w http.ResponseWriter, r *http.Request, action string, kind mintCredential, err error) {
 	audit.Annotate(r.Context(), audit.Annotation{
-		Action:     TokenMintRefusedAuditAction,
+		Action:     action,
 		EntityType: "token",
 		EntityName: mintFaultAuditName,
 	})
-	slog.ErrorContext(r.Context(), "personal token mint: the owner's administration permissions could not be read",
-		"credential_kind", string(kind), "err", err, "method", r.Method, "path", r.URL.Path)
+	slog.ErrorContext(r.Context(), "personal token request: the caller's administration permissions could not be read",
+		"action", action, "credential_kind", string(kind), "err", err, "method", r.Method, "path", r.URL.Path)
 	writeTokenJSONError(w, http.StatusInternalServerError, "server_error",
 		mintFaultAuditName, "failed to resolve caller permissions")
 }

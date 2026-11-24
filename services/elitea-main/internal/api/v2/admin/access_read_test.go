@@ -31,6 +31,7 @@ const (
 	accessNobody    = "r010b-nobody@autotest.local"
 	accessRoles     = "/admin/access/roles"
 	accessHistory   = "/admin/access/history"
+	accessTokens    = "/admin/access/tokens"
 	accessDirectory = "/admin/auth_users/administration?limit=100&offset=0"
 )
 
@@ -53,6 +54,7 @@ func (e escalationEnvironment) gatedAccessRouter(email string) chi.Router {
 	accessGate := central(adminaccess.AccessRolesView, adminaccess.AdminAuthUsers, adminaccess.ModesUsers)
 	router.With(accessGate).Get(accessRoles, handler.AccessRoles)
 	router.With(accessGate).Get(accessHistory, handler.AccessHistory)
+	router.With(accessGate).Get(accessTokens, handler.AccessTokens)
 	router.With(central(adminaccess.AdminAuthUsers)).Get("/admin/auth_users/{mode}", handler.AuthUsers)
 	return router
 }

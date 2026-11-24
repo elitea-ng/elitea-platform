@@ -59,7 +59,7 @@ func TestUnsupportedOperation_Is501OnEveryRoute(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := postJSON(t, NewHandler(tc.fake, nil, nil).route(), tc.path, tc.body)
+			rec := postJSON(t, newTestHandler(tc.fake, nil, nil).route(), tc.path, tc.body)
 			assertUnsupported(t, rec.Code, rec.Body.Bytes())
 		})
 	}

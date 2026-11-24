@@ -71,9 +71,25 @@ export const PersonalAccessToken = zod
       .describe(
         'THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every read masks it to `"..."` plus the last seven characters, which is a display hint and not a credential.\n',
       ),
+    admin_access: zod
+      .string()
+      .describe(
+        "The token's administration access (ADR-0059 decision 7): `none` (no administration permission, the default of a new token), `scoped` (only `admin_scopes`, intersected with what the owner holds at each request) or `inherit` (the owner's whole set; a backfill value of the upgrade that ends on the sunset date and that no request sets).\n",
+      ),
+    admin_scopes: zod
+      .array(zod.string())
+      .describe(
+        "The administration permissions of a `scoped` token, sorted. Empty for `none` and `inherit`. A scope the owner no longer holds stays listed and opens nothing.\n",
+      ),
+    inherit_ends_on: zod.iso
+      .date()
+      .optional()
+      .describe(
+        "The date an `inherit` token ends (the sunset date of ADR-0059 decision 2). ABSENT while that date is not set, and for every other access.\n",
+      ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/auth/tokens.go:41-52 (the `Token` struct) and :575-600 (presentToken, which decides whether `token` is revealed).\n",
+    "NOTE(W2): internal/api/v2/auth/tokens.go:42-66 (the `Token` struct) and presentToken, which decides whether `token` is revealed.\n",
   );
 
 export type PersonalAccessToken = zod.input<typeof PersonalAccessToken>;

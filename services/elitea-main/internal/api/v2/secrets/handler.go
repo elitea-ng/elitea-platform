@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/secretstrength"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -114,6 +115,14 @@ func MasterKeyFromEnv(getenv func(string) string) ([]byte, error) {
 	value := getenv(MasterKeyEnvVar)
 	if value == "" {
 		return nil, nil
+	}
+	// A key that was published in the source repository is known to
+	// everyone and wraps nothing (#2958). The check compares digests only,
+	// and the error does not repeat the value.
+	if secretstrength.Burned(value) {
+		return nil, fmt.Errorf("%s holds a key that was published in the source repository and must be treated as known; "+
+			"generate a new Fernet key and rewrap the stored project keys with it "+
+			"(deploy/scripts/rewrap-centry-vault.py) before you start", MasterKeyEnvVar)
 	}
 	raw, err := fernetDecodeKey(value)
 	if err != nil {

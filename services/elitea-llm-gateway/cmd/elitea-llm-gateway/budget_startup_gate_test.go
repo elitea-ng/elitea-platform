@@ -356,7 +356,7 @@ func TestGatewayRefusesToStartWithoutEnforcement(t *testing.T) {
 			"DATABASE_URL=not-a-database-url",
 			// Required whenever NATS is configured (issue #11), and this test
 			// must fail on the budget gate, not on that one.
-			"GATEWAY_IDENTITY_SECRET=startup-gate-test",
+			"GATEWAY_IDENTITY_SECRET=startup-gate-test-identity-0123456789ab",
 			// Required at start-up (master_key_gate.go); this test must fail
 			// on the budget gate, not on that one.
 			"SECRETS_MASTER_KEY="+testMasterKey,

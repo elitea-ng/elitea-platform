@@ -3944,6 +3944,12 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
+    # HTTP action rules (pipeline `type: http` nodes): the outer bound for the
+    # origin a project admin may write into a rule, checked at write time and
+    # again at every dial. HTTPS only. Unset permits public destinations only;
+    # same grammar and split as ELITEA_MCP_EGRESS_ALLOWLIST above. A malformed
+    # entry fails Main's startup.
+    ELITEA_HTTP_ACTION_EGRESS_ALLOWLIST: ""
     # The worker's private permit (#2950), merged with Configuration > Worker
     # Egress > Private Permit: the private destinations agent toolkits and
     # remote MCP servers may reach (an on-premises Jira or GitLab), comma
@@ -4049,8 +4055,10 @@ main:
     # provider verifies and must hold the SAME value on both sides, exactly as
     # GATEWAY_IDENTITY_SECRET does for the /llm hop. `optional: true` because
     # a deployment with ELITEA_DEEPWIKI_ENABLED off has no provider to sign
-    # for; when the facade IS on, an absent secret means unsigned identity
-    # headers, and the provider then has only the mTLS hop to go on.
+    # for. When the facade IS on, elitea-main refuses to start without a
+    # strong value (at least 32 bytes, #2958), and the provider host refuses
+    # every call without one (#2959); the chart refuses a render with
+    # deepwiki.enabled and no reference on either side.
     ELITEA_DEEPWIKI_IDENTITY_SECRET:
       secretName: elitea-deepwiki-secrets
       key: identity-secret
@@ -4058,7 +4066,8 @@ main:
     # The Inventory identity secret. The same rule and its own value: it signs
     # the headers the Inventory provider verifies and must hold the SAME value
     # on both sides. A shared secret between the two providers would let one
-    # provider's compromised key sign for the other.
+    # provider's compromised key sign for the other. Required (at least 32
+    # bytes) when the facade is on, as for DeepWiki above.
     ELITEA_INVENTORY_IDENTITY_SECRET:
       secretName: elitea-inventory-secrets
       key: identity-secret
@@ -6081,11 +6090,13 @@ deepwiki:
     # The HMAC key that verifies the identity headers elitea-main signs. It
     # must hold the SAME value as main's ELITEA_DEEPWIKI_IDENTITY_SECRET —
     # this side verifies what that side signs, and a mismatch fails every
-    # request with a signature error.
+    # request with a signature error. Required: the host refuses to start
+    # without a strong value (at least 32 bytes, #2958 and #2959), so a
+    # missing Secret fails at container creation and names it.
     ELITEA_DEEPWIKI_IDENTITY_SECRET:
       secretName: elitea-deepwiki-secrets
       key: identity-secret
-      optional: true
+      optional: false
 
   # The service's own migrations, run as a pre-install/pre-upgrade Job from the
   # service's own image. See templates/deepwiki/migrate-job.yaml for why this
@@ -6428,11 +6439,13 @@ inventory:
     # The HMAC key that verifies the identity headers elitea-main signs. It
     # must hold the SAME value as main's ELITEA_INVENTORY_IDENTITY_SECRET —
     # this side verifies what that side signs, and a mismatch fails every
-    # request with a signature error.
+    # request with a signature error. Required: the host refuses to start
+    # without a strong value (at least 32 bytes, #2958 and #2959), so a
+    # missing Secret fails at container creation and names it.
     ELITEA_INVENTORY_IDENTITY_SECRET:
       secretName: elitea-inventory-secrets
       key: identity-secret
-      optional: true
+      optional: false
 
   # The engine's own migrations, run as a pre-install/pre-upgrade Job from the
   # engine image (templates/inventory/migrate-job.yaml). Rendered only with a

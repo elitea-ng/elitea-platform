@@ -358,7 +358,7 @@ func newRealtimeFixture(t *testing.T, opts ...HandlerOption) *realtimeFixture {
 		// that it does not fire during a test that is not about it.
 		WithRealtimeBudgetRecheck(25 * time.Millisecond),
 	}
-	h := NewHandler(newDispatchSpy(), nil, nil, append(base, opts...)...)
+	h := newTestHandler(newDispatchSpy(), nil, nil, append(base, opts...)...)
 	srv := httptest.NewServer(h.route())
 	t.Cleanup(srv.Close)
 	return &realtimeFixture{handler: h, server: srv, dialer: dialer, gate: gate, prov: prov}
@@ -449,7 +449,7 @@ func TestRealtime_UnpricedModelIsRefusedBeforeTheUpgrade(t *testing.T) {
 	// SourceFallback is what an un-catalogued model resolves to. It is a real
 	// price with a real number; only its provenance says it was invented.
 	costs := &fakeCostEstimator{inputRateNano: 1000, source: cost.SourceFallback}
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithBudgetGate(newRecordingGate(failmode.Allow), costs),
 	)
@@ -491,7 +491,7 @@ func TestRealtime_CatalogPricedModelIsAdmitted(t *testing.T) {
 // shape. whisper-style realtime models are sold by the second and carry NO token
 // price, so a token-only probe would refuse every one of them.
 func TestRealtime_SecondsOnlyCatalogRateAdmits(t *testing.T) {
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(&fakeRealtimeDialer{sock: newFakeProviderSocket()}),
 		WithBudgetGate(newRecordingGate(failmode.Allow), &secondsOnlyEstimator{}),
 	)
@@ -529,7 +529,7 @@ func (secondsOnlyEstimator) CostUnits(_ context.Context, _, _ string, u cost.Uni
 func TestRealtime_BudgetRefusalPrecedesTheUpgrade(t *testing.T) {
 	prov := newFakeProviderSocket()
 	dialer := &fakeRealtimeDialer{sock: prov}
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithBudgetGate(newRecordingGate(failmode.Block402), &fakeCostEstimator{inputRateNano: 1000}),
 	)
@@ -568,7 +568,7 @@ func TestRealtime_MissingModelIs400(t *testing.T) {
 // with no provider side must refuse rather than upgrade a socket it can connect
 // to nothing.
 func TestRealtime_NoDialerAnswers501(t *testing.T) {
-	h := NewHandler(newDispatchSpy(), nil, nil)
+	h := newTestHandler(newDispatchSpy(), nil, nil)
 	srv := httptest.NewServer(h.route())
 	defer srv.Close()
 	resp := refusedDial(t,
@@ -594,7 +594,7 @@ func TestRealtime_DispatchesTheAsrSectionWireName(t *testing.T) {
 	resolver := NewModelResolver(ModelResolverConfig{DB: &fakeModelDB{rows: []fakeModelRow{
 		{title: "Voice in", data: []byte(`{"name":"openai/gpt-4o-transcribe"}`), section: "asr", typ: "asr_model"},
 	}}})
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithModelResolver(resolver),
 		WithBudgetGate(newRecordingGate(failmode.Allow), &fakeCostEstimator{inputRateNano: 1000}),
@@ -1209,7 +1209,7 @@ func TestRealtimeConstantsInSync(t *testing.T) {
 // options must still bound a session rather than gate it once and hold an
 // unbounded socket.
 func TestRealtimeDefaultsAreArmedWithoutOptions(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil)
+	h := newTestHandler(&fakeRouter{}, nil, nil)
 	if h.realtimeRecheck != DefaultRealtimeBudgetRecheck {
 		t.Errorf("realtimeRecheck = %v, want %v", h.realtimeRecheck, DefaultRealtimeBudgetRecheck)
 	}
@@ -1365,7 +1365,7 @@ func (s slowCostEstimator) CostUnits(ctx context.Context, p, m string, u cost.Un
 func TestRealtime_TheFrameReachesTheCallerBeforeBillingRuns(t *testing.T) {
 	const priceDelay = 400 * time.Millisecond
 	prov := newFakeProviderSocket()
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(&fakeRealtimeDialer{sock: prov}),
 		WithBudgetGate(newRecordingGate(failmode.Allow), slowCostEstimator{delay: priceDelay}),
 	)
@@ -1841,7 +1841,7 @@ func newModelSwapFixture(t *testing.T, priced ...string) (*realtimeFixture, *per
 	prov := newFakeProviderSocket()
 	dialer := &fakeRealtimeDialer{sock: prov}
 	gate := newRecordingGate(failmode.Allow)
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithBudgetGate(gate, costs),
 		WithRealtimeBudgetRecheck(time.Hour), // only the frame path may act here
@@ -1968,7 +1968,7 @@ func TestRealtime_MappedModelIsWrittenBackIntoTheFrame(t *testing.T) {
 	resolver := NewModelResolver(ModelResolverConfig{DB: &fakeModelDB{rows: []fakeModelRow{
 		{title: "Voice in", data: []byte(`{"name":"openai/gpt-4o-transcribe"}`), section: "asr", typ: "asr_model"},
 	}}})
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithModelResolver(resolver),
 		WithBudgetGate(newRecordingGate(failmode.Allow), &fakeCostEstimator{inputRateNano: 1000}),
@@ -2130,7 +2130,7 @@ func TestRealtime_UndecodableTerminalFrameIsNeverSilent(t *testing.T) {
 // class stream_drain.go exists to prevent.
 func TestRealtime_TurnIsBilledWhenTheClientWriteFails(t *testing.T) {
 	gate := newRecordingGate(failmode.Allow)
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{inputRateNano: 1000, outputRateNano: 2000}))
 
 	client := newScriptedClientSocket()
@@ -2170,7 +2170,7 @@ func TestRealtime_TurnIsBilledWhenTheClientWriteFails(t *testing.T) {
 func TestRealtime_StalledBudgetStoreIsAnOutage(t *testing.T) {
 	prov := newFakeProviderSocket()
 	dialer := &fakeRealtimeDialer{sock: prov}
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		// One answer for the UPGRADE's own budget check, then silence: only the
 		// live session meets the stall.
@@ -2259,7 +2259,7 @@ func TestRealtimeGateTimeout_ExceedsTheGatesOwnBudget(t *testing.T) {
 // The test drives exactly that interleaving: it calls resumeTurns FROM INSIDE
 // the close handshake, which is the one moment the context check cannot catch.
 func TestRealtime_ALateAllowCannotResumeAnEndingSession(t *testing.T) {
-	h := NewHandler(newDispatchSpy(), nil, nil)
+	h := newTestHandler(newDispatchSpy(), nil, nil)
 	client := newScriptedClientSocket()
 	prov := newFakeProviderSocket()
 	s := newTestSession(t, h, client, prov)
@@ -2291,7 +2291,7 @@ func TestRealtime_ALateAllowCannotResumeAnEndingSession(t *testing.T) {
 }
 
 func TestRealtime_EndRefusesBeforeItCloses(t *testing.T) {
-	h := NewHandler(newDispatchSpy(), nil, nil)
+	h := newTestHandler(newDispatchSpy(), nil, nil)
 	client := newScriptedClientSocket()
 	prov := newFakeProviderSocket()
 	s := newTestSession(t, h, client, prov)
@@ -2332,7 +2332,7 @@ func TestRealtime_EndRefusesBeforeItCloses(t *testing.T) {
 // directly, and it fails if that branch stops going through end().
 func TestRealtime_ExhaustedBudgetStopsForwardingAtTheRegate(t *testing.T) {
 	gate := newRecordingGate(failmode.Block402)
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{inputRateNano: 1000}),
 		WithRealtimeBudgetRecheck(10*time.Millisecond))
 	client := newScriptedClientSocket()
@@ -2420,7 +2420,7 @@ func TestRealtime_TurnOnAnUnpricedBasisIsCounted(t *testing.T) {
 	prov := newFakeProviderSocket()
 	dialer := &fakeRealtimeDialer{sock: prov}
 	gate := newRecordingGate(failmode.Allow)
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithBudgetGate(gate, tokensOnlyCatalogEstimator{}),
 		WithRealtimeBudgetRecheck(time.Hour))
@@ -2499,7 +2499,7 @@ func TestRealtime_TurnOnAnUnpricedBasisIsNotBilledFromAFabricatedPrice(t *testin
 	prov := newFakeProviderSocket()
 	dialer := &fakeRealtimeDialer{sock: prov}
 	gate := newRecordingGate(failmode.Allow)
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithRealtimeDialer(dialer),
 		WithBudgetGate(gate, secondsOnlyCatalogEstimator{}),
 		WithRealtimeBudgetRecheck(time.Hour))
@@ -2898,7 +2898,7 @@ func (d *deadlinePingSocket) budget() (time.Duration, bool) {
 // is never enforced.
 func TestRealtime_EachKeepalivePingGetsItsOwnDeadline(t *testing.T) {
 	const bound = 150 * time.Millisecond
-	h := NewHandler(newDispatchSpy(), nil, nil)
+	h := newTestHandler(newDispatchSpy(), nil, nil)
 	// Not an operator knob: the production bound is realtimeWriteTimeout and a
 	// test cannot wait 10 s for one ping.
 	// TestRealtimeDefaultsAreArmedWithoutOptions pins the default.

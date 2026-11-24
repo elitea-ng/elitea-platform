@@ -51,6 +51,7 @@ import type {
   AdminAuthUsersPage,
   AdminConsoleDocument,
   AdminConsoleItem,
+  AdministrationAccessTokens,
   AdministrationRoleHistory,
   AdministrationRoleHolders,
   AgentIdentityBinding,
@@ -614,6 +615,35 @@ export const getListAdministrationRoleHistoryResponseMock =
         reason: null,
         source: "bootstrap",
         source_ref: null,
+      },
+    ],
+  });
+
+export const getListAdministrationAccessTokensResponseMock =
+  (): AdministrationAccessTokens => ({
+    total: 2,
+    rows: [
+      {
+        id: 31,
+        name: "nightly-sync",
+        expires: "2027-02-01T00:00:00Z",
+        admin_access: "inherit",
+        admin_scopes: [],
+        owner_id: 11,
+        owner_name: "Ada Admin",
+        owner_email: "ada@example.com",
+        owner_suspended: false,
+      },
+      {
+        id: 42,
+        name: "usage-report",
+        expires: null,
+        admin_access: "scoped",
+        admin_scopes: ["access.roles.view", "llm.usage.view"],
+        owner_id: 14,
+        owner_name: "Sam Auditor",
+        owner_email: "sam@example.com",
+        owner_suspended: false,
       },
     ],
   });
@@ -4813,6 +4843,32 @@ export const getListAdministrationRoleHistoryMockHandler = (
   );
 };
 
+export const getListAdministrationAccessTokensMockHandler = (
+  overrideResponse?:
+    | AdministrationAccessTokens
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AdministrationAccessTokens> | AdministrationAccessTokens),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/tokens",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListAdministrationAccessTokensResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListUserModeRolesMockHandler = (
   overrideResponse?:
     | ModeRoleListing
@@ -7614,6 +7670,7 @@ export const getAdminMock = () => [
   getGetAdminConsoleItemMockHandler(),
   getListAdministrationRoleHoldersMockHandler(),
   getListAdministrationRoleHistoryMockHandler(),
+  getListAdministrationAccessTokensMockHandler(),
   getListUserModeRolesMockHandler(),
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),

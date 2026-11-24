@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "مالك النشر.",
   "pages.admin.users.roles.superAdmin.label": "المسؤول العام",
   "pages.admin.users.roles.viewer.description": "دور قديم. يحتفظ بالأذونات التي كانت لديه عند الترقية.",
-  "pages.admin.users.roles.viewer.label": "عارض"
+  "pages.admin.users.roles.viewer.label": "عارض",
+  "entities.token.form.adminScopesHelp": "اختر أذونات الإدارة التي يمكن لهذا الرمز استخدامها. لا تختر أيًا منها لرمز بلا وصول إداري. يتطلب اختيار أي منها تسجيل دخول حديثًا.",
+  "entities.token.form.adminScopesTitle": "الوصول الإداري",
+  "entities.token.form.recentSignInUnavailable": "تتطلب أذونات الإدارة تسجيل دخول حديثًا. سجّل الخروج، ثم سجّل الدخول مرة أخرى، وأنشئ الرمز خلال بضع دقائق.",
+  "entities.token.form.scopeBrowserRequired": "لا يمكن منح رمز أذونات إدارية إلا بعد تسجيل الدخول بحسابك الخاص في تطبيق الويب.",
+  "entities.token.form.scopeNotSettable": "لا يمكن لتسجيل الدخول هذا منح رمز أذونات إدارية. أزلها، أو سجّل الدخول مرة أخرى وحاول مجددًا.",
+  "entities.token.form.scopeRefused": "لا يمكن أن يملك هذا الرمز أذونات الإدارة هذه: {{scopes}}. أزلها وأنشئ الرمز مرة أخرى.",
+  "entities.token.table.adminAccess": "الإدارة",
+  "entities.token.table.adminInherit": "جميع أذونات الإدارة الخاصة بك",
+  "entities.token.table.adminInheritEnds": "جميع أذونات الإدارة الخاصة بك، حتى {{date}}",
+  "entities.token.table.adminNone": "لا شيء"
 }

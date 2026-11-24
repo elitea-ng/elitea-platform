@@ -3,6 +3,7 @@ module github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway
 go 1.27.3
 
 require (
+	github.com/elitea-ng/elitea-platform/libs/go/secretstrength v0.0.0-00010101000000-000000000000
 	cel.dev/cel-go v0.33.2
 	github.com/aws/aws-sdk-go-v2 v1.47.8
 	github.com/coder/websocket v1.8.15
@@ -113,3 +114,5 @@ replace github.com/elitea-ng/elitea-platform/libs/go/egresslib => ../../libs/go/
 replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 
 replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
+
+replace github.com/elitea-ng/elitea-platform/libs/go/secretstrength => ../../libs/go/secretstrength

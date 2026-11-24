@@ -318,7 +318,7 @@ func TestLoopBreaker_OperatorParamsApply(t *testing.T) {
 // matters here is that it really does admit everything rather than falling
 // back to a default the operator did not ask for.
 func TestWithLoopBreakerParams_NegativeThresholdDisarms(t *testing.T) {
-	h := NewHandler(&trackingRouter{}, nil, nil, WithLoopBreakerParams(LoopBreakerParams{Threshold: -1}))
+	h := newTestHandler(&trackingRouter{}, nil, nil, WithLoopBreakerParams(LoopBreakerParams{Threshold: -1}))
 	if h.loopGuard != nil {
 		t.Fatal("a negative threshold must disarm the backstop entirely, not fall back to the default")
 	}

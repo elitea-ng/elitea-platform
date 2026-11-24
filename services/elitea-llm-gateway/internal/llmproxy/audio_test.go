@@ -28,7 +28,7 @@ import (
 // audioHandler builds a handler with no model resolver, so mapModel forwards
 // the caller's model unchanged and these tests observe the audio path alone.
 func audioHandler(f *fakeRouter) http.Handler {
-	return NewHandler(f, nil, nil).route()
+	return newTestHandler(f, nil, nil).route()
 }
 
 // postAudioJSON posts a JSON body to path.
@@ -160,7 +160,7 @@ func TestSpeech_GeminiDefaultsToWAV(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			router := &capturingSpeechRouter{fakeRouter: fakeRouter{speechResp: &schemas.BifrostSpeechResponse{Audio: []byte("RIFF")}}}
-			rec := postAudioJSON(t, NewHandler(router, nil, nil).route(), "/llm/v1/audio/speech", tc.body)
+			rec := postAudioJSON(t, newTestHandler(router, nil, nil).route(), "/llm/v1/audio/speech", tc.body)
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 			}
@@ -296,7 +296,7 @@ func TestTranscription_CarriesTheUploadedFileAndFilename(t *testing.T) {
 	var seen *schemas.BifrostTranscriptionRequest
 	f := &fakeRouter{transcriptionResp: &schemas.BifrostTranscriptionResponse{Text: "ok"}}
 	spy := &transcriptionCapture{fakeRouter: *f, seen: &seen}
-	h := NewHandler(spy, nil, nil).route()
+	h := newTestHandler(spy, nil, nil).route()
 
 	audio := []byte("RIFF-payload")
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",

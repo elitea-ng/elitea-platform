@@ -59,9 +59,6 @@ func TestIdentitySignaturesMatchThePythonShell(t *testing.T) {
 	if spi.VerifySignature(h1, secret) {
 		t.Fatal("a changed project id verified")
 	}
-	if !spi.VerifySignature(http.Header{}, nil) {
-		t.Fatal("no secret must mean no verification, not a refusal")
-	}
 }
 
 // The classifier's precedence is the recorded one: message words first for
@@ -119,8 +116,17 @@ func TestToolErrorCarriesTheContract(t *testing.T) {
 	}
 }
 
+// These tests build hosts with no identity secret, so the lookup answers the
+// development flag ELITEA_DEV_INSECURE_IDENTITY=true unless the test sets it
+// itself. A test that proves the fail-closed default sets it to "false".
 func env(pairs map[string]string) spi.Lookup {
-	return func(key string) (string, bool) { v, ok := pairs[key]; return v, ok }
+	return func(key string) (string, bool) {
+		v, ok := pairs[key]
+		if !ok && key == spi.InsecureIdentityEnvVar {
+			return "true", true
+		}
+		return v, ok
+	}
 }
 
 func TestSettingsAreStrictAndPrefixed(t *testing.T) {

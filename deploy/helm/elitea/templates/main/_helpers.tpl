@@ -1805,6 +1805,14 @@ elitea-llm-gateway.masterKeyRef).
 {{- $ref = get (.Values.llmGateway.secrets | default dict) "SECRETS_MASTER_KEY" -}}
 {{- end -}}
 {{- $optOut := eq (toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS")) "true" -}}
+{{- /* #2958: the opt-out is a development flag, and a real sign-in
+       configuration is never a development machine. elitea-main refuses the
+       pair at start-up (cmd/elitea-main/master_key_gate.go); the chart refuses
+       it while rendering. */ -}}
+{{- $authFile := (((.Values.main.fileConfig | default dict).authConfig | default dict).enabled) -}}
+{{- if and $optOut (or $authFile (get $env "OIDC_ISSUER_URL") (get $env "ELITEA_AUTH_CONFIG_FILE")) -}}
+{{- fail "main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\" is refused next to a sign-in configuration (main.fileConfig.authConfig.enabled, main.env.OIDC_ISSUER_URL or main.env.ELITEA_AUTH_CONFIG_FILE): the opt-out is for a throwaway local install only. Remove it and reference a SECRETS_MASTER_KEY Secret (main.secrets.SECRETS_MASTER_KEY)." -}}
+{{- end -}}
 {{- if $ref -}}
 {{- if or (not $ref.secretName) (not $ref.key) -}}
 {{- fail "main.secrets.SECRETS_MASTER_KEY (or, when unset, llmGateway.secrets.SECRETS_MASTER_KEY) needs both secretName and key." -}}

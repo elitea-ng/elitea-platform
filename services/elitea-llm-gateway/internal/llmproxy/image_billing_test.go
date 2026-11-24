@@ -116,7 +116,7 @@ func TestImageBilling_CatalogPerImageBillsTheReturnedCount(t *testing.T) {
 	// Three images requested, two returned: the bill is for two.
 	router := &imageRouter{}
 	router.imgResp = imageResponse(2)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	rec, row := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p","n":3,"size":"1792x1024","quality":"hd"}`, nil)
 	if rec.Code != http.StatusOK {
@@ -146,7 +146,7 @@ func TestImageBilling_NoCatalogPriceBillsTheFlaggedEstimateAndWarnsOncePerModel(
 	gate := newImageGate(healthyAllow(0, 0))
 	router := &imageRouter{}
 	router.imgResp = imageResponse(2)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{priced: false}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{priced: false}))
 
 	_, row := serveImage(t, h, `{"model":"openai/some-new-image-model","prompt":"p"}`, nil)
 	gate.waitForUpdate(t)
@@ -177,7 +177,7 @@ func TestImageBilling_TokenUsageKeepsTheTokenPath(t *testing.T) {
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
 	router.imgResp.Usage = &schemas.ImageUsage{InputTokens: 10, OutputTokens: 5}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	_, row := serveImage(t, h, `{"model":"openai/gpt-image-1","prompt":"p"}`, nil)
 	gate.waitForUpdate(t)
@@ -194,7 +194,7 @@ func TestImageBilling_UsageBlockWithZeroTokensStillBills(t *testing.T) {
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
 	router.imgResp.Usage = &schemas.ImageUsage{}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: 40_000_000, priced: true}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: 40_000_000, priced: true}))
 
 	serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, nil)
 	gate.waitForUpdate(t)
@@ -208,7 +208,7 @@ func TestImageBilling_Dalle3DefaultsAreAskedOfTheCatalog(t *testing.T) {
 	calc := &imageCalc{unit: 40_000_000, priced: true}
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, nil)
 	calc.mu.Lock()
@@ -234,7 +234,7 @@ func TestImageAdmission_RefusesAnEstimateThatDoesNotFitAtTheBoundary(t *testing.
 			gate := newImageGate(healthyAllow(tc.spent, limit))
 			router := &imageRouter{}
 			router.imgResp = imageResponse(1)
-			h := NewHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: estimate, priced: true}))
+			h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: estimate, priced: true}))
 
 			rec, _ := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p","size":"1792x1024","quality":"hd"}`, nil)
 			if tc.wantOK {
@@ -263,7 +263,7 @@ func TestImageAdmission_RefusesAtTheMemberCeiling(t *testing.T) {
 	})
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: estimate, priced: true}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: estimate, priced: true}))
 
 	rec, _ := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, map[string]string{headerUserID: "7"})
 	assertBudgetRefusal(t, rec, budgetCodeMember, budgetScopeFieldMember)
@@ -277,7 +277,7 @@ func TestImageAdmission_NoEstimateForAnUnbudgetedProject(t *testing.T) {
 	calc := &imageCalc{unit: 1_000_000_000_000, priced: true}
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	rec, _ := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, nil)
 	if rec.Code != http.StatusOK {
@@ -289,7 +289,7 @@ func TestImageAdmission_AnUnpricedModelIsEstimatedAtTheFlatFigure(t *testing.T) 
 	gate := newImageGate(healthyAllow(0, 0))
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{priced: false}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &imageCalc{priced: false}))
 
 	serveImage(t, h, `{"model":"openai/some-new-image-model","prompt":"p","n":4}`, nil)
 	if got := gate.firstEstimate(budgetScopeProject); got != 4*perImageFallbackNano {
@@ -315,7 +315,7 @@ func TestImageBilling_AFailedOrEmptyProviderCallBillsNothing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gate := newImageGate(healthyAllow(0, 0))
-			h := NewHandler(tc.router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: 40_000_000, priced: true}))
+			h := newTestHandler(tc.router, nil, nil, WithBudgetGate(gate, &imageCalc{unit: 40_000_000, priced: true}))
 			_, row := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, nil)
 			gate.waitNoUpdate(t)
 			if row.Image == nil || row.Image.Count != 0 || row.Image.PricingSource != "" {
@@ -332,7 +332,7 @@ func TestImageBilling_EditAndVariationUseTheSamePricing(t *testing.T) {
 			calc := &imageCalc{unit: 20_000_000, priced: true}
 			router := &imageRouter{}
 			router.imgResp = imageResponse(2)
-			h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+			h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 			body, ct := multipartBody(t,
 				map[string]string{"model": "openai/dall-e-2", "prompt": "p", "size": "256x256", "n": "2"},

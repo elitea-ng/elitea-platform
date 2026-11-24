@@ -179,7 +179,7 @@ func TestDialOpenAIProtocolStreamedChatThroughTheGateway(t *testing.T) {
 			mapProjectID: {{id: "cred-dial", typ: account.DialCredentialType, title: "team-dial"}},
 		},
 	}
-	h := NewHandler(NewBifrostRouter(core), nil, nil,
+	h := newTestHandler(NewBifrostRouter(core), nil, nil,
 		WithModelResolver(NewModelResolver(ModelResolverConfig{DB: db})))
 
 	sink := &logCaptureSink{}

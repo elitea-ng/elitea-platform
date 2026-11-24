@@ -130,7 +130,10 @@ jobs:
           # it); sunset-reminder.mjs is the decision of sunset-reminder.yml.
           # check-critical-actions-note.mjs holds the R1.2b upgrade note to the
           # action table; it runs above.
-          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template check-sunset sunset-reminder check-critical-actions-note; do
+          # action-archive-list.mjs is the action set eng-runner-image.yml
+          # bakes into the pool image (the codeload 429 fix); its reader and
+          # the runner's cache layout are tested here.
+          for t in check-helm-version check-chart-deps check-vendor-manifest-notes browser-bakeoff-report check-upgrading-notes check-whats-new brand-output-scan brand-template check-sunset sunset-reminder check-critical-actions-note action-archive-list; do
             expected="$(grep -c '^test(' "scripts/ci/${t}.test.mjs")"
             status=0
             output="$(node --test --test-reporter=tap "scripts/ci/${t}.test.mjs" 2>&1)" || status=$?
@@ -605,6 +608,15 @@ jobs:
           set -euo pipefail
           node --test scripts/ci/check-e2e-paths.test.mjs
           node scripts/ci/check-e2e-paths.mjs
+      # #2958: no deploy/**/*.yml gives a signing secret, the vault master
+      # key or the unwrapped opt-out a literal value; the stack scripts
+      # generate them (deploy/scripts/lib/stack-secrets.sh).
+      - name: No deploy file carries a literal signing secret
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-deploy-signing-secrets.test.mjs
+          node scripts/ci/check-deploy-signing-secrets.mjs
       # The pool runs the E2E stack as processes from a hand-kept table
       # (deploy/native/). Every compose environment key, depends_on edge,
       # healthcheck and one-shot must have its counterpart there, and every

@@ -26,7 +26,7 @@ import (
 func TestDisconnect_SlowClose_ReaderBoundedByDrainPool(t *testing.T) {
 	gate := allowGate()
 	events := newRecordingEvents()
-	h := NewHandler(&wedgedRouter{}, nil, nil,
+	h := newTestHandler(&wedgedRouter{}, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1_000}),
 		WithOpsEventPublisher(events),
 		WithStreamDrainLimit(16), // per-project share = 16/8 = 2
@@ -107,7 +107,7 @@ func disconnectBilledInput(t *testing.T, path string, body any, first *schemas.B
 	}
 	gate := allowGate()
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(newSilentRouter(first), nil, nil,
+	h := newTestHandler(newSilentRouter(first), nil, nil,
 		WithBudgetGate(gate, calc),
 		WithStreamGrace(MaxStreamGrace))
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(raw)))
@@ -306,7 +306,7 @@ func (r *estimateProbeRouter) ChatCompletionStreamRequest(ctx *schemas.BifrostCo
 // never bills an estimate, so it must not pay for the closure either.
 func TestPromptEstimate_AttachedToStreamsOnly(t *testing.T) {
 	r := &estimateProbeRouter{}
-	h := NewHandler(r, nil, nil)
+	h := newTestHandler(r, nil, nil)
 
 	h.Chat(httptest.NewRecorder(), chatReqWithProject(t, "30", false))
 	if got := r.unary.Load(); got != 2 {

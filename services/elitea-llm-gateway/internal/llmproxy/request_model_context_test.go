@@ -49,7 +49,7 @@ var _ LLMRouter = (*modelCtxSpy)(nil)
 func TestHandlerPublishesTheDispatchedModel(t *testing.T) {
 	spy := &modelCtxSpy{dispatchSpy: *newDispatchSpy()}
 	resolver := NewModelResolver(ModelResolverConfig{DB: &fakeModelDB{rows: modelMapRows()}})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	for _, tc := range []struct {
 		name, path, id, want string
@@ -86,7 +86,7 @@ func TestHandlerPublishesTheDispatchedModel(t *testing.T) {
 // would also silently drop every tenant's api-version.
 func TestHandlerPublishesTheModelWhenTheModelSetIsUnknown(t *testing.T) {
 	spy := &modelCtxSpy{dispatchSpy: *newDispatchSpy()}
-	h := NewHandler(spy, nil, nil).route() // no model resolver at all
+	h := newTestHandler(spy, nil, nil).route() // no model resolver at all
 
 	rec := postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)

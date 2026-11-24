@@ -197,7 +197,7 @@ func normaliseVoiceProviderType(providerType string) string {
 // It dials nothing, writes nothing and bills nothing — see the file doc for why
 // that is the correct implementation today rather than a stub.
 func (h *Handler) ListProviderVoices(w http.ResponseWriter, r *http.Request) {
-	if !verifySignature(r.Header, h.identitySecret) {
+	if !h.verifyIdentity(r.Header) {
 		writeError(w, http.StatusForbidden, "permission_error", "invalid identity signature", "")
 		return
 	}

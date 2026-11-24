@@ -8,7 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit/accessevent"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -27,6 +30,12 @@ type Handler struct {
 	tokens          tokenRepository
 	tokenSigningKey []byte
 	tokenSigner     TokenSigner
+	// recentAuthentication is the sign-in check of the token scope rule
+	// (ADR-0059 R1.3a). The zero value is the deployment's limit.
+	recentAuthentication apimw.RecentAuthentication
+	// accessAudit appends the admin.access.changed event of a token scope
+	// change, in the change's transaction.
+	accessAudit securityaudit.Appender
 }
 
 type Option func(*Handler)
@@ -59,7 +68,7 @@ func WithTokenSigner(signer TokenSigner) Option {
 }
 
 func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
-	handler := &Handler{}
+	handler := &Handler{accessAudit: accessevent.DefaultAppender(accessEventSource)}
 	if pool != nil {
 		handler.tokens = newPostgresTokenRepository(pool)
 	}
@@ -75,8 +84,12 @@ func (h *Handler) Routes() chi.Router {
 	r.Get("/permissions/prompt_lib/{projectID}", h.PermissionList)
 	r.Get("/permissions/administration", h.AdministrationPermissionList)
 	r.Get("/token/", h.TokenList)
+	// Static, so it wins over the {tokenUUID} pattern below; a UUID is never
+	// the word "admin_scopes".
+	r.Get("/token/admin_scopes", h.TokenAdminScopeOffer)
 	r.Get("/token/{tokenUUID}", h.TokenGet)
 	r.Post("/token/", h.TokenCreate)
+	r.Put("/token/{tokenUUID}/admin_scopes", h.TokenSetAdminScopes)
 	r.Delete("/token/{tokenUUID}", h.TokenDelete)
 	return r
 }

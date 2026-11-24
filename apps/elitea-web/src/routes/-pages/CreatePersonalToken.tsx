@@ -11,6 +11,10 @@
  *  - Token name (validated: alphanumeric, underscore, hyphen)
  *  - Expiration period (dropdown: never, days, weeks, hours, minutes)
  *  - Expiration value (number input, shown when period != never)
+ *  - Administration scopes (ADR-0059 R1.3b), only when the server offers any:
+ *    `TokenAdminScopesField`. A create that needs a fresh sign-in saves the
+ *    form, starts the sign-in the server named, and restores the form here
+ *    (`features/settings/lib/personal-tokens/tokenCreateDraft`).
  *  - Generated token display via `GeneratedTokenDialog` on success
  *
  * PROJECT BINDING (`spec-llm-project-scope` §4, ADR-0018): the token binds to
@@ -47,7 +51,6 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
-import type { SxProps, Theme } from '@mui/material/styles';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -60,7 +63,15 @@ import { t } from '@/shared/i18n';
 import { TOKEN_NAME_PATTERN, TOKEN_EXPIRATION_OPTIONS, DEFAULT_TOKEN_EXPIRATION_VALUE } from '@/entities/token/model/constants';
 import { useCreateTokenMutation, useListTokensQuery } from '@/entities/token/api/tokenApi';
 import { bindableProjectId } from '@/entities/token/model/selectors';
-import { createTokenFailureMessage, TokenCreateError, TokenProjectNotice } from '@/routes/-ui/TokenProjectNotice';
+import {
+  createTokenFailureMessage,
+  recentSignInUnavailableMessage,
+  TokenCreateError,
+  TokenProjectNotice,
+} from '@/routes/-ui/TokenProjectNotice';
+import { TokenAdminScopesField } from '@/features/settings/ui/personal-tokens/TokenAdminScopesField';
+import { signInAgainForTokenCreate, takeTokenCreateDraft, tokenFormDefaults } from '@/features/settings/lib/personal-tokens/tokenCreateDraft';
+import { getStyles } from './CreatePersonalToken.styles';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { useTheme } from '@mui/material/styles';
 
@@ -98,6 +109,9 @@ export function CreatePersonalTokenPage() {
   useListTokensQuery({ enabled: false });
   const theme = useTheme();
   const [submitError, setSubmitError] = useState<string | null>(null);
+  /* ADR-0059 R1.3b: what the person typed before a fresh sign-in, restored once. */
+  const [draft] = useState(takeTokenCreateDraft);
+  const [adminScopes, setAdminScopes] = useState<readonly string[]>(() => draft?.adminScopes ?? []);
 
   /* The binding, read the same way `settings/tokens.tsx` reads it. The server
      re-checks membership in the create transaction (§4) — the sidebar
@@ -109,11 +123,7 @@ export function CreatePersonalTokenPage() {
   const form = useForm<FormValues>({
     resolver: zodResolver(validationSchema),
     mode: 'onChange',
-    defaultValues: {
-      name: '',
-      measure: 'days',
-      expiration: DEFAULT_TOKEN_EXPIRATION_VALUE,
-    },
+    defaultValues: tokenFormDefaults(draft, DEFAULT_TOKEN_EXPIRATION_VALUE),
   });
 
   const {
@@ -141,18 +151,23 @@ export function CreatePersonalTokenPage() {
         expires,
         // SPREAD, never `project_id: null` — §4 makes "absent" the unbound case.
         ...(boundProjectId === undefined ? {} : { project_id: boundProjectId }),
+        // Nothing chosen: no admin keys at all, a token without administration access.
+        ...(adminScopes.length === 0 ? {} : { admin_access: 'scoped', admin_scopes: adminScopes }),
       });
       setGeneratedToken({ token: resp.token, name: resp.name });
       setShowDialog(true);
     } catch (error) {
-      setSubmitError(createTokenFailureMessage(error));
+      const draftNow = { name: values.name, measure: values.measure, expiration: values.expiration, adminScopes };
+      const signIn = signInAgainForTokenCreate(error, draftNow);
+      if (signIn === 'started') return;
+      setSubmitError(signIn === 'unavailable' ? recentSignInUnavailableMessage() : createTokenFailureMessage(error));
     }
-  }, [createMutation, boundProjectId]);
+  }, [createMutation, boundProjectId, adminScopes]);
 
   const expirationValue = useWatch({ name: 'expiration', control }) as number | null;
   const hasChanged = useMemo(
-    () => name !== '' || measure !== 'days' || expirationValue !== DEFAULT_TOKEN_EXPIRATION_VALUE,
-    [name, measure, expirationValue],
+    () => name !== '' || measure !== 'days' || expirationValue !== DEFAULT_TOKEN_EXPIRATION_VALUE || adminScopes.length > 0,
+    [name, measure, expirationValue, adminScopes],
   );
 
   const onCancel = useCallback(() => {
@@ -264,6 +279,13 @@ export function CreatePersonalTokenPage() {
                   )}
                 </Box>
 
+                {/* Administration scopes (ADR-0059 R1.3b): only when the server offers any. */}
+                <TokenAdminScopesField
+                  value={adminScopes}
+                  onChange={setAdminScopes}
+                  disabled={isGenerating}
+                />
+
                 {/* Project binding — the sidebar selection, fixed at creation (§4).
                     The name comes from the id the request carries, so a dropped
                     store value reads as unbound here too. `||`, not `??`: the
@@ -290,107 +312,3 @@ export function CreatePersonalTokenPage() {
     </>
   );
 }
-
-const getStyles = (theme: Theme): {
-  root: SxProps<Theme>;
-  headerRight: SxProps<Theme>;
-  content: SxProps<Theme>;
-  formWrapper: SxProps<Theme>;
-  formFields: SxProps<Theme>;
-  nameField: SxProps<Theme>;
-  expirationRow: SxProps<Theme>;
-  measureField: SxProps<Theme>;
-  valueField: SxProps<Theme>;
-  loadingIndicator: SxProps<Theme>;
-  input: SxProps<Theme>;
-  select: SxProps<Theme>;
-  numberInput: SxProps<Theme>;
-  helperText: SxProps<Theme>;
-} => {
-  const baseInput: SxProps<Theme> = {
-    width: '100%',
-    border: 'none',
-    borderBottom: '1px solid',
-    borderBottomColor: theme.vars.palette.border.lines,
-    padding: '0.5rem 0',
-    fontSize: ({ typography }) => typography.headingMedium.fontSize,
-    outline: 'none',
-    background: 'transparent',
-  };
-
-  return {
-    root: {
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      overflow: 'hidden',
-    },
-    headerRight: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '0.5rem',
-    },
-    content: {
-      padding: '1.5rem',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'flex-start',
-      flex: 1,
-    },
-    formWrapper: {
-      marginTop: '1.25rem',
-      width: '100%',
-      maxWidth: '45rem',
-    },
-    formFields: {
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: '1.25rem',
-    },
-    nameField: {
-      width: '17.875rem',
-    },
-    expirationRow: {
-      display: 'flex',
-      flexDirection: 'row',
-      alignItems: 'flex-end',
-      gap: '1rem',
-      width: '17.875rem',
-    },
-    measureField: {
-      width: '12.5rem',
-    },
-    valueField: {
-      width: '5.375rem',
-      paddingTop: '0.125rem',
-    },
-    loadingIndicator: {
-      marginLeft: '0.5rem',
-    },
-    input: baseInput,
-    // The open list is the browser's popup: inherited light text on its light
-    // background was unreadable in the dark theme. Colour both explicitly.
-    select: {
-      ...baseInput,
-      cursor: 'pointer',
-      appearance: 'auto',
-      color: theme.vars.palette.text.primary,
-      colorScheme: 'light',
-      ...theme.applyStyles('dark', { colorScheme: 'dark' }),
-      '& option': {
-        color: theme.vars.palette.text.primary,
-        backgroundColor: theme.vars.palette.background.paper,
-      },
-    },
-    numberInput: {
-      ...baseInput,
-      width: '100%',
-      textAlign: 'center',
-    },
-    helperText: {
-      marginTop: '0.25rem',
-      fontSize: ({ typography }) => typography.bodySmall.fontSize,
-    },
-  };
-};

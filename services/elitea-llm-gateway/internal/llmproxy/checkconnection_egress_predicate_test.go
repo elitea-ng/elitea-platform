@@ -175,7 +175,7 @@ func TestProbeEgressPredicate_CloudClassStaysClosed(t *testing.T) {
 // TestProbeEgressPredicate_NilPolicyFailsClosed pins the fail-closed default:
 // a handler with no policy grants nothing.
 func TestProbeEgressPredicate_NilPolicyFailsClosed(t *testing.T) {
-	h := NewHandler(nil, nil, nil) // no WithEgressPolicy
+	h := newTestHandler(nil, nil, nil) // no WithEgressPolicy
 	if h.probeAllowsPrivateNetwork(checkConnectionRequest{
 		Type: "vllm", APIBase: "http://10.1.2.3:8000/v1",
 	}) {

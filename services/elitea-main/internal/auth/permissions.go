@@ -44,6 +44,12 @@ type PermissionResolution struct {
 	// was resolved can hold none. Only the administration mode sets it; the
 	// elevation union (ADR-0059 R2.1) reads it.
 	ElevationSessionRef int64
+	// ElevationID is the elevation the resolved set includes, "" when the
+	// set is the caller's standing set alone. It is the resolver's elevation
+	// indicator: the elevation union (ADR-0059 R2.1) sets it, nothing does
+	// before. A rule that refuses an elevated caller (token scopes, R1.3a)
+	// reads it here, so the rule is live the day the union merges.
+	ElevationID string
 	// Roles is the caller's STANDING administration roles, by name, read by
 	// the same query as Permissions: the owner's roles for every kind whose
 	// set the owner's roles decide (session, form, native, and a scoped or

@@ -129,11 +129,11 @@ main:
           form:
             users_json_file: /run/elitea-auth/auth-form-users.json
   env:
-    APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
-    # Throwaway cluster: no master-key Secret is created, so Main opts out of
-    # the mandatory key explicitly.
-    ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
+    # No APPLICATION_SECRET_KEY and no ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS here
+    # (#2958): both are Secrets kind-stack.sh generates (main.secrets below and
+    # the gateway's SECRETS_MASTER_KEY reference elitea-main reads by default).
+    # elitea-main refuses the unwrapped opt-out next to fileConfig.authConfig.
 
     # The Configurations plane. It is on for ONE reason: ELITEA_AI_PROJECT_ID
     # below is refused unless it is (cmd/elitea-main/configurations_config.go
@@ -158,6 +158,14 @@ main:
     S3_REGION: "us-east-1"
     S3_FORCE_PATH_STYLE: "true"
 
+
+  # Merged into the chart's main.secrets map. kind-stack.sh generates the
+  # Secret once per cluster.
+  secrets:
+    APPLICATION_SECRET_KEY:
+      secretName: elitea-main-app-secrets
+      key: application-secret-key
+      optional: false
 
   # The runtime plane (main.runtime) runs on its defaults: on, with the
   # material Secret elitea-runtime-material, which kind-stack.sh creates from

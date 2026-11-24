@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -154,9 +155,32 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 	want("native_client", nativeClient, adminaccess.PlatformMaintenanceManage,
 		adminaccess.RuntimeAdminPublishedAgents, adminaccess.RuntimePlugins)
 	want("maintenance", maintenance, adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
-	// No row is a token scope until the scoped token (R1.1, R1.2) opts rows
-	// in. Identity trust (admin.auth.users.super_admin) never is.
-	want("token", token)
+	// Every row is a token scope (R1.3a) except a CLOSED list: the seeded-only
+	// names (identity trust, the global administrator's own permission,
+	// break-glass) and the two legacy names. The list is written out rather
+	// than derived from the rule, so widening the rule, or a new seeded-only
+	// or legacy row, fails here until the list is reviewed.
+	never := []string{
+		adminaccess.AdminAuthUsersSuperAdmin, adminaccess.IdentitySSOTrustManage,
+		adminaccess.AccessBreakglassRequest, adminaccess.AccessBreakglassApprove,
+		adminaccess.AccessBreakglassReview, adminaccess.AccessBreakglassManage,
+		adminaccess.RuntimePlugins, adminaccess.ConfigurationGovernance,
+	}
+	var eligible []string
+	for _, row := range adminaccess.Registry().Rows() {
+		if !slices.Contains(never, row.Name) {
+			eligible = append(eligible, row.Name)
+		}
+	}
+	want("token", token, eligible...)
+	for _, name := range never {
+		if row, _ := adminaccess.Lookup(name); row.Token {
+			t.Errorf("%s is a token scope; it must say token: never", name)
+		}
+	}
+	if len(token) < 50 {
+		t.Errorf("only %d token scopes: the opt-in lost rows", len(token))
+	}
 	// The two overloaded names of ADR-0059 decision 2, which end on the
 	// sunset date (R0.14a). R4.7 removes both rows.
 	want("legacy", legacy, adminaccess.ConfigurationGovernance, adminaccess.RuntimePlugins)

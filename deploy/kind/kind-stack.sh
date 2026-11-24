@@ -81,6 +81,24 @@ die()  { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 kc() { kubectl --context "kind-${CLUSTER}" "$@"; }
 
+# shellcheck source=../scripts/lib/stack-secrets.sh
+. "${REPO_ROOT}/deploy/scripts/lib/stack-secrets.sh"
+
+# kind_secret NAME KEY KIND — the value of data key KEY in Secret NAME, or a
+# new random one when the Secret or the key does not exist yet. No value is
+# committed (#2958): a cluster keeps the values it was installed with across
+# `up` runs, and a new cluster gets new ones. KIND is b64 or fernet, as in
+# deploy/scripts/lib/stack-secrets.sh.
+kind_secret() {
+  local current
+  current="$(kc -n "$NS" get secret "$1" -o "go-template={{index .data \"$2\"}}" 2>/dev/null || true)"
+  if [ -n "$current" ] && [ "$current" != "<no value>" ]; then
+    printf '%s' "$current" | openssl base64 -d -A
+    return
+  fi
+  _stack_secret_value "$3"
+}
+
 require_tools() {
   for tool in "$ENGINE" kind kubectl helm python3; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is not on PATH"
@@ -306,10 +324,10 @@ install_infra() {
   # both sides: the chart hands this same Secret to elitea-main and to the
   # provider pod.
   kc -n "$NS" create secret generic elitea-deepwiki-secrets \
-    --from-literal=identity-secret='kind-deepwiki-identity' \
+    --from-literal=identity-secret="$(kind_secret elitea-deepwiki-secrets identity-secret b64)" \
     --dry-run=client -o yaml | kc apply -f -
   kc -n "$NS" create secret generic elitea-inventory-secrets \
-    --from-literal=identity-secret='kind-inventory-identity' \
+    --from-literal=identity-secret="$(kind_secret elitea-inventory-secrets identity-secret b64)" \
     --dry-run=client -o yaml | kc apply -f -
   # The bundled Qdrant's API key: Qdrant reads it, and elitea-vector, its only
   # client, presents it (vector.qdrant.apiKeySecret).
@@ -318,7 +336,17 @@ install_infra() {
     --dry-run=client -o yaml | kc apply -f -
   # Non-optional in the chart even with llmGateway.enabled=false.
   kc -n "$NS" create secret generic elitea-main-llm-gateway-secrets \
-    --from-literal=gateway-identity-secret='kind-unused-gateway-identity' \
+    --from-literal=gateway-identity-secret="$(kind_secret elitea-main-llm-gateway-secrets gateway-identity-secret b64)" \
+    --dry-run=client -o yaml | kc apply -f -
+  # The vault master key (elitea-main reads the gateway's reference by
+  # default) and the token key. elitea-main refuses the unwrapped opt-out next
+  # to the Form authentication this stack runs (#2958), so the cluster has a
+  # real key; seed() wraps the seeded vault keys with it.
+  kc -n "$NS" create secret generic elitea-llm-gateway-secrets \
+    --from-literal=secrets-master-key="$(kind_secret elitea-llm-gateway-secrets secrets-master-key fernet)" \
+    --dry-run=client -o yaml | kc apply -f -
+  kc -n "$NS" create secret generic elitea-main-app-secrets \
+    --from-literal=application-secret-key="$(kind_secret elitea-main-app-secrets application-secret-key b64)" \
     --dry-run=client -o yaml | kc apply -f -
   kc -n "$NS" create secret generic elitea-main-storage-secrets \
     --from-literal=s3-access-key='elitea' \
@@ -377,6 +405,10 @@ psql_exec() {
 seed() {
   say "Seeding the wiki toolkit, its repository credential, the bucket row and a PAT"
   psql_exec -q < "${SCRIPT_DIR}/seed.sql"
+  # seed.sql writes the vault keys in the clear; wrap them with the cluster's
+  # master key, the one elitea-main reads.
+  SECRETS_MASTER_KEY="$(kind_secret elitea-llm-gateway-secrets secrets-master-key fernet)" \
+    stack_wrap_seeded_vault_keys psql_exec
   note "seeded project ${PROJECT_ID}, toolkit ${TOOLKIT_ID}, code toolkit ${CODE_TOOLKIT_ID}"
 }
 

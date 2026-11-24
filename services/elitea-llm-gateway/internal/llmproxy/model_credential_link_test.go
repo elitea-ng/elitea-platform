@@ -74,7 +74,7 @@ func newLinkHandler(t *testing.T, rows []fakeModelRow, creds []fakeCredentialRow
 		rows:          rows,
 		credsBySchema: map[string][]fakeCredentialRow{mapProjectID: creds},
 	}
-	h := NewHandler(spy, nil, nil, WithModelResolver(NewModelResolver(ModelResolverConfig{DB: db})))
+	h := newTestHandler(spy, nil, nil, WithModelResolver(NewModelResolver(ModelResolverConfig{DB: db})))
 	return h.route(), spy
 }
 
@@ -469,7 +469,7 @@ func TestModelLinksToAPublishedCredential(t *testing.T) {
 		},
 	}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db, PublicProjectID: public})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"Prod GPT","messages":[{"role":"user","content":"hi"}]}`)
@@ -505,7 +505,7 @@ func TestUnpublishedCredentialOfThePublicProjectIsNotLinkable(t *testing.T) {
 		},
 	}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db, PublicProjectID: public})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"Prod GPT","messages":[{"role":"user","content":"hi"}]}`)
@@ -541,7 +541,7 @@ func TestPublishedModelPinsItsUnpublishedOwnerCredential(t *testing.T) {
 		},
 	}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db, PublicProjectID: public})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"Shared GPT","messages":[{"role":"user","content":"hi"}]}`)
@@ -579,7 +579,7 @@ func TestPublishedModelPrivateLinkUsesTheCallerScope(t *testing.T) {
 		},
 	}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db, PublicProjectID: public})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"Personal GPT","messages":[{"role":"user","content":"hi"}]}`)
@@ -610,7 +610,7 @@ func TestOwnCredentialWinsOverAPublishedOneOfTheSameTitle(t *testing.T) {
 		},
 	}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db, PublicProjectID: public})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	postAs(t, h, "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"Prod GPT","messages":[{"role":"user","content":"hi"}]}`)

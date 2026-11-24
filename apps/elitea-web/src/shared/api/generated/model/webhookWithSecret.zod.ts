@@ -53,7 +53,7 @@ export const WebhookWithSecret = zod
       .string()
       .optional()
       .describe(
-        "The signing secret. HMAC-SHA256 of the delivered body keyed by this value is the `X-Webhook-Signature` header. Absent when the webhook was created without one.\n",
+        "The signing secret. HMAC-SHA256 of the delivered body keyed by this value is the `X-Webhook-Signature` header. Every webhook has one: createWebhook generates a random 32-byte value when the body carries none.\n",
       ),
     active: zod.boolean(),
     created_at: zod.iso.datetime({ offset: true }),

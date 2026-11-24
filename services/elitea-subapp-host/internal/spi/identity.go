@@ -74,13 +74,14 @@ func IdentityFromHeaders(h http.Header) Identity {
 }
 
 // VerifySignature reports whether the headers carry a signature the secret
-// produced. No secret means no verification, which is the dev-stack shape.
-// v2 (with an execution id) is tried first; v1 is accepted only for a
-// request that carries no execution id, so an execution id can never be
-// appended to a v1 signature after the fact.
+// produced. It fails closed: with no secret there is nothing to verify
+// against, so no header set verifies (#2959). v2 (with an execution id) is
+// tried first; v1 is accepted only for a request that carries no execution
+// id, so an execution id can never be appended to a v1 signature after the
+// fact.
 func VerifySignature(h http.Header, secret []byte) bool {
 	if len(secret) == 0 {
-		return true
+		return false
 	}
 	got := h.Get(HeaderSignature)
 	if got == "" {

@@ -66,6 +66,12 @@ const (
 	SunsetAfter          = ""
 )
 
+// InheritEndsOn is the date on which an `inherit` token ends (ADR-0059
+// decision 2 and decision 7, "`inherit`"): SunsetAfter, "" while it is not
+// set. The token responses and the central listing state it (R1.3a); the
+// later of this date and 30 days after the owner's notice is R4.2's.
+func InheritEndsOn() string { return SunsetAfter }
+
 // Area is one of the six console areas of ADR-0059 decision 6.
 type Area string
 

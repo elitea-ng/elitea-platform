@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "De eigenaar van de implementatie.",
   "pages.admin.users.roles.superAdmin.label": "Globale beheerder",
   "pages.admin.users.roles.viewer.description": "Een verouderde rol. Hij behoudt de rechten die hij bij de upgrade had.",
-  "pages.admin.users.roles.viewer.label": "Lezer"
+  "pages.admin.users.roles.viewer.label": "Lezer",
+  "entities.token.form.adminScopesHelp": "Kies de beheerrechten die dit token mag gebruiken. Kies er geen voor een token zonder beheertoegang. Als u er een kiest, is een recente aanmelding nodig.",
+  "entities.token.form.adminScopesTitle": "Beheertoegang",
+  "entities.token.form.recentSignInUnavailable": "Beheerrechten vereisen een recente aanmelding. Meld u af, meld u opnieuw aan en maak het token binnen enkele minuten.",
+  "entities.token.form.scopeBrowserRequired": "Beheerrechten kunnen alleen aan een token worden gegeven nadat u zich met uw eigen account in de webapp hebt aangemeld.",
+  "entities.token.form.scopeNotSettable": "Met deze aanmelding kunt u een token geen beheerrechten geven. Verwijder ze, of meld u opnieuw aan en probeer het nog eens.",
+  "entities.token.form.scopeRefused": "Dit token kan deze beheerrechten niet hebben: {{scopes}}. Verwijder ze en maak het token opnieuw.",
+  "entities.token.table.adminAccess": "Beheer",
+  "entities.token.table.adminInherit": "Al uw beheerrechten",
+  "entities.token.table.adminInheritEnds": "Al uw beheerrechten, tot {{date}}",
+  "entities.token.table.adminNone": "Geen"
 }
