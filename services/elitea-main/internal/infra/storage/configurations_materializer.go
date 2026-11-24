@@ -274,7 +274,7 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 			return nil, currentMaterializationError(ctx, err)
 		}
 		version["tools"] = tools
-		if err := m.materializeDBActionSnapshot(ctx, projectID, version, &walker); err != nil {
+		if err := m.materializeDBActionSnapshot(ctx, projectID, application, version, &walker); err != nil {
 			return nil, currentMaterializationError(ctx, err)
 		}
 		application["version_details"] = version
@@ -314,13 +314,21 @@ func (m *CurrentConfigurationsMaterializer) materializeAgentExecution(
 const maxDelegatedCredentialReferences = 16
 
 // materializeDBActionSnapshot redeems each frozen `sql` configuration in
-// version["db_action_snapshot"] strictly for the claimed Worker. Every rule's
-// `sql_configuration` must carry Main's CurrentFrozenConfigurationMarker,
-// configuration_type=="sql", and configuration_project_id matching the claimed
-// execution's projectID; the marker is stripped before returning to the Worker.
+// version["db_action_snapshot"] strictly for the claimed Worker:
+//   - verifies the snapshot envelope (project_id, application_id, version_id)
+//     and every rule's PolicyDigest and BindingDigest via FrozenSnapshot.Verify;
+//   - enforces a strict flat key allowlist on `sql_configuration` (no unknown
+//     keys or nested maps that could traverse into a foreign project's vault);
+//   - verifies CurrentFrozenConfigurationMarker, configuration_type=="sql", and
+//     configuration_project_id == claimed projectID;
+//   - requires a sealed vault secret reference on `password` and unsecrets
+//     strictly that `password` field (never host, username, or metadata);
+//   - strips CurrentFrozenConfigurationMarker and validates + zeroes the
+//     materialized credential before returning to the Worker.
 func (m *CurrentConfigurationsMaterializer) materializeDBActionSnapshot(
 	ctx context.Context,
 	projectID int32,
+	application map[string]any,
 	version map[string]any,
 	walker *currentFrozenConfigurationWalker,
 ) error {
@@ -328,15 +336,45 @@ func (m *CurrentConfigurationsMaterializer) materializeDBActionSnapshot(
 	if !exists || rawSnapshot == nil {
 		return nil
 	}
-	snapshot, ok := rawSnapshot.(map[string]any)
-	if !ok || snapshot == nil {
+	snapshotMap, ok := rawSnapshot.(map[string]any)
+	if !ok || snapshotMap == nil {
 		return errInvalidCurrentFrozenConfiguration
 	}
-	if schema, _ := snapshot["schema_version"].(string); schema != dbaction.SnapshotSchema {
+	appID, ok := positiveMaterializationInt64(application["id"])
+	if !ok {
 		return errInvalidCurrentFrozenConfiguration
 	}
-	rawRules, ok := snapshot["rules"].([]any)
-	if !ok || len(rawRules) == 0 || len(rawRules) > dbaction.MaxRulesPerProject {
+	versionID, ok := positiveMaterializationInt64(application["version_id"])
+	if !ok {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	if nestedVersionID, exists := version["id"]; exists && nestedVersionID != nil {
+		parsedNested, nestedOK := positiveMaterializationInt64(nestedVersionID)
+		if !nestedOK || parsedNested != versionID {
+			return errInvalidCurrentFrozenConfiguration
+		}
+	}
+
+	// Re-encode and strictly decode the snapshot envelope so FrozenSnapshot.Verify
+	// validates schema_version, project_id, application_id, version_id, unique
+	// valid rule names, PolicyDigest (across every policy field), and BindingDigest.
+	snapshotBytes, err := json.Marshal(snapshotMap)
+	if err != nil {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	var decoded dbaction.FrozenSnapshot
+	decoder := json.NewDecoder(bytes.NewReader(snapshotBytes))
+	decoder.DisallowUnknownFields()
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return errInvalidCurrentFrozenConfiguration
+	}
+	if err := decoded.Verify(int64(projectID), appID, versionID); err != nil {
+		return errInvalidCurrentFrozenConfiguration
+	}
+
+	rawRules, ok := snapshotMap["rules"].([]any)
+	if !ok || len(rawRules) != len(decoded.Rules) {
 		return errInvalidCurrentFrozenConfiguration
 	}
 	for i, rawRule := range rawRules {
@@ -344,9 +382,8 @@ func (m *CurrentConfigurationsMaterializer) materializeDBActionSnapshot(
 		if !ok || ruleMap == nil {
 			return errInvalidCurrentFrozenConfiguration
 		}
-		dialect, _ := ruleMap["dialect"].(string)
 		sqlCfg, ok := ruleMap["sql_configuration"].(map[string]any)
-		if !ok || sqlCfg == nil {
+		if !ok || sqlCfg == nil || !validFlatDBSnapshotSQLConfig(sqlCfg) {
 			return errInvalidCurrentFrozenConfiguration
 		}
 		ownerProjectID, marked, err := currentFrozenConfigurationOwner(sqlCfg)
@@ -356,24 +393,77 @@ func (m *CurrentConfigurationsMaterializer) materializeDBActionSnapshot(
 		if cfgType, _ := sqlCfg["configuration_type"].(string); cfgType != "sql" {
 			return errInvalidCurrentFrozenConfiguration
 		}
+		rawPassword, ok := sqlCfg["password"].(string)
+		if !ok || !configurationapp.IsCurrentSecretReference(rawPassword) || len(rawPassword) > dbaction.MaxSQLPasswordBytes {
+			return errInvalidCurrentFrozenConfiguration
+		}
 		if walker.configurations >= maxCurrentFrozenConfigurationScopes {
 			return errInvalidCurrentFrozenConfiguration
 		}
+		if err := walker.visit(ctx, 0); err != nil {
+			return err
+		}
 		walker.configurations++
-		materialized, err := walker.materializeOwnedMap(ctx, ownerProjectID, sqlCfg, 0, true)
+		unsecretedPasswordMap, err := m.unsecreter.Unsecret(ctx, ownerProjectID, map[string]any{"password": rawPassword})
 		if err != nil {
 			return err
 		}
-		delete(materialized, configurationapp.CurrentFrozenConfigurationMarker)
-		if _, err := dbaction.ParseMaterializedSQLCredential(dialect, materialized); err != nil {
+		materialized := make(map[string]any, len(sqlCfg))
+		for k, v := range sqlCfg {
+			if k == configurationapp.CurrentFrozenConfigurationMarker {
+				continue
+			}
+			materialized[k] = v
+		}
+		materialized["password"] = unsecretedPasswordMap["password"]
+		cred, err := dbaction.ParseMaterializedSQLCredential(decoded.Rules[i].Dialect, materialized)
+		if err != nil {
 			return errInvalidCurrentFrozenConfiguration
 		}
+		cred.Zero()
 		ruleMap["sql_configuration"] = materialized
 		rawRules[i] = ruleMap
 	}
-	snapshot["rules"] = rawRules
-	version["db_action_snapshot"] = snapshot
+	snapshotMap["rules"] = rawRules
+	version["db_action_snapshot"] = snapshotMap
 	return nil
+}
+
+func positiveMaterializationInt64(raw any) (int64, bool) {
+	switch v := raw.(type) {
+	case json.Number:
+		n, err := strconv.ParseInt(string(v), 10, 64)
+		return n, err == nil && n > 0
+	case int64:
+		return v, v > 0
+	case int32:
+		return int64(v), v > 0
+	case int:
+		return int64(v), v > 0
+	default:
+		return 0, false
+	}
+}
+
+func validFlatDBSnapshotSQLConfig(cfg map[string]any) bool {
+	if len(cfg) == 0 || len(cfg) > 9 {
+		return false
+	}
+	for k, v := range cfg {
+		switch k {
+		case configurationapp.CurrentFrozenConfigurationMarker,
+			"configuration_uuid", "configuration_project_id", "configuration_type",
+			"host", "port", "username", "password", "dialect":
+		default:
+			return false
+		}
+		switch v.(type) {
+		case nil, bool, string, int, int32, int64, float64, json.Number:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // materializeDelegatedCredentials resolves a fan-out wake's

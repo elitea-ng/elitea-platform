@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // SnapshotSchema is the start-time freeze of project DB action rules and their
@@ -107,8 +108,7 @@ func FreezeSnapshot(
 		if err != nil {
 			return nil, err
 		}
-		if loaded.Name != name || loaded.RuleID <= 0 || loaded.Revision <= 0 ||
-			loaded.ConfigurationID <= 0 || loaded.SQLConfiguration == nil || !validHexDigest(loaded.PolicyDigest) {
+		if loaded.Name != name || !validFrozenRulePolicy(projectID, loaded) {
 			return nil, ErrPolicyDenied
 		}
 		loaded.BindingDigest = FrozenRuleBindingDigest(*snapshot, loaded)
@@ -141,7 +141,8 @@ func FrozenRuleBindingDigest(snapshot FrozenSnapshot, rule FrozenRule) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// Verify checks the snapshot's version binding and every rule's binding digest.
+// Verify checks the snapshot's version binding, reconstructs and validates
+// every rule's policy fields against PolicyDigest, and verifies BindingDigest.
 func (s FrozenSnapshot) Verify(projectID, applicationID, versionID int64) error {
 	if s.SchemaVersion != SnapshotSchema ||
 		s.ProjectID != projectID ||
@@ -152,9 +153,7 @@ func (s FrozenSnapshot) Verify(projectID, applicationID, versionID int64) error 
 	}
 	seen := make(map[string]bool, len(s.Rules))
 	for _, rule := range s.Rules {
-		if seen[rule.Name] || !ValidRuleName(rule.Name) ||
-			rule.RuleID <= 0 || rule.Revision <= 0 || rule.ConfigurationID <= 0 ||
-			rule.SQLConfiguration == nil || !validHexDigest(rule.PolicyDigest) ||
+		if seen[rule.Name] || !validFrozenRulePolicy(projectID, rule) ||
 			!validHexDigest(rule.BindingDigest) ||
 			rule.BindingDigest != FrozenRuleBindingDigest(s, rule) {
 			return ErrPolicyDenied
@@ -162,6 +161,33 @@ func (s FrozenSnapshot) Verify(projectID, applicationID, versionID int64) error 
 		seen[rule.Name] = true
 	}
 	return nil
+}
+
+// validFrozenRulePolicy reconstructs the authoritative Rule from every
+// policy-bearing field of a FrozenRule, re-validates it, and proves
+// rule.PolicyDigest matches the canonical PolicyDigest of those exact fields.
+func validFrozenRulePolicy(projectID int64, rule FrozenRule) bool {
+	if rule.RuleID <= 0 || projectID <= 0 || rule.Revision <= 0 || rule.ConfigurationID <= 0 ||
+		rule.SQLConfiguration == nil || !validHexDigest(rule.PolicyDigest) {
+		return false
+	}
+	candidate := Rule{
+		ID:              rule.RuleID,
+		ProjectID:       projectID,
+		Revision:        rule.Revision,
+		SchemaVersion:   RuleSchema,
+		Name:            rule.Name,
+		ConfigurationID: rule.ConfigurationID,
+		Dialect:         rule.Dialect,
+		DatabaseName:    rule.DatabaseName,
+		Mode:            rule.Mode,
+		MarkerTable:     rule.MarkerTable,
+		Enabled:         true,
+	}
+	if candidate.Validate() != nil {
+		return false
+	}
+	return candidate.PolicyDigest() == rule.PolicyDigest
 }
 
 // MaterializedSQLCredential is the claim-time unsecreted connection credential
@@ -280,7 +306,7 @@ func ParseSQLPort(raw any, defaultPort uint16) (uint16, error) {
 		}
 		parsed = n
 	case float64:
-		if math.Trunc(v) != v || math.IsNaN(v) || math.IsInf(v, 0) {
+		if math.IsNaN(v) || math.IsInf(v, 0) || math.Trunc(v) != v || v < 1 || v > 65535 {
 			return 0, ErrInvalid
 		}
 		parsed = int64(v)
@@ -304,11 +330,13 @@ func parseSQLHost(raw any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	host = strings.TrimSpace(host)
-	if strings.Contains(host, "{{secret.") {
+	if host != strings.TrimSpace(host) {
 		return "", ErrInvalid
 	}
-	if _, err := netip.ParseAddr(host); err == nil {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.Zone() != "" {
+			return "", ErrInvalid
+		}
 		return host, nil
 	}
 	if strings.HasSuffix(host, ".") {
@@ -330,7 +358,7 @@ func parseSQLHost(raw any) (string, error) {
 
 func parseSQLRequiredText(raw any, maxBytes int) (string, error) {
 	value, ok := raw.(string)
-	if !ok || len(value) > maxBytes || strings.TrimSpace(value) == "" || hasControlChar(value) {
+	if !ok || len(value) > maxBytes || strings.TrimSpace(value) == "" || hasControlChar(value) || strings.Contains(value, "{{secret.") {
 		return "", ErrInvalid
 	}
 	return value, nil
@@ -346,7 +374,7 @@ func parseSQLPassword(raw any) (string, error) {
 
 func hasControlChar(value string) bool {
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return true
 		}
 	}

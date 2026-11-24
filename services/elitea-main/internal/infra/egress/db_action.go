@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -36,9 +37,22 @@ func (g *Guard) ValidateHostPort(ctx context.Context, host string, port uint16) 
 	if trimmed == "" || port == 0 {
 		return fmt.Errorf("%w: the destination host or port is empty", ErrDestinationRefused)
 	}
-	// Strip optional IPv6 brackets so literal IPv6 hosts resolve cleanly.
-	if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+	// Strip optional IPv6 brackets and require a valid non-zoned IPv6 literal.
+	if strings.HasPrefix(trimmed, "[") || strings.HasSuffix(trimmed, "]") {
+		if !strings.HasPrefix(trimmed, "[") || !strings.HasSuffix(trimmed, "]") {
+			return fmt.Errorf("%w: malformed bracketed destination host", ErrDestinationRefused)
+		}
 		trimmed = trimmed[1 : len(trimmed)-1]
+		if trimmed == "" {
+			return fmt.Errorf("%w: the destination host is empty", ErrDestinationRefused)
+		}
+		addr, err := netip.ParseAddr(trimmed)
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return fmt.Errorf("%w: malformed bracketed IPv6 destination", ErrDestinationRefused)
+		}
+	}
+	if strings.ContainsRune(trimmed, '%') {
+		return fmt.Errorf("%w: zoned IP addresses are refused", ErrDestinationRefused)
 	}
 	ips, err := g.resolveHost(ctx, trimmed)
 	if err != nil {

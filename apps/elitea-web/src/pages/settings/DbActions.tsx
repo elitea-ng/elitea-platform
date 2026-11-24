@@ -38,6 +38,7 @@ import type {
 } from '@/shared/api/generated/model';
 import {
   createDbActionRule,
+  getListDbActionRuleNamesQueryKey,
   getListDbActionRulesQueryKey,
   updateDbActionRule,
   useListDbActionRuleNames,
@@ -94,10 +95,10 @@ export const DbActionsContent = memo(function DbActionsContent() {
   const permissions = useDbActionRulePermissions(projectId);
   const queryClient = useQueryClient();
 
-  const invalidateList = useCallback(
-    () => void queryClient.invalidateQueries({ queryKey: getListDbActionRulesQueryKey(projectId) }),
-    [queryClient, projectId],
-  );
+  const invalidateList = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: getListDbActionRulesQueryKey(projectId) });
+    void queryClient.invalidateQueries({ queryKey: getListDbActionRuleNamesQueryKey(projectId) });
+  }, [queryClient, projectId]);
   const createMutation = useMutation({
     mutationFn: (body: DbActionRuleWriteRequest) => createDbActionRule(projectId, body),
     onSuccess: invalidateList,

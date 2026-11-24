@@ -3,7 +3,8 @@ package repos
 // DB action rules (shared/0271) against the migrated corpus: CRUD paths,
 // per-project 256-rule cap under a concurrent burst, optimistic revision fence,
 // audit row per write, SQL configuration ownership/type/dialect validation,
-// start-time snapshot freezing, and claim-time credential materialization.
+// FOR SHARE target-drift binding, start-time snapshot freezing, and claim-time
+// credential materialization.
 //
 // Requires a PostgreSQL service (ELITEA_TEST_DATABASE_URL).
 
@@ -24,6 +25,8 @@ import (
 )
 
 const testDBActionRuleConfigID = int32(721)
+
+var testDBActionRuleTarget = DBActionConfigurationTarget{Host: "warehouse.example.com", Port: 5432}
 
 func newDBActionRulesTestRepo(t *testing.T) (*DBActionRulesRepo, *pgxpool.Pool) {
 	t.Helper()
@@ -107,13 +110,13 @@ func TestDBActionRulesRepoPostgres_CreateListGetUpdateAndAudit(t *testing.T) {
 	repo, pool := newDBActionRulesTestRepo(t)
 	ctx := dbActionRuleContext(t)
 
-	second, err := repo.Create(ctx, 1, 7, testDBActionRule("zeta.query"))
+	second, err := repo.Create(ctx, 1, 7, testDBActionRule("zeta.query"), testDBActionRuleTarget)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	firstRule := testDBActionRule("alpha.load")
 	firstRule.Mode = dbaction.ModeWrite
-	first, err := repo.Create(ctx, 1, 7, firstRule)
+	first, err := repo.Create(ctx, 1, 7, firstRule, testDBActionRuleTarget)
 	if err != nil {
 		t.Fatalf("create write rule: %v", err)
 	}
@@ -146,7 +149,7 @@ func TestDBActionRulesRepoPostgres_CreateListGetUpdateAndAudit(t *testing.T) {
 	edit.Enabled = false
 	edit.Mode = dbaction.ModeWrite
 	edit.MarkerTable = "public.etl_markers"
-	updated, err := repo.Update(ctx, 1, second.ID, 9, edit, 1)
+	updated, err := repo.Update(ctx, 1, second.ID, 9, edit, 1, testDBActionRuleTarget)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -166,30 +169,40 @@ func TestDBActionRulesRepoPostgres_CreateListGetUpdateAndAudit(t *testing.T) {
 	}
 }
 
-func TestDBActionRulesRepoPostgres_ConflictsScopingAndConfigurationAccess(t *testing.T) {
+func TestDBActionRulesRepoPostgres_ConflictsScopingTargetDriftAndConfigurationAccess(t *testing.T) {
 	repo, pool := newDBActionRulesTestRepo(t)
 	ctx := dbActionRuleContext(t)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at) VALUES
- (730,'60000000-0000-4000-8000-000000000730',1,'own_private_sql','sql','credentials','{"host":"priv.example.com","username":"u","password":"p"}'::jsonb,'{}'::jsonb,false,true,'user',7,now() AT TIME ZONE 'UTC'),
- (731,'60000000-0000-4000-8000-000000000731',1,'other_private_sql','sql','credentials','{"host":"priv2.example.com","username":"u","password":"p"}'::jsonb,'{}'::jsonb,false,true,'user',99,now() AT TIME ZONE 'UTC'),
+ (730,'60000000-0000-4000-8000-000000000730',1,'own_private_sql','sql','credentials','{"host":"priv.example.com","username":"u","password":"{{secret.P}}"}'::jsonb,'{}'::jsonb,false,true,'user',7,now() AT TIME ZONE 'UTC'),
+ (731,'60000000-0000-4000-8000-000000000731',1,'other_private_sql','sql','credentials','{"host":"priv2.example.com","username":"u","password":"{{secret.P}}"}'::jsonb,'{}'::jsonb,false,true,'user',99,now() AT TIME ZONE 'UTC'),
  (732,'60000000-0000-4000-8000-000000000732',1,'wrong_type','openapi','credentials','{"host":"api.example.com"}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC'),
- (733,'60000000-0000-4000-8000-000000000733',1,'mysql_dialect_cfg','sql','credentials','{"host":"mysql.example.com","dialect":"mysql","username":"u","password":"p"}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
+ (733,'60000000-0000-4000-8000-000000000733',1,'mysql_dialect_cfg','sql','credentials','{"host":"mysql.example.com","dialect":"mysql","username":"u","password":"{{secret.P}}"}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC'),
+ (734,'60000000-0000-4000-8000-000000000734',1,'secret_username_cfg','sql','credentials','{"host":"warehouse.example.com","username":"{{secret.ADMIN}}","password":"{{secret.P}}"}'::jsonb,'{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 
-	created, err := repo.Create(ctx, 1, 7, testDBActionRule("same.name"))
+	created, err := repo.Create(ctx, 1, 7, testDBActionRule("same.name"), testDBActionRuleTarget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repo.Create(ctx, 1, 7, testDBActionRule("same.name")); !errors.Is(err, ErrDBActionRuleNameTaken) {
+	if _, err := repo.Create(ctx, 1, 7, testDBActionRule("same.name"), testDBActionRuleTarget); !errors.Is(err, ErrDBActionRuleNameTaken) {
 		t.Fatalf("duplicate create = %v, want name taken", err)
 	}
-	if _, err := repo.Update(ctx, 1, created.ID, 7, testDBActionRule("same.name"), 99); !errors.Is(err, ErrDBActionRuleStale) {
+	if _, err := repo.Update(ctx, 1, created.ID, 7, testDBActionRule("same.name"), 99, testDBActionRuleTarget); !errors.Is(err, ErrDBActionRuleStale) {
 		t.Fatalf("stale update = %v, want stale", err)
 	}
 	if _, err := repo.Get(ctx, 2, created.ID); !errors.Is(err, ErrDBActionRuleNotFound) {
 		t.Fatalf("cross-project get = %v, want not found", err)
+	}
+
+	// SEC-5E2-03: target drift between LookupConfigurationTarget and FOR SHARE write fails closed.
+	driftedTarget := DBActionConfigurationTarget{Host: "other.example.com", Port: 5432}
+	if _, err := repo.Create(ctx, 1, 7, testDBActionRule("drifted.create"), driftedTarget); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
+		t.Fatalf("drifted create = %v, want ErrDBActionRuleConfigurationInvalid", err)
+	}
+	if _, err := repo.Update(ctx, 1, created.ID, 7, testDBActionRule("same.name"), created.Revision, driftedTarget); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
+		t.Fatalf("drifted update = %v, want ErrDBActionRuleConfigurationInvalid", err)
 	}
 
 	// Own private SQL config accepted; default port 5432 resolved.
@@ -199,11 +212,12 @@ INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data
 	if err != nil || target.Host != "priv.example.com" || target.Port != 5432 {
 		t.Fatalf("LookupConfigurationTarget = %+v, %v", target, err)
 	}
-	if _, err := repo.Create(ctx, 1, 7, own); err != nil {
+	if _, err := repo.Create(ctx, 1, 7, own, target); err != nil {
 		t.Fatalf("own private SQL config refused: %v", err)
 	}
 
-	// Other user's private, non-sql type, mismatched dialect, missing, and foreign project all refused.
+	// Other user's private, non-sql type, mismatched dialect, secret placeholder in username,
+	// missing, and foreign project all refused.
 	for _, tc := range []struct {
 		label string
 		cfgID int32
@@ -211,15 +225,16 @@ INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data
 		{"other user private", 731},
 		{"non-sql type", 732},
 		{"dialect mismatch", 733},
+		{"secret placeholder in username", 734},
 		{"missing config", 999},
 	} {
 		rule := testDBActionRule("bad." + strings.ReplaceAll(tc.label, " ", "_"))
 		rule.ConfigurationID = tc.cfgID
-		if _, err := repo.Create(ctx, 1, 7, rule); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
+		if _, err := repo.Create(ctx, 1, 7, rule, testDBActionRuleTarget); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
 			t.Errorf("%s: err = %v, want ErrDBActionRuleConfigurationInvalid", tc.label, err)
 		}
 	}
-	if _, err := repo.Create(ctx, 2, 7, testDBActionRule("foreign.cfg")); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
+	if _, err := repo.Create(ctx, 2, 7, testDBActionRule("foreign.cfg"), testDBActionRuleTarget); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
 		t.Fatalf("foreign project config err = %v, want ErrDBActionRuleConfigurationInvalid", err)
 	}
 }
@@ -241,7 +256,7 @@ func TestDBActionRulesRepoPostgres_ConcurrentBurstNeverExceedsTheLimit(t *testin
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, err := repo.Create(ctx, 1, 7, testDBActionRule(fmt.Sprintf("burst_%03d", i)))
+			_, err := repo.Create(ctx, 1, 7, testDBActionRule(fmt.Sprintf("burst_%03d", i)), testDBActionRuleTarget)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -297,8 +312,6 @@ func TestDBActionCredentialsPostgres_FreezeAndMaterialize(t *testing.T) {
 	repo, pool := newDBActionRulesTestRepo(t)
 	ctx := dbActionRuleContext(t)
 
-	// Seed user 7 as project 1 admin (holds configurations.configuration.details)
-	// and user 8 with no project membership.
 	if _, err := pool.Exec(ctx, `
 INSERT INTO public.auth_core__user (id, email, name) VALUES
  (7, 'db-admin@test.local', 'db-admin'),
@@ -307,12 +320,21 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO public.auth_core__project_role (project_id, name) VALUES (1, 'admin') ON CONFLICT (project_id, name) DO NOTHING;
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 SELECT 1, 7, id FROM public.auth_core__project_role WHERE project_id = 1 AND name = 'admin'
-ON CONFLICT DO NOTHING;`); err != nil {
+ON CONFLICT DO NOTHING;
+INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at)
+VALUES (739,'60000000-0000-4000-8000-000000000739',1,'unsealed_sql','sql','credentials',
+ '{"host":"warehouse.example.com","port":5432,"username":"etl_ro","password":"legacy-plaintext-password"}'::jsonb,
+ '{}'::jsonb,true,true,'user',7,now() AT TIME ZONE 'UTC')`); err != nil {
 		t.Fatal(err)
 	}
 
-	created, err := repo.Create(ctx, 1, 7, testDBActionRule("warehouse.analytics"))
+	created, err := repo.Create(ctx, 1, 7, testDBActionRule("warehouse.analytics"), testDBActionRuleTarget)
 	if err != nil {
+		t.Fatal(err)
+	}
+	unsealedRule := testDBActionRule("warehouse.unsealed")
+	unsealedRule.ConfigurationID = 739
+	if _, err := repo.Create(ctx, 1, 7, unsealedRule, testDBActionRuleTarget); err != nil {
 		t.Fatal(err)
 	}
 
@@ -334,9 +356,21 @@ ON CONFLICT DO NOTHING;`); err != nil {
 		t.Fatalf("frozen SQL config did not stay sealed with marker: %+v", frozen.SQLConfiguration)
 	}
 
+	// SEC-5E2-02: unsealed legacy plaintext password is refused at freeze time.
+	if _, err := dbaction.FreezeSnapshot(ctx, 1, 7, 31, 41, []string{unsealedRule.Name}, creds); !errors.Is(err, dbaction.ErrPolicyDenied) {
+		t.Fatalf("unsealed password FreezeSnapshot err = %v, want ErrPolicyDenied", err)
+	}
+
 	// Outsider without configurations.configuration.details is refused.
 	if _, err := dbaction.FreezeSnapshot(ctx, 1, 8, 31, 41, []string{created.Name}, creds); !errors.Is(err, dbaction.ErrPolicyDenied) {
 		t.Fatalf("outsider FreezeSnapshot err = %v, want ErrPolicyDenied", err)
+	}
+
+	// BUG-5E2-01: canceled context is preserved rather than masked as ErrUnavailable.
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := creds.LoadFrozenRule(canceledCtx, 1, 7, created.Name); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled LoadFrozenRule err = %v, want context.Canceled", err)
 	}
 
 	// Claim-time materialization unsecrets password for the claimed Worker.
@@ -344,6 +378,7 @@ ON CONFLICT DO NOTHING;`); err != nil {
 	if err != nil {
 		t.Fatalf("MaterializeSQLCredential: %v", err)
 	}
+	defer materialized.Zero()
 	if materialized.Host != "warehouse.example.com" || materialized.Port != 5432 || materialized.Username != "etl_ro" || materialized.Password() != "plaintext-db-secret-value" {
 		t.Fatalf("unexpected materialized credential: host=%s port=%d user=%s", materialized.Host, materialized.Port, materialized.Username)
 	}
@@ -351,7 +386,7 @@ ON CONFLICT DO NOTHING;`); err != nil {
 	// Disabled rule is refused at freeze time.
 	disabled := testDBActionRule("warehouse.analytics")
 	disabled.Enabled = false
-	if _, err := repo.Update(ctx, 1, created.ID, 7, disabled, created.Revision); err != nil {
+	if _, err := repo.Update(ctx, 1, created.ID, 7, disabled, created.Revision, testDBActionRuleTarget); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := dbaction.FreezeSnapshot(ctx, 1, 7, 31, 41, []string{created.Name}, creds); !errors.Is(err, dbaction.ErrPolicyDenied) {

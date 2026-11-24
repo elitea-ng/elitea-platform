@@ -20,14 +20,15 @@ import (
 )
 
 type fakeRepo struct {
-	created   []dbaction.Rule
-	updated   []dbaction.Rule
-	actor     int64
-	expected  int64
-	target    repos.DBActionConfigurationTarget
-	lookupErr error
-	err       error
-	names     []repos.DBActionRuleName
+	created        []dbaction.Rule
+	updated        []dbaction.Rule
+	actor          int64
+	expected       int64
+	expectedTarget repos.DBActionConfigurationTarget
+	target         repos.DBActionConfigurationTarget
+	lookupErr      error
+	err            error
+	names          []repos.DBActionRuleName
 }
 
 func (f *fakeRepo) List(context.Context, int64) ([]repos.DBActionRuleRecord, error) {
@@ -57,19 +58,19 @@ func (f *fakeRepo) LookupConfigurationTarget(context.Context, int64, int64, int3
 	}
 	return repos.DBActionConfigurationTarget{Host: "warehouse.example.com", Port: 5432}, nil
 }
-func (f *fakeRepo) Create(_ context.Context, projectID, actorID int64, rule dbaction.Rule) (repos.DBActionRuleRecord, error) {
+func (f *fakeRepo) Create(_ context.Context, projectID, actorID int64, rule dbaction.Rule, expectedTarget repos.DBActionConfigurationTarget) (repos.DBActionRuleRecord, error) {
 	if f.err != nil {
 		return repos.DBActionRuleRecord{}, f.err
 	}
-	f.created, f.actor = append(f.created, rule), actorID
+	f.created, f.actor, f.expectedTarget = append(f.created, rule), actorID, expectedTarget
 	rule.ID, rule.ProjectID, rule.Revision = 41, projectID, 1
 	return repos.DBActionRuleRecord{Rule: rule}, nil
 }
-func (f *fakeRepo) Update(_ context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expected int64) (repos.DBActionRuleRecord, error) {
+func (f *fakeRepo) Update(_ context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expected int64, expectedTarget repos.DBActionConfigurationTarget) (repos.DBActionRuleRecord, error) {
 	if f.err != nil {
 		return repos.DBActionRuleRecord{}, f.err
 	}
-	f.updated, f.actor, f.expected = append(f.updated, rule), actorID, expected
+	f.updated, f.actor, f.expected, f.expectedTarget = append(f.updated, rule), actorID, expected, expectedTarget
 	rule.ID, rule.ProjectID, rule.Revision = ruleID, projectID, expected+1
 	return repos.DBActionRuleRecord{Rule: rule}, nil
 }
@@ -198,6 +199,13 @@ func TestCreateValidationAndEgressBoundaries(t *testing.T) {
 			if len(repo.created) != 1 || repo.actor != 5 || repo.created[0].SchemaVersion != dbaction.RuleSchema {
 				t.Fatalf("repository received %+v (actor %d)", repo.created, repo.actor)
 			}
+			wantTarget := tc.target
+			if wantTarget.Host == "" {
+				wantTarget = repos.DBActionConfigurationTarget{Host: "warehouse.example.com", Port: 5432}
+			}
+			if repo.expectedTarget != wantTarget {
+				t.Fatalf("expectedTarget = %+v, want %+v", repo.expectedTarget, wantTarget)
+			}
 			if body["mode"] == "write" && body["marker_table"] == nil && repo.created[0].MarkerTable != dbaction.DefaultMarkerTable {
 				t.Fatalf("default marker_table not applied: %+v", repo.created[0])
 			}
@@ -276,8 +284,9 @@ func TestNilGuardNilRepoAndUpdateRevision(t *testing.T) {
 	body := validBody()
 	body["revision"] = 3
 	response := serve(t, h, http.MethodPut, rulesPath+"/4", body)
-	if response.Code != http.StatusOK || repo.expected != 3 || repo.actor != 5 {
-		t.Fatalf("update = %d (expected %d, actor %d)", response.Code, repo.expected, repo.actor)
+	if response.Code != http.StatusOK || repo.expected != 3 || repo.actor != 5 ||
+		repo.expectedTarget != (repos.DBActionConfigurationTarget{Host: "warehouse.example.com", Port: 5432}) {
+		t.Fatalf("update = %d (expected %d, actor %d, target %+v)", response.Code, repo.expected, repo.actor, repo.expectedTarget)
 	}
 }
 

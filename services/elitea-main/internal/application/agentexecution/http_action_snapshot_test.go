@@ -144,3 +144,16 @@ func strconvQuote(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
 }
+
+func TestFreezeCurrentHTTPActionRequestsStripsPreExistingDBActionSnapshot(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"agent_type":         "pipeline",
+		"instructions":       "entry_point: tick\nnodes:\n  - id: tick\n    type: state_modifier\n    template: 'ok'\n    input: []\n    output: [out]\n    transition: END\n",
+		"tools":              []any{},
+		"db_action_snapshot": map[string]any{"schema_version": "elitea.runtime.db-action-snapshot.v1", "rules": []any{}},
+	})
+	require.NoError(t, err)
+	frozen, err := freezeCurrentHTTPActionRequests(31, 41, raw, nil)
+	require.NoError(t, err)
+	require.NotContains(t, string(frozen), "db_action_snapshot")
+}

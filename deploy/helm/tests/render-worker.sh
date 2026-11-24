@@ -159,6 +159,9 @@ dep = next(d for d in docs
 c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
 env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["ELITEA_DB_EGRESS_ALLOWLIST"] == "10.0.0.0/8,192.168.1.5:5432", env
+cm = next(d for d in docs
+          if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "elitea-main-config")
+assert cm["data"]["ELITEA_DB_EGRESS_ALLOWLIST"] == "10.0.0.0/8,192.168.1.5:5432", cm["data"].get("ELITEA_DB_EGRESS_ALLOWLIST")
 PY
 
 echo "== runtime.json is complete =="

@@ -40,6 +40,10 @@ func TestNewDBActionGuardParsesAndFailsClosed(t *testing.T) {
 		{"nat64 metadata refused", "db.nat64.example", 5432, false},
 		{"unresolvable host", "db.missing.example", 5432, false},
 		{"empty host", "", 5432, false},
+		{"empty bracketed host", "[]", 5432, false},
+		{"bracketed non-ipv6", "[db.public.example]", 5432, false},
+		{"zoned ipv6 literal", "fe80::1%eth0", 5432, false},
+		{"bracketed zoned ipv6", "[fe80::1%eth0]", 5432, false},
 		{"zero port", "db.public.example", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

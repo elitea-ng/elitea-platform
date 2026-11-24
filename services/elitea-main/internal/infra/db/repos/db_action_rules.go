@@ -200,15 +200,24 @@ func (r *DBActionRulesRepo) LookupConfigurationTarget(
 
 // Create stores a new DB action rule at revision 1. Creates of one project are
 // serialised by a transaction-scoped advisory lock, so the 256-rule cap holds
-// under any concurrency.
-func (r *DBActionRulesRepo) Create(ctx context.Context, projectID, actorID int64, rule dbaction.Rule) (DBActionRuleRecord, error) {
+// under any concurrency. expectedTarget is the egress-validated (Host, Port)
+// bound before opening the write transaction; inside the FOR SHARE lock, any
+// drift aborts the write fail-closed without running DNS inside Postgres locks.
+func (r *DBActionRulesRepo) Create(ctx context.Context, projectID, actorID int64, rule dbaction.Rule, expectedTarget DBActionConfigurationTarget) (DBActionRuleRecord, error) {
 	if err := checkDBActionRuleWrite(projectID, actorID, &rule); err != nil {
 		return DBActionRuleRecord{}, err
 	}
+	if expectedTarget.Host == "" || expectedTarget.Port == 0 {
+		return DBActionRuleRecord{}, ErrDBActionRuleConfigurationInvalid
+	}
 	var created DBActionRuleRecord
 	err := r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
-		if _, err := checkDBActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID, rule.Dialect, true); err != nil {
+		lockedTarget, err := checkDBActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID, rule.Dialect, true)
+		if err != nil {
 			return err
+		}
+		if lockedTarget != expectedTarget {
+			return ErrDBActionRuleConfigurationInvalid
 		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('elitea.db_action_rules/' || $1::bigint::text, 0))`, projectID); err != nil {
 			return err
@@ -241,14 +250,23 @@ RETURNING `+dbActionRuleColumns,
 
 // Update replaces every field of the rule when its stored revision equals
 // expectedRevision, incrementing revision by one and recording an audit row.
-func (r *DBActionRulesRepo) Update(ctx context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expectedRevision int64) (DBActionRuleRecord, error) {
+// Inside the FOR SHARE configuration lock, lockedTarget must still match
+// expectedTarget (the egress-validated destination from admit).
+func (r *DBActionRulesRepo) Update(ctx context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expectedRevision int64, expectedTarget DBActionConfigurationTarget) (DBActionRuleRecord, error) {
 	if err := checkDBActionRuleWrite(projectID, actorID, &rule); err != nil {
 		return DBActionRuleRecord{}, err
 	}
+	if expectedTarget.Host == "" || expectedTarget.Port == 0 {
+		return DBActionRuleRecord{}, ErrDBActionRuleConfigurationInvalid
+	}
 	var updated DBActionRuleRecord
 	err := r.store.WithinTx(ctx, pgx.TxOptions{}, func(tx sqlExecutor) error {
-		if _, err := checkDBActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID, rule.Dialect, true); err != nil {
+		lockedTarget, err := checkDBActionRuleConfiguration(ctx, tx, projectID, actorID, rule.ConfigurationID, rule.Dialect, true)
+		if err != nil {
 			return err
+		}
+		if lockedTarget != expectedTarget {
+			return ErrDBActionRuleConfigurationInvalid
 		}
 		record, err := scanDBActionRule(tx.QueryRow(ctx, `
 UPDATE elitea_runtime.db_action_rules SET

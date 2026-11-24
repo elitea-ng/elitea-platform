@@ -56,8 +56,8 @@ type Repository interface {
 	Get(ctx context.Context, projectID, ruleID int64) (repos.DBActionRuleRecord, error)
 	ListNames(ctx context.Context, projectID int64) ([]repos.DBActionRuleName, error)
 	LookupConfigurationTarget(ctx context.Context, projectID, actorID int64, configurationID int32, dialect string) (repos.DBActionConfigurationTarget, error)
-	Create(ctx context.Context, projectID, actorID int64, rule dbaction.Rule) (repos.DBActionRuleRecord, error)
-	Update(ctx context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expectedRevision int64) (repos.DBActionRuleRecord, error)
+	Create(ctx context.Context, projectID, actorID int64, rule dbaction.Rule, expectedTarget repos.DBActionConfigurationTarget) (repos.DBActionRuleRecord, error)
+	Update(ctx context.Context, projectID, ruleID, actorID int64, rule dbaction.Rule, expectedRevision int64, expectedTarget repos.DBActionConfigurationTarget) (repos.DBActionRuleRecord, error)
 }
 
 // Handler serves the five routes. A nil resolver refuses every route (403), a
@@ -136,11 +136,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, _, actorID, ok := h.admit(w, r, projectID)
+	rule, _, actorID, target, ok := h.admit(w, r, projectID)
 	if !ok {
 		return
 	}
-	created, err := h.repo.Create(r.Context(), projectID, actorID, rule)
+	created, err := h.repo.Create(r.Context(), projectID, actorID, rule, target)
 	if err != nil {
 		h.fail(w, r, "create", err)
 		return
@@ -158,7 +158,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, revision, actorID, ok := h.admit(w, r, projectID)
+	rule, revision, actorID, target, ok := h.admit(w, r, projectID)
 	if !ok {
 		return
 	}
@@ -166,7 +166,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, apierr.BadRequest("DB action rule revision is required: send the revision you read"))
 		return
 	}
-	updated, err := h.repo.Update(r.Context(), projectID, ruleID, actorID, rule, *revision)
+	updated, err := h.repo.Update(r.Context(), projectID, ruleID, actorID, rule, *revision, target)
 	if err != nil {
 		h.fail(w, r, "update", err)
 		return
@@ -190,22 +190,24 @@ type writeRequest struct {
 }
 
 // admit decodes, validates, checks configuration access, and egress-checks the
-// referenced SQL configuration's host/port. Writes the refusal itself.
-func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64) (dbaction.Rule, *int64, int64, bool) {
+// referenced SQL configuration's host/port. Returns the validated target so
+// Create/Update can verify inside the FOR SHARE lock that no drift occurred.
+func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64) (dbaction.Rule, *int64, int64, repos.DBActionConfigurationTarget, bool) {
+	var zeroTarget repos.DBActionConfigurationTarget
 	user, _ := auth.UserFromContext(r.Context())
 	actorID, ok := user.OwningUserID()
 	if !ok {
 		apierr.Write(w, apierr.Forbidden("a DB action rule write needs a user principal"))
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	if h.guard == nil {
 		apierr.Write(w, apierr.BadRequest("this deployment cannot validate DB action rule destinations; contact an administrator"))
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	body, err := decode(w, r)
 	if err != nil {
 		apierr.Write(w, err)
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	for _, required := range []struct {
 		field   string
@@ -216,7 +218,7 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64)
 	} {
 		if required.missing {
 			apierr.Write(w, apierr.BadRequest("DB action rule "+required.field+" is required"))
-			return dbaction.Rule{}, nil, 0, false
+			return dbaction.Rule{}, nil, 0, zeroTarget, false
 		}
 	}
 	markerTable := ""
@@ -236,28 +238,28 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64)
 	}
 	if rule.Mode == dbaction.ModeWrite && explicitEmptyMarker {
 		apierr.Write(w, apierr.BadRequest("DB action rule marker_table is required when mode is write"))
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	rule.Normalize()
 	if err := rule.Validate(); err != nil {
 		apierr.Write(w, ruleRefusal(err))
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	if rule.ConfigurationID > 0 {
 		if h.resolver == nil {
 			apierr.Write(w, apierr.Forbidden("insufficient permissions"))
-			return dbaction.Rule{}, nil, 0, false
+			return dbaction.Rule{}, nil, 0, zeroTarget, false
 		}
 		resolution, err := h.resolver.ResolvePermissions(r.Context(), user, auth.PermissionModeDefault, strconv.FormatInt(projectID, 10))
 		if err != nil || !slices.Contains(resolution.Permissions, permissionConfigurationDetails) {
 			apierr.Write(w, apierr.Forbidden("a DB action rule referencing a configuration requires configuration access"))
-			return dbaction.Rule{}, nil, 0, false
+			return dbaction.Rule{}, nil, 0, zeroTarget, false
 		}
 	}
 	target, err := h.repo.LookupConfigurationTarget(r.Context(), projectID, actorID, rule.ConfigurationID, rule.Dialect)
 	if err != nil {
 		h.fail(w, r, "lookup configuration", err)
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
 	if err := h.guard.ValidateHostPort(r.Context(), target.Host, target.Port); err != nil {
 		// Never echo the resolved host or IP: prevents turning rule writes into
@@ -267,9 +269,9 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64)
 		} else {
 			h.fail(w, r, "check destination", err)
 		}
-		return dbaction.Rule{}, nil, 0, false
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
-	return rule, body.Revision, actorID, true
+	return rule, body.Revision, actorID, target, true
 }
 
 func decode(w http.ResponseWriter, r *http.Request) (writeRequest, error) {
