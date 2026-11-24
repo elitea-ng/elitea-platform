@@ -154,7 +154,7 @@ impl Secret {
     }
 
     /// A secret from a literal, for the crate's tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn for_test(value: &str) -> Self {
         Self(Arc::from(value))
     }
