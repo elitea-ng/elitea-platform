@@ -827,6 +827,7 @@ mod tests {
             agent_model_checkpoint_recovery: false,
             agent_node_recovery: false,
             governed_security_context: false,
+            db_egress_allowlist: elitea_agent_runtime::toolkits::DbEgressAllowlist::default(),
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 nats_fetch_batch: 8,

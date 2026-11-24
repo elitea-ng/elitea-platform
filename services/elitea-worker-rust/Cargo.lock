@@ -6021,8 +6021,6 @@ dependencies = [
 [[package]]
 name = "sqlx-mysql"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27"
 dependencies = [
  "bigdecimal",
  "bitflags 2.13.1",
@@ -6050,8 +6048,6 @@ dependencies = [
 [[package]]
 name = "sqlx-postgres"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e"
 dependencies = [
  "atoi 2.0.0",
  "base64 0.22.1",

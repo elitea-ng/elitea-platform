@@ -167,6 +167,13 @@ pub struct RuntimeDeployConfig {
     /// legacy worker, byte for byte.
     #[serde(skip)]
     pub governed_security_context: bool,
+    /// Private database egress permits for the `sql` toolkit (5e-1), read from
+    /// [`DB_EGRESS_ALLOWLIST_ENVIRONMENT`] at startup. Never read from the
+    /// deployment document. Empty by default: public databases are allowed,
+    /// private ranges are refused unless explicitly permitted here, and a
+    /// malformed variable refuses worker startup (fail-closed).
+    #[serde(skip)]
+    pub db_egress_allowlist: elitea_agent_runtime::toolkits::DbEgressAllowlist,
     #[serde(default)]
     pub sandbox_runtimes: Vec<SandboxRuntimeConfig>,
     /// The cloud executor (ADR-0034 decision 9): the sandbox supervisor's
@@ -811,6 +818,47 @@ impl RuntimeLimits {
 /// security context (ADR-0039, #1115).
 pub const GOVERNED_CONTEXT_ENVIRONMENT: &str = "ELITEA_WORKER_GOVERNED_CONTEXT";
 
+/// The environment variable that permits private database egress targets for
+/// the `sql` toolkit (5e-1), in the egresslib CSV grammar (CIDR, `IP[:port]`,
+/// `localhost[:port]`). Unset or blank admits public databases only; any
+/// malformed entry refuses worker startup (fail-closed).
+pub const DB_EGRESS_ALLOWLIST_ENVIRONMENT: &str = "ELITEA_DB_EGRESS_ALLOWLIST";
+
+/// Parse [`DB_EGRESS_ALLOWLIST_ENVIRONMENT`]: unset or blank is empty (public
+/// databases only; all private ranges refused). Any malformed entry refuses
+/// startup rather than skipping a broken rule.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError::InvalidConfiguration`] when any entry is
+/// malformed.
+pub fn parse_db_egress_allowlist(
+    value: Option<&str>,
+) -> Result<elitea_agent_runtime::toolkits::DbEgressAllowlist, RuntimeConfigError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(elitea_agent_runtime::toolkits::DbEgressAllowlist::default());
+    };
+    elitea_agent_runtime::toolkits::DbEgressAllowlist::parse_csv(value).map_err(|_| {
+        RuntimeConfigError::InvalidConfiguration(
+            "ELITEA_DB_EGRESS_ALLOWLIST is malformed: want comma-separated CIDR, IP[:port], or localhost[:port] entries",
+        )
+    })
+}
+
+fn parse_db_egress_allowlist_env(
+    result: Result<String, std::env::VarError>,
+) -> Result<elitea_agent_runtime::toolkits::DbEgressAllowlist, RuntimeConfigError> {
+    match result {
+        Ok(value) => parse_db_egress_allowlist(Some(&value)),
+        Err(std::env::VarError::NotPresent) => {
+            Ok(elitea_agent_runtime::toolkits::DbEgressAllowlist::default())
+        }
+        Err(std::env::VarError::NotUnicode(_)) => Err(RuntimeConfigError::InvalidConfiguration(
+            "ELITEA_DB_EGRESS_ALLOWLIST must be valid UTF-8",
+        )),
+    }
+}
+
 /// Parse [`GOVERNED_CONTEXT_ENVIRONMENT`]: unset or blank is off; `true`,
 /// `1`, `yes`, `on` and `false`, `0`, `no`, `off` (any case, surrounding
 /// space ignored) are the only accepted spellings. Anything else refuses
@@ -842,6 +890,18 @@ impl RuntimeDeployConfig {
     pub fn with_governed_context_from_env(mut self) -> Result<Self, RuntimeConfigError> {
         let value = std::env::var(GOVERNED_CONTEXT_ENVIRONMENT).ok();
         self.governed_security_context = parse_governed_context(value.as_deref())?;
+        Ok(self)
+    }
+
+    /// Apply [`DB_EGRESS_ALLOWLIST_ENVIRONMENT`] from the process environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::InvalidConfiguration`] when the variable
+    /// is non-UTF-8 or carries any malformed allowlist entry.
+    pub fn with_db_egress_allowlist_from_env(mut self) -> Result<Self, RuntimeConfigError> {
+        self.db_egress_allowlist =
+            parse_db_egress_allowlist_env(std::env::var(DB_EGRESS_ALLOWLIST_ENVIRONMENT))?;
         Ok(self)
     }
 }
@@ -1269,6 +1329,76 @@ mod tests {
             serde_json::from_value(value.clone()).expect("config");
         assert!(!loaded.governed_security_context);
         value["governed_security_context"] = json!(true);
+        assert!(serde_json::from_value::<super::RuntimeDeployConfig>(value).is_err());
+    }
+
+    #[test]
+    fn db_egress_allowlist_parses_valid_entries_and_fails_closed_on_malformed() {
+        use std::net::IpAddr;
+
+        for empty in [None, Some(""), Some("   "), Some(" , ")] {
+            let parsed = super::parse_db_egress_allowlist(empty).expect("empty allowlist");
+            assert!(!parsed.is_configured());
+            assert!(parsed.private_permits().is_empty());
+        }
+
+        let parsed = super::parse_db_egress_allowlist(Some(
+            "10.0.0.0/8, 192.168.1.5:5432, localhost:5432, [fd00::1]:3306,",
+        ))
+        .expect("valid DB egress allowlist");
+        let permits = parsed.private_permits();
+        let ip = |text: &str| text.parse::<IpAddr>().expect("ip");
+        assert!(permits.admits(ip("10.1.2.3"), 5432));
+        assert!(permits.admits(ip("192.168.1.5"), 5432));
+        assert!(!permits.admits(ip("192.168.1.5"), 3306));
+        assert!(permits.admits(ip("127.0.0.1"), 5432));
+        assert!(permits.admits(ip("::1"), 5432));
+        assert!(!permits.admits(ip("127.0.0.1"), 3306));
+        assert!(permits.admits(ip("fd00::1"), 3306));
+        assert!(!permits.admits(ip("fd00::1"), 5432));
+        assert!(!permits.admits(ip("172.16.0.1"), 5432));
+
+        for malformed in [
+            "https://warehouse.internal",
+            "10.0.0.0/33",
+            "10.0.0.0/8:5432",
+            "db.internal:0",
+            "db.internal:70000",
+            "a b",
+            "*",
+            "*:5432",
+            "*.",
+            "10.0.0.1, bad entry",
+        ] {
+            assert!(
+                super::parse_db_egress_allowlist(Some(malformed)).is_err(),
+                "malformed ELITEA_DB_EGRESS_ALLOWLIST must fail closed: {malformed}"
+            );
+        }
+
+        assert!(
+            super::parse_db_egress_allowlist_env(Err(std::env::VarError::NotPresent))
+                .expect("absent env defaults empty")
+                .private_permits()
+                .is_empty()
+        );
+        assert!(
+            super::parse_db_egress_allowlist_env(Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from("non-utf8"),
+            )))
+            .is_err(),
+            "non-UTF-8 ELITEA_DB_EGRESS_ALLOWLIST must fail closed"
+        );
+    }
+
+    #[test]
+    fn db_egress_allowlist_is_never_read_from_the_document() {
+        let root = tempdir().expect("root");
+        let mut value = config(root.path());
+        let loaded: super::RuntimeDeployConfig =
+            serde_json::from_value(value.clone()).expect("config");
+        assert!(!loaded.db_egress_allowlist.is_configured());
+        value["db_egress_allowlist"] = json!("10.0.0.0/8");
         assert!(serde_json::from_value::<super::RuntimeDeployConfig>(value).is_err());
     }
 

@@ -160,6 +160,8 @@ zip = { version = "=9.1.3", default-features = false, features = ["deflate"] }
 elitea-connectors = { path = "../connectors", default-features = false, features = ["providers", "reqwest-012", "test-support"] }
 # The fake internal tool service the internal MCP toolset is tested against.
 elitea-platform-rpc = { path = "../platform-rpc", features = ["testing"] }
+# Throwaway CA and leaf certificates for the SQL guarded-dial TLS tests.
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 # The invocation suite captures the spans a toolkit call emits.
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
