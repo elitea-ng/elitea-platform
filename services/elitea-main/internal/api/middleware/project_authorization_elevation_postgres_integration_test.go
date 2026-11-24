@@ -17,9 +17,11 @@ package middleware_test
 //     on a project they are not a member of; the standing super_admin gets
 //     through (the control);
 //   - with R2.1 (#2515): a user with an active super_admin-level elevation
-//     and no role gets 403. It is guarded by the existence of
-//     elitea_auth.admin_elevations, which R2.1 creates; R2.1 writes the
-//     elevation insert there.
+//     and no role gets 403. Until R2.1 creates elitea_auth.admin_elevations
+//     there is nothing to insert, so a tripwire stands in its place: it
+//     passes while the table is absent and FAILS the run that creates it,
+//     which must replace it with the elevation case. It never skips (a
+//     skip is no coverage, scripts/go/declared-skips.txt).
 //
 // It runs on the real schema: 001_initial.sql and the shared corpus.
 
@@ -88,21 +90,16 @@ SELECT (SELECT COUNT(*) FROM public.auth_core__role_permission p JOIN public.aut
 	expectProjectAccess(t, pool, "r013-none@autotest.local", http.StatusForbidden)
 	expectProjectAccess(t, pool, "r013-copy@autotest.local", http.StatusForbidden)
 
-	t.Run("an active super_admin-level elevation", func(t *testing.T) {
-		var present bool
-		if err := pool.QueryRow(t.Context(),
-			`SELECT to_regclass('elitea_auth.admin_elevations') IS NOT NULL`).Scan(&present); err != nil {
-			t.Fatalf("look for the elevations table: %v", err)
-		}
-		if !present {
-			t.Skip("elitea_auth.admin_elevations does not exist yet; R2.1 (#2515) creates it and enables this half")
-		}
-		// R2.1: insert an active super_admin-level elevation for
-		// r013-none@autotest.local (who holds no role) here, then keep the
-		// assertion below. The project access check must still refuse it.
-		t.Fatal("elitea_auth.admin_elevations exists: R2.1 writes the active elevation of r013-none here")
-		expectProjectAccess(t, pool, "r013-none@autotest.local", http.StatusForbidden)
-	})
+	// The R2.1 tripwire (see the header).
+	var elevationsExist bool
+	if err := pool.QueryRow(t.Context(),
+		`SELECT to_regclass('elitea_auth.admin_elevations') IS NOT NULL`).Scan(&elevationsExist); err != nil {
+		t.Fatalf("look for the elevations table: %v", err)
+	}
+	if elevationsExist {
+		t.Fatal("elitea_auth.admin_elevations exists: R2.1 (#2515) replaces this tripwire with an active " +
+			"super_admin-level elevation of r013-none@autotest.local, and expects 403 for it")
+	}
 }
 
 func expectProjectAccess(t *testing.T, pool *pgxpool.Pool, email string, want int) {
