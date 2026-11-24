@@ -349,7 +349,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "run_command",
         kind: ToolKind::RunCommand,
-        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh. Routine commands run without a question; destructive ones (recursive deletes, history rewrites, pushes, deploys, privilege), network and full-access are confirmed by the person. A rule the person wrote may let one program (such as gh) run with network on, its login and named hosts only, without a question: run it as one plain foreground command (no pipes or &&).",
+        description: "Run a command in the workspace under the OS sandbox. Plain commands run without a shell; pipes, redirects and && run under /bin/sh. Routine commands run without a question; destructive ones (recursive deletes, history rewrites, pushes, deploys, privilege), network and full-access are confirmed by the person.",
         parameters: || {
             json!({
                 "type": "object",
