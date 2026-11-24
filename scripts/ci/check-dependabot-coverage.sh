@@ -101,8 +101,14 @@ scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixtu
 EXEMPTIONS
 )
 
+# Here-strings, never `printf | grep -q`. Under pipefail that pipe is a race:
+# grep -q exits on its first match, printf is still writing a list larger
+# than one write (the exemptions are ~15 KB), takes SIGPIPE, and the pipeline
+# reports failure for a manifest that IS exempt. The symptom was a FAIL line
+# preceded by "printf: write error: Broken pipe", for different manifests on
+# different runs.
 is_exempt() {
-  printf '%s\n' "$EXEMPT" | grep -q "^$1[[:space:]]"
+  grep -q "^$1[[:space:]]" <<<"$EXEMPT"
 }
 
 # A composite action's action.yml is the github-actions manifest: the `uses:`
@@ -146,7 +152,7 @@ for manifest in $manifests; do
   fi
   dir=$(dirname "$manifest")
   [ "$dir" = "." ] && dir=""
-  if ! printf '%s\n' "$configured" | grep -qxF "$dir"; then
+  if ! grep -qxF "$dir" <<<"$configured"; then
     echo "FAIL: $manifest has no entry in $CONFIG and no exemption in this script." >&2
     fail=1
   fi

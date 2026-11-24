@@ -38,8 +38,6 @@ var declaredWithoutDecision = map[string]string{
 		"moderation request; admin.moderation.create in the DEFAULT mode against {projectID}",
 	"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}": "a project member withdraws " +
 		"their own request (#544); admin.moderation.create in the DEFAULT mode, rows scoped to the caller",
-	"DELETE /api/v2/admin/users/{mode}/{projectID}": "removes a member from one project; " +
-		"configuration.users.users.delete in the DEFAULT mode against {projectID}",
 	"GET /api/v2/admin/system_info/prompt_lib": "the Help Center's version lookup; " +
 		"open to every signed-in user like the legacy PromptLibAPI (router.go, /admin block)",
 	"GET /api/v2/admin/plugin_config_values/prompt_lib/resources": "the Help Center's one public " +
@@ -61,10 +59,29 @@ var declaredWithoutDecision = map[string]string{
 var invisibleChecks = map[string]string{
 	adminsurface.InvisibleKey(
 		adminsurface.Route{Method: http.MethodDelete, Pattern: "/api/v2/admin/scim_group_bindings/administration/{id}"},
-		"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy.ResolveCaller",
+		"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess.ResolveCaller",
 	): "guardBindingWrite compares the caller's set with the role of the STORED binding, which the " +
 		"unconnected pool cannot read, so no grant changes the answer; the rule reads role rows, not a " +
 		"literal, and its one literal (admin.auth.users.super_admin) is seen on the SCIM client routes",
+}
+
+// The central branch of the guarded project settings (ADR-0059 R0.6b) admits
+// only a request that names a guarded setting type: the `type` query of the
+// list, the `type` of the create's body. The driver's empty request names
+// none, so no grant changes the answer on these four. Its two permissions
+// come from adminaccess.OverrideRoutePermissions, and the same check is seen
+// on the detail, update and delete routes, where the type is the stored row's.
+func init() {
+	const settingsOverride = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware.ResolveCentralPermission"
+	for _, route := range []adminsurface.Route{
+		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{projectID}"},
+		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{mode}/{projectID}"},
+		{Method: http.MethodPost, Pattern: "/api/v2/configurations/configurations/{projectID}"},
+		{Method: http.MethodPost, Pattern: "/api/v2/configurations/configurations/{mode}/{projectID}"},
+	} {
+		invisibleChecks[adminsurface.InvisibleKey(route, settingsOverride)] = "the central settings branch " +
+			"decides on the configuration type the request names, and the driver's empty request names none"
+	}
 }
 
 type drivenSurface struct {
@@ -324,16 +341,13 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 // the permission the action requires; the drive's empty body stops before the
 // check that names it.
 var actionPermissionExceptions = map[string]string{
-	"PUT " + identityProvider + " " + adminaccess.OutcomeTrust:   identityTrustInHandler,
-	"PUT " + identityProvider + " " + adminaccess.OutcomeDisable: identityTrustInHandler,
+	// ADR-0059 R0.6b: the central settings branch reads the type of the
+	// create's body, and the drive's empty body names none (invisibleChecks).
+	"POST /api/v2/configurations/configurations/{projectID}": "the central settings branch decides " +
+		"on the body's configuration type; the empty body names none",
+	"POST /api/v2/configurations/configurations/{mode}/{projectID}": "the central settings branch decides " +
+		"on the body's configuration type; the empty body names none",
 }
-
-const (
-	identityProvider       = "/api/v2/admin/identity_providers/administration/{key}"
-	identityTrustInHandler = "IdentityProviderSave asks for admin.auth.users.super_admin only after the " +
-		"document validates and the stored row is read, and only when a trust field changes (issue 2558); " +
-		"the drive's empty body is refused first, and the unconnected pool has no stored row"
-)
 
 // TestEveryWriteRouteOfTheSurfaceHasAnActionEntry is the ratchet of the action
 // table (ADR-0059 R0.1c): a write route of the surface with no entry fails, an
@@ -403,4 +417,95 @@ func TestEveryWriteRouteOfTheSurfaceHasAnActionEntry(t *testing.T) {
 			}
 		}
 	})
+}
+
+// maintenanceBypassNames are the registry rows marked `maintenance`: the names
+// the in-application maintenance bypass accepts.
+func maintenanceBypassNames() []string {
+	var names []string
+	for _, row := range adminaccess.Registry().Rows() {
+		if row.Maintenance {
+			names = append(names, row.Name)
+		}
+	}
+	return names
+}
+
+// sessionAndWindowCheck is one check TestAdministrationSurfaceReachesSessionAndWindowChecks
+// expects.
+type sessionAndWindowCheck struct {
+	route   adminsurface.Route
+	variant string
+	// caller is the suffix of Check.Caller, from the package directory.
+	caller      string
+	gate        bool
+	kind        adminsurface.Kind
+	permissions []string
+}
+
+// TestAdministrationSurfaceReachesSessionAndWindowChecks holds the checks the
+// default request never reaches (ADR-0059 #2925) to the surface: the
+// maintenance bypass, which runs only while a window is open; the token mint,
+// which asks the administration mode of a native device session only; and the
+// Marketplace moderation check, behind a project gate in the default mode.
+// Each must appear with the function that asks and what it accepts.
+func TestAdministrationSurfaceReachesSessionAndWindowChecks(t *testing.T) {
+	t.Parallel()
+	result := drivenComposedSurface(t).result
+
+	bypass := maintenanceBypassNames()
+	for _, w := range []sessionAndWindowCheck{
+		{adminsurface.TokenMint, adminsurface.VariantNativeSession,
+			"/internal/api/v2/auth.(*Handler).ownerHoldsAdministration", false, adminsurface.KindWholeSet, nil},
+		{adminsurface.MarketplaceListingUpdate, adminsurface.VariantModeration,
+			"/internal/api/v2/eliteacore.(*Handler).holdsModerationPermission", false, adminsurface.KindAnyOf,
+			[]string{adminaccess.RuntimeAdminPublishedAgents}},
+		{adminsurface.PlatformSettings, adminsurface.VariantMaintenance,
+			"/internal/api/v2/eliteacore.(*Handler).holdsMaintenanceBypass", false, adminsurface.KindAnyOf, bypass},
+		{adminsurface.MaintenanceUserRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.(*maintenanceGate).admits", true, adminsurface.KindAnyOf, bypass},
+		// On a route an administration gate decides, the maintenance gate
+		// admits a holder of any administration permission and the route
+		// gate decides (ADR-0059 R0.4b).
+		{adminsurface.MaintenanceAdministrationRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.(*maintenanceGate).admits", true, adminsurface.KindWholeSet, nil},
+		{adminsurface.MaintenanceAdministrationRoute, adminsurface.VariantMaintenance,
+			"/internal/api/middleware.RequireResolvedPermissionsForProject", true, adminsurface.KindAnyOf,
+			[]string{adminaccess.ModelsAdminProjectBudgetsEdit}},
+	} {
+		var found []adminsurface.Check
+		for _, entry := range result.Find(w.route.Method, w.route.Pattern) {
+			if entry.Variant != w.variant {
+				continue
+			}
+			for _, check := range entry.Checks {
+				if strings.HasSuffix(check.Caller, w.caller) {
+					found = append(found, check)
+				}
+			}
+		}
+		if len(found) != 1 {
+			t.Errorf("%s (variant %q): %d checks by %s in the surface, want 1", w.route, w.variant, len(found), w.caller)
+			continue
+		}
+		check := found[0]
+		if check.Gate != w.gate || check.Kind != w.kind || !slices.Equal(check.Permissions, w.permissions) {
+			t.Errorf("%s (variant %q), %s: got gate=%v %s %v, want gate=%v %s %v", w.route, w.variant, w.caller,
+				check.Gate, check.Kind, check.Permissions, w.gate, w.kind, w.permissions)
+		}
+	}
+
+	// A write whose every check reads the whole answer needs no action entry
+	// (ActionFailures skips it). The list is pinned so that a new one is a
+	// decision, not an accident of the probe.
+	var wholeSet []string
+	for _, entry := range result.Surface {
+		if entry.IsWrite() && entry.NamesNoPermission() {
+			wholeSet = append(wholeSet, entry.String()+" "+entry.Variant)
+		}
+	}
+	want := []string{adminsurface.TokenMint.String() + " " + adminsurface.VariantNativeSession}
+	if !slices.Equal(wholeSet, want) {
+		t.Errorf("writes that name no permission: got %q, want %q", wholeSet, want)
+	}
 }

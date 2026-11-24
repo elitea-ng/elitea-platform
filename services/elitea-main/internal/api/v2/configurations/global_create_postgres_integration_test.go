@@ -50,8 +50,8 @@ func platformSurfaceRouter(pool *pgxpool.Pool) chi.Router {
 		configurations.WithPublicProjectID(globalScopeProject))
 	r := chi.NewRouter()
 	r.Route("/gateway", func(r chi.Router) {
-		r.Mount("/providers", handler.GlobalProviderRoutes())
-		r.Mount("/platform_models", handler.GlobalModelRoutes())
+		r.Mount("/providers", handler.GlobalProviderRoutes(openCatalogueGatesExternal))
+		r.Mount("/platform_models", handler.GlobalModelRoutes(openCatalogueGatesExternal))
 	})
 	return r
 }

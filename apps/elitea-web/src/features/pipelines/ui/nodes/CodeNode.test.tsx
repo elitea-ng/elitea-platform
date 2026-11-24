@@ -6,7 +6,7 @@ import { dump, load } from 'js-yaml';
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { CodeNode } from './CodeNode';
 
@@ -36,7 +36,16 @@ function renderCodeNode(flowEditorOverrides: Partial<FlowEditorContextValue> = {
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={edges}
-          nodeTypes={{ testNode: CodeNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <CodeNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <CodeNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -52,7 +61,9 @@ function renderCodeNodeBare(flowEditorOverrides: Partial<FlowEditorContextValue>
   return renderWithRouterAndProject(
     <ReactFlowProvider>
       <FlowEditorContext.Provider value={flowEditorValue}>
-        <CodeNode id="Node1" />
+        <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+          <CodeNode id="Node1" />
+        </NodeConfigPanelContext.Provider>
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
     PROJECT_ID,
@@ -144,12 +155,12 @@ describe('CodeNode', () => {
   });
 
   it('renders the Code input-mapping row, Input select, Output select, and interrupt settings', async () => {
-    const { findByText, getByText } = renderCodeNode();
+    const { findByText, getByText, getAllByText } = renderCodeNode();
     await findByText('Node1');
 
-    expect(getByText('Code')).toBeInTheDocument();
-    expect(getByText('Input')).toBeInTheDocument();
-    expect(getByText('Output')).toBeInTheDocument();
+    expect(getAllByText('Code').length).toBeGreaterThan(0);
+    expect(getAllByText('Input').length).toBeGreaterThan(0);
+    expect(getAllByText('Output').length).toBeGreaterThan(0);
     expect(getByText('Interrupt before')).toBeInTheDocument();
     expect(getByText('Interrupt after')).toBeInTheDocument();
   });
@@ -302,6 +313,7 @@ describe('CodeNode', () => {
     const setYamlJsonObject = vi.fn((document: YamlPipelineDocument) => { saved = document; });
     const ui = renderCodeNodeBare({ expandAll: true, yamlJsonObject: saved, setYamlJsonObject });
 
+    await user.click(await ui.findByText('Advanced'));
     await user.click(await ui.findByRole('button', { name: 'Settings' }));
     await user.click(ui.getByRole('switch', { name: 'Retry on fail' }));
     expect(saved.nodes?.[0]?.['settings']).toEqual({ retry_on_fail: true });
@@ -316,6 +328,7 @@ describe('CodeNode', () => {
       expandAll: true,
       yamlJsonObject: load(dump(withTimeout)) as YamlPipelineDocument,
     });
+    await user.click(await reopened.findByText('Advanced'));
     await user.click(await reopened.findByRole('button', { name: 'Settings' }));
     expect(reopened.getByRole('switch', { name: 'Retry on fail' })).toBeChecked();
     expect(reopened.getByLabelText('Max tries')).toHaveValue(4);

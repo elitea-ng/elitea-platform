@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // Store reads and writes the platform's identity provider definitions.
@@ -199,6 +201,11 @@ func (s *Store) upsert(ctx context.Context, provider Provider, expected *int) (P
 	if expected != nil && *expected > 0 && stored.Revision == 1 {
 		return Provider{}, ErrRevisionConflict
 	}
+	// The security audit event of the route, in this transaction (ADR-0059
+	// R1.5): a failed append rolls the write back.
+	if err := securityaudit.RunChangeHook(ctx, tx, stored.Key); err != nil {
+		return Provider{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Provider{}, err
 	}
@@ -218,8 +225,13 @@ func (s *Store) Delete(ctx context.Context, key string) (string, error) {
 	if normalized == "" {
 		return "", ErrNotFound
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	var reference string
-	err := s.pool.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`DELETE FROM elitea_auth.identity_providers
 		  WHERE provider_key = $1
 		 RETURNING secret_ref`, normalized).Scan(&reference)
@@ -227,6 +239,14 @@ func (s *Store) Delete(ctx context.Context, key string) (string, error) {
 		return "", ErrNotFound
 	}
 	if err != nil {
+		return "", err
+	}
+	// The security audit event of the route, in this transaction (ADR-0059
+	// R1.5).
+	if err := securityaudit.RunChangeHook(ctx, tx, normalized); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return reference, nil

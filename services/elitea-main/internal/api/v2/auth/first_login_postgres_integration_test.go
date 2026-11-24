@@ -34,6 +34,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -384,7 +385,9 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			expires timestamp without time zone,
 			user_id integer REFERENCES auth_core__user (id)
 				ON UPDATE CASCADE ON DELETE CASCADE,
-			name text
+			name text,
+			admin_access text NOT NULL DEFAULT 'none',
+			admin_scopes text[] NOT NULL DEFAULT '{}'
 		);
 		CREATE UNIQUE INDEX ix_auth_core__token_uuid ON auth_core__token (uuid);
 		CREATE TABLE auth_core__role (
@@ -399,6 +402,14 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			role_id integer NOT NULL REFERENCES auth_core__role (id) ON DELETE CASCADE,
 			UNIQUE (user_id, role_id)
 		);
+		-- The grants that say who is a global administrator: the list applies
+		-- only while nobody holds admin.auth.users.super_admin (issue 2589).
+		CREATE TABLE auth_core__role_permission (
+			id serial PRIMARY KEY,
+			role_id integer NOT NULL REFERENCES auth_core__role (id) ON DELETE CASCADE,
+			permission varchar(128) NOT NULL,
+			UNIQUE (role_id, permission)
+		);
 		CREATE SCHEMA elitea_identity;
 		CREATE TABLE elitea_identity.token_project_binding (
 			token_id integer PRIMARY KEY REFERENCES auth_core__token (id) ON DELETE CASCADE,
@@ -408,7 +419,10 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 			('super_admin', 'administration'),
 			('admin', 'administration'),
 			('user', 'administration'),
-			('viewer', 'default');`)
+			('viewer', 'default');
+		INSERT INTO auth_core__role_permission (role_id, permission)
+		SELECT id, 'admin.auth.users.super_admin' FROM auth_core__role
+		WHERE name = 'super_admin' AND mode = 'administration';`)
 	require.NoError(t, err)
 
 	// The role history the grant writes (issue 2499), from the real shared
@@ -417,6 +431,66 @@ func newFirstLoginPool(t *testing.T) *pgxpool.Pool {
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, string(grants))
 	require.NoError(t, err)
+	// The security audit outbox the bootstrap grant appends its
+	// admin.access.changed event to (ADR-0059 R1.5): a grant without it
+	// fails the sign-in.
+	outbox, err := fs.ReadFile(platformmigrations.Files, "shared/0183_security_audit_outbox.sql")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, string(outbox))
+	require.NoError(t, err)
 
 	return pool
+}
+
+// The first-login grant of identity.initial_global_admins appends one
+// admin.access.changed event with the source `bootstrap` and no actor, in the
+// sign-in's transaction (ADR-0059 R1.5, issue 2509). The next sign-in grants
+// nothing and appends nothing.
+func TestAnInitialAdminFirstSignInAppendsOneBootstrapAccessEvent(t *testing.T) {
+	pool := newFirstLoginPool(t)
+	handler := (&OIDCHandler{pool: pool}).WithFirstLoginPolicy(
+		FirstLoginPolicy{InitialGlobalAdmins: []string{"email:alice@corp.com"}})
+
+	userID := signInWithVerifiedOIDC(t, handler,
+		"00000000-1111-2222-3333-666666666666", "alice@corp.com", true)
+	again := signInWithVerifiedOIDC(t, handler,
+		"00000000-1111-2222-3333-666666666666", "alice@corp.com", true)
+	require.Equal(t, userID, again)
+
+	rows, err := pool.Query(context.Background(), `
+SELECT partition_key, event->>'subject', event->'data'->>'action',
+       COALESCE(event->'data'->>'principal_ref', ''),
+       event->'data'->'access'->>'source', event->'data'->'access'->>'mode',
+       event->'data'->'access'->'before', event->'data'->'access'->'after'
+FROM elitea_runtime.security_audit_outbox
+WHERE event_type = 'ai.elitea.security.v1.admin.access.changed' ORDER BY seq`)
+	require.NoError(t, err)
+	defer rows.Close()
+	type event struct {
+		partition, subject, action, principal, source, mode, before, after string
+	}
+	var events []event
+	for rows.Next() {
+		var e event
+		require.NoError(t, rows.Scan(&e.partition, &e.subject, &e.action, &e.principal,
+			&e.source, &e.mode, &e.before, &e.after))
+		events = append(events, e)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, events, 1, "the first sign-in of an initial administrator appended %d events", len(events))
+	require.Equal(t, event{
+		partition: "0",
+		subject:   "user/" + strconv.Itoa(userID),
+		action:    "admin.access.role_assignment",
+		principal: "",
+		source:    "bootstrap",
+		mode:      identity.InitialAdministrationMode,
+		before:    "[]",
+		after:     `["` + identity.InitialAdministrationRole + `"]`,
+	}, events[0])
+
+	report, err := securityaudit.Verify(context.Background(), pool, securityaudit.SourceOutbox, 0, 1)
+	require.NoError(t, err)
+	require.Nil(t, report.Break)
+	require.EqualValues(t, 1, report.Checked)
 }

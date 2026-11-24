@@ -74,19 +74,16 @@ impl DirectFetcher {
         // guard itself, under the run's public policy, and `fetch` checks and
         // records every hop by hand (IP literals never reach it: the URL
         // rules refuse them).
-        let client = reqwest::Client::builder()
-            .https_only(https_only)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .dns_resolver(Arc::new(
-                GuardedResolver::new(Arc::clone(&self.lookup), port, self.permits.clone())
-                    .with_public_policy(self.egress.policy().clone()),
-            ))
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(FETCH_TIMEOUT)
-            .user_agent(self.user_agent.clone())
-            .build()
-            .map_err(|_| ProviderError::Unavailable)?;
+        let client = crate::egress::fetch_client_builder(
+            GuardedResolver::new(Arc::clone(&self.lookup), port, self.permits.clone())
+                .with_public_policy(self.egress.policy().clone()),
+        )
+        .https_only(https_only)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(FETCH_TIMEOUT)
+        .user_agent(self.user_agent.clone())
+        .build()
+        .map_err(|_| ProviderError::Unavailable)?;
         clients.insert((port, https_only), client.clone());
         Ok(client)
     }

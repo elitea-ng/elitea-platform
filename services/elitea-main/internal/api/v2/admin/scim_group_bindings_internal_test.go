@@ -23,8 +23,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -104,7 +104,7 @@ func serveBinding(
 	// whom the no-escalation rule exempts. scim_binding_escalation_internal_test.go
 	// covers the rule.
 	if handler.resolver == nil {
-		handler.resolver = fixedResolver{rolepolicy.SuperAdminPermission}
+		handler.resolver = fixedResolver{adminaccess.SuperAdminPermission}
 	}
 	request := httptest.NewRequest(method, target, strings.NewReader(body))
 	request = request.WithContext(auth.ContextWithUser(request.Context(), auth.User{ID: "5", UserID: "5"}))

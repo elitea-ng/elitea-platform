@@ -1,7 +1,8 @@
 /**
  * The super admin refusals on identity trust (issue 2558).
  *
- * Creating an identity provider, changing its issuer, metadata, signing
+ * Creating or deleting an identity provider (deleting since ADR-0059 R0.4c),
+ * turning it on or off, changing its issuer, metadata, signing
  * certificates or identity attributes, re-binding its accounts, and creating,
  * rotating or deleting a SCIM client are super admin decisions. The server
  * refuses everyone else with 403 and a stable `code`
@@ -19,7 +20,7 @@ const TRUST_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
   identity_provider_trust_super_admin_required: () =>
     t(
       'pages.admin.identityTrust.refusal.provider',
-      'Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes.',
+      'Only a super admin can create or delete an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes.',
     ),
   identity_binding_super_admin_required: () =>
     t(

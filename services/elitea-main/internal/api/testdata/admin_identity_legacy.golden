@@ -1,0 +1,56 @@
+runtime.plugins	GET	/api/v2/admin/identity_providers/administration	503
+runtime.plugins	PUT	/api/v2/admin/identity_providers/administration/fixture	503
+runtime.plugins	DELETE	/api/v2/admin/identity_providers/administration/fixture	503
+runtime.plugins	POST	/api/v2/admin/identity_providers/administration/fixture/rebind	403 identity_binding_super_admin_required
+runtime.plugins	GET	/api/v2/admin/scim_clients/administration	403 gate
+runtime.plugins	POST	/api/v2/admin/scim_clients/administration	403 gate
+runtime.plugins	POST	/api/v2/admin/scim_clients/administration/1/rotate	403 gate
+runtime.plugins	POST	/api/v2/admin/scim_clients/administration/1/revoke	403 gate
+runtime.plugins	DELETE	/api/v2/admin/scim_clients/administration/1	403 gate
+runtime.plugins	GET	/api/v2/admin/scim_group_bindings/administration	403 gate
+runtime.plugins	GET	/api/v2/admin/scim_group_bindings/administration/project_roles/1	403 gate
+runtime.plugins	POST	/api/v2/admin/scim_group_bindings/administration	403 gate
+runtime.plugins	PUT	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+runtime.plugins	DELETE	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+admin.auth.users	GET	/api/v2/admin/identity_providers/administration	403 gate
+admin.auth.users	PUT	/api/v2/admin/identity_providers/administration/fixture	403 gate
+admin.auth.users	DELETE	/api/v2/admin/identity_providers/administration/fixture	403 gate
+admin.auth.users	POST	/api/v2/admin/identity_providers/administration/fixture/rebind	403 gate
+admin.auth.users	GET	/api/v2/admin/scim_clients/administration	503
+admin.auth.users	POST	/api/v2/admin/scim_clients/administration	503
+admin.auth.users	POST	/api/v2/admin/scim_clients/administration/1/rotate	503
+admin.auth.users	POST	/api/v2/admin/scim_clients/administration/1/revoke	503
+admin.auth.users	DELETE	/api/v2/admin/scim_clients/administration/1	503
+admin.auth.users	GET	/api/v2/admin/scim_group_bindings/administration	403 gate
+admin.auth.users	GET	/api/v2/admin/scim_group_bindings/administration/project_roles/1	403 gate
+admin.auth.users	POST	/api/v2/admin/scim_group_bindings/administration	403 gate
+admin.auth.users	PUT	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+admin.auth.users	DELETE	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+configuration.roles.user_project_permissions.view	GET	/api/v2/admin/identity_providers/administration	403 gate
+configuration.roles.user_project_permissions.view	PUT	/api/v2/admin/identity_providers/administration/fixture	403 gate
+configuration.roles.user_project_permissions.view	DELETE	/api/v2/admin/identity_providers/administration/fixture	403 gate
+configuration.roles.user_project_permissions.view	POST	/api/v2/admin/identity_providers/administration/fixture/rebind	403 gate
+configuration.roles.user_project_permissions.view	GET	/api/v2/admin/scim_clients/administration	403 gate
+configuration.roles.user_project_permissions.view	POST	/api/v2/admin/scim_clients/administration	403 gate
+configuration.roles.user_project_permissions.view	POST	/api/v2/admin/scim_clients/administration/1/rotate	403 gate
+configuration.roles.user_project_permissions.view	POST	/api/v2/admin/scim_clients/administration/1/revoke	403 gate
+configuration.roles.user_project_permissions.view	DELETE	/api/v2/admin/scim_clients/administration/1	403 gate
+configuration.roles.user_project_permissions.view	GET	/api/v2/admin/scim_group_bindings/administration	503
+configuration.roles.user_project_permissions.view	GET	/api/v2/admin/scim_group_bindings/administration/project_roles/1	503
+configuration.roles.user_project_permissions.view	POST	/api/v2/admin/scim_group_bindings/administration	403 gate
+configuration.roles.user_project_permissions.view	PUT	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+configuration.roles.user_project_permissions.view	DELETE	/api/v2/admin/scim_group_bindings/administration/1	403 gate
+configuration.roles.user_project_permissions.edit	GET	/api/v2/admin/identity_providers/administration	403 gate
+configuration.roles.user_project_permissions.edit	PUT	/api/v2/admin/identity_providers/administration/fixture	403 gate
+configuration.roles.user_project_permissions.edit	DELETE	/api/v2/admin/identity_providers/administration/fixture	403 gate
+configuration.roles.user_project_permissions.edit	POST	/api/v2/admin/identity_providers/administration/fixture/rebind	403 gate
+configuration.roles.user_project_permissions.edit	GET	/api/v2/admin/scim_clients/administration	403 gate
+configuration.roles.user_project_permissions.edit	POST	/api/v2/admin/scim_clients/administration	403 gate
+configuration.roles.user_project_permissions.edit	POST	/api/v2/admin/scim_clients/administration/1/rotate	403 gate
+configuration.roles.user_project_permissions.edit	POST	/api/v2/admin/scim_clients/administration/1/revoke	403 gate
+configuration.roles.user_project_permissions.edit	DELETE	/api/v2/admin/scim_clients/administration/1	403 gate
+configuration.roles.user_project_permissions.edit	GET	/api/v2/admin/scim_group_bindings/administration	403 gate
+configuration.roles.user_project_permissions.edit	GET	/api/v2/admin/scim_group_bindings/administration/project_roles/1	403 gate
+configuration.roles.user_project_permissions.edit	POST	/api/v2/admin/scim_group_bindings/administration	403 role_caller_unresolved
+configuration.roles.user_project_permissions.edit	PUT	/api/v2/admin/scim_group_bindings/administration/1	403 role_caller_unresolved
+configuration.roles.user_project_permissions.edit	DELETE	/api/v2/admin/scim_group_bindings/administration/1	403 role_caller_unresolved

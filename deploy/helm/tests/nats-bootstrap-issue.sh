@@ -199,7 +199,10 @@ check("drifted: the matching one is kept", not [e for e in api.log if e[0] in ("
 
 # ── 3. a Certificate that never becomes Ready ─────────────────────────────
 api = API(never_ready={CERT("gateway")})
-p, d = run(api, "never", wait="3")
+# The deadline is shared by every Certificate, and main's takes three GETs two
+# seconds apart (at least 4s) before gateway's is polled. A wait under that,
+# plus a slow runner's process start, timed out on main instead of gateway.
+p, d = run(api, "never", wait="10")
 check("never ready: the run fails", p.returncode != 0, p.stdout)
 check("never ready: it names the Certificate and its condition",
       CERT("gateway") in p.stderr and "DoesNotExist" in p.stderr and "Issuing certificate as Secret does not exist" in p.stderr, p.stderr)

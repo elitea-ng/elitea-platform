@@ -14,15 +14,26 @@ package admin
 //     bound group, and so into the role that group grants.
 //
 // Both are therefore equal to `super_admin`. Their route gates
-// (`runtime.plugins`, `admin.auth.users`) are held by `admin` too, so the
+// (`runtime.plugins`, `admin.auth.users`, and since ADR-0059 R0.4c
+// `identity.sso.settings.manage`) are held by narrower roles too, so the
 // handler checks the caller's own administration set, read from the database
-// for each request (rolepolicy.ResolveCaller), for
-// rolepolicy.SuperAdminPermission. It fails closed: a caller that cannot be
-// read is refused with rolepolicy.CodeCallerUnresolved.
+// for each request (adminaccess.ResolveCaller), for
+// adminaccess.SuperAdminPermission or adminaccess.IdentitySSOTrustManage. It
+// fails closed: a caller that cannot be read is refused with
+// adminaccess.CodeCallerUnresolved.
+//
+// # The split (ADR-0059 R0.4c)
+//
+// Trust actions: create or delete an identity provider, turn one on or off,
+// change a trust field (identityproviders.FieldClasses) or replace its secret,
+// re-bind accounts, and create, rotate or delete a SCIM client. Everything
+// else (a rename, the scopes, the login domains, the name attribute, a SCIM
+// client revoke, the group bindings) is a settings action, open to the route
+// gate.
 //
 // # The refusal, and the audit rows
 //
-// The conventions are rolepolicy's (#2555): a 403 whose JSON carries `error`
+// The conventions are the role policy's (internal/adminaccess) (#2555): a 403 whose JSON carries `error`
 // and a stable `code`, and an annotation on the audit row the request
 // middleware writes for every admin write and every refusal (event type
 // `api`), so the row names the domain action rather than only the route. A
@@ -33,8 +44,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // The refusal codes. Clients key their message on these, so they are stable.
@@ -75,25 +86,33 @@ type trustGate struct {
 	fields []string
 }
 
-// requireSuperAdmin answers 403 and returns false unless the caller holds
-// rolepolicy.SuperAdminPermission.
-func (h *Handler) requireSuperAdmin(w http.ResponseWriter, r *http.Request, gate trustGate) bool {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+// requireIdentityTrust answers 403 and returns false unless the caller holds
+// adminaccess.SuperAdminPermission or adminaccess.IdentitySSOTrustManage, the
+// name of the identity trust half (ADR-0059 R0.4c). The registry seeds the
+// trust name on super_admin alone and refuses it on every other role, so the
+// two answer the same today; the name lets the action table and the audit
+// state what the action needs.
+//
+// The route gates in front of these writes accept the settings name and the
+// legacy names too, on purpose: a refusal of a trust action must be written
+// here, with its code and its audit action, not as the route gate's bare 403.
+func (h *Handler) requireIdentityTrust(w http.ResponseWriter, r *http.Request, gate trustGate) bool {
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		refusal.Message = "your own permissions could not be read, so the change was refused"
 		writeTrustRefusal(w, r, gate, refusal)
 		return false
 	}
-	if caller.SuperAdmin {
+	if caller.SuperAdmin || caller.Administration[adminaccess.IdentitySSOTrustManage] {
 		return true
 	}
-	writeTrustRefusal(w, r, gate, &rolepolicy.Refusal{Code: gate.code, Message: gate.message})
+	writeTrustRefusal(w, r, gate, &adminaccess.Refusal{Code: gate.code, Message: gate.message})
 	return false
 }
 
-// writeTrustRefusal is rolepolicy.Write with this surface's audit action and
+// writeTrustRefusal is adminaccess.Write with this surface's audit action and
 // entity.
-func writeTrustRefusal(w http.ResponseWriter, r *http.Request, gate trustGate, refusal *rolepolicy.Refusal) {
+func writeTrustRefusal(w http.ResponseWriter, r *http.Request, gate trustGate, refusal *adminaccess.Refusal) {
 	audit.Annotate(r.Context(), audit.Annotation{
 		Action:     gate.refusedAction,
 		EntityType: gate.entityType,

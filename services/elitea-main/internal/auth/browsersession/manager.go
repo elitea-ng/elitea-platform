@@ -152,6 +152,13 @@ type NewSession struct {
 	// without auth_time). Such a session never satisfies the
 	// recent-authentication check. AuthenticatedAt is then ignored.
 	AuthenticationTimeUnknown bool
+	// AuthenticationProven says the recorded time is PROOF of an
+	// authentication, not merely the moment of the sign-in (shared 0264,
+	// ADR-0059 R1.10b): an OIDC id_token's auth_time, or a SAML
+	// AuthnInstant answering a request that carried ForceAuthn. Only a
+	// proven row satisfies the recent-authentication check. It is ignored
+	// when AuthenticationTimeUnknown is set.
+	AuthenticationProven bool
 }
 
 // Create writes one session row and returns the COOKIE VALUE for it.
@@ -208,6 +215,7 @@ func (m *Manager) CreateCookie(ctx context.Context, request NewSession) (string,
 		ProviderSessionIndex: request.ProviderSessionIndex,
 		CreatedAt:            now,
 		AuthenticatedAt:      authenticatedAt,
+		AuthenticationProven: request.AuthenticationProven && !authenticatedAt.IsZero(),
 		LastSeenAt:           now,
 		ExpiresAt:            now.Add(lifetime),
 		IdleTimeout:          idle,
@@ -299,6 +307,7 @@ func (s Session) User() auth.User {
 		Email:             s.Email,
 		AuthType:          "session",
 		BrowserSessionRef: s.Ref,
+		CredentialKind:    auth.CredentialKindSession,
 	}
 }
 

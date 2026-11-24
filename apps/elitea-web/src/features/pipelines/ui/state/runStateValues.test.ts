@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { continuedFailureSteps, isRunFinished, stepStateValues } from './runStateValues';
+import { isRunFinished, stepStateValues } from './runStateValues';
 
 /**
  * #6883: a pipeline whose last node is an agent. The agent's entry got no
@@ -13,7 +13,7 @@ const terminalAgentTimeline = [
   { state: {} }, // the terminal agent entry
 ];
 
-describe('stepStateValues (#6883)', () => {
+describe('stepStateValues (issue 6883 + EL-3734 grouped timelines)', () => {
   it('reads Before from the previous entry and After from the selected one for a middle step', () => {
     const timeline = [{ state: { n: 0 } }, { state: { n: 1 } }, { state: { n: 2 } }];
     expect(stepStateValues(timeline, 1, 'n', true)).toEqual({ before: 0, after: 1, isFinal: false });
@@ -39,6 +39,38 @@ describe('stepStateValues (#6883)', () => {
   it('handles an empty timeline', () => {
     expect(stepStateValues([], 0, 'answer', true)).toEqual({ before: '', after: undefined, isFinal: false });
   });
+
+  it('reads outer-step Before from the previous outer step, never leaking a preceding nested child step', () => {
+    const grouped = [
+      { state: { answer: 'outer-0' }, is_nested: false },
+      { state: { answer: 'nested-child' }, is_nested: true, scope_id: 'application:call-1' },
+      { state: { answer: 'outer-1' }, is_nested: false },
+    ];
+    expect(stepStateValues(grouped, 2, 'answer', false)).toEqual({
+      before: 'outer-0',
+      after: 'outer-1',
+      isFinal: false,
+    });
+  });
+
+  it('marks lastOuterIndex as Final state on a finished grouped run ending with nested steps and scans outer steps only (#6883)', () => {
+    const grouped = [
+      { state: { answer: 'outer-0' }, is_nested: false },
+      { state: {}, is_nested: false }, // lastOuterIndex = 1 (empty state)
+      { state: { answer: 'nested-only' }, is_nested: true, scope_id: 'application:call-1' },
+    ];
+    expect(stepStateValues(grouped, 1, 'answer', true)).toEqual({
+      before: 'outer-0',
+      after: 'outer-0',
+      isFinal: true,
+    });
+    // Nested child itself is not the outer final state.
+    expect(stepStateValues(grouped, 2, 'answer', true)).toEqual({
+      before: '',
+      after: 'nested-only',
+      isFinal: false,
+    });
+  });
 });
 
 describe('isRunFinished (#6883)', () => {
@@ -57,48 +89,5 @@ describe('isRunFinished (#6883)', () => {
       after: undefined,
       isFinal: false,
     });
-  });
-});
-
-describe('continuedFailureSteps (5b-1, D12; fix round 1, finding 10)', () => {
-  it('marks only the visit whose own state appended the entry', () => {
-    const timeline = [
-      { id: 'shape', state: { node_errors: [] } },
-      { id: 'route', state: { node_errors: [] } },
-      { id: 'shape', state: { node_errors: [{ node: 'shape', handled: 'continue' }] } },
-      { id: 'route', state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }] } },
-      { id: 'shape', state: { node_errors: [{ node: 'shape', handled: 'continue' }, { node: 'route', handled: 'error_output' }] } },
-      { id: 'END' },
-    ];
-    expect([...continuedFailureSteps(timeline)]).toEqual([2, 3]);
-    expect(continuedFailureSteps([{ id: 'a', state: { out: 'x' } }]).size).toBe(0);
-    expect(continuedFailureSteps([]).size).toBe(0);
-  });
-});
-
-describe('continuedFailureSteps (delta review A)', () => {
-  const entry = (node: string, inputStep: number) => ({ node, handled: 'continue', input_step: inputStep, support_ref: `${node}-${String(inputStep)}` });
-
-  it('attributes an entry to its own node even when an interrupt marker shows it first', () => {
-    const timeline = [
-      { id: 'shape' },
-      { id: 'interrupt', state: { node_errors: [entry('shape', 1)] } },
-      { id: 'after', state: { node_errors: [entry('shape', 1)] } },
-    ];
-    expect([...continuedFailureSteps(timeline)]).toEqual([0]);
-  });
-
-  it('ignores entries recorded before a resumed timeline began', () => {
-    // Resumed after a HITL pause: the first rebuilt step already holds the
-    // entries of earlier visits, including one of `shape`, which fails again later.
-    const olderShape = entry('shape', 1);
-    const older = entry('earlier', 2);
-    const timeline = [
-      { id: 'review', state: { node_errors: [olderShape, older] } },
-      { id: 'shape', state: { node_errors: [olderShape, older] } },
-      { id: 'after', state: { node_errors: [olderShape, older] } },
-      { id: 'shape', state: { node_errors: [olderShape, older, entry('shape', 7)] } },
-    ];
-    expect([...continuedFailureSteps(timeline)]).toEqual([3]);
   });
 });

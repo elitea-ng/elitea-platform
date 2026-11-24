@@ -218,7 +218,7 @@ INSERT INTO public.auth_core__project_role_permission (id, project_id, role_id, 
 	if lastLogin == nil || lastLogin.UTC().Format("2006-01-02") != time.Now().UTC().Format("2006-01-02") {
 		t.Fatalf("token permission lookup last_login = %v, want current UTC day", lastLogin)
 	}
-	assertResolution(t, resolver, auth.User{ID: "1", AuthType: "user"}, auth.PermissionModeAdministration, "", 1, []string{"central.administration"})
+	assertResolution(t, resolver, auth.User{ID: "1", AuthType: "user", CredentialKind: auth.CredentialKindSession}, auth.PermissionModeAdministration, "", 1, []string{"central.administration"})
 	assertResolution(t, resolver, auth.User{ID: "1", AuthType: "user"}, auth.PermissionModeDeveloper, "", 1, []string{"central.developer"})
 
 	for _, test := range []struct {

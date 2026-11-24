@@ -225,7 +225,7 @@ describe('numeric node ids: the real editor panel', () => {
     expect(screen.queryByText('Failed to load the flow editor')).not.toBeInTheDocument();
 
     // Non-editing interactions: view switches must not touch the stored text or arm the guard.
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     await user.click(await screen.findByRole('button', { name: 'Flow' }));
     await waitFor(() => expect(container.querySelector('.react-flow__node[data-id="1"]')).not.toBeNull());
     const afterSwitch = usePipelineYamlStore.getState();

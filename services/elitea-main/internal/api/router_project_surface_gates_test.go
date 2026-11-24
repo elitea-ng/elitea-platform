@@ -22,9 +22,10 @@ import (
 // package `Routes()` method.
 //
 //	/api/v2/configurations              22 routes, the per-project CREDENTIALS
-//	/api/v2/webhooks/prompt_lib/{id}     7 routes, url + rotating `secret`,
-//	                                     plus the delivery log (#876's second
-//	                                     half: GET .../deliveries and POST
+//	/api/v2/webhooks/prompt_lib/{id}     8 routes, url + write-only `secret`
+//	                                     and its rotation (issue 2963), plus
+//	                                     the delivery log (#876's second half:
+//	                                     GET .../deliveries and POST
 //	                                     .../deliveries/{id}/redeliver)
 //	/api/v2/events/prompt_lib/{id}       1 route,  the project SSE bus
 //
@@ -105,6 +106,7 @@ var projectSurfaceRoutes = []projectSurfaceRoute{
 	{http.MethodGet, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationGetPermission},
 	{http.MethodPut, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationUpdatePermission},
 	{http.MethodDelete, "/api/v2/webhooks/prompt_lib/7/wh-1", "/api/v2/webhooks/prompt_lib/8/wh-1", configurationDeletePermission},
+	{http.MethodPost, "/api/v2/webhooks/prompt_lib/7/wh-1/rotate_secret", "/api/v2/webhooks/prompt_lib/8/wh-1/rotate_secret", configurationUpdatePermission},
 	{http.MethodGet, "/api/v2/webhooks/prompt_lib/7/wh-1/deliveries", "/api/v2/webhooks/prompt_lib/8/wh-1/deliveries", configurationGetPermission},
 	{http.MethodPost, "/api/v2/webhooks/prompt_lib/7/wh-1/deliveries/del-1/redeliver", "/api/v2/webhooks/prompt_lib/8/wh-1/deliveries/del-1/redeliver", configurationUpdatePermission},
 	// ── /events ────────────────────────────────────────────────────────────
@@ -146,7 +148,7 @@ func (emptyWebhookRepo) List(context.Context, string) ([]webhook.Webhook, error)
 }
 
 func (emptyWebhookRepo) Get(_ context.Context, projectID, id string) (webhook.Webhook, error) {
-	return webhook.Webhook{ID: id, ProjectID: projectID, Secret: "s3cr3t"}, nil
+	return webhook.Webhook{ID: id, ProjectID: projectID, SecretRef: "{{secret.s3cr3t}}"}, nil
 }
 
 func (emptyWebhookRepo) Create(_ context.Context, projectID string, wh webhook.Webhook) (webhook.Webhook, error) {
@@ -154,9 +156,13 @@ func (emptyWebhookRepo) Create(_ context.Context, projectID string, wh webhook.W
 	return wh, nil
 }
 
-func (emptyWebhookRepo) Update(_ context.Context, projectID, id string, wh webhook.Webhook) (webhook.Webhook, error) {
+func (emptyWebhookRepo) Update(_ context.Context, projectID, id string, wh webhook.Webhook, _ *string) (webhook.Webhook, error) {
 	wh.ID, wh.ProjectID = id, projectID
 	return wh, nil
+}
+
+func (emptyWebhookRepo) RotateSecret(_ context.Context, projectID, id, _ string) (webhook.Webhook, error) {
+	return webhook.Webhook{ID: id, ProjectID: projectID}, nil
 }
 
 func (emptyWebhookRepo) Delete(context.Context, string, string) error { return nil }

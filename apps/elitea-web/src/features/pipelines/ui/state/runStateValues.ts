@@ -1,25 +1,25 @@
 /**
  * The "Before" and "After" values the Run Details dialog shows for one state
- * variable at one timeline step (#6883).
+ * variable at one timeline step (#6883 + EL-3734 grouped timelines).
  *
  * A timeline entry carries the state the run had when that step finished,
- * so "After" is the entry's own state and "Before" is the entry before it.
+ * so "After" is the entry's own state and "Before" is the preceding entry in
+ * the same execution scope (`findPreviousScopedStep` — outer steps compare
+ * against the previous outer step, nested child steps compare against the
+ * previous nested step with the same `scope_id`).
  *
- * THE TERMINAL STEP. The last step of a finished run often carries no state
- * of its own. A terminal agent node finishes on `pipeline_finish`, which has
- * no transitional edge after it to copy the state onto the node's entry, and
- * the state of the agent's last edge lands on the agent's last TOOL entry
- * (both share the agent's `langgraph_node`). The dialog then showed an empty
- * "After", or the step before it, and never the final state the run produced.
- * For that step, "After" is the run's final state: the newest state the
+ * THE TERMINAL STEP. The last outer step of a finished run often carries no
+ * state of its own (`pipeline_finish` has no trailing transitional edge). For
+ * that step (`!currentStep.is_nested && selectedStep === lastOuterIndex`),
+ * "After" is the run's final outer state: the newest outer-step state the
  * timeline holds. The dialog labels it "Final state".
- *
- * Only a TERMINAL run has a final state (`isRunFinished`). `Interrupt` is a
- * run paused at a human-in-the-loop node: it resumes later and produces a
- * different state, so its last step keeps the plain "After" and its own
- * value. An unknown status is treated the same way.
  */
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import {
+  findLastOuterStepIndex,
+  findPreviousScopedStep,
+} from '../../lib/run-state-timeline/timelineGrouping.helpers';
+import type { GroupedTimelineStep } from '../../lib/run-state-timeline/timeline.types';
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
   FlowEditorConstants.PipelineStatus.Completed,
@@ -33,13 +33,15 @@ export function isRunFinished(status: string | undefined): boolean {
 }
 
 export interface RunStateStep {
-  readonly state?: Readonly<Record<string, unknown>>;
+  readonly state?: Readonly<Record<string, unknown>> | undefined;
+  readonly is_nested?: boolean | undefined;
+  readonly scope_id?: string | undefined;
 }
 
 export interface StepStateValues {
   readonly before: unknown;
   readonly after: unknown;
-  /** True for the last step of a terminal run (see `isRunFinished`). */
+  /** True for the last outer step of a terminal run (see `isRunFinished`). */
   readonly isFinal: boolean;
 }
 
@@ -47,11 +49,12 @@ function hasVariable(step: RunStateStep | undefined, variable: string): boolean 
   return step?.state !== undefined && Object.prototype.hasOwnProperty.call(step.state, variable);
 }
 
-/** The newest value of `variable` in the timeline, scanning back from the end. */
-function finalValueOf(timeline: readonly RunStateStep[], variable: string): unknown {
+/** The newest value of `variable` across outer (non-nested) steps, scanning back from the end. */
+function finalOuterValueOf(timeline: readonly RunStateStep[], variable: string): unknown {
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const step = timeline[index];
-    if (hasVariable(step, variable)) return step?.state?.[variable];
+    if (!step || step.is_nested) continue;
+    if (hasVariable(step, variable)) return step.state?.[variable];
   }
   return undefined;
 }
@@ -62,56 +65,17 @@ export function stepStateValues(
   variable: string,
   runFinished: boolean,
 ): StepStateValues {
-  const before = selectedStep > 0 ? timeline[selectedStep - 1]?.state?.[variable] : '';
-  const isFinal = runFinished && timeline.length > 0 && selectedStep === timeline.length - 1;
-  if (isFinal) return { before, after: finalValueOf(timeline, variable), isFinal };
-  return { before, after: timeline[selectedStep]?.state?.[variable], isFinal };
-}
+  const steps = timeline as readonly GroupedTimelineStep[];
+  const currentStep = timeline[selectedStep];
+  const previousStep = findPreviousScopedStep(steps, selectedStep);
+  const before = previousStep ? previousStep.state?.[variable] : '';
+  const lastOuterIndex = findLastOuterStepIndex(steps);
+  const isFinal =
+    runFinished &&
+    !currentStep?.is_nested &&
+    lastOuterIndex >= 0 &&
+    selectedStep === lastOuterIndex;
 
-/**
- * 5b-1 (D12): the timeline steps whose node's failure the run settled
- * through its settings, so the dialog can mark them "Failed · continued"
- * with the existing failed styling.
- *
- * Each `node_errors` entry is counted once (by its node, input step, support
- * reference and handling) at the first step whose state shows it, and is
- * attributed to the nearest step AT OR BEFORE that position whose node is the
- * entry's own node. So a marker step that shows the entry first (an
- * `interrupt` after the failing node) or the next node's step never takes it,
- * and an entry recorded before a resumed timeline began, whose node has no
- * step at or before its first appearance, is never attributed. The steps
- * carry no checkpoint step, so a timeline that begins with a revisit of the
- * very node whose failure predates it cannot be told apart from that node
- * failing there; it is marked.
- */
-export function continuedFailureSteps(timeline: readonly (RunStateStep & { readonly id?: string })[]): ReadonlySet<number> {
-  const marked = new Set<number>();
-  const seen = new Set<string>();
-  timeline.forEach((step, index) => {
-    const entries = step.state?.['node_errors'];
-    if (!Array.isArray(entries)) return;
-    for (const entry of entries as readonly unknown[]) {
-      const continued = continuedEntry(entry);
-      if (continued === undefined || seen.has(continued.identity)) continue;
-      seen.add(continued.identity);
-      const owner = nearestStepOf(timeline, continued.node, index);
-      if (owner !== undefined) marked.add(owner);
-    }
-  });
-  return marked;
-}
-
-function continuedEntry(entry: unknown): { readonly node: string; readonly identity: string } | undefined {
-  if (typeof entry !== 'object' || entry === null) return undefined;
-  const { node, handled, input_step: inputStep, error } = entry as Readonly<Record<string, unknown>>;
-  if (typeof node !== 'string' || (handled !== 'continue' && handled !== 'error_output')) return undefined;
-  const support = typeof error === 'object' && error !== null ? (error as Readonly<Record<string, unknown>>)['support_ref'] : undefined;
-  return { node, identity: JSON.stringify([node, inputStep, support, handled]) };
-}
-
-function nearestStepOf(timeline: readonly { readonly id?: string }[], node: string, from: number): number | undefined {
-  for (let index = from; index >= 0; index -= 1) {
-    if (timeline[index]?.id === node) return index;
-  }
-  return undefined;
+  if (isFinal) return { before, after: finalOuterValueOf(timeline, variable), isFinal };
+  return { before, after: currentStep?.state?.[variable], isFinal };
 }

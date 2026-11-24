@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -206,6 +207,14 @@ type RouterConfig struct {
 	SAMLHandler        *v2auth.SAMLHandler
 	HealthDeps         health.Deps
 	Pool               *pgxpool.Pool
+	// MaintenanceState reads the maintenance window in place of the
+	// platform_settings rows of Pool, for the maintenance gate, the
+	// platform_settings flag read and GET /admin/maintenance alike, on every
+	// request and uncached. Nil,
+	// which cmd/elitea-main always leaves it, reads Pool. It is the seam the
+	// administration surface helper (internal/api/adminsurface) opens a
+	// window through, because its pool reaches no database.
+	MaintenanceState func(context.Context) (platformconfig.Maintenance, error)
 	// BrandPackPath is the brand pack's file layer (BRAND_PACK_PATH, read in
 	// cmd/elitea-main/brand_pack_config.go). Empty means no file layer. Used
 	// only when Branding is nil.
@@ -2231,10 +2240,22 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.NativeAccess != nil {
 		nativeClientForToken = cfg.NativeAccess.ClientID
 	}
+	// The routes an administration-mode gate decides, which a holder of a
+	// narrow administration permission keeps during a maintenance window
+	// (ADR-0059 R0.4b). Marked from the finished router, at the end of this
+	// function.
+	administrationRoutes := &administrationGatedRoutes{}
+	// The token rule of the action table (ADR-0059 R1.2b,
+	// token_critical_actions.go): below Audit, so a refusal is recorded, and
+	// above the route gates. Marked from the finished router with the routes
+	// above.
+	tokenRule := &tokenCriticalActions{resolver: permissionResolver}
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
-			Pool:     cfg.Pool,
-			Resolver: permissionResolver,
+			Pool:                cfg.Pool,
+			State:               cfg.MaintenanceState,
+			Resolver:            permissionResolver,
+			AdministrationRoute: administrationRoutes.decides,
 		}),
 		apimw.ClientVersion(apimw.ClientVersionConfig{
 			MinimumFor:           nativePolicy.MinimumFor,
@@ -2350,6 +2371,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
+		v2core.WithMaintenanceState(cfg.MaintenanceState),
 		v2core.WithObjectStore(cfg.ObjectStore),
 		v2core.WithInviteMailer(inviteMailer),
 		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
@@ -2536,6 +2558,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//     (403) is recorded rather than silently disappearing — which is
 		//     the question an audit trail is most often opened to answer.
 		r.Use(apimw.Audit(auditRecorder))
+		r.Use(tokenRule.middleware)
 		// A write that can change what a callee agent holds asks for the drift
 		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
 		// Below Audit so it sees the final status; it never changes a response.
@@ -2751,6 +2774,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				append([]admin.Option{
 					admin.WithMemoryUserJournal(memoryUserJournal),
 					admin.WithPermissionResolver(permissionResolver),
+					admin.WithMaintenanceState(cfg.MaintenanceState),
 					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
@@ -2835,17 +2859,28 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// select the permission mode: legacy reached these handlers only
 			// through its `administration` AdminAPI, so the resolution mode is
 			// always `administration`.
-			central := func(permission string) func(http.Handler) http.Handler {
+			central := func(permissions ...string) func(http.Handler) http.Handler {
 				return apimw.RequireCentralPermissions(
 					permissionResolver, platformauth.PermissionModeAdministration,
-					permission,
+					permissions...,
 				)
 			}
 			// auth_users.py, user_suspend.py
 			requireAdminUsers := central(adminaccess.AdminAuthUsers)
-			// System info, plugin config, maintenance and background jobs —
-			// all declare ["runtime.plugins"].
-			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
+			// Maintenance, system info, e-mail, background jobs, the prebuilt
+			// MCP catalogue and the identity providers declared
+			// ["runtime.plugins"], and now accept a narrow name beside it
+			// (below). Plugin config has its own gate (R0.5).
+			//
+			// The narrow names of ADR-0059 decision 2 for the low-risk
+			// platform subjects (R0.4a). Each gate accepts the narrow name OR
+			// runtime.plugins, so a holder of the legacy name sees no change
+			// (testdata/admin_platform_legacy.golden).
+			requireEmail := central(adminaccess.PlatformEmailManage, adminaccess.RuntimePlugins)
+			requireOperationsView := central(adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins)
+			requireOperationsManage := central(adminaccess.PlatformOperationsManage, adminaccess.RuntimePlugins)
+			requireMCPCatalogue := central(adminaccess.MCPCatalogueManage, adminaccess.RuntimePlugins)
+			requireMaintenance := central(adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
 			// this unit added, so all four read as one surface.
@@ -2862,6 +2897,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// resolvable.
 			requireProjectsView := central(adminaccess.ProjectsProjectsView)
 			requireProjectsEdit := central(adminaccess.ProjectsProjectsEdit)
+			// Identity, split by action (ADR-0059 R0.4c). Reads accept
+			// identity.sso.view beside the legacy name. A write route accepts
+			// identity.sso.settings.manage beside the legacy name, and the
+			// trust name too: the handler then refuses a TRUST action (create,
+			// delete, turn on or off, a trust field, a secret, a re-bind, a
+			// SCIM client create, rotate or delete) unless the caller holds
+			// identity.sso.trust.manage or admin.auth.users.super_admin
+			// (identity_trust.go). The trust refusal is written there, with its
+			// code and audit action, not as a bare 403 here. A binding write
+			// still meets the role rule of #2555 whatever name opened it.
+			// testdata/admin_identity_legacy.golden pins the legacy answers.
+			requireIdentityProvidersView := central(adminaccess.IdentitySSOView, adminaccess.RuntimePlugins)
+			requireIdentityProvidersEdit := central(adminaccess.IdentitySSOSettingsManage,
+				adminaccess.IdentitySSOTrustManage, adminaccess.RuntimePlugins)
+			requireSCIMClientsView := central(adminaccess.IdentitySSOView, adminaccess.AdminAuthUsers)
+			requireSCIMClientsEdit := central(adminaccess.IdentitySSOSettingsManage,
+				adminaccess.IdentitySSOTrustManage, adminaccess.AdminAuthUsers)
+			requireSCIMBindingsView := central(adminaccess.IdentitySSOView, admin.UserProjectPermissionsViewPermission)
+			requireSCIMBindingsEdit := central(adminaccess.IdentitySSOSettingsManage, admin.UserProjectPermissionsEditPermission)
 
 			// The SCIM 2.0 tree is NOT mounted here. It authenticates a SCIM
 			// client, not a user, so it sits outside this group's Auth
@@ -2889,13 +2943,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// which is why every Help Center card said "No links configured".
 				r.Get("/plugin_config_values/prompt_lib/resources", adminHandler.PromptLibResourcesValues)
 
-				r.With(requireRuntimePlugins).Get("/system_info/{mode}", adminHandler.SystemInfo)
+				r.With(requireOperationsView).Get("/system_info/{mode}", adminHandler.SystemInfo)
 				// Before this gate any authenticated session could read the
 				// global user list — id, name, email, last_login, suspended and
 				// administration role for every row of auth_core__user.
 				r.With(requireAdminUsers).Get("/auth_users/{mode}", adminHandler.AuthUsers)
 				r.With(requireAdminUsers).Post("/auth_users/{mode}", adminHandler.AuthUsersAction)
 				r.With(requireAdminUsers).Put("/user_suspend/{mode}/{userID}", adminHandler.UserSuspend)
+				// The Access reads (ADR-0059 R0.10b): who holds which
+				// administration role, and the grant history. A security
+				// auditor reads them through access.roles.view without the
+				// user directory above, which stays on admin.auth.users; the
+				// names it narrows open them too. Later Access reads
+				// (posture, tokens) share the /access/ prefix.
+				requireAccessRolesView := central(adminaccess.AccessRolesView,
+					adminaccess.AdminAuthUsers, adminaccess.ModesUsers)
+				r.With(requireAccessRolesView).Get("/access/roles", adminHandler.AccessRoles)
+				r.With(requireAccessRolesView).Get("/access/history", adminHandler.AccessHistory)
 				// The MODES registry and the GLOBAL invite (#255). Both are
 				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC
@@ -2944,20 +3008,23 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Put("/user_project_permissions/administration", adminHandler.UserProjectPermissionsSave)
 				// The dedicated SCIM client credentials (shared migration 0135).
 				// Gated on `admin.auth.users`, the permission the SCIM tree
-				// itself required before 0134: a SCIM client creates and
-				// deactivates accounts, so minting one must need the right to
-				// do that by hand. internal/api/v2/admin/scim_clients.go
-				// states why a weaker gate would be an escalation. A secret is
-				// returned once, by the create and the rotate.
-				r.With(requireAdminUsers).
+				// itself required before 0134, or the identity names of ADR-0059
+				// R0.4c (the read on identity.sso.view, the writes on
+				// identity.sso.settings.manage). The create, the rotate and the
+				// delete are trust actions the handler refuses without a trust
+				// name: a SCIM client creates and deactivates accounts.
+				// internal/api/v2/admin/scim_clients.go states why a weaker
+				// gate would be an escalation. A secret is returned once, by the
+				// create and the rotate.
+				r.With(requireSCIMClientsView).
 					Get("/scim_clients/administration", adminHandler.SCIMClientList)
-				r.With(requireAdminUsers).
+				r.With(requireSCIMClientsEdit).
 					Post("/scim_clients/administration", adminHandler.SCIMClientCreate)
-				r.With(requireAdminUsers).
+				r.With(requireSCIMClientsEdit).
 					Post("/scim_clients/administration/{id}/rotate", adminHandler.SCIMClientRotate)
-				r.With(requireAdminUsers).
+				r.With(requireSCIMClientsEdit).
 					Post("/scim_clients/administration/{id}/revoke", adminHandler.SCIMClientRevoke)
-				r.With(requireAdminUsers).
+				r.With(requireSCIMClientsEdit).
 					Delete("/scim_clients/administration/{id}", adminHandler.SCIMClientDelete)
 				// The SCIM group bindings (shared migration 0098): which
 				// identity provider group grants which role on which project.
@@ -2965,15 +3032,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Gated on the SAME pair as the editor above, and deliberately
 				// so. Authoring a binding is authorising a directory to put
 				// people into a project with a role, which is exactly what
-				// `configuration.roles.user_project_permissions` governs. No new
-				// permission string arrives, so the grant gate in
-				// router_permission_grant_gate_test.go stays untripped.
+				// `configuration.roles.user_project_permissions` governs. Since
+				// ADR-0059 R0.4c the reads also accept identity.sso.view and the
+				// writes identity.sso.settings.manage; the role rule of #2555
+				// (guardBindingWrite) still refuses a binding to a role the
+				// caller does not hold in that project, whatever name opened the
+				// route.
 				//
 				// The mode segment is static `administration`: a binding is a
 				// deployment fact with no project-scoped view, so another mode
 				// 404s rather than being answered under a scope that does not
 				// apply.
-				r.With(central(admin.UserProjectPermissionsViewPermission)).
+				r.With(requireSCIMBindingsView).
 					Get("/scim_group_bindings/administration", adminHandler.SCIMGroupBindingList)
 				// The roles a project REALLY has, for the binding editor's role
 				// control. `/admin/roles/{mode}/{projectID}` answers a hardcoded
@@ -2982,14 +3052,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				//
 				// A static segment ahead of `{id}`: chi matches the literal
 				// first, so this cannot shadow the binding routes below.
-				r.With(central(admin.UserProjectPermissionsViewPermission)).
+				r.With(requireSCIMBindingsView).
 					Get("/scim_group_bindings/administration/project_roles/{projectID}",
 						adminHandler.SCIMGroupBindingProjectRoles)
-				r.With(central(admin.UserProjectPermissionsEditPermission)).
+				r.With(requireSCIMBindingsEdit).
 					Post("/scim_group_bindings/administration", adminHandler.SCIMGroupBindingCreate)
-				r.With(central(admin.UserProjectPermissionsEditPermission)).
+				r.With(requireSCIMBindingsEdit).
 					Put("/scim_group_bindings/administration/{id}", adminHandler.SCIMGroupBindingSave)
-				r.With(central(admin.UserProjectPermissionsEditPermission)).
+				r.With(requireSCIMBindingsEdit).
 					Delete("/scim_group_bindings/administration/{id}", adminHandler.SCIMGroupBindingDelete)
 				// The admin Roles page. Before it, only the GET existed —
 				// ungated, ignoring {scope}, and listing only already-granted
@@ -3024,7 +3094,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				adminCloudExecutor := newProjectCloudExecutorHandler(cfg.Pool)
 				r.With(requireProjectsView).Get(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Get)
 				r.With(requireProjectsEdit).Put(v2projectcloudexecutor.AdminPath, adminCloudExecutor.Put)
-				r.With(requireRuntimePlugins).Get("/plugin_config_schemas/{mode}", adminHandler.PluginConfigSchemas)
+				// The three Configuration routes admit runtime.plugins or any
+				// narrow name a section declares, computed from the sections
+				// (ADR-0059 R0.5, v2/admin/config_section_access.go); the
+				// handler then decides per section, and the schema list and
+				// the suggestions are filtered to the sections the caller can
+				// read.
+				requireConfiguration := adminHandler.RequireConfigurationAccess
+				r.With(requireConfiguration).Get("/plugin_config_schemas/{mode}", adminHandler.PluginConfigSchemas)
 				// The admin Configuration page's read and write (unit A14).
 				// The `{mode}` pair they replace answered 200 for EVERY section:
 				// the GET with the schema's defaults for all of them at once
@@ -3034,38 +3111,38 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `administration` is a STATIC segment, so chi's trie prefers it
 				// and a static segment binds no `{mode}` parameter — the trap
 				// #207's test caught. These handlers state their mode rather
-				// than sniffing it from the URL. Sections that additionally
-				// declare a `required_permission` are checked INSIDE the
-				// handler, because that permission depends on the section and
-				// route middleware cannot see it.
+				// than sniffing it from the URL. The section is decided INSIDE
+				// the handler, on its narrow permission or on runtime.plugins
+				// and its `required_permission`, because that permission
+				// depends on the section and route middleware cannot see it.
 				//
 				// The legacy runtime registers no handler for any other mode on
 				// this path except `prompt_lib`/resources above, so there is
 				// deliberately no `{mode}` fallback: another mode 404s rather
 				// than being answered with something plausible.
-				r.With(requireRuntimePlugins).
+				r.With(requireConfiguration).
 					Get("/plugin_config_values/administration/{plugin}", adminHandler.AdministrationPluginConfigValues)
-				r.With(requireRuntimePlugins).
+				r.With(requireConfiguration).
 					Put("/plugin_config_values/administration/{plugin}", adminHandler.AdministrationPluginConfigValuesSave)
 				// The PRE-BUILT MCP server catalogue — the real surface behind
 				// the Configuration page's "MCP Servers" section, which stays
 				// unavailable because its rows are plaintext and a catalogue
 				// entry carries a client secret (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` the section it
-				// replaces already required, so an operator who could edit that
-				// section can edit the catalogue, and no new permission string
-				// arrives without a grant (router_permission_grant_gate_test.go).
+				// The permission is `mcp.catalogue.manage` (ADR-0059 R0.4a, one
+				// name for read and edit) or the SAME `runtime.plugins` the
+				// section it replaces already required, so an operator who
+				// could edit that section can still edit the catalogue.
 				//
 				// The mode segment is static `administration`: the catalogue is
 				// platform-wide and there is no project-scoped view of it, so
 				// another mode 404s rather than being answered with the same
 				// rows under a scope that does not apply to them.
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Get("/mcp_prebuilt_servers/administration", adminHandler.PrebuiltMCPList)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Put("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPSave)
-				r.With(requireRuntimePlugins).
+				r.With(requireMCPCatalogue).
 					Delete("/mcp_prebuilt_servers/administration/{key}", adminHandler.PrebuiltMCPDelete)
 				// The TYPED identity provider definitions — the real surface
 				// behind the Configuration page's "Authentication" section,
@@ -3073,9 +3150,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// provider carries a client secret (config_schemas.go).
 				//
 				// The permission is the SAME `runtime.plugins` that section
-				// already required, so an operator who could edit it can author
-				// a provider, and no new permission string arrives without a
-				// grant (router_permission_grant_gate_test.go).
+				// already required, or since ADR-0059 R0.4c identity.sso.view
+				// (the read) and identity.sso.settings.manage (the writes). A
+				// save that changes a trust field, the delete and the re-bind
+				// are trust actions the handler refuses without
+				// identity.sso.trust.manage or super_admin.
 				//
 				// The mode segment is static `administration`: federation is a
 				// deployment fact with no project-scoped view, so another mode
@@ -3102,16 +3181,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					r.With(requireAdminUsers).
 						Delete("/native_devices/administration/{deviceID}", nativeHandler.AdminRevokeDevice)
 				}
-				r.With(requireRuntimePlugins).
+				r.With(requireIdentityProvidersView).
 					Get("/identity_providers/administration", adminHandler.IdentityProviderList)
-				r.With(requireRuntimePlugins).
+				r.With(requireIdentityProvidersEdit).
 					Put("/identity_providers/administration/{key}", adminHandler.IdentityProviderSave)
-				r.With(requireRuntimePlugins).
+				r.With(requireIdentityProvidersEdit).
 					Delete("/identity_providers/administration/{key}", adminHandler.IdentityProviderDelete)
 				// Moves the accounts linked under an old issuer onto the
 				// provider's current one (issue 2558). The handler also
-				// requires super_admin, as it does for a trust-field save.
-				r.With(requireRuntimePlugins).
+				// requires a trust name, as it does for a trust-field save and
+				// for the delete above.
+				r.With(requireIdentityProvidersEdit).
 					Post("/identity_providers/administration/{key}/rebind", adminHandler.IdentityProviderRebind)
 				// The Microsoft Default app registry (ADR-0057 decisions 5 and
 				// 11; epic 2254 story S1b). Its own permission, granted to
@@ -3187,10 +3267,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// rows are plaintext and the SMTP password is a credential
 				// (config_schemas.go).
 				//
-				// The permission is the SAME `runtime.plugins` that section
-				// already required, so an operator who could edit it can
-				// configure the relay, and no new permission string arrives
-				// without a grant (router_permission_grant_gate_test.go).
+				// The permission is `platform.email.manage` (ADR-0059 R0.4a:
+				// read and edit the settings, send a test; there is no view
+				// half) or the SAME `runtime.plugins` that section already
+				// required, so an operator who could edit it can still
+				// configure the relay.
 				//
 				// The mode segment is static `administration`: a mail relay is
 				// a deployment fact with no project-scoped view, so another
@@ -3202,16 +3283,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// not in behaviour, and an operator who may configure the relay
 				// must be able to verify it without also holding the grant that
 				// lets them re-brand the product.
-				r.With(requireRuntimePlugins).Get("/email/administration", adminHandler.EmailSettingsRead)
-				r.With(requireRuntimePlugins).Put("/email/administration", adminHandler.EmailSettingsSave)
-				r.With(requireRuntimePlugins).Post("/email/test/administration", adminHandler.EmailTestSend)
+				r.With(requireEmail).Get("/email/administration", adminHandler.EmailSettingsRead)
+				r.With(requireEmail).Put("/email/administration", adminHandler.EmailSettingsSave)
+				r.With(requireEmail).Post("/email/test/administration", adminHandler.EmailTestSend)
 				// The branding package (ADR-0024 decision 9): export, import
 				// with a dry run, and the kept versions for rollback.
 				r.With(requireBranding).Get("/branding/package/administration", adminHandler.BrandingPackageExport)
 				r.With(requireBranding).Post("/branding/package/administration", adminHandler.BrandingPackageImport)
 				r.With(requireBranding).Get("/branding/package/administration/versions", adminHandler.BrandingPackageVersions)
 				r.With(requireBranding).Post("/branding/package/administration/versions/{digest}/restore", adminHandler.BrandingPackageRestore)
-				r.With(requireRuntimePlugins).Get("/plugin_config_suggestions/{mode}/{key}", adminHandler.PluginConfigSuggestions)
+				r.With(requireConfiguration).Get("/plugin_config_suggestions/{mode}/{key}", adminHandler.PluginConfigSuggestions)
 				// `/moderation_statuses/…` is NOT registered here. #209 gated the
 				// stub that used to sit on this line; this unit replaced the stub
 				// with a real handler, registered below on a static
@@ -3219,25 +3300,29 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// resurrect the stub for every other mode — and since legacy
 				// reaches this surface only through its `administration` AdminAPI,
 				// the only thing that would answer is a constant nobody asked for.
-				r.With(requireRuntimePlugins).Get("/maintenance/{mode}", adminHandler.Maintenance)
-				r.With(requireRuntimePlugins).Put("/maintenance/{mode}", adminHandler.Maintenance)
+				// platform.maintenance.manage or runtime.plugins (ADR-0059
+				// R0.4b). The window itself is authored in the Maintenance
+				// section of Configuration; the PUT answers 405.
+				r.With(requireMaintenance).Get("/maintenance/{mode}", adminHandler.Maintenance)
+				r.With(requireMaintenance).Put("/maintenance/{mode}", adminHandler.Maintenance)
 				// Admin › Tasks — the platform's own background jobs, read
 				// from this platform's tables.
 				//
-				// Gated on `runtime.plugins` in administration mode, the
-				// permission the admin Tasks page has always declared. No new
-				// permission string arrives, so the grant gate stays untripped.
+				// Gated in administration mode on `platform.operations.view`
+				// (the read) and `platform.operations.manage` (a cancel, the
+				// notice run), each beside `runtime.plugins`, the permission
+				// the admin Tasks page has always declared (ADR-0059 R0.4a).
 				//
 				// A STATIC `administration` segment, not `{mode}`: a mode
 				// variable would name a resolution this router does not
 				// perform — the same argument the moderation routes below make.
-				r.With(requireRuntimePlugins).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsView).Get("/background_jobs/administration", adminHandler.BackgroundJobs)
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/{kind}/{jobID}:cancel",
 					adminHandler.CancelBackgroundJob,
 				)
 				// Run the personal-access-token expiry notice pass now
-				// (#940 A3). Same surface, same `runtime.plugins` gate, and
+				// (#940 A3). Same surface, same operations.manage gate, and
 				// the same producer the scheduler runs — see
 				// admin/pat_expiry_notices.go for why an operator needs it and
 				// why it must not be a second implementation.
@@ -3245,7 +3330,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// One static segment, so it cannot collide with the
 				// `{kind}/{jobID}:cancel` route above: that pattern is two
 				// segments, this is one.
-				r.With(requireRuntimePlugins).Post(
+				r.With(requireOperationsManage).Post(
 					"/background_jobs/administration/pat_expiry_notices:run",
 					adminHandler.RunPATExpiryNotices,
 				)
@@ -3519,7 +3604,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// refuses EVERY caller reads as a pass.
 				r.With(projectPermission("configuration.users.users.view")).
 					Get("/users/{mode}/{projectID}", coreHandler.Users)
-				r.With(central(adminaccess.ConfigurationUsersUsersView)).
+				// The administration member routes accept projects.members.manage
+				// beside each legacy configuration.users.users.* name (ADR-0059
+				// R0.6a); a holder of the legacy names sees no change
+				// (testdata/central_project_admin_legacy.golden).
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersView)).
 					Get("/users/administration/{projectID}", coreHandler.Users)
 				r.With(apimw.RequireResolvedPermissions(
 					permissionResolver, platformauth.PermissionModeDefault,
@@ -3557,14 +3646,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `404 {"error":"unknown mode"}`. The GET above never showed it,
 				// because Handler.Users reads no mode. See the header of
 				// internal/api/v2/eliteacore/users_write.go.
-				r.With(apimw.RequireCentralPermissions(
-					permissionResolver, platformauth.PermissionModeAdministration,
-					adminaccess.ConfigurationUsersUsersCreate,
-				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
-				r.With(apimw.RequireCentralPermissions(
-					permissionResolver, platformauth.PermissionModeAdministration,
-					adminaccess.ConfigurationUsersUsersEdit,
-				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
+				//
+				// The DELETE is the central removal of ADR-0059 R0.6a: the update
+				// refuses an empty role set, and the `{mode}` DELETE above needs a
+				// membership of the project. A static segment, like the other two,
+				// so chi prefers it over `{mode}`. Every write here is under the
+				// no-escalation rule of eliteacore/users_write_policy.go, and one
+				// into a project the caller is not a member of marks its audit
+				// record central_override.
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersCreate)).
+					Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersEdit)).
+					Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersDelete)).
+					Delete("/users/administration/{projectID}", coreHandler.AdministrationUsersDelete)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
 				// auth_core__project_role for the named project, legacy
@@ -3714,11 +3809,8 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				governanceHandler := gateway.NewGovernanceHandler(cfg.Pool)
 				// The LLM Proxy surface: the gateway's enforcement status and
 				// the model price catalogue, joined to the usage that makes the
-				// catalogue actionable. It shares this group's permission
-				// deliberately — it explains and prices the same enforcement
-				// the governance CRUD beside it authors, and a second
-				// permission string would need its own grant migration to reach
-				// anybody (the #386 shape, one block up).
+				// catalogue actionable. The status, usage and logs are usage
+				// reads; the prices are the catalogue (gates below).
 				//
 				// `cfg.GatewayStatus` may be nil. A deployment with no gateway
 				// address is supported, and the handler reports that posture
@@ -3738,38 +3830,75 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					llmProxyDB = cfg.Pool
 				}
 				llmProxyHandler := gateway.NewLLMProxyHandler(llmProxyDB, cfg.GatewayStatus)
-				r.Group(func(r chi.Router) {
-					r.Use(central(adminaccess.ConfigurationGovernance))
-					r.Route("/gateway", func(r chi.Router) {
-						r.Mount("/", budgetAlertHandler.Routes())
-						governanceHandler.Register(r)
-						llmProxyHandler.Register(r)
-						// PLATFORM-WIDE provider credentials — the public
-						// project's shared `ai_credentials` rows, which the LLM
-						// gateway already resolves for every project (issue
-						// #316). See global_providers.go for why this is the
-						// same rows and the same handlers rather than a second
-						// credential model.
-						//
-						// It inherits this group's `configuration.governance`
-						// gate from the enclosing Group, which is correct for a
-						// surface whose four verbs take one permission — and is
-						// why it can be a Mount at all, unlike the project-scoped
-						// Routes() that needs five different strings.
-						r.Mount("/providers", configurationsHandler.GlobalProviderRoutes())
-						// PLATFORM-WIDE models — the other half. A credential
-						// authenticates; a model is what a caller addresses.
-						// Both are the public project's shared rows, and the
-						// gateway resolves a public model against public
-						// credentials ONLY, so the two surfaces are mounted
-						// together and global_models.go enforces that pairing.
-						r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes())
-						// The PLATFORM DEFAULT model (#6826): which platform
-						// model a new project starts with, and what a project
-						// with no usable default of its own falls back to.
-						// platform_default_model.go has the precedence.
-						r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes())
+				// One gate per sub-surface (ADR-0059 R0.3). Until R0.3 one
+				// group-wide `configuration.governance` gate covered all of
+				// /gateway, so a person who should manage models and spend had
+				// to be given `admin`. Each gate now accepts the narrow name of
+				// ADR-0059 decision 2 OR `configuration.governance`, so a
+				// holder of the legacy name sees no change
+				// (testdata/admin_gateway_legacy.golden). The sub-routers take
+				// the gates as arguments, so a route cannot be mounted
+				// without one. Shared 0261 grants the narrow names.
+				requireLLMUsageView := central(adminaccess.LLMUsageView, adminaccess.ConfigurationGovernance)
+				requireLLMAlertsManage := central(adminaccess.LLMAlertsManage, adminaccess.ConfigurationGovernance)
+				requireLLMPolicyView := central(adminaccess.LLMPolicyView, adminaccess.ConfigurationGovernance)
+				// The governance writes admit a policy OR a guardrails
+				// manager; the handler then decides by the kind of the row, so
+				// only the second writes a guardrail (gateway/gates.go).
+				requireLLMPolicyOrGuardrailsManage := central(
+					adminaccess.LLMPolicyManage, adminaccess.LLMGuardrailsManage, adminaccess.ConfigurationGovernance,
+				)
+				// The kind check reads the permissions the Manage gate resolved
+				// for this request (administration mode, no project), so it
+				// asks the resolver no second time and cannot disagree with
+				// the gate about who the caller is.
+				holdsCentralAdministrationPermission := func(r *http.Request, names ...string) bool {
+					held, ok := apimw.ResolvedProjectPermissions(
+						r.Context(), platformauth.PermissionModeAdministration, "",
+					)
+					return ok && slices.ContainsFunc(names, func(name string) bool {
+						return slices.Contains(held, name)
 					})
+				}
+				catalogueGates := v2configs.CatalogueGates{
+					View:   central(adminaccess.LLMCatalogueView, adminaccess.ConfigurationGovernance),
+					Manage: central(adminaccess.LLMCatalogueManage, adminaccess.ConfigurationGovernance),
+				}
+				r.Route("/gateway", func(r chi.Router) {
+					r.Mount("/", budgetAlertHandler.Routes(requireLLMUsageView, requireLLMAlertsManage))
+					governanceHandler.Register(r, gateway.GovernanceGates{
+						View:   requireLLMPolicyView,
+						Manage: requireLLMPolicyOrGuardrailsManage,
+						Holds:  holdsCentralAdministrationPermission,
+					})
+					llmProxyHandler.Register(r, gateway.LLMProxyGates{
+						Usage:           requireLLMUsageView,
+						CatalogueView:   catalogueGates.View,
+						CatalogueManage: catalogueGates.Manage,
+					})
+					// PLATFORM-WIDE provider credentials — the public
+					// project's shared `ai_credentials` rows, which the LLM
+					// gateway already resolves for every project (issue
+					// #316). See global_providers.go for why this is the
+					// same rows and the same handlers rather than a second
+					// credential model.
+					//
+					// The listing takes the catalogue view gate; every other
+					// route, `check` and `revalidate` included (they use the
+					// stored credential), the manage gate.
+					r.Mount("/providers", configurationsHandler.GlobalProviderRoutes(catalogueGates))
+					// PLATFORM-WIDE models — the other half. A credential
+					// authenticates; a model is what a caller addresses.
+					// Both are the public project's shared rows, and the
+					// gateway resolves a public model against public
+					// credentials ONLY, so the two surfaces are mounted
+					// together and global_models.go enforces that pairing.
+					r.Mount("/platform_models", configurationsHandler.GlobalModelRoutes(catalogueGates))
+					// The PLATFORM DEFAULT model (#6826): which platform
+					// model a new project starts with, and what a project
+					// with no usable default of its own falls back to.
+					// platform_default_model.go has the precedence.
+					r.Mount("/default_model", configurationsHandler.PlatformDefaultModelRoutes(catalogueGates))
 				})
 			})
 
@@ -5226,7 +5355,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/marketplace_listings/prompt_lib/{projectID}", coreHandler.MarketplaceSearch)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListing)
-				r.With(requireMarketplaceRead).
+				// Featuring and delisting are a platform administrator's alone:
+				// the handler refuses anyone without the moderation
+				// permission, so the route keeps its moderators during a
+				// maintenance window (ADR-0059 R0.4b).
+				r.With(requireMarketplaceRead, apimw.MarkAdministrationRoute).
 					Patch("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListingUpdate)
 				r.With(requireMarketplaceRead).
 					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
@@ -5928,13 +6061,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//
 			// Port of legacy/plugins/tracing/api/v2/{collect,otlp,status}.py —
 			// see internal/api/v2/tracing's package doc for the option-(a)
-			// architecture decision and the "runtime.plugins" admin-status gate
-			// (reusing the permission system_info.py/plugin_config_*.py/
-			// maintenance.py/runtime_*.py already declare, rather than seeding
-			// the legacy runtime's unseeded "models.admin.tracing.view" fresh).
+			// architecture decision. The admin-status gate accepts
+			// "platform.operations.view" (ADR-0059 R0.4a) or "runtime.plugins",
+			// the permission system_info.py/plugin_config_*.py/maintenance.py/
+			// runtime_*.py already declare, rather than seeding the legacy
+			// runtime's unseeded "models.admin.tracing.view" fresh.
 			requireTracingAdminStatus := apimw.RequireCentralPermissions(
 				permissionResolver, platformauth.PermissionModeAdministration,
-				adminaccess.RuntimePlugins,
+				adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins,
 			)
 			tracingHandler := v2tracing.NewHandler(
 				cfg.Pool,
@@ -6111,8 +6245,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 			// === Webhooks ===
 			//
-			// Five routes over `webhooks WHERE project_id = $1`. The listing
-			// returns the row's `secret` and the PUT rotates it, and until #496
+			// The routes over `webhooks WHERE project_id = $1`. The signing
+			// secret is write-only (issue 2963): it lives in the project vault
+			// and only Create and rotate_secret return it, once. Until #496
 			// the subrouter carried no gate, so any authenticated caller could
 			// name any project id. The gates are inside the package — see that
 			// Routes() header for the permission each route takes and why the
@@ -6288,11 +6423,13 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// where a project's ai_credentials are created, overwritten and deleted;
 	// without Audit here they left no centry.audit_events row. A fresh slice,
 	// so the append can never write into apiGates' backing array.
-	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+1)
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+2)
 	reviewedGates = append(reviewedGates, apiGates...)
-	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder))
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware)
 	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
+	administrationRoutes.mark(r)
+	tokenRule.mark(r)
 	return r
 }
 

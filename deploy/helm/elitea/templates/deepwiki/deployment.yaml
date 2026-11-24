@@ -49,6 +49,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-deepwiki.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.deepwiki.serviceAccount }}
       # Long enough for a running generation to FINISH on this replica
       # (scaling). On SIGTERM the host leaves the Services, stops admitting
       # (its slots leave the fleet's total), and waits up to

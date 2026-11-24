@@ -209,7 +209,9 @@ export function AdminIdentityProvidersEditor() {
         setPendingDelete(undefined);
       },
       onError: (error: unknown) => {
-        setActionError(configFailureReason(error) ?? "delete");
+        // Deleting a provider is a trust action (ADR-0059 R0.4c): an
+        // `admin` gets the translated super admin refusal.
+        setActionError(identityTrustFailureReason(error) ?? "delete");
         setPendingDelete(undefined);
       },
     });

@@ -492,7 +492,7 @@ func TestTheMountedSurfaceAnswersThePathsTheClientCalls(t *testing.T) {
 
 	root := chi.NewRouter()
 	root.Route("/gateway", func(r chi.Router) {
-		r.Mount("/providers", handler.GlobalProviderRoutes())
+		r.Mount("/providers", handler.GlobalProviderRoutes(openCatalogueGates))
 	})
 
 	for _, probe := range []struct {
@@ -653,8 +653,9 @@ func (f governanceResolverFunc) ResolvePermissions(
 	return f(ctx, principal, mode, projectID)
 }
 
-// gatedProviderRouter mounts this surface the way router.go does: the central
-// permission is applied at the MOUNT, and the sub-router applies none itself.
+// gatedProviderRouter mounts this surface the way router.go does: the
+// catalogue gates, each accepting its narrow name or configuration.governance
+// (ADR-0059 R0.3), passed to the sub-router.
 func gatedProviderRouter(t *testing.T, handler *Handler, resolver auth.PermissionResolver) chi.Router {
 	t.Helper()
 	root := chi.NewRouter()
@@ -665,29 +666,30 @@ func gatedProviderRouter(t *testing.T, handler *Handler, resolver auth.Permissio
 			next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: "1"})))
 		})
 	})
-	root.Group(func(r chi.Router) {
-		r.Use(apimw.RequireCentralPermissions(
-			resolver, auth.PermissionModeAdministration, "configuration.governance"))
-		r.Route("/gateway", func(r chi.Router) {
-			r.Mount("/providers", handler.GlobalProviderRoutes())
-		})
+	gate := func(names ...string) func(http.Handler) http.Handler {
+		return apimw.RequireCentralPermissions(resolver, auth.PermissionModeAdministration, names...)
+	}
+	root.Route("/gateway", func(r chi.Router) {
+		r.Mount("/providers", handler.GlobalProviderRoutes(CatalogueGates{
+			View:   gate("llm.catalogue.view", "configuration.governance"),
+			Manage: gate("llm.catalogue.manage", "configuration.governance"),
+		}))
 	})
 	return root
 }
 
-// TestTheStoredProviderRoutesInheritTheCentralGate.
+// TestTheStoredProviderRoutesTakeTheManageGate.
 //
-// The gate is applied at the mount, so a route ADDED to GlobalProviderRoutes is
-// gated by construction — which is exactly why it is worth pinning: nothing in
-// this package would fail if a later refactor moved these two registrations
-// outside that mount, and the two of them are the ones that make the platform
-// dial a provider and rewrite a credential's status column.
+// The two routes are the ones that make the platform dial a provider with the
+// stored credential and rewrite a credential's status column, so they take the
+// catalogue MANAGE gate although they are POSTs that look harmless: a holder
+// of llm.catalogue.view is refused there on purpose (ADR-0059 R0.3).
 //
 // The entitled direction is asserted too. A gate that refuses everybody is
 // indistinguishable from a correct one when only the refusal is measured, and
 // 503 (routed, then refused for want of a store) is the answer that proves the
 // request reached the handler.
-func TestTheStoredProviderRoutesInheritTheCentralGate(t *testing.T) {
+func TestTheStoredProviderRoutesTakeTheManageGate(t *testing.T) {
 	for _, target := range []string{
 		"/gateway/providers/4/check",
 		"/gateway/providers/4/revalidate",
@@ -702,6 +704,8 @@ func TestTheStoredProviderRoutesInheritTheCentralGate(t *testing.T) {
 				granted: []string{"configuration.governance"},
 				want:    http.StatusServiceUnavailable,
 			},
+			"llm.catalogue.view":   {granted: []string{"llm.catalogue.view"}, want: http.StatusForbidden},
+			"llm.catalogue.manage": {granted: []string{"llm.catalogue.manage"}, want: http.StatusServiceUnavailable},
 		} {
 			t.Run(target+" "+name, func(t *testing.T) {
 				router := gatedProviderRouter(t,
@@ -726,7 +730,7 @@ func TestTheStoredProviderRoutesInheritTheCentralGate(t *testing.T) {
 func TestTheStoredProviderRoutesRefuseWithNoPublicProject(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/gateway", func(r chi.Router) {
-		r.Mount("/providers", (&Handler{}).GlobalProviderRoutes())
+		r.Mount("/providers", (&Handler{}).GlobalProviderRoutes(openCatalogueGates))
 	})
 
 	for _, target := range []string{
@@ -765,7 +769,7 @@ func TestAFailedSectionReadIsNotReportedAsADeletedCredential(t *testing.T) {
 	handler := NewHandler(revalidateClosedPool(t), WithPublicProjectID(1))
 	router := chi.NewRouter()
 	router.Route("/gateway", func(r chi.Router) {
-		r.Mount("/providers", handler.GlobalProviderRoutes())
+		r.Mount("/providers", handler.GlobalProviderRoutes(openCatalogueGates))
 	})
 
 	for _, test := range []struct {

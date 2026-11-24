@@ -571,6 +571,8 @@ export default function table(ctx) {
             ["BRAND_PACK_PATH", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_TLS", "EMAIL_FROM", "EMAIL_REPLY_TO", "PUBLIC_BASE_URL", "ELITEA_EMAIL_SUPPRESS"].map((k) => [k, d(k, "")]),
           ),
           ELITEA_RUNTIME_ENABLED: "true",
+          // The fixtures toolkits reach are on loopback addresses here (#2950).
+          ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: d("ELITEA_WORKER_EGRESS_PRIVATE_PERMIT", "mcp-mock,ado-mock,qtest-mock,llm-mock,llm-real"),
           ELITEA_RUNTIME_COMMAND_STREAM: "ELITEA_RT_V1_VALIDATE",
           ELITEA_RUNTIME_MAX_OUTSTANDING: d("ELITEA_RUNTIME_MAX_OUTSTANDING", "64"),
           ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true",

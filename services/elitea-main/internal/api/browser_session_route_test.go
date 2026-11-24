@@ -43,6 +43,10 @@ type routeTestSessions struct {
 func (s *routeTestSessions) Insert(_ context.Context, session browsersession.Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if session.Ref == 0 {
+		// The identity column of browser_sessions.ref (shared 0200).
+		session.Ref = int64(len(s.rows) + 1)
+	}
 	s.rows[session.ID] = session
 	return nil
 }
@@ -198,6 +202,53 @@ func serveWithSessionCookie(t *testing.T, router http.Handler, path, value strin
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder.Code
+}
+
+// An OIDC and a SAML browser session each reach the permission resolver with
+// the kind `session` and their row's non-zero reference, through the real
+// router (ADR-0059 R1.2a). The reference is what the resolver exposes for an
+// elevation (R2.1). The Form plane's test is in internal/api/browserauth and
+// the legacy signed cookie's (no row, no reference) in internal/api/middleware.
+func TestEveryServerSideSessionPlaneReachesTheResolverWithItsReference(t *testing.T) {
+	for _, provider := range []string{browsersession.ProviderOIDC, browsersession.ProviderSAML} {
+		t.Run(provider, func(t *testing.T) {
+			store := &routeTestSessions{rows: map[string]browsersession.Session{}}
+			manager, err := browsersession.NewManager(store, browsersession.Policy{
+				IdleTimeout: time.Hour, AbsoluteLifetime: 24 * time.Hour,
+			})
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			var seen []auth.User
+			router := NewRouter(RouterConfig{
+				SessionSecret:      "session-secret",
+				PrincipalValidator: activeRoutePrincipals{},
+				Auth:               AuthDeps{SessionStore: manager},
+				PermissionResolver: credentialKindResolver{owner: credentialKindAdminSet, seen: &seen},
+			})
+			value, err := manager.Create(context.Background(), browsersession.NewSession{
+				UserID: 7, Email: "owner@example.test", Provider: provider,
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if status := serveWithSessionCookie(t, router, "/api/v2/auth/permissions/administration", value); status != http.StatusOK {
+				t.Fatalf("status %d", status)
+			}
+			if len(seen) == 0 {
+				t.Fatal("the resolver was never asked")
+			}
+			got := seen[0]
+			if got.CredentialKind != auth.CredentialKindSession || got.BrowserSessionRef <= 0 {
+				t.Fatalf("the resolver got kind %q ref %d, want session and a positive reference",
+					got.CredentialKind, got.BrowserSessionRef)
+			}
+			if got.Credential().ElevationSessionRef() != got.BrowserSessionRef {
+				t.Fatalf("elevation ref %d, want the session's %d",
+					got.Credential().ElevationSessionRef(), got.BrowserSessionRef)
+			}
+		})
+	}
 }
 
 // compile-time proof that the manager satisfies the field's interface. A

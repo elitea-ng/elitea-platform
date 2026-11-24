@@ -38,6 +38,8 @@ Configure identity providers under **Configuration › Authentication** in the a
 
 A fresh database seeds only `dev@elitea.ai`. On a single-sign-on deployment, this account has no password. Set `identity.initial_global_admins` or the equivalent environment variable before you rely on the admin console.
 
+The list is a bootstrap only. It grants `super_admin` at first sign-in only while no active account holds `super_admin`. After that, a listed sign-in gets no role and logs a warning. Add later administrators from the console of an existing administrator, and empty the list once the first administrator has signed in. See [The first global administrator](/admin/authentication#the-first-global-administrator).
+
 ## E-mail: SMTP bootstrap defaults
 
 `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `EMAIL_FROM`, `EMAIL_REPLY_TO` and `PUBLIC_BASE_URL` are a **default layer**, not the whole configuration. **Admin → E-mail** writes a second layer into the database, and `internal/emailsettings` merges the two field by field on every send — the database wins where it has a value.
@@ -54,7 +56,7 @@ A change in the console needs no restart or re-sync — the merge runs per messa
 curl -s -H "Authorization: Bearer $ADMIN_PAT" \
   https://elitea.example.com/api/v2/admin/email/administration | jq
 ```
-`.settings` is what the console stored, `.effective` is the merged document the next message uses, `.sources` names `database`/`environment`/`unset` per field, and `.configured`/`.reason` say whether a message can be sent.
+`$ADMIN_PAT` must be a personal access token that carries administration rights: a new token carries none (see [Which credential carries which administration rights](/admin/authentication#which-credential-carries-which-administration-rights)). `.settings` is what the console stored, `.effective` is the merged document the next message uses, `.sources` names `database`/`environment`/`unset` per field, and `.configured`/`.reason` say whether a message can be sent.
 </Step>
 </Steps>
 
@@ -95,6 +97,13 @@ Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the 
 </Tab>
 <Tab title="Agent tools — Configuration › Worker Egress">
 Governs the public hosts an agent's tools reach from the **worker**: web fetches, toolkit clients, OpenAPI tools, remote MCP servers, index runs and the workspace pull-request push. It is a console setting, not an environment variable: section `worker_egress`, with `mode` (`open`, the default, or `allowlist`) and `allowlist` (at most 512 entries, the same grammar as above). A project adds its own entries with a `worker_egress` project configuration (at most 256). In `allowlist` mode each run may reach the platform's entries, its project's entries and the hosts its own toolkits and MCP servers are configured with. Runs under the governed credential profile always use `allowlist` mode.
+
+**Private destinations.** In both modes the worker checks every address a toolkit, OpenAPI tool, index run or remote MCP server connects to, IP literals included. It refuses loopback, RFC 1918, unique-local (`fc00::/7`), CGNAT (`100.64.0.0/10`), link-local, multicast and cloud metadata addresses. It connects only to the address it checked. To let toolkits reach on-premises hosts on a private network (a self-hosted Jira, GitLab or Confluence), list them in **Private Permit** (`private_permit`, at most 128 entries, the same grammar):
+
+- A host name, `host:port` or `*.domain` admits the private addresses that name resolves to.
+- A CIDR block or IP literal admits the addresses inside it.
+
+The deployment can set the same list as `ELITEA_WORKER_EGRESS_PRIVATE_PERMIT` (comma separated, at most 128 entries). Main merges it with the console field, and a malformed entry stops Main at start. Only these two operator settings supply the permit. A project setting or a toolkit URL never adds to it. Link-local addresses (`169.254.0.0/16`, `fe80::/10`) and the cloud metadata endpoints are **never** admitted, even when the permit names them. A refused request fails the tool call with `egress_host_not_allowed`. The run's egress summary lists it with the reason `not_public`, and the worker logs the refused host and port (never the URL) once per run. A host whose DNS answer holds more addresses than the worker checks is refused with the reason `too_many_addresses`. Toolkit and MCP clients ignore `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`: the worker needs a direct route to the hosts its toolkits reach. In `allowlist` mode a permitted host must also pass the allowlist. A toolkit's own base URL is added to the allowlist automatically.
 
 The worker and the egress proxy report the hosts each run reached and was refused. Main keeps those summaries in `elitea_runtime.egress_run_summaries` for `ELITEA_EGRESS_AUDIT_RETENTION_DAYS` days (default `30`, at most `365`), and writes one audit event per run turn. The same panel lists them, so you can seed the allowlist before you switch.
 
@@ -207,6 +216,8 @@ See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-faci
 ## Observability
 
 Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`). The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration.
+
+The collector runs as non-root on a read-only root filesystem (`otelCollector.securityContext`). An exporter or extension that writes files (`file`, `file_storage`) needs a writable directory for its path: mount one with `otelCollector.extraVolumes` and `otelCollector.extraVolumeMounts` (an `emptyDir`, or a PVC to keep the files).
 
 The chart sets each component's `OTEL_EXPORTER_OTLP_ENDPOINT` (elitea-main, the scheduler, the LLM gateway, DeepWiki, Inventory, elitea-vector and the worker) where you have not set it or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_SDK_DISABLED`:
 

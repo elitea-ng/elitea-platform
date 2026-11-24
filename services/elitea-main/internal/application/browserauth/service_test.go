@@ -1323,6 +1323,7 @@ func cloneSessionState(state sessionstate.State) sessionstate.State {
 		state.UserID = &userID
 	}
 	state.Expiration = cloneTime(state.Expiration)
+	state.AuthenticatedAt = cloneTime(state.AuthenticatedAt)
 	state.ProviderAttributes = append(json.RawMessage(nil), state.ProviderAttributes...)
 	return state
 }

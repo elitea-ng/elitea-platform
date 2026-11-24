@@ -21,10 +21,51 @@
  * (see `NodeCardHeader.tsx`'s `onBlur`), and only overrides `id`/`data.label`
  * for the node whose `id === name`.
  */
+import { t } from '@/shared/i18n';
 import { graphExtensionReferenceUpdate } from '../../../lib/graphExtensionReferenceRename.helpers';
+import { isCompilerLegalNodeId } from '../../../lib/flow-editor/helpers/flowEditor.helpers';
 import type { YamlConditionSpec, YamlDecisionSpec, YamlPipelineDocument, YamlPipelineNode } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import { PipelineNodeTypes } from '../../../lib/flow-editor/constants/flowEditor.constants';
 import type { FlowEdge, FlowNode, FlowNodeData } from '../../../lib/flow-editor/reactFlowTypes';
+
+/**
+ * Why a node rename must be refused, or `undefined` to let it through.
+ * Shared by `NodeNameField`, `useNodeYamlEditor`, and legacy `NodeCardHeader`.
+ */
+export function findRenameRejection(
+  inputtedName: string,
+  name: string,
+  yamlJsonObject: YamlPipelineDocument,
+  toolNames: readonly string[] = [],
+): string | undefined {
+  if (!isCompilerLegalNodeId(inputtedName)) {
+    return t(
+      'pipelines.flowEditor.nodeCardHeader.invalidNodeName',
+      'Only letters, numbers and _ - . : are allowed — no spaces.',
+    );
+  }
+
+  const foundNodeName = yamlJsonObject.nodes?.find(
+    node => node.id !== name && node.id.replace(/\s/g, '') === inputtedName.replace(/\s/g, ''),
+  );
+  if (foundNodeName) {
+    return t(
+      'pipelines.flowEditor.nodeCardHeader.duplicateNodeName',
+      'The name has been used by other nodes, please input a new name!',
+    );
+  }
+
+  const foundToolName = toolNames.find(toolName => toolName.replace(/\s/g, '') === inputtedName.replace(/\s/g, ''));
+  if (foundToolName) {
+    return t(
+      'pipelines.flowEditor.nodeCardHeader.duplicateToolName',
+      `The name conflicts with an existing toolkit name "${foundToolName}", please input a new name!`,
+      { toolName: foundToolName },
+    );
+  }
+
+  return undefined;
+}
 
 // Keep omitted optional fields omitted. The strict serializer rejects new undefined values.
 // Keep authored nulls and unknown metadata intact during reference updates.

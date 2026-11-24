@@ -13,7 +13,18 @@
 #                    platform-edge proxy) admits the worker, DeepWiki and
 #                    Inventory — and no edge pod or platform-edge policy is
 #                    rendered any more.
-#   worker           no inbound traffic at all; egress is not restricted.
+#   worker           no inbound traffic at all. Egress (#2951): DNS,
+#                    elitea-main's runtime listeners, NATS 4222 and the
+#                    declared PostgreSQL by selector or block, and the public
+#                    internet minus RFC 1918, link-local, CGNAT, unique-local
+#                    and the cluster ranges; mode proxy renders no public rule.
+#   scheduler        no inbound except its health port from probeFrom and
+#                    metricsFrom (#2952).
+#   llmGateway       gRPC from elitea-main only, 8083 from probeFrom and
+#                    metricsFrom; its egress policy is on by default with the
+#                    same public carve-out (#2952).
+#   otelCollector    OTLP from the chart's own sender pods only (#2952).
+#   pgbouncer        its port from the chart's database clients only (#2952).
 #   sandbox          the supervisor ports admit the worker and elitea-main only.
 #   deepwiki         one port (#1359), the gRPC listener that serves the
 #                    provider SPI and the platform service: declared, served,
@@ -113,7 +124,7 @@ render() { # render <name> <args...> -> $WORK/<name>.yaml
 # check <name> <worker> <supervisor> <deepwiki: 0|1> <inventory: 0|1>
 check() {
   python3 - "$WORK/$1.yaml" "$1" "$2" "$3" "$4" "$5" "${EXPECT_GRPC:-}" "${EXPECT_INV_GRPC:-}" <<'PY'
-import sys, yaml
+import os, sys, yaml
 
 path, name, worker, sup, deepwiki, inventory = sys.argv[1:7]
 expect_grpc = sys.argv[7] if len(sys.argv) > 7 else ""
@@ -172,6 +183,16 @@ if VEC in pods:
     expected["elitea-vector-netpol"] = VEC
 if QDRANT in pods:
     expected["elitea-vectordb-netpol"] = QDRANT
+# #2952: the scheduler, the LLM gateway, the OTel collector and PgBouncer
+# carry an ingress policy wherever the chart renders them.
+SCHED, GW, OTEL, PGB = "Deployment/elitea-scheduler", "Deployment/elitea-llm-gateway", "Deployment/elitea-otel-collector", "Deployment/elitea-pgbouncer"
+for pname, target in (("elitea-scheduler-netpol", SCHED), ("elitea-llm-gateway-netpol", GW),
+                      ("elitea-otel-collector-netpol", OTEL), ("elitea-pgbouncer-netpol", PGB)):
+    if target in pods:
+        expected[pname] = target
+# The egress proxy's own boundary (render-egress-proxy.sh asserts its rules).
+if "Deployment/elitea-egress-proxy" in pods:
+    expected["elitea-egress-proxy-netpol"] = "Deployment/elitea-egress-proxy"
 check(sorted(policies) == sorted(expected), f"policy set {sorted(policies)} != {sorted(expected)}")
 
 for pname, target in expected.items():
@@ -328,12 +349,155 @@ for key, want_port in (("deepwiki", expect_grpc), ("inventory", expect_inv_grpc)
         check(str(grpc_port) == want_port, f"{key}: gRPC port {grpc_port}, expected {want_port}")
 
 # ── worker ───────────────────────────────────────────────────────────────────
+PUBLIC_EXCEPT = {"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "127.0.0.0/8"}
+PUBLIC_EXCEPT6 = {"fc00::/7", "fe80::/10"}
+CLUSTER = {"10.244.0.0/16", "10.96.0.0/12"}  # features-off.yaml / operator-values.yaml
+
+def ipblocks(rule):
+    return [p["ipBlock"] for p in rule.get("to", []) if "ipBlock" in p]
+
+def public_rules(rules):
+    return [r for r in rules if any(b["cidr"] in ("0.0.0.0/0", "::/0") for b in ipblocks(r))]
+
+def check_public(rules, where):
+    pub = public_rules(rules)
+    check(len(pub) == 1, f"{where}: {len(pub)} public rules, want one")
+    for r in pub:
+        blocks = {b["cidr"]: set(b.get("except", [])) for b in ipblocks(r)}
+        check("0.0.0.0/0" in blocks and PUBLIC_EXCEPT | CLUSTER <= blocks.get("0.0.0.0/0", set()),
+              f"{where}: the IPv4 public rule excepts {sorted(blocks.get('0.0.0.0/0', []))}, missing {sorted((PUBLIC_EXCEPT | CLUSTER) - blocks.get('0.0.0.0/0', set()))}")
+        check("::/0" in blocks and PUBLIC_EXCEPT6 <= blocks.get("::/0", set()), f"{where}: the IPv6 public rule does not except {sorted(PUBLIC_EXCEPT6)}")
+        check(sorted(int(p["port"]) for p in r.get("ports", [])) == [443], f"{where}: public rule ports {r.get('ports')}, want 443 only")
+    return pub
+
+def selector_rules(rules, workload):
+    # Rules whose peers select the given rendered workload, in this namespace.
+    out = []
+    for r in rules:
+        for p in r.get("to", []):
+            ns = (p.get("namespaceSelector") or {}).get("matchLabels") or {}
+            ps = (p.get("podSelector") or {}).get("matchLabels") or {}
+            if ns == {"kubernetes.io/metadata.name": "elitea"} and ps and workload in selects(ps):
+                out.append(r)
+    return out
+
+def ports_of(rules):
+    return sorted({int(p["port"]) for r in rules for p in r.get("ports", [])})
+
+def check_dns(rules, where):
+    dns = [r for r in rules if any(((p.get("podSelector") or {}).get("matchLabels") or {}) == {"k8s-app": "kube-dns"} for p in r.get("to", []))]
+    check(len(dns) == 1 and ports_of(dns) == [53], f"{where}: DNS rule {dns}")
+
+def check_no_empty(rules, where):
+    for r in rules:
+        check(r.get("to"), f"{where}: egress rule {r} has no peers (admits every destination)")
+
+def check_postgres(rules, where):
+    pg = [r for r in rules if {"cidr": "10.20.0.5/32"} in ipblocks(r)]
+    check(len(pg) == 1 and ports_of(pg) == [5432], f"{where}: the declared PostgreSQL rule is {pg}")
+
+NATS = "StatefulSet/elitea-nats"
 wp = policies.get("elitea-worker-netpol")
 if wp:
     spec = wp["spec"]
-    check(spec["policyTypes"] == ["Ingress"], "worker: policyTypes must be Ingress only (egress is not restricted)")
+    check(spec["policyTypes"] == ["Ingress", "Egress"], f"worker: policyTypes {spec['policyTypes']}, want [Ingress, Egress]")
     check(not spec.get("ingress"), "worker: ingress must have no rules (deny all inbound)")
-    check("egress" not in spec, "worker: must carry no egress rules")
+    eg = spec.get("egress") or []
+    check_no_empty(eg, "worker")
+    check_dns(eg, "worker")
+    check_postgres(eg, "worker")
+    if NATS in pods:
+        check(ports_of(selector_rules(eg, NATS)) == [4222], f"worker: NATS admitted on {ports_of(selector_rules(eg, NATS))}, want [4222]")
+    if deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"] and any(
+            p["name"].startswith("runtime-") for p in deployments["elitea-main"]["spec"]["template"]["spec"]["containers"][0]["ports"]):
+        check(ports_of(selector_rules(eg, MAIN)) == [9443, 9444, 9445, 9446], f"worker: elitea-main admitted on {ports_of(selector_rules(eg, MAIN))}, want 9443-9446")
+    if sup:
+        check(ports_of(selector_rules(eg, SUP)) == [9446, 9447], f"worker: supervisor admitted on {ports_of(selector_rules(eg, SUP))}")
+    for other in (WEB, GW, SCHED, DW, INV, "StatefulSet/elitea-vectordb"):
+        if other in pods:
+            check(not selector_rules(eg, other), f"worker: egress admits {other}, which it never calls")
+    if os.environ.get("EXPECT_WORKER_MODE") == "proxy":
+        check(not public_rules(eg), "worker: mode proxy must render no public rule")
+        check(len(selector_rules(eg, "Deployment/elitea-egress-proxy")) == 1, "worker: mode proxy must admit the egress proxy")
+        # Only the named peers: every rule is DNS, an in-namespace workload, or
+        # the declared PostgreSQL block.
+        for r in eg:
+            for p in r.get("to", []):
+                check("ipBlock" not in p or p["ipBlock"] == {"cidr": "10.20.0.5/32"}, f"worker: mode proxy admits the block {p}")
+    else:
+        check_public(eg, "worker")
+
+# ── scheduler, LLM gateway, OTel collector, PgBouncer (#2952) ────────────────
+sp_ = policies.get("elitea-scheduler-netpol")
+if sp_:
+    spec = sp_["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "scheduler: policyTypes must be Ingress only")
+    # These renders declare no probeFrom / metricsFrom: nothing may connect.
+    check(not spec.get("ingress"), f"scheduler: ingress {spec.get('ingress')}, want none (no probe or metrics peer declared)")
+
+gp = policies.get("elitea-llm-gateway-netpol")
+if gp:
+    spec = gp["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "llmGateway: policyTypes must be Ingress only")
+    by = rules_by_ports(spec.get("ingress") or [], "llmGateway")
+    check(list(by) == [(8443,)], f"llmGateway: ports admitted {list(by)}, want only the gRPC port 8443")
+    if (8443,) in by:
+        check(peer_targets(by[(8443,)], "llmGateway:grpc") == [MAIN], "llmGateway: the gRPC port must admit elitea-main only")
+    gwe = [d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "elitea-llm-gateway-egress"]
+    check(len(gwe) == 1, "llmGateway: the egress policy is not on by default")
+    if gwe:
+        espec = gwe[0]["spec"]
+        check(espec["policyTypes"] == ["Egress"], "llmGateway egress: policyTypes must be Egress")
+        check(sorted(selects(espec["podSelector"]["matchLabels"])) == [GW], "llmGateway egress: selects the wrong pods")
+        eg = espec.get("egress") or []
+        check_no_empty(eg, "llmGateway egress")
+        check_dns(eg, "llmGateway egress")
+        check_postgres(eg, "llmGateway egress")
+        check_public(eg, "llmGateway egress")
+        if NATS in pods:
+            check(ports_of(selector_rules(eg, NATS)) == [4222], "llmGateway egress: NATS must be admitted on 4222")
+        check(not selector_rules(eg, MAIN), "llmGateway egress: the gateway never calls elitea-main")
+
+op = policies.get("elitea-otel-collector-netpol")
+if op:
+    spec = op["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "otelCollector: policyTypes must be Ingress only")
+    rules = spec.get("ingress") or []
+    check(len(rules) == 1 and sorted(int(p["port"]) for p in rules[0]["ports"]) == [4317, 4318], f"otelCollector: rules {rules}")
+    if rules:
+        senders = set()
+        for peer in rules[0]["from"]:
+            ps = peer.get("podSelector") or {}
+            names = next((e["values"] for e in ps.get("matchExpressions", []) if e["key"] == "app.kubernetes.io/name" and e["operator"] == "In"), [])
+            check(peer.get("namespaceSelector") == {"matchLabels": {"kubernetes.io/metadata.name": "elitea"}}, f"otelCollector: peer {peer} not pinned to the namespace")
+            check(ps.get("matchLabels") == {"app.kubernetes.io/instance": "elitea"} and names, f"otelCollector: peer {peer} is not the chart's senders")
+            senders |= {n for n, l in pods.items() if l.get("app.kubernetes.io/instance") == "elitea" and l.get("app.kubernetes.io/name") in names}
+        want = {n for n in (MAIN, SCHED, GW, WORKER, DW, INV, VEC) if n in pods}
+        got = {n for n in senders if not n.endswith("-migrate") and not n.startswith(("Job/", "CronJob/"))}
+        check(got == want, f"otelCollector: admits {sorted(got)}, want {sorted(want)}")
+        for n in (WEB, "Deployment/elitea-otel-collector", "StatefulSet/elitea-nats", QDRANT):
+            check(n not in senders, f"otelCollector: admits {n}, which exports no traces")
+
+pb = policies.get("elitea-pgbouncer-netpol")
+if pb:
+    spec = pb["spec"]
+    check(spec["policyTypes"] == ["Ingress"], "pgbouncer: policyTypes must be Ingress only")
+    rules = spec.get("ingress") or []
+    check(len(rules) == 1 and [int(p["port"]) for p in rules[0]["ports"]] == [6432], f"pgbouncer: rules {rules}")
+    if rules:
+        admitted = set()
+        for peer in rules[0]["from"]:
+            ps = peer.get("podSelector") or {}
+            check(peer.get("namespaceSelector") == {"matchLabels": {"kubernetes.io/metadata.name": "elitea"}}, f"pgbouncer: peer {peer} not pinned to the namespace")
+            names = next((e["values"] for e in ps.get("matchExpressions", []) if e["key"] == "app.kubernetes.io/name"), None)
+            for n, l in pods.items():
+                if all(l.get(k) == v for k, v in (ps.get("matchLabels") or {}).items()) and (names is None or l.get("app.kubernetes.io/name") in names):
+                    admitted.add(n)
+        for n in (MAIN, SCHED, GW, "Job/elitea-main-migrate"):
+            if n in pods:
+                check(n in admitted, f"pgbouncer: {n} reads the database Secret but is not admitted")
+        for n in (WEB, "Deployment/elitea-otel-collector", VEC, QDRANT, "StatefulSet/elitea-nats", PGB):
+            check(n not in admitted, f"pgbouncer: admits {n}, which has no database credential")
 
 # ── sandbox supervisor ───────────────────────────────────────────────────────
 sp = policies.get("elitea-sandbox-supervisor-netpol")
@@ -380,6 +544,103 @@ run inventory-only 0 0 0 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}"
 EXPECT_GRPC=9555 run deepwiki-grpc-port 0 0 1 0 -- "${STANDALONE[@]}" "${DEEPWIKI[@]}" --set deepwiki.platformGrpc.port=9555
 EXPECT_INV_GRPC=9555 run inventory-grpc-port 0 0 0 1 -- "${STANDALONE[@]}" "${INVENTORY[@]}" --set inventory.platformGrpc.port=9555
 
+# Worker egress, mode proxy (#2951): the egress proxy and the named peers, no public rule.
+EXPECT_WORKER_MODE=proxy run worker-proxy 1 0 0 0 -- "${STANDALONE[@]}" "${WORKER[@]}" \
+  -f "$REPO/deploy/helm/tests/fixtures/egress-proxy-values.yaml" --set egressProxy.audit.enabled=false --set worker.networkPolicy.mode=proxy
+# PgBouncer on: its ingress policy, and the pooler as a database peer.
+PGBOUNCER=(--set pgbouncer.enabled=true --set-string pgbouncer.postgresHost=postgres.example.invalid
+  --set-string pgbouncer.database=elitea --set-string pgbouncer.credentialsSecretName=elitea-pgbouncer)
+run pgbouncer 1 0 0 0 -- "${STANDALONE[@]}" "${WORKER[@]}" "${PGBOUNCER[@]}"
+
+# ── 1b. Worker egress values (#2951) ─────────────────────────────────────────
+echo "== worker egress values =="
+cat > "$WORK/private-values.yaml" <<'YAML'
+worker:
+  networkPolicy:
+    privateEgress:
+      - cidr: 10.30.0.0/16
+        ports:
+          - protocol: TCP
+            port: 8443
+main:
+  env:
+    ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: "jira.corp.example,db:5432,10.40.0.0/24,10.50.0.7:5000,[fd00::7]:9000,fd00::8"
+networkPolicies:
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+YAML
+if render private "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" -f "$WORK/private-values.yaml"; then
+  if out="$(python3 - "$WORK/private.yaml" <<'PY' 2>&1
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+pols = {d["metadata"]["name"]: d for d in docs if d["kind"] == "NetworkPolicy"}
+eg = pols["elitea-worker-netpol"]["spec"]["egress"]
+want = {"to": [{"ipBlock": {"cidr": "10.30.0.0/16"}}], "ports": [{"protocol": "TCP", "port": 8443}]}
+assert want in eg, "privateEgress entry not rendered verbatim: " + str(eg)
+# The permit CIDR and IP entries are admitted; the host name is not a block.
+assert {"to": [{"ipBlock": {"cidr": "10.40.0.0/24"}}]} in eg, "permit CIDR missing"
+assert {"to": [{"ipBlock": {"cidr": "10.50.0.7/32"}}], "ports": [{"protocol": "TCP", "port": 5000}]} in eg, "permit IP:port missing"
+assert {"to": [{"ipBlock": {"cidr": "fd00::7/128"}}], "ports": [{"protocol": "TCP", "port": 9000}]} in eg, "permit [v6]:port missing"
+assert {"to": [{"ipBlock": {"cidr": "fd00::8/128"}}]} in eg, "permit bare v6 missing"
+# A short host name of hex letters with a port is a host, never an IPv6 block.
+assert not any("db:" in str(r) for r in eg), "permit host db:5432 read as an address: " + str(eg)
+mon = [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}]
+for name, port in (("elitea-scheduler-netpol", 8081), ("elitea-llm-gateway-netpol", 8083)):
+    rules = [r for r in pols[name]["spec"]["ingress"] if [p["port"] for p in r["ports"]] == [port]]
+    assert len(rules) == 1 and rules[0]["from"] == mon, f"{name}: metricsFrom not admitted on {port} alone: {rules}"
+print("privateEgress verbatim; permit CIDR, IP:port and [v6]:port admitted; metricsFrom reaches the scheduler and gateway health ports")
+PY
+)"; then pass "$out"; else fail "worker egress values: $out"; fi
+fi
+# allowPublicEgress false on both: no public rule, and no clusterCIDRs needed.
+if render nopublic "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.clusterCIDRs=null \
+    --set worker.networkPolicy.allowPublicEgress=false --set llmGateway.networkPolicy.allowPublicEgress=false; then
+  if python3 - "$WORK/nopublic.yaml" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+for d in docs:
+    if d["kind"] == "NetworkPolicy":
+        for r in d["spec"].get("egress", []):
+            assert not any(p.get("ipBlock", {}).get("cidr") in ("0.0.0.0/0", "::/0") for p in r.get("to", [])), d["metadata"]["name"]
+PY
+  then pass "allowPublicEgress=false renders no public rule and needs no clusterCIDRs"
+  else fail "allowPublicEgress=false still renders a public rule"; fi
+fi
+# A NATS of your own (nats.enabled=false): its namespace on natsClient.port, or egressPeers.nats.
+for variant in namespace peers; do
+  case "$variant" in
+    namespace) args=(--set natsClient.namespace=messaging --set natsClient.port=4223);;
+    peers) args=(--set natsClient.namespace=messaging --set 'networkPolicies.egressPeers.nats.to[0].podSelector.matchLabels.app=nats');;
+  esac
+  if render "nats-byo-$variant" "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set nats.enabled=false \
+      --set natsBootstrap.enabled=false --set natsClient.tls.issuerRef.kind=ClusterIssuer "${args[@]}"; then
+    if python3 - "$WORK/nats-byo-$variant.yaml" "$variant" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+want = {"namespace": {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "messaging"}}}], "ports": [{"protocol": "TCP", "port": 4223}]},
+        "peers": {"to": [{"podSelector": {"matchLabels": {"app": "nats"}}}], "ports": [{"protocol": "TCP", "port": 4222}]}}[sys.argv[2]]
+for name in ("elitea-worker-netpol", "elitea-llm-gateway-egress"):
+    eg = next(d for d in docs if d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == name)["spec"]["egress"]
+    assert want in eg, f"{name}: no rule {want}: {eg}"
+    assert not any("app.kubernetes.io/component" in str(r) and "nats" in str(r) for r in eg), f"{name}: still names the bundled server"
+PY
+    then pass "a NATS of your own ($variant): the worker and the gateway reach it, and only it"
+    else fail "a NATS of your own ($variant): wrong NATS rule"; fi
+  fi
+done
+# egressEnabled=false with the statement: the worker policy is ingress-only again.
+if render worker-egress-off "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" \
+    --set worker.networkPolicy.egressEnabled=false --set worker.networkPolicy.externallyManaged=true; then
+  if python3 -c '
+import sys, yaml
+p = next(d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "NetworkPolicy" and d["metadata"]["name"] == "elitea-worker-netpol")
+assert p["spec"]["policyTypes"] == ["Ingress"] and "egress" not in p["spec"], p["spec"]' "$WORK/worker-egress-off.yaml"
+  then pass "worker.networkPolicy.egressEnabled=false + externallyManaged renders the ingress-only policy"
+  else fail "worker.networkPolicy.egressEnabled=false still restricts egress"; fi
+fi
+
 # ── 2. Guards ────────────────────────────────────────────────────────────────
 echo "== guards =="
 refuses() { # refuses <label> <message fragment> <helm args...>
@@ -395,6 +656,37 @@ refuses() { # refuses <label> <message fragment> <helm args...>
 count_policies() { python3 -c '
 import sys, yaml
 print(sum(1 for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-netpol")))' "$1"; }
+
+refuses "allowPublicEgress with empty clusterCIDRs" "networkPolicies.clusterCIDRs: the cluster's pod and Service CIDRs" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.clusterCIDRs=null
+refuses "an egress policy without PostgreSQL" "networkPolicies.egressPeers.postgresql.to: where PostgreSQL is" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set networkPolicies.egressPeers.postgresql.to=null
+refuses "worker egress off without the statement" "worker.networkPolicy.externallyManaged=true" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.egressEnabled=false
+refuses "gateway egress off without the statement" "llmGateway.networkPolicy.externallyManaged=true" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" --set llmGateway.networkPolicy.enabled=false
+refuses "mode proxy without the egress proxy" "egressProxy.enabled is false" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.mode=proxy
+refuses "an unknown worker egress mode" "worker.networkPolicy.mode must be" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.mode=open
+refuses "a link-local privateEgress block" "never the whole address space" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set 'worker.networkPolicy.privateEgress[0].cidr=169.254.169.254/32' \
+  --set 'worker.networkPolicy.privateEgress[0].ports[0].port=80'
+for wide in 0.0.0.0/0 128.0.0.0/1 160.0.0.0/4 169.0.0.0/8 127.0.0.0/8 ::/0 fe80::/10 ::1/128; do
+  refuses "a privateEgress block of $wide" "never the whole address space" \
+    "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set "worker.networkPolicy.privateEgress[0].cidr=$wide" \
+    --set 'worker.networkPolicy.privateEgress[0].ports[0].port=443'
+  refuses "a permit block of $wide" "which the worker's egress policy cannot admit" \
+    "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set-string "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT=$wide"
+done
+refuses "a permit address on the metadata range" "which the worker's egress policy cannot admit" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set-string 'main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT=169.254.169.254:80'
+refuses "a privateEgress entry without ports" "has no ports" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set 'worker.networkPolicy.privateEgress[0].cidr=10.30.0.0/16'
+refuses "a permit host name with nothing to admit it" "a host name cannot become a NetworkPolicy rule" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set-string main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT=jira.corp.example
+refuses "empty worker publicEgressPorts" "worker.networkPolicy.publicEgressPorts is empty" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.publicEgressPorts=null
 
 refuses "default values without the ingress decision" "explicit decision about who may reach elitea-main" \
   "${STANDALONE[@]}" --set networkPolicies.main.noExternalIngress=false

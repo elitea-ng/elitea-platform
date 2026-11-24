@@ -50,7 +50,12 @@ async function openEditorAndAddHitlNode(page: Page, pipeline: CreatedPipeline) {
   await page.getByRole('menuitem', { name: 'Human-in-the-loop', exact: true }).click();
   const card = page.locator(`.react-flow__node[data-id="${HITL_NODE_ID}"]`);
   await expect(card).toBeVisible({ timeout: 15_000 });
-  return card;
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${HITL_NODE_ID}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  return panel;
 }
 
 async function saveAndAwaitPersist(page: Page): Promise<void> {
@@ -142,17 +147,15 @@ test('the HITL node\'s Input picker is enabled only when the user message is F-S
   // accessible name at all — but it is the FIRST thing in the card's body
   // (above the user-message editor, above the Router-mapping accordion),
   // so it is always the first `combobox` on a non-Entrypoint node.
-  const inputPicker = card.getByRole('combobox').first();
+  await card.getByRole('button', { name: 'Advanced', exact: true }).click();
+  const advancedSection = card.getByTestId('pipeline-node-panel-advanced-section');
+  await expect(advancedSection).toBeVisible({ timeout: 10_000 });
+  const inputPicker = advancedSection.getByRole('combobox').first();
   await expect(inputPicker).toBeDisabled();
 
   // Switch the user message's own "Type" mapping (`SimpleLLMInputItem`) to
   // F-String — only then does the tooltip's stated condition ("Available
   // only when the User message type is set to F-String") hold.
-  //
-  // At 1280px the editor folds its chat pane so the canvas keeps at least
-  // 480px (`useEditorPaneRoom`). "Fit view" (the canvas's own control) then
-  // brings the whole new card into that canvas, as a user would.
-  await page.getByRole('button', { name: /fit view/i }).click();
   const messageType = card.getByRole('combobox', { name: 'Type' });
   await messageType.click();
   await page.getByRole('option', { name: 'F-String', exact: true }).click();

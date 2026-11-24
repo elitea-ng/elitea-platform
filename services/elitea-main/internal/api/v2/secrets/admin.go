@@ -147,13 +147,16 @@ type adminSecretUpdateBody struct {
 // Fail-closed by construction — `RequireCentralPermissions` answers 403 when the
 // resolver is nil, so a Handler built without one (the programmatic constructors
 // in applications/ and conversations/, which never serve HTTP) exposes nothing.
-func (h *Handler) adminGate(permission string, next http.HandlerFunc) http.HandlerFunc {
-	gated := apimw.RequireCentralPermissions(
+//
+// It answers the gated handler itself, not its ServeHTTP method value, so that
+// withModes can tell the maintenance gate that the administration branch is an
+// administration-mode route gate (apimw.IsAdministrationGated).
+func (h *Handler) adminGate(permission string, next http.HandlerFunc) http.Handler {
+	return apimw.RequireCentralPermissions(
 		h.permissionResolver,
 		modeAdministration,
 		permission,
 	)(next)
-	return gated.ServeHTTP
 }
 
 /* ── handler methods ──────────────────────────────────────────────────────── */

@@ -31,12 +31,28 @@ import (
 const refusedDatabase = "postgres://adminsurface@127.0.0.1:1/adminsurface?sslmode=disable&connect_timeout=1"
 
 // Token is the bearer credential the composed router accepts for the
-// synthetic principal. It accepts no other.
-const Token = "adminsurface-principal"
+// synthetic principal. NativeToken is the same principal signed in through a
+// native device session (desktop, mobile). It accepts no other.
+const (
+	Token       = "adminsurface-principal"
+	NativeToken = "adminsurface-native-session"
+)
+
+// NativeClientID is the native client of the NativeToken session.
+const NativeClientID = "adminsurface-native-client"
 
 // Principal is the synthetic principal every driven request carries.
 func Principal() auth.User {
 	return auth.User{ID: "1", UserID: "1", Email: "adminsurface@test.local", AuthType: "token"}
+}
+
+// NativePrincipal is Principal signed in through a native device session: the
+// Auth middleware classes a bearer principal with a native client as
+// auth.CredentialKindNative.
+func NativePrincipal() auth.User {
+	user := Principal()
+	user.NativeClientID = NativeClientID
+	return user
 }
 
 // Composed is the composed production router with the recording resolver on
@@ -85,6 +101,9 @@ func ComposedRouter() (Composed, error) {
 		SharedChatTranscript:   dbrepos.NewSharedChatLinksRepo(pool),
 		NativeClients:          nativeauth.NewRegistry(nil, pool),
 		NativeStore:            nativeauth.NewStore(pool, nativeauth.Config{}),
+		// No database holds a maintenance window here: a variant with
+		// Maintenance set opens one for its own requests.
+		MaintenanceState: MaintenanceState,
 
 		// Administration route groups the router mounts only when their
 		// handler is set. cmd/elitea-main always sets RetentionAdmin, and sets
@@ -168,7 +187,70 @@ func (c Composed) Options() (Options, error) {
 			}
 		}
 	}
+	// The checks the default request does not reach (ADR-0059 #2925).
+	for route, variants := range SessionAndWindowVariants() {
+		opts.Variants[route.String()] = append(opts.Variants[route.String()], variants...)
+	}
 	return opts, nil
+}
+
+// The routes the variants of SessionAndWindowVariants drive.
+var (
+	// TokenMint mints a personal access token. Its administration-mode
+	// check runs for a native device session only (v2/auth
+	// token_mint_policy.go): a browser session mints without it and every
+	// other credential is refused first.
+	TokenMint = Route{Method: http.MethodPost, Pattern: "/api/v2/auth/token/"}
+	// MarketplaceListingUpdate features or delists a listing. Its
+	// moderation check (eliteacore holdsModerationPermission) sits behind
+	// the project's agent list gate and after the body is read. The reads
+	// ask the same function, but hand its answer to a query, so no grant
+	// changes what this router answers there.
+	MarketplaceListingUpdate = Route{Method: http.MethodPatch,
+		Pattern: "/api/v2/elitea_core/marketplace_listing/prompt_lib/{projectID}/{listingID}"}
+	// PlatformSettings tells the SPA whether a window is open and whether
+	// the caller bypasses it (eliteacore holdsMaintenanceBypass).
+	PlatformSettings = Route{Method: http.MethodGet, Pattern: "/api/v2/elitea_core/platform_settings/prompt_lib"}
+	// MaintenanceUserRoute is a route outside the administration surface,
+	// driven with a window open: the maintenance gate is its only
+	// administration-mode check.
+	MaintenanceUserRoute = Route{Method: http.MethodGet, Pattern: "/api/v2/elitea_core/applications/prompt_lib/{projectID}"}
+	// MaintenanceAdministrationRoute is a route of the surface outside the
+	// paths a window leaves open (/api/v2/admin and the others of
+	// middleware.MaintenanceExempt), driven with a window open: the
+	// maintenance gate asks first, then the route gate.
+	MaintenanceAdministrationRoute = Route{Method: http.MethodPut,
+		Pattern: "/api/v2/elitea_core/project_budget/administration/{projectID}/budget"}
+)
+
+// The variant names. None has a space, so none selects an action of the
+// action table (Entry.SelectorValue).
+const (
+	VariantNativeSession = "native_session"
+	VariantModeration    = "moderation"
+	VariantMaintenance   = "maintenance_window"
+)
+
+// MarketplaceReadPermission is the default-mode permission of the Marketplace
+// project gate (router.go, requireMarketplaceRead).
+const MarketplaceReadPermission = "models.applications.applications.list"
+
+// SessionAndWindowVariants are the variants that reach the checks a bearer
+// request with the window closed does not: the token mint of a native
+// session, the Marketplace moderation check, and the maintenance bypass in the
+// gate and in the platform_settings read. A route listed here is driven with
+// these variants only: the default one is listed where it reaches a check of
+// its own.
+func SessionAndWindowVariants() map[Route][]Variant {
+	window := Variant{Name: VariantMaintenance, Maintenance: true}
+	return map[Route][]Variant{
+		TokenMint: {{Name: VariantNativeSession, Authenticate: AuthenticateNative}},
+		MarketplaceListingUpdate: {{Name: VariantModeration, Body: `{"featured":true}`,
+			OtherModes: []string{MarketplaceReadPermission}}},
+		PlatformSettings:               {window},
+		MaintenanceUserRoute:           {window},
+		MaintenanceAdministrationRoute: {{}, window},
+	}
 }
 
 // Section is one Configuration section of the router's schema list.
@@ -217,6 +299,10 @@ func (c Composed) ConfigurationSections() ([]Section, error) {
 
 func authenticate(r *http.Request) { r.Header.Set("Authorization", "Bearer "+Token) }
 
+// AuthenticateNative adds the native device session credential of the
+// synthetic principal.
+func AuthenticateNative(r *http.Request) { r.Header.Set("Authorization", "Bearer "+NativeToken) }
+
 type discardAudit struct{}
 
 func (discardAudit) Record(context.Context, audit.Event) {}
@@ -224,10 +310,13 @@ func (discardAudit) Record(context.Context, audit.Event) {}
 type tokenValidator struct{}
 
 func (tokenValidator) ValidateToken(_ context.Context, token string) (auth.User, error) {
-	if token != Token {
-		return auth.User{}, errors.New("adminsurface: not the synthetic principal's token")
+	switch token {
+	case Token:
+		return Principal(), nil
+	case NativeToken:
+		return NativePrincipal(), nil
 	}
-	return Principal(), nil
+	return auth.User{}, errors.New("adminsurface: not a credential of the synthetic principal")
 }
 
 type principalValidator struct{}

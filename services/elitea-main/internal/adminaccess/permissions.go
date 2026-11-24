@@ -31,6 +31,11 @@ const (
 	ConfigurationUsersUsersView   = "configuration.users.users.view"
 	ConfigurationUsersUsersCreate = "configuration.users.users.create"
 	ConfigurationUsersUsersEdit   = "configuration.users.users.edit"
+	// ConfigurationUsersUsersDelete gates the central member removal route
+	// beside projects.members.manage (R0.6a). Shared 0076 grants it in the
+	// default mode only, so no administration role holds it from a migration
+	// (ungrantedByMigration); a deployment gives it to a custom role.
+	ConfigurationUsersUsersDelete = "configuration.users.users.delete"
 	AdminModeration               = "admin.moderation"
 	AdminModerationEdit           = "admin.moderation.edit"
 	RuntimeAdminPublishedAgents   = "runtime.admin.published_agents"
@@ -76,9 +81,12 @@ const (
 )
 
 // The narrow permissions of ADR-0059 decision 2 that shared 0261 grants to
-// super_admin and admin (identity.sso.trust.manage to super_admin alone). No
-// gate accepts them yet; stories R0.3 to R0.6 wire each beside the legacy
-// name it narrows.
+// super_admin and admin (identity.sso.trust.manage to super_admin alone).
+// Stories R0.3 to R0.6 wire each beside the legacy name it narrows: R0.4a
+// wired platform.email.manage, platform.operations.view and .manage, and
+// mcp.catalogue.manage, each accepted beside runtime.plugins; R0.3 wired the
+// seven llm.* names, each accepted beside configuration.governance on the
+// /admin/gateway routes.
 const (
 	// Models and spend.
 	LLMCatalogueView    = "llm.catalogue.view"
@@ -133,15 +141,15 @@ func row(name string, area Area, class Class) Permission {
 func rows() []Permission {
 	superAdmin := row(AdminAuthUsersSuperAdmin, AreaPeopleAccess, ClassWrite)
 	// The global administrator's own permission. Shared 0060 grants it to
-	// super_admin and rolepolicy refuses it to every other role, so only a
+	// super_admin and the role policy refuses it to every other role, so only a
 	// migration grants it. It gates identity trust (#2558), which is never
 	// a token scope (ADR-0059 decision 7).
 	superAdmin.Grantable = GrantableSeededOnly
 
 	runtimePlugins := row(RuntimePlugins, AreaPlatform, ClassWrite)
 	// The maintenance bypass (middleware/maintenance.go and the
-	// platform_settings flag read). A native session keeps it, and today it
-	// is the only permission that admits its holder during a window.
+	// platform_settings flag read), with its narrow name
+	// platform.maintenance.manage. A native session keeps it.
 	runtimePlugins.NativeClient = true
 	runtimePlugins.Maintenance = true
 
@@ -174,6 +182,7 @@ func rows() []Permission {
 		row(ConfigurationUsersUsersView, AreaProjects, ClassRead),
 		row(ConfigurationUsersUsersCreate, AreaProjects, ClassWrite),
 		row(ConfigurationUsersUsersEdit, AreaProjects, ClassWrite),
+		row(ConfigurationUsersUsersDelete, AreaProjects, ClassWrite),
 		row(AdminModeration, AreaProjects, ClassRead),
 		row(AdminModerationEdit, AreaProjects, ClassWrite),
 		publishedAgents,
@@ -237,9 +246,13 @@ func seeded(name string, area Area, class Class, narrows ...string) Permission {
 // narrowRows are the 25 rows of shared 0261. None is a token scope (Token
 // false): the scoped token of R1.1 and R1.2 opts rows in, and identity trust
 // never is one. platform.maintenance.manage is the narrow name of the
-// maintenance bypass, but it gets NativeClient and Maintenance only in R0.4,
-// when the bypass accepts it: the attributes say what is enforced.
+// maintenance bypass: since R0.4b the bypass accepts it, so it carries
+// Maintenance, and a native session keeps it (NativeClient) as it keeps
+// runtime.plugins.
 func narrowRows() []Permission {
+	maintenance := narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins)
+	maintenance.NativeClient = true
+	maintenance.Maintenance = true
 	return []Permission{
 		// Models and spend.
 		narrow(LLMCatalogueView, AreaModelsSpend, ClassRead, ConfigurationGovernance),
@@ -256,7 +269,7 @@ func narrowRows() []Permission {
 		narrow(PlatformConfigView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformConfigManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		narrow(PlatformEmailManage, AreaPlatform, ClassWrite, RuntimePlugins),
-		narrow(PlatformMaintenanceManage, AreaPlatform, ClassWrite, RuntimePlugins),
+		maintenance,
 		narrow(PlatformOperationsView, AreaPlatform, ClassRead, RuntimePlugins),
 		narrow(PlatformOperationsManage, AreaPlatform, ClassWrite, RuntimePlugins),
 		// Prebuilt MCP servers are connectors: the Agents and governance
@@ -273,13 +286,13 @@ func narrowRows() []Permission {
 		seeded(IdentitySSOTrustManage, AreaPeopleAccess, ClassWrite),
 
 		// Projects. projects.members.manage also narrows
-		// configuration.users.users.delete on the central removal route that
-		// R0.6 adds; that name joins the table with its gate. The two
-		// settings names are new capabilities, not narrowings: they let an
-		// administration permission reach the guarded settings of a project
+		// configuration.users.users.delete, on the central removal route of
+		// R0.6a. The two settings names are new capabilities, not narrowings:
+		// they let an administration permission reach the guarded settings of
+		// a project, through the reviewed allowlist of central_override.go
 		// (R0.6b).
 		narrow(ProjectsMembersManage, AreaProjects, ClassWrite,
-			ConfigurationUsersUsersCreate, ConfigurationUsersUsersEdit),
+			ConfigurationUsersUsersCreate, ConfigurationUsersUsersEdit, ConfigurationUsersUsersDelete),
 		narrow(ProjectsSettingsView, AreaProjects, ClassRead),
 		narrow(ProjectsSettingsManage, AreaProjects, ClassWrite),
 

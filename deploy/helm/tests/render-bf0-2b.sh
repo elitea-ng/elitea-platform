@@ -257,7 +257,7 @@ params = {p["name"]: p.get("value", "") for p in helm.get("parameters", [])}
 # "false" here is the boolean false, as the switches below rely on.
 forced = {p["name"] for p in helm.get("parameters", []) if p.get("forceString")}
 
-# The values an OPERATOR supplies, and only those. Both are empty in git on
+# The values an OPERATOR supplies, and only those. All are empty in git on
 # purpose, so this stands in for the operator. `.invalid` is reserved by
 # RFC 2606 and never resolves, so no reader mistakes it for a shipped default.
 operator = {
@@ -265,6 +265,9 @@ operator = {
     "llmGateway.egressPosture": "public-unrestricted",
     # The gateway peer admitted to elitea-main:8080 (networkPolicies).
     "networkPolicies.main.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name": "gateway-system",
+    # The gateway's egress policy (#2952): the cluster's ranges and the database.
+    "networkPolicies.clusterCIDRs": "{10.244.0.0/16,10.96.0.0/12}",
+    "networkPolicies.egressPeers.postgresql.to[0].ipBlock.cidr": "10.20.0.5/32",
 }
 for name in operator:
     assert name in params, (
@@ -284,7 +287,7 @@ for name, value in params.items():
 
 done = subprocess.run(argv, capture_output=True, text=True)
 assert done.returncode == 0, (
-    "the Application does not render with the values it supplies plus the two "
+    "the Application does not render with the values it supplies plus the ones "
     f"the operator supplies:\n{done.stderr.strip()}"
 )
 

@@ -8,7 +8,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
 import { SubgraphNode, type SubgraphNodeProps } from './SubgraphNode';
@@ -53,7 +53,16 @@ function renderSubgraphNode(
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={[]}
-          nodeTypes={{ testNode: () => <SubgraphNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <SubgraphNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+                  <SubgraphNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,

@@ -33,7 +33,7 @@ test.afterEach(async ({ page }) => {
 
 async function assertEditorSectionsActive(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: 'Flow', exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole('button', { name: 'Yaml', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'YAML', exact: true })).toBeVisible();
   const toolkitsSection = page.getByTestId('agent-toolkits-section');
   await expect(toolkitsSection).toBeVisible({ timeout: 15_000 });
   await expect(toolkitsSection.getByRole('button', { name: 'Toolkit', exact: true })).toBeEnabled();
@@ -54,7 +54,7 @@ test('the create form has no Flow/YAML/Toolkit section — one save activates al
 
   // Pre-save: none of the three exist on the page at all.
   await expect(page.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Yaml', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'YAML', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('agent-toolkits-section')).toHaveCount(0);
 
   const name = `${AUTOTEST_PREFIX}cux-${Date.now() % 1e9}`;

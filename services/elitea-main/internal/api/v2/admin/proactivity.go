@@ -18,8 +18,9 @@ import (
 func proactivitySection() map[string]any {
 	const section = platformconfig.SectionProactivity
 	return map[string]any{
-		"id":    section,
-		"title": "Proactive agents",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Proactive agents",
 		"description": "Proactive agents wake up on a timer, check their goals and the new messages, and then " +
 			"do nothing, notify their owner or start a run. These settings are the platform maximums. An " +
 			"agent's own daily limits can only be lower. A run that an agent starts always uses its owner's " +

@@ -27,6 +27,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 const (
@@ -74,6 +75,10 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+
+	// accessAudit appends the admin.access.changed events of the global
+	// provider routes (ADR-0059 R1.5); nil means the PostgreSQL appender.
+	accessAudit securityaudit.Appender
 	// tracingAccess contains the current platform's temporary containment:
 	// tracing credentials may be managed only by project admins or inside the
 	// actor's own personal project. It is derived from the same pool by default
@@ -256,22 +261,31 @@ func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	list := h.require(CurrentConfigurationListPermission)
-	details := h.require(CurrentConfigurationGetPermission)
 	create := h.require(CurrentConfigurationCreatePermission)
 	update := h.require(CurrentConfigurationUpdatePermission)
-	remove := h.require(CurrentConfigurationDeletePermission)
 
 	r.Get("/available/", h.Available)
-	r.With(list).Get("/configurations/{projectID}", h.List)
-	r.With(list).Get("/configurations/{mode}/{projectID}", h.List)
-	r.With(create).Post("/configurations/{projectID}", h.Create)
-	r.With(create).Post("/configurations/{mode}/{projectID}", h.Create)
-	r.With(details).Get("/configuration/{projectID}/{configID}", h.Get)
-	r.With(details).Get("/configuration/{mode}/{projectID}/{configID}", h.Get)
-	r.With(update).Put("/configuration/{projectID}/{configID}", h.Update)
-	r.With(update).Put("/configuration/{mode}/{projectID}/{configID}", h.Update)
-	r.With(remove).Delete("/configuration/{projectID}/{configID}", h.Delete)
-	r.With(remove).Delete("/configuration/{mode}/{projectID}/{configID}", h.Delete)
+	// The five row routes take the central branch of the guarded project
+	// settings (ADR-0059 R0.6b, project_settings_central.go): a caller who
+	// does not hold the permission in the project passes only for an
+	// allowlisted (route, configuration type) pair. Every other route here
+	// keeps the member gate alone.
+	const (
+		listPath     = "/configurations/{projectID}"
+		listModePath = "/configurations/{mode}/{projectID}"
+		rowPath      = "/configuration/{projectID}/{configID}"
+		rowModePath  = "/configuration/{mode}/{projectID}/{configID}"
+	)
+	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationListPermission)).Get(listPath, h.List)
+	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationListPermission)).Get(listModePath, h.List)
+	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationCreatePermission)).Post(listPath, h.Create)
+	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationCreatePermission)).Post(listModePath, h.Create)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationGetPermission)).Get(rowPath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationGetPermission)).Get(rowModePath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationUpdatePermission)).Put(rowPath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationUpdatePermission)).Put(rowModePath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationDeletePermission)).Delete(rowPath, h.Delete)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationDeletePermission)).Delete(rowModePath, h.Delete)
 	// The connection checks take the CREATE string. The reference declares no
 	// permission on either route, so this is a proposal, and it is the narrowest
 	// one that costs no caller a control: the button they serve sits on the
@@ -1320,7 +1334,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var uuid string
 	var createdAt time.Time
 	err = h.withConfigurationSecretTx(ctx, pID, secretMutations, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, q,
+		if err := tx.QueryRow(ctx, q,
 			pID,
 			label,
 			title,
@@ -1330,7 +1344,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			metaBytes,
 			shared,
 			authorID,
-		).Scan(&id, &uuid, &createdAt)
+		).Scan(&id, &uuid, &createdAt); err != nil {
+			return err
+		}
+		// The security audit event of a route that asked for one (the
+		// global provider routes, ADR-0059 R1.5), in this transaction.
+		return securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(id))
 	})
 	if err != nil {
 		writeConfigurationCreateFailure(ctx, w, projectID, err)
@@ -1586,6 +1605,11 @@ func (h *Handler) applyConfigurationUpdate(
 	if err = h.purgeOrphanedHiddenSecrets(ctx, tx, schema, int64(projectID), previousSecrets); err != nil {
 		return c, nil, err
 	}
+	// The security audit event of a route that asked for one (the global
+	// provider routes, ADR-0059 R1.5), in this transaction.
+	if err = securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(c.ID)); err != nil {
+		return c, nil, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return c, nil, err
 	}
@@ -1812,7 +1836,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared, &data); err != nil {
 			return err
 		}
-		return h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data))
+		if err := h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data)); err != nil {
+			return err
+		}
+		// The security audit event of a route that asked for one (the
+		// global provider routes, ADR-0059 R1.5), in this transaction.
+		return securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(int(id)))
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")

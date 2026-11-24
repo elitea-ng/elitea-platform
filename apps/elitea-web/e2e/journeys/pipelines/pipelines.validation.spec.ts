@@ -107,7 +107,7 @@ async function createPipeline(page: Page, name: string): Promise<string> {
  * writes to.
  */
 async function authorYaml(page: Page, document: string): Promise<void> {
-  await page.getByRole('button', { name: 'Yaml', exact: true }).click();
+  await page.getByRole('button', { name: 'YAML', exact: true }).click();
   const editor = page.locator('.cm-content');
   await expect(editor).toBeVisible({ timeout: 10_000 });
 
@@ -166,9 +166,41 @@ function parseStoredDocument(instructions: string): Readonly<Record<string, unkn
   return parsed as Readonly<Record<string, unknown>>;
 }
 
-/** The admission panel inside one node's card. */
+async function openNodePanel(page: Page, nodeId: string): Promise<Locator> {
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${nodeId}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    const card = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
+    await expect(card).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Fit view' }).click();
+    await expect(async () => {
+      if (!(await panel.isVisible().catch(() => false))) {
+        await card.click({ timeout: 3_000 });
+      }
+      await expect(panel).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  return panel;
+}
+
+async function openInterruptSwitches(page: Page, nodeId: string): Promise<{ before: Locator; after: Locator }> {
+  const panel = await openNodePanel(page, nodeId);
+  const advancedSection = panel.getByTestId('pipeline-node-panel-advanced-section');
+  const advancedToggle = advancedSection.getByRole('button', { name: 'Advanced', exact: true });
+  await expect(advancedToggle).toBeVisible({ timeout: 10_000 });
+  if ((await advancedToggle.getAttribute('aria-expanded')) !== 'true') {
+    await advancedToggle.click();
+  }
+  await expect(advancedToggle).toHaveAttribute('aria-expanded', 'true', { timeout: 10_000 });
+  return {
+    before: advancedSection.getByRole('switch', { name: 'Interrupt before' }),
+    after: advancedSection.getByRole('switch', { name: 'Interrupt after' }),
+  };
+}
+
+/** The admission panel inside one node's config drawer. */
 function nodeIssues(page: Page, nodeId: string): Locator {
-  return page.locator(`.react-flow__node[data-id="${nodeId}"]`).getByTestId('node-admission-issues');
+  return page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${nodeId}"]`).getByTestId('node-admission-issues');
 }
 
 test('J16: an output naming an undeclared state key is named in the panel and never reaches the backend', async ({
@@ -185,7 +217,9 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
   // 1. A LEGAL graph saves. Without this half, "the PUT did not fire" below
   //    would also be true of an editor that can never save anything.
   await authorYaml(page, ADMISSIBLE_YAML);
+  await openNodePanel(page, 'LLM_1');
   await expect(nodeIssues(page, 'LLM_1')).toHaveCount(0);
+  await expect(page.locator('.react-flow__node[data-id="LLM_1"]').getByTestId('pipeline-node-v2-status-needs-configuration')).toHaveCount(0);
   await expect(page.getByTestId('pipeline-save-button')).toBeEnabled();
   await saveAndAwaitPersist(page);
 
@@ -196,7 +230,12 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
   //    is now one the runtime refuses whole (compiler.rs:1284).
   await authorYaml(page, INADMISSIBLE_YAML);
 
-  // 3. The panel names the exact field AND the exact key — not "invalid node".
+  // 3. The canvas card shows needs-configuration status and the node panel names
+  //    the exact field AND the exact key — not "invalid node".
+  await expect(
+    page.locator('.react-flow__node[data-id="LLM_1"]').getByTestId('pipeline-node-v2-status-needs-configuration'),
+  ).toBeVisible({ timeout: 10_000 });
+  await openNodePanel(page, 'LLM_1');
   const issues = nodeIssues(page, 'LLM_1');
   await expect(issues).toBeVisible({ timeout: 10_000 });
   await expect(issues).toContainText('output[0]: "summary" is not declared');
@@ -222,9 +261,7 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
 test('J16: active interrupt controls roundtrip the exact stored node lists', async ({ page }) => {
   const id = await createPipeline(page, `${AUTOTEST_PREFIX}intr-${Date.now() % 1e9}`);
   await authorYaml(page, ADMISSIBLE_YAML);
-  const card = page.locator('.react-flow__node[data-id="LLM_1"]');
-  const before = card.getByRole('switch', { name: 'Interrupt before' });
-  const after = card.getByRole('switch', { name: 'Interrupt after' });
+  const { before, after } = await openInterruptSwitches(page, 'LLM_1');
   await expect(before).toBeEnabled();
   await expect(after).toBeEnabled();
   await before.check();
@@ -237,8 +274,9 @@ test('J16: active interrupt controls roundtrip the exact stored node lists', asy
   expect(stored['interrupt_before']).toEqual(['LLM_1']);
   expect(stored['interrupt_after']).toEqual(['LLM_1']);
 
-  await before.uncheck();
-  await after.uncheck();
+  const reopened = await openInterruptSwitches(page, 'LLM_1');
+  await reopened.before.uncheck();
+  await reopened.after.uncheck();
   await saveAndAwaitPersist(page);
   const cleared = parseStoredDocument(await readStoredInstructions(page, id));
   expect(cleared['interrupt_before'] ?? []).toEqual([]);

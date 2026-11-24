@@ -306,7 +306,8 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		IsError: status >= http.StatusBadRequest,
 	}
 
-	if user, ok := auth.UserFromContext(r.Context()); ok {
+	user, hasUser := auth.UserFromContext(r.Context())
+	if hasUser {
 		event.UserEmail = user.Email
 		// OwningUserID, not User.ID: a token principal's ID is the token row,
 		// and filing an audit event under a token id would make
@@ -337,9 +338,64 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		// no user principal did. A user id is never replaced by a label.
 		if annotation.Actor != "" && event.UserID == nil && event.UserEmail == "" {
 			event.UserEmail = annotation.Actor
+			if !hasUser {
+				event.CredentialKind = annotation.ActorCredentialKind
+			}
 		}
+		// Only a write that happened: a refused or failed request changed
+		// nothing in the project, so it is no central override.
+		event.CentralOverride = annotation.CentralOverride && status < http.StatusBadRequest
+		event.ReasonCode = annotation.ReasonCode
+		event.Reason = annotation.Reason
+		event.ReasonMissing = annotation.ReasonMissing
 	}
+	applyRoleUse(r, slot, user, hasUser, &event)
 	return event
+}
+
+// applyRoleUse fills the role-use fields of an ADMINISTRATION-MODE row
+// (ADR-0059 decision 8, story R1.4a): a request during which the permission
+// resolver answered the administration mode for the caller, at a route gate
+// or in a handler. The resolver recorded the caller's standing roles on the
+// slot, from the query it already ran, so this adds no query. A request that
+// never resolved the administration mode keeps NULL in every field.
+func applyRoleUse(r *http.Request, slot *audit.AnnotationSlot, user auth.User, hasUser bool, event *audit.Event) {
+	administration, resolved := slot.Administration()
+	if !resolved {
+		return
+	}
+	event.ActingRoles = administration.ActingRoles
+	if hasUser {
+		event.CredentialKind = credentialKindColumn(user.CredentialKind)
+	}
+	event.ElevationID = slot.ElevationID()
+	if event.ElevationID == "" {
+		event.ElevationID = audit.ElevationIDFromContext(r.Context())
+	}
+}
+
+// credentialKindColumn maps the credential kind of a principal to its
+// credential_kind value. The zero kind, and any kind not in the credentials
+// table of ADR-0059 decision 7, answers "" (NULL): never a guess. `scim` is
+// not a principal kind; the SCIM routes annotate it (ActorCredentialKind).
+func credentialKindColumn(kind auth.CredentialKind) string {
+	switch kind {
+	case auth.CredentialKindSession:
+		return audit.CredentialKindSession
+	case auth.CredentialKindForm:
+		return audit.CredentialKindForm
+	case auth.CredentialKindSealed:
+		return audit.CredentialKindSealed
+	case auth.CredentialKindToken:
+		return audit.CredentialKindToken
+	case auth.CredentialKindNative:
+		return audit.CredentialKindNative
+	case auth.CredentialKindRun:
+		return audit.CredentialKindRun
+	case auth.CredentialKindSystem:
+		return audit.CredentialKindSystem
+	}
+	return ""
 }
 
 // requestProjectID resolves the project the request acted on, in the order the

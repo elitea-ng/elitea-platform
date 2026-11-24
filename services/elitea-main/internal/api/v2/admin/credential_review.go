@@ -17,8 +17,9 @@ func credentialReviewSection() map[string]any {
 	const section = platformconfig.SectionCredentialReview
 	defaults := platformconfig.DefaultCredentialReviewPolicy()
 	return map[string]any{
-		"id":    section,
-		"title": "Credential Review",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Credential Review",
 		"description": "When a credential an agent can use counts as stale, what happens to it, and how far back " +
 			"the permission trimming report looks for use. Revoke applies to personal access tokens and " +
 			"credential use grants only; toolkit secrets, MCP OAuth tokens and credential references are " +

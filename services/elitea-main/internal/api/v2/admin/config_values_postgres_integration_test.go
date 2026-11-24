@@ -148,11 +148,22 @@ func saveResources(t *testing.T, router chi.Router, values map[string]any) *http
 		map[string]any{"values": values})
 }
 
+// legacyAdministrator is the set an administrator holds on the legacy path:
+// runtime.plugins, which the route gate used to guarantee, and every
+// section's required_permission. The handler checks runtime.plugins itself
+// since ADR-0059 R0.5, so a fixture that calls it directly grants it.
+var legacyAdministrator = []string{
+	"runtime.plugins", "configuration.governance", "configuration.branding",
+	"configuration.native_clients", "configuration.microsoft_apps",
+	"configuration.service_descriptors", "entitlements.export",
+}
+
 func newConfigEnvironment(t *testing.T) (*pgxpool.Pool, chi.Router) {
 	t.Helper()
 	pool := newConfigPool(t)
 	principal := auth.User{ID: "7", UserID: "7", Email: "operator@example.com"}
-	return pool, configRouter(admin.NewHandler(pool), &principal)
+	return pool, configRouter(admin.NewHandler(pool,
+		admin.WithPermissionResolver(grantingResolver(legacyAdministrator...))), &principal)
 }
 
 /* ── the read ──────────────────────────────────────────────────────────── */
@@ -554,7 +565,7 @@ func TestGovernanceIsWithheldWithItsOwnReason(t *testing.T) {
 	pool := newConfigPool(t)
 	principal := auth.User{ID: "7", Email: "operator@example.com"}
 	handler := admin.NewHandler(pool, admin.WithPermissionResolver(
-		grantingResolver("configuration.governance"),
+		grantingResolver("runtime.plugins", "configuration.governance"),
 	))
 	router := configRouter(handler, &principal)
 
@@ -1102,14 +1113,14 @@ func TestEntitlementExportSCIMClientsRoundTrip(t *testing.T) {
 	const target = "/admin/plugin_config_values/administration/entitlement_export"
 
 	denied := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
-		grantingResolver("configuration.governance"))), &principal)
+		grantingResolver("runtime.plugins", "configuration.governance"))), &principal)
 	if recorder := configDo(t, denied, http.MethodPut, target,
 		map[string]any{"values": map[string]any{"scim_client_ids": []any{3}}}); recorder.Code != http.StatusForbidden {
 		t.Fatalf("PUT without entitlements.export = %d, want 403 (body %s)", recorder.Code, recorder.Body.String())
 	}
 
 	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
-		grantingResolver("entitlements.export"))), &principal)
+		grantingResolver("runtime.plugins", "entitlements.export"))), &principal)
 	settings, err := platformconfig.LoadEntitlementExportSettings(context.Background(), pool)
 	if err != nil || len(settings.SCIMClientIDs) != 0 {
 		t.Fatalf("default = %v, %v; want no client", settings, err)
@@ -1138,7 +1149,7 @@ func TestDelegationSectionIsStoredOnlyOnceSaved(t *testing.T) {
 	principal := auth.User{ID: "7", Email: "operator@example.com"}
 	const target = "/admin/plugin_config_values/administration/delegation"
 	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
-		grantingResolver("configuration.governance"))), &principal)
+		grantingResolver("runtime.plugins", "configuration.governance"))), &principal)
 
 	settings, err := platformconfig.LoadDelegationSettings(context.Background(), pool)
 	if err != nil || settings.Stored || settings != platformconfig.DefaultDelegationSettings() {
@@ -1181,7 +1192,7 @@ INSERT INTO elitea_lifecycle.permission_trimming_observed VALUES
 	}
 	principal := auth.User{ID: "7", UserID: "7", Email: "operator@example.com"}
 	router := configRouter(admin.NewHandler(pool, admin.WithPermissionResolver(
-		grantingResolver("configuration.governance"))), &principal)
+		grantingResolver("runtime.plugins", "configuration.governance"))), &principal)
 	if recorder := configDo(t, router, http.MethodPut, "/admin/plugin_config_values/administration/worker_egress",
 		map[string]any{"values": map[string]any{"allowlist": []any{"kept.example"}}}); recorder.Code != http.StatusOK {
 		t.Fatalf("PUT = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())

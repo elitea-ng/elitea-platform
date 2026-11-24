@@ -1213,7 +1213,7 @@ export const getGetTracingStatusAdminUrl = () => {
 };
 
 /**
- * internal/api/v2/tracing/handler.go's StatusAdmin. Port of legacy status.py's AdminAPI (models.admin.tracing.view), gated here on the already-seeded "runtime.plugins" central permission instead — see the handler package's doc comment.
+ * internal/api/v2/tracing/handler.go's StatusAdmin. Port of legacy status.py's AdminAPI (models.admin.tracing.view), gated here on the "platform.operations.view" or the already-seeded "runtime.plugins" central permission instead — see the handler package's doc comment.
  * @summary Tracing ingest status and configuration (admin)
  */
 export const getTracingStatusAdmin = async (

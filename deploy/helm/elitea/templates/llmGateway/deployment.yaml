@@ -139,6 +139,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-llm-gateway.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.llmGateway.serviceAccount }}
       # §9.5: >=150s so in-flight LLM streams (up to ~120s) drain on rolling
       # deploys instead of being truncated. Rises together with the gateway's
       # srv.Shutdown() context (GATEWAY_SHUTDOWN_TIMEOUT).

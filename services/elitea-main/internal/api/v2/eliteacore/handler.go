@@ -45,6 +45,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/marketplace"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
@@ -75,7 +76,12 @@ type Handler struct {
 	memoryUsers        MemoryUserJournal
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
-	httpClient         *http.Client
+
+	// maintenanceState reads the maintenance window in place of pool for the
+	// platform_settings flag read (WithMaintenanceState); nil reads pool.
+	maintenanceState func(context.Context) (platformconfig.Maintenance, error)
+
+	httpClient *http.Client
 	// mcpEgressGuard pins every production MCP dial (Load Tools, metadata
 	// reads) to a resolved, checked public address. It is used only when no
 	// WithHTTPClient override is configured.
@@ -239,6 +245,15 @@ func WithMemoryUserJournal(journal MemoryUserJournal) Option {
 		if usable := cleanupjournal.UsableMemoryUserJournal(journal); usable != nil {
 			handler.memoryUsers = usable
 		}
+	}
+}
+
+// WithMaintenanceState reads the maintenance window through state instead of
+// the platform_settings rows of the pool, the same reader the maintenance gate
+// takes (api.RouterConfig.MaintenanceState). Nil keeps the pool read.
+func WithMaintenanceState(state func(context.Context) (platformconfig.Maintenance, error)) Option {
+	return func(handler *Handler) {
+		handler.maintenanceState = state
 	}
 }
 

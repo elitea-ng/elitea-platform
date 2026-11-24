@@ -30,10 +30,11 @@
  * 128-129`) is still read from `pipelineEditorStore` unchanged — that half
  * of the split already had a zustand home.
  */
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { FlowEditorConstants } from '../lib/flow-editor/constants';
 import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode, SetFlowEdges, SetFlowNodes, YamlPipelineDocumentRef } from '../lib/flow-editor/reactFlowTypes';
 
@@ -212,4 +213,52 @@ export function useFlowEditorLayoutVersionSync(args: UseFlowEditorLayoutVersionA
     onLayoutVersionChange(currentLayoutVersion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutVersion, nodesInitialized]);
+}
+
+export function isEmptyPipelineDocument(yamlJsonObject: YamlPipelineDocument): boolean {
+  const nodes = (yamlJsonObject as { readonly nodes?: readonly unknown[] }).nodes;
+  return !nodes?.filter(Boolean).length;
+}
+
+export function getVisibleFlowNodes(flowNodes: FlowNode[], isEmpty: boolean): FlowNode[] {
+  return isEmpty ? flowNodes.filter(node => node.type !== FlowEditorConstants.PipelineNodeTypes.End) : flowNodes;
+}
+
+export function getCanvasInteractionFlags(disabled: boolean, isLocked: boolean, isRunning: boolean, isEmpty: boolean) {
+  return { canEditCanvas: !disabled && !isLocked, canArrange: !disabled && !isRunning && !isEmpty };
+}
+
+export interface FlowEditorNodeSelectionState {
+  readonly selectedNodeId: string | null;
+  readonly isNodeDrawerOpen: boolean;
+  readonly handleSelectNode: (nextId: string | null) => void;
+  readonly handleCloseNodeDrawer: () => void;
+}
+
+/** Tracks single-node canvas selection and whether the 400px `FlowNodeConfigDrawer` is active (excluding `End` and `Ghost`). */
+export function useFlowEditorNodeSelection(
+  visibleFlowNodes: readonly FlowNode[],
+  setFlowNodes: SetFlowNodes,
+): FlowEditorNodeSelectionState {
+  const { selectedNodeId, isNodeDrawerOpen } = useMemo(() => {
+    const selected = visibleFlowNodes.filter(node => node.selected);
+    const single = selected.length === 1 ? selected[0] : undefined;
+    const isConfigurable = Boolean(
+      single?.type &&
+        single.type !== FlowEditorConstants.PipelineNodeTypes.End &&
+        single.type !== FlowEditorConstants.PipelineNodeTypes.Ghost,
+    );
+    return { selectedNodeId: single?.id ?? null, isNodeDrawerOpen: isConfigurable };
+  }, [visibleFlowNodes]);
+
+  const handleSelectNode = useCallback(
+    (nextId: string | null) => {
+      setFlowNodes(prevNodes => prevNodes.map(node => ({ ...node, selected: nextId !== null && node.id === nextId })));
+    },
+    [setFlowNodes],
+  );
+
+  const handleCloseNodeDrawer = useCallback(() => handleSelectNode(null), [handleSelectNode]);
+
+  return { selectedNodeId, isNodeDrawerOpen, handleSelectNode, handleCloseNodeDrawer };
 }

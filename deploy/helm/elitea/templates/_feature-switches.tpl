@@ -190,6 +190,18 @@ only one at a time.
 {{- if and $np.enabled $v.main.enabled (not $np.main.ingressFrom) (not $np.main.extraIngressFrom) (not $np.main.noExternalIngress) -}}
 {{- $out = append $out "networkPolicies.main.ingressFrom: an explicit decision about who may reach elitea-main:8080 — the ingress controller or Gateway API gateway, as NetworkPolicyPeer entries (or networkPolicies.main.noExternalIngress=true when only kubectl port-forward does)" -}}
 {{- end -}}
+{{- /* The egress policies of the worker and the LLM gateway (#2951, #2952):
+       templates/worker/networkpolicy.yaml, templates/llmGateway/networkpolicy.yaml. */ -}}
+{{- if or (include "elitea.netpol.workerPublicEgress" .) (include "elitea.netpol.gatewayPublicEgress" .) -}}
+{{- if not (include "elitea.netpol.clusterCidrs" . | fromJsonArray) -}}
+{{- $out = append $out "networkPolicies.clusterCIDRs: the cluster's pod and Service CIDRs (and its node range and control-plane endpoint when they are public addresses), e.g. [10.244.0.0/16, 10.96.0.0/12]. The worker's and the LLM gateway's public-internet egress rules except them; without them a cluster whose pods use public-range addresses would count as public (or set worker.networkPolicy.allowPublicEgress / llmGateway.networkPolicy.allowPublicEgress false)" -}}
+{{- end -}}
+{{- end -}}
+{{- if or (include "elitea.netpol.workerEgress" .) (include "elitea.netpol.gatewayEgress" .) -}}
+{{- if not $np.egressPeers.postgresql.to -}}
+{{- $out = append $out "networkPolicies.egressPeers.postgresql.to: where PostgreSQL is, as NetworkPolicyPeer entries, e.g. [{ipBlock: {cidr: 10.20.0.5/32}}] for a managed database or a namespaceSelector plus podSelector for one in the cluster. The worker's and the LLM gateway's egress policies admit only the destinations they name" -}}
+{{- end -}}
+{{- end -}}
 {{- /* The LLM gateway's postures: llmGateway/deployment.yaml. */ -}}
 {{- if $v.llmGateway.enabled -}}
 {{- if not (get ($v.llmGateway.env | default dict) "GATEWAY_SELF_LLM_ORIGINS") -}}

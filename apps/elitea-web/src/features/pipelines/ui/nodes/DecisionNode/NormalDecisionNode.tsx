@@ -19,13 +19,16 @@ import { useEdges, type NodeProps } from '@xyflow/react';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../../lib/flow-editor/constants';
+import { NODE_FIELD_KEYS } from '../../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import type { AiAssistantLlmSettings } from '../../../api/aiAssistantPredict';
 import type { FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
+import { NodeConfigSection, NodeFieldHeading } from '../../node-config-drawer/NodeConfigSection';
 import { AIAssistantInput } from '../../AIAssistantInput';
 import { CommonInterruptSettings } from '../../settings/CommonInterruptSettings';
+import { NodeSettings } from '../../settings/NodeSettings';
 import { InputSelect } from '../../select/InputSelect';
 import { CustomHandle } from '../CustomHandle';
 import { NodeCard } from '../BaseNode/NodeCard';
@@ -149,32 +152,46 @@ export const NormalDecisionNode = memo(function NormalDecisionNode(props: Normal
         />
       )}
     >
-      <InputSelect
-        id={id}
-        inputFieldName="input"
-        disabled={isRunningPipeline}
-      />
-      <AIAssistantInput
-        value={description}
-        disabled={isFieldsDisabled}
-        label={t('pipelines.flowEditor.decisionNode.description', 'Description')}
-        fieldName="description"
-        modelConfig={resolvedLlmSettings}
-        fieldBinding={{ name: 'description', id: 'description', onInput: onChangeDecisionDescription }}
-      />
-      <DecisionOutputs
-        id={id}
-        decisionOutput={decisionOutput}
-        onRemoveOutput={onRemoveOutput}
-        isRunningPipeline={isRunningPipeline}
-        disabled={disabled}
-      />
-      <CommonInterruptSettings
-        id={id}
-        showStructuredOutput={false}
-        type={FlowEditorConstants.PipelineNodeTypes.Decision}
-        disabled={isRunningPipeline}
-      />
+      <NodeConfigSection section="basic">
+        <AIAssistantInput
+          value={description}
+          disabled={isFieldsDisabled}
+          label={t('pipelines.flowEditor.decisionNode.description', 'Description')}
+          fieldName="description"
+          modelConfig={resolvedLlmSettings}
+          fieldBinding={{ name: 'description', id: 'description', onInput: onChangeDecisionDescription }}
+        />
+        <DecisionOutputs
+          id={id}
+          decisionOutput={decisionOutput}
+          onRemoveOutput={onRemoveOutput}
+          isRunningPipeline={isRunningPipeline}
+          disabled={disabled}
+        />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.decisionNode.inputLabel', 'Input')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Decision}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          inputFieldName="input"
+          disabled={isFieldsDisabled}
+        />
+        <CommonInterruptSettings
+          id={id}
+          showStructuredOutput={false}
+          type={FlowEditorConstants.PipelineNodeTypes.Decision}
+          disabled={isFieldsDisabled}
+        />
+        <NodeSettings
+          id={id}
+          type={FlowEditorConstants.PipelineNodeTypes.Decision}
+          disabled={isFieldsDisabled}
+        />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

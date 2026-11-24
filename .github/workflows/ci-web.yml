@@ -728,6 +728,12 @@ jobs:
         # Starlight); CI — Docs builds it, and the web image's docs stage
         # ships it at /docs/.
         run: npm run build
+      # The ELITEA desktop bundle the Tauri host embeds (dist-desktop). A web
+      # change no longer starts ci-desktop.yml's macOS host only to build it
+      # (scripts/ci/tier-paths.json `ci-desktop`): this step is that build,
+      # and the brand/sample one below is its second brand.
+      - name: Desktop bundle (ELITEA)
+        run: npm run build:desktop
       # Issue #426. This step used to ask whether lighthouserc.json existed and
       # print "lhci bundle budget pending" when it did not. Neither that file
       # nor .lighthouserc.json has ever been in the tree, so the step was a

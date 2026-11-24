@@ -143,6 +143,9 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 tokio-stream = { version = "0.1.19", features = ["net"] }
+# The `Service` trait the guarded hyper resolver implements (#2950); already
+# locked through hyper-util in every host.
+tower-service = "0.3.3"
 tracing = "0.1.44"
 # `subagents::message_ref::short_message_ref` reads a chat message id's
 # canonical uuid form (#1909). Already locked through both hosts.

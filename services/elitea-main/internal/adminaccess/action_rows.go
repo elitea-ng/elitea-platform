@@ -16,6 +16,10 @@ const ConfigurationValuesPattern = adminPrefix + "/plugin_config_values/administ
 // `action` of the body (AuthUsersAction in internal/api/v2/admin/users.go).
 const AuthUsersActionPattern = adminPrefix + "/auth_users/{mode}"
 
+// IdentityProviderSavePattern is the identity provider save, whose handler
+// classifies the save and applies the token rule itself (TokenRuleInHandler).
+const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
+
 // write is an entry with no danger: no reason, elevation `allow`, token
 // `allowed`.
 func write(method, pattern, permission string) Action {
@@ -33,8 +37,9 @@ func (a Action) critical(e Elevation) Action  { a.Danger = DangerCritical; a.Ele
 func (a Action) selected(s Selector) Action   { a.Selector = s; a.Name = s.Value; return a }
 
 // tokenAllowed lets a token call a critical action, with the written reason
-// ADR-0059 decision 7 requires. No entry uses it yet: story R1.2 declares the
-// identity trust exception with it.
+// ADR-0059 decision 7 requires. The token rule (token_rule.go) still admits
+// only an inherit token of a standing global administrator. The identity
+// trust entries use it (R1.2b); R4.2 turns them to never.
 func (a Action) tokenAllowed(reason string) Action {
 	a.Token, a.TokenReason = TokenAllowed, reason
 	return a
@@ -77,12 +82,30 @@ func actionRows() []Action {
 			a.outcome(ClassifyRetention, OutcomeLengthen),
 		}
 	}
-	governanceRow := func(a Action) []Action {
+	// A governance row write: the route gate admits llm.policy.manage or
+	// llm.guardrails.manage (or configuration.governance), and the handler
+	// decides by the kind of the row (internal/api/gateway/gates.go).
+	//
+	// The `other` outcome names llm.policy.manage, the narrowest name that
+	// writes any of its kinds. It is an upper bound: the handler narrows it
+	// further, and the egress allowlist, the MCP allowlist, the credential
+	// policy and the budget alert row still take configuration.governance
+	// alone. A reader of this table that decides admission must not treat
+	// llm.policy.manage as enough for those kinds; splitting the outcome per
+	// kind is a change to ClassifyGovernanceRow.
+	governanceRow := func(method, pattern string) []Action {
 		return []Action{
-			a.outcome(ClassifyGovernanceRow, OutcomeGuardrail).critical(allow),
-			a.outcome(ClassifyGovernanceRow, OutcomeOther),
+			write(method, pattern, LLMGuardrailsManage).outcome(ClassifyGovernanceRow, OutcomeGuardrail).critical(allow),
+			write(method, pattern, LLMPolicyManage).outcome(ClassifyGovernanceRow, OutcomeOther),
 		}
 	}
+
+	// The identity trust repair path (ADR-0059 decision 5, "Emergency
+	// mechanisms that exist today"): an automation that holds an inherit
+	// token of a standing global administrator can still repair a broken
+	// sign-in until the sunset of decision 7 (R4.2 removes the exception).
+	const trustRepair = "identity trust repair path until the sunset: an inherit token of a standing " +
+		"global administrator (ADR-0059 decision 5)"
 
 	rows := []Action{
 		// People and access: users.
@@ -116,30 +139,41 @@ func actionRows() []Action {
 		// every holder.
 		del(admin("/roles/{scope}/{mode}"), ConfigurationRolesRolesDelete).critical(deny),
 
-		// People and access: SCIM.
-		post(admin("/scim_clients/administration"), AdminAuthUsersSuperAdmin).critical(sealed),
-		post(admin("/scim_clients/administration/{id}/rotate"), AdminAuthUsersSuperAdmin).critical(sealed),
-		post(admin("/scim_clients/administration/{id}/revoke"), AdminAuthUsers).dangerous(),
-		del(admin("/scim_clients/administration/{id}"), AdminAuthUsersSuperAdmin).dangerous(),
-		post(admin("/scim_group_bindings/administration"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
-		put(admin("/scim_group_bindings/administration/{id}"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
-		del(admin("/scim_group_bindings/administration/{id}"), ConfigurationRolesUserProjectPermsEdit).critical(deny),
+		// People and access: SCIM. Split by action (R0.4c): minting, rotating
+		// and deleting a client are trust actions (identity.sso.trust.manage or
+		// super_admin, in the handler); a revoke and the bindings are settings.
+		// A binding write also meets the role rule of #2555.
+		post(admin("/scim_clients/administration"), IdentitySSOTrustManage).critical(sealed).tokenAllowed(trustRepair),
+		post(admin("/scim_clients/administration/{id}/rotate"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
+		post(admin("/scim_clients/administration/{id}/revoke"), IdentitySSOSettingsManage).dangerous(),
+		del(admin("/scim_clients/administration/{id}"), IdentitySSOTrustManage).dangerous(),
+		post(admin("/scim_group_bindings/administration"), IdentitySSOSettingsManage).critical(deny),
+		put(admin("/scim_group_bindings/administration/{id}"), IdentitySSOSettingsManage).critical(deny),
+		del(admin("/scim_group_bindings/administration/{id}"), IdentitySSOSettingsManage).critical(deny),
 
 		// Security: identity providers. The PUT is split by the fields it
-		// changes; story R0.4c wires the split at the gate. A trust change and
-		// turning a provider off need super_admin in the handler today (issue
-		// 2558); the delete needs only the route gate until R0.4c moves it to
-		// the trust permission. The entries name what each requires today.
-		put(admin("/identity_providers/administration/{key}"), AdminAuthUsersSuperAdmin).
-			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed),
-		put(admin("/identity_providers/administration/{key}"), AdminAuthUsersSuperAdmin).
-			outcome(ClassifyIdentityProvider, OutcomeDisable).critical(flag),
-		put(admin("/identity_providers/administration/{key}"), RuntimePlugins).
+		// changes (R0.4c): a trust change and turning a provider off need
+		// identity.sso.trust.manage or super_admin in the handler (issue 2558),
+		// as do the delete and the re-bind; the rest is settings.
+		//
+		// The trust entries here and above name identity.sso.trust.manage.
+		// The route gate also admits the settings name and the legacy name, so
+		// that the handler (requireIdentityTrust) writes the refusal; the
+		// handler accepts identity.sso.trust.manage or
+		// admin.auth.users.super_admin, which only super_admin holds.
+		put(IdentityProviderSavePattern, IdentitySSOTrustManage).
+			outcome(ClassifyIdentityProvider, OutcomeTrust).critical(sealed).tokenAllowed(trustRepair),
+		put(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).
+			outcome(ClassifyIdentityProvider, OutcomeDisable).critical(flag).tokenAllowed(trustRepair),
+		put(admin("/identity_providers/administration/{key}"), IdentitySSOSettingsManage).
 			outcome(ClassifyIdentityProvider, OutcomeSettings).elevation(flag),
-		del(admin("/identity_providers/administration/{key}"), RuntimePlugins).critical(sealed),
+		del(admin("/identity_providers/administration/{key}"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
 		// Moves linked accounts onto the provider's issuer: the identity
 		// mapping.
-		post(admin("/identity_providers/administration/{key}/rebind"), AdminAuthUsersSuperAdmin).critical(sealed),
+		post(admin("/identity_providers/administration/{key}/rebind"), IdentitySSOTrustManage).critical(sealed).
+			tokenAllowed(trustRepair),
 
 		// Security: retention and legal holds.
 		post(admin("/legal_holds"), LegalHoldManage),
@@ -152,10 +186,25 @@ func actionRows() []Action {
 		del("/api/v2/projects/project/{mode}/{projectID}", ProjectsProjectDelete).critical(allow),
 		put(admin("/project_suspend/{mode}/{projectID}"), ProjectsProjectsEdit),
 		put(admin("/project_cloud_executor/administration/{projectID}"), ProjectsProjectsEdit).elevation(flag),
-		post(admin("/users/administration/{projectID}"), ConfigurationUsersUsersCreate).elevation(flag),
-		put(admin("/users/administration/{projectID}"), ConfigurationUsersUsersEdit).elevation(flag),
+		// The central member routes (ADR-0059 R0.6a): the gate accepts
+		// projects.members.manage beside each legacy name.
+		post(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
+		put(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
+		del(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
 		post(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersCreate).elevation(flag),
 		put(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersEdit).elevation(flag),
+		// The `{mode}` pattern with mode `administration` reaches the static
+		// central removal route above (R0.6a).
+		del(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersDelete).elevation(flag),
+		// A guarded project setting of any project through the central
+		// override (ADR-0059 R0.6b): only the allowlisted pairs of
+		// central_override.go. Flagged under an elevation (decision 5).
+		post("/api/v2/configurations/configurations/{projectID}", ProjectsSettingsManage).elevation(flag),
+		post("/api/v2/configurations/configurations/{mode}/{projectID}", ProjectsSettingsManage).elevation(flag),
+		put("/api/v2/configurations/configuration/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		put("/api/v2/configurations/configuration/{mode}/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		del("/api/v2/configurations/configuration/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		del("/api/v2/configurations/configuration/{mode}/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
 		put(admin("/moderation_status/administration"), AdminModerationEdit),
 
 		// Models and spend: budgets.
@@ -164,28 +213,32 @@ func actionRows() []Action {
 		put(core("/user_budget/administration/{projectID}/user_budget/{userID}"), ModelsAdminProjectBudgetsEdit),
 		del(core("/user_budget/administration/{projectID}/user_budget/{userID}"), ModelsAdminProjectBudgetsEdit),
 
-		// Models and spend: the gateway.
+		// Models and spend: the gateway (ADR-0059 R0.3). Each route's gate
+		// accepts the narrow name below or configuration.governance.
 		// Creating a global provider sets its endpoint, credential and keyless
 		// identity, so it is critical like changing them.
-		post(admin("/gateway/providers"), ConfigurationGovernance).critical(flag),
-		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
+		post(admin("/gateway/providers"), LLMCatalogueManage).critical(flag),
+		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeRoute).critical(flag),
-		put(admin("/gateway/providers/{configID}"), ConfigurationGovernance).
+		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeSettings),
-		del(admin("/gateway/providers/{configID}"), ConfigurationGovernance).dangerous(),
-		post(admin("/gateway/providers/{configID}/check"), ConfigurationGovernance),
-		post(admin("/gateway/providers/{configID}/models"), ConfigurationGovernance),
-		post(admin("/gateway/providers/{configID}/revalidate"), ConfigurationGovernance),
-		post(admin("/gateway/platform_models"), ConfigurationGovernance),
-		put(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance),
-		del(admin("/gateway/platform_models/{configID}"), ConfigurationGovernance).dangerous(),
-		put(admin("/gateway/default_model"), ConfigurationGovernance),
-		del(admin("/gateway/default_model"), ConfigurationGovernance),
-		put(admin("/gateway/models"), ConfigurationGovernance),
-		del(admin("/gateway/models/{id}"), ConfigurationGovernance),
-		put(admin("/gateway/metered-prices"), ConfigurationGovernance),
-		put(admin("/gateway/budget-alerts"), ConfigurationGovernance),
-		post(admin("/gateway/governance/validate-cel"), ConfigurationGovernance),
+		del(admin("/gateway/providers/{configID}"), LLMCatalogueManage).dangerous(),
+		// check, revalidate and the provider model listing call out with the
+		// stored credential, so they take the manage name, not the view.
+		post(admin("/gateway/providers/{configID}/check"), LLMCatalogueManage),
+		post(admin("/gateway/providers/{configID}/models"), LLMCatalogueManage),
+		post(admin("/gateway/providers/{configID}/revalidate"), LLMCatalogueManage),
+		post(admin("/gateway/platform_models"), LLMCatalogueManage),
+		put(admin("/gateway/platform_models/{configID}"), LLMCatalogueManage),
+		del(admin("/gateway/platform_models/{configID}"), LLMCatalogueManage).dangerous(),
+		put(admin("/gateway/default_model"), LLMCatalogueManage),
+		del(admin("/gateway/default_model"), LLMCatalogueManage),
+		put(admin("/gateway/models"), LLMCatalogueManage),
+		del(admin("/gateway/models/{id}"), LLMCatalogueManage),
+		put(admin("/gateway/metered-prices"), LLMCatalogueManage),
+		put(admin("/gateway/budget-alerts"), LLMAlertsManage),
+		// Changes nothing: a read behind the policy view gate.
+		post(admin("/gateway/governance/validate-cel"), LLMPolicyView),
 
 		// Agents and governance.
 		post(admin("/execution_suspensions"), SafetySuspend).
@@ -202,8 +255,8 @@ func actionRows() []Action {
 		put(admin("/toolkit_types/administration/{type}"), ToolkitCatalogueTypeManage),
 		put(admin("/toolkit_types/administration/{type}/projects/{projectID}"), ToolkitCatalogueTypeManage),
 		del(admin("/toolkit_types/administration/{type}/projects/{projectID}"), ToolkitCatalogueTypeManage),
-		put(admin("/mcp_prebuilt_servers/administration/{key}"), RuntimePlugins),
-		del(admin("/mcp_prebuilt_servers/administration/{key}"), RuntimePlugins),
+		put(admin("/mcp_prebuilt_servers/administration/{key}"), MCPCatalogueManage),
+		del(admin("/mcp_prebuilt_servers/administration/{key}"), MCPCatalogueManage),
 
 		// Agents and governance: agent identities (mounted with the
 		// governance flag on).
@@ -245,12 +298,12 @@ func actionRows() []Action {
 		post(admin("/branding/package/administration"), ConfigurationBranding),
 		post(admin("/branding/package/administration/versions/{digest}/restore"), ConfigurationBranding),
 		post(admin("/branding/test_email/administration"), ConfigurationBranding),
-		put(admin("/email/administration"), RuntimePlugins).elevation(deny),
-		post(admin("/email/test/administration"), RuntimePlugins),
+		put(admin("/email/administration"), PlatformEmailManage).elevation(deny),
+		post(admin("/email/test/administration"), PlatformEmailManage),
 		// Answers 405: maintenance is authored in the Maintenance section.
-		put(admin("/maintenance/{mode}"), RuntimePlugins),
-		post(admin("/background_jobs/administration/pat_expiry_notices:run"), RuntimePlugins),
-		post(admin("/background_jobs/administration/{kind}/{jobID}:cancel"), RuntimePlugins),
+		put(admin("/maintenance/{mode}"), PlatformMaintenanceManage),
+		post(admin("/background_jobs/administration/pat_expiry_notices:run"), PlatformOperationsManage),
+		post(admin("/background_jobs/administration/{kind}/{jobID}:cancel"), PlatformOperationsManage),
 		put(admin("/platform_routines/administration/{id}"), ConfigurationSchedulingSchedulesEdit),
 		put(admin("/native_clients/administration/{clientID}"), ConfigurationNativeClients),
 		del(admin("/native_clients/administration/{clientID}"), ConfigurationNativeClients),
@@ -260,6 +313,10 @@ func actionRows() []Action {
 		post(admin("/microsoft_oauth_apps/{id}/disable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/enable"), ConfigurationMicrosoftApps),
 		post(admin("/microsoft_oauth_apps/{id}/test"), ConfigurationMicrosoftApps),
+		// Feature or delist a Marketplace listing: the moderation check in
+		// the handler (eliteacore holdsModerationPermission), behind the
+		// project's agent list gate. The surface reaches it since #2925.
+		write(http.MethodPatch, core("/marketplace_listing/prompt_lib/{projectID}/{listingID}"), RuntimeAdminPublishedAgents),
 		post(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		del(core("/register_descriptor/{projectID}"), ProviderHubDescriptorRegister),
 		post(core("/register_descriptor/{projectID}/activate"), ProviderHubDescriptorActivate),
@@ -275,9 +332,9 @@ func actionRows() []Action {
 	// Deleting an override falls back to the platform maximum, which can be
 	// shorter.
 	rows = append(rows, retention(del(admin("/retention/policies/{dataClass}/projects/{projectID}"), RetentionManage))...)
-	rows = append(rows, governanceRow(post(admin("/gateway/governance"), ConfigurationGovernance))...)
-	rows = append(rows, governanceRow(put(admin("/gateway/governance/{id}"), ConfigurationGovernance))...)
-	rows = append(rows, governanceRow(del(admin("/gateway/governance/{id}"), ConfigurationGovernance))...)
+	rows = append(rows, governanceRow(http.MethodPost, admin("/gateway/governance"))...)
+	rows = append(rows, governanceRow(http.MethodPut, admin("/gateway/governance/{id}"))...)
+	rows = append(rows, governanceRow(http.MethodDelete, admin("/gateway/governance/{id}"))...)
 
 	// The Configuration sections.
 	maintenance := section("maintenance", RuntimePlugins)

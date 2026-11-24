@@ -243,6 +243,19 @@ SQL
   stack compose run --rm --no-deps elitea-migrate -all-tenants
   # PATs for the new personas (the same idempotent block `seed-runtime` runs).
   stack seed-runtime
+  # The suite drives administration routes (the guardrails policy, the
+  # credential approvals) with each admin persona's PAT. A token resolves no
+  # administration permission unless its row says so (ADR-0059 R1.2a, shared
+  # 0265: a new token is `none`), so the admin personas' tokens are
+  # `inherit`, the value an upgrade gives an administrator's existing token.
+  echo "→ Marking the admin personas' PATs inherit…"
+  stack compose exec -T postgres psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
+UPDATE public.auth_core__token AS t
+SET admin_access = 'inherit', admin_scopes = '{}'
+FROM public.auth_core__user AS u
+WHERE t.user_id = u.id AND t.uuid IS NOT NULL
+  AND u.email IN ('e2e-admin@autotest.local', 'e2e-gov-approver@autotest.local');
+SQL
   # X-SECRET backfill for the new projects runs at elitea-main start.
   stack compose restart elitea-main
   wait_healthy elitea-main

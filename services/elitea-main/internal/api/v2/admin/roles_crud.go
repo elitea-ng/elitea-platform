@@ -88,7 +88,7 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -281,6 +281,13 @@ func validateRoleName(name string) error {
 				"of each row, so a role by that name would hide every permission name",
 		}
 	}
+	if strings.EqualFold(name, adminaccess.ReservedRoleName) {
+		return matrixError{
+			status: http.StatusBadRequest,
+			message: strconv.Quote(name) + " is reserved: it names the break-glass section " +
+				"(ADR-0059), so no role can use it",
+		}
+	}
 	if !roleNamePattern.MatchString(name) {
 		return matrixError{
 			status: http.StatusBadRequest,
@@ -317,27 +324,27 @@ func refuseCodeNamed(name, what string) error {
 // has been seen once, each call first asks whether it exists, because reading
 // an absent relation would abort the caller's transaction. Once seen it is
 // never dropped, so the steady state is the one read.
-func (h *Handler) seededRoles(ctx context.Context, q rolepolicy.Querier, mode string, names []string) ([]string, error) {
+func (h *Handler) seededRoles(ctx context.Context, q adminaccess.Querier, mode string, names []string) ([]string, error) {
+	return h.seededRolesMarked(ctx, q, mode, names, "")
+}
+
+// seededRolesMarked is seededRoles narrowed to the seed rows of one marker;
+// "" matches every marker.
+func (h *Handler) seededRolesMarked(
+	ctx context.Context, q adminaccess.Querier, mode string, names []string, marker adminaccess.SeedMarker,
+) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
-	if !h.seedTable.Load() {
-		var present bool
-		if err := q.QueryRow(ctx,
-			`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
-			return nil, fmt.Errorf("look for the built-in role record: %w", err)
-		}
-		if !present {
-			return nil, nil
-		}
-		h.seedTable.Store(true)
+	if present, err := h.seedRecordPresent(ctx, q); err != nil || !present {
+		return nil, err
 	}
 	rows, err := q.Query(ctx, `
 SELECT role.name
 FROM elitea_auth.admin_role_seeds AS seed
 JOIN public.auth_core__role AS role ON role.id = seed.role_id
-WHERE role.mode = $1 AND role.name = ANY($2::text[])
-ORDER BY role.name`, mode, names)
+WHERE role.mode = $1 AND role.name = ANY($2::text[]) AND ($3 = '' OR seed.marker = $3)
+ORDER BY role.name`, mode, names, string(marker))
 	if err != nil {
 		return nil, fmt.Errorf("read the built-in roles: %w", err)
 	}
@@ -348,9 +355,28 @@ ORDER BY role.name`, mode, names)
 	return seeded, nil
 }
 
-// refuseSeeded refuses a write to a built-in role. The stable code of the
-// permission-edit refusal (`role_set_locked`, 403) is story R0.8a.
-func (h *Handler) refuseSeeded(ctx context.Context, q rolepolicy.Querier, target roleTarget, name, what string) error {
+// seedRecordPresent reports whether elitea_auth.admin_role_seeds exists (see
+// seededRoles). Reading an absent relation would abort the caller's
+// transaction, so this asks first until the table has been seen once.
+func (h *Handler) seedRecordPresent(ctx context.Context, q adminaccess.Querier) (bool, error) {
+	if h.seedTable.Load() {
+		return true, nil
+	}
+	var present bool
+	if err := q.QueryRow(ctx,
+		`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
+		return false, fmt.Errorf("look for the built-in role record: %w", err)
+	}
+	if present {
+		h.seedTable.Store(true)
+	}
+	return present, nil
+}
+
+// refuseSeeded refuses a rename or a delete of a built-in role (409). The edit
+// of its set is refused by refuseSeededCells (roles.go) with the 403
+// adminaccess.CodeSetLocked.
+func (h *Handler) refuseSeeded(ctx context.Context, q adminaccess.Querier, target roleTarget, name, what string) error {
 	if !target.central() {
 		return nil
 	}
@@ -408,20 +434,25 @@ func (h *Handler) AdminRoleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.insertRole(r.Context(), target, body.Name); err != nil {
+	if err := h.insertRole(r, target, body.Name); err != nil {
 		writeMatrixError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "name": body.Name})
 }
 
-func (h *Handler) insertRole(ctx context.Context, target roleTarget, name string) error {
-	var err error
+func (h *Handler) insertRole(r *http.Request, target roleTarget, name string) error {
+	ctx := r.Context()
+	transaction, err := h.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin role create: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
 	if target.central() {
-		_, err = h.pool.Exec(ctx,
+		_, err = transaction.Exec(ctx,
 			`INSERT INTO public.auth_core__role (name, mode) VALUES ($1, $2)`, name, target.mode)
 	} else {
-		_, err = h.pool.Exec(ctx,
+		_, err = transaction.Exec(ctx,
 			`INSERT INTO public.auth_core__project_role (project_id, name) VALUES ($1, $2)`,
 			target.projectID, name)
 	}
@@ -434,7 +465,44 @@ func (h *Handler) insertRole(ctx context.Context, target roleTarget, name string
 	if err != nil {
 		return fmt.Errorf("create role: %w", err)
 	}
+	// A new role holds nothing (the body has no permission field): its set
+	// after is empty (ADR-0059 R1.5).
+	if err := h.appendAccessChange(ctx, transaction, r,
+		roleLifecycleChange(target, name, securityaudit.AccessRoleCreated, nil)); err != nil {
+		return fmt.Errorf("record role create: %w", err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit role create: %w", err)
+	}
 	return nil
+}
+
+// roleLifecycleChange is the role_created or role_deleted event of a role:
+// a central role is "<mode>:<name>" on the platform partition, a project role
+// "<project>:<name>" on the project's. permissions is the set the deleted
+// role held (empty for a created one).
+// roleDeleteProjectCopiesField is the Fields value of a role_deleted event
+// whose delete also removed the same-named project roles of every project.
+const roleDeleteProjectCopiesField = "project_role_copies"
+
+func roleLifecycleChange(
+	target roleTarget, name string, kind securityaudit.AccessChangeKind, permissions []string,
+) securityaudit.AdminAccessChanged {
+	change := securityaudit.AdminAccessChanged{
+		SubjectType: "role",
+		SubjectID:   target.mode + ":" + name,
+		Change:      securityaudit.AccessChange{Kind: kind, Mode: target.mode},
+	}
+	if kind == securityaudit.AccessRoleDeleted {
+		change.Change.Before = sortedSet(permissions)
+	}
+	if !target.central() {
+		change.SubjectType = "project_role"
+		change.SubjectID = strconv.Itoa(target.projectID) + ":" + name
+		change.TenantProjectID = int64(target.projectID)
+		change.Change.Mode = ""
+	}
+	return change
 }
 
 /* ── rename ────────────────────────────────────────────────────────────── */
@@ -502,11 +570,11 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 	// SAME NAME. So the rename runs the effect guard of the no-escalation rule
 	// (issue 2488). An administration-plane rename cannot: grants and
 	// assignments follow the role id.
-	var caller *rolepolicy.Caller
-	if !target.central() || !rolepolicy.AdministrationPlane(target.mode) {
-		resolved, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	var caller *adminaccess.Caller
+	if !target.central() || !adminaccess.AdministrationPlane(target.mode) {
+		resolved, refusal := adminaccess.ResolveCaller(r, h.resolver)
 		if refusal != nil {
-			rolepolicy.Write(w, r, refusal)
+			adminaccess.Write(w, r, refusal)
 			return
 		}
 		caller = &resolved
@@ -520,7 +588,7 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) renameRole(
-	ctx context.Context, target roleTarget, name, newName string, caller *rolepolicy.Caller,
+	ctx context.Context, target roleTarget, name, newName string, caller *adminaccess.Caller,
 ) (projectsRenamed int64, err error) {
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -528,9 +596,9 @@ func (h *Handler) renameRole(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	var guard *rolepolicy.SelfGuard
+	var guard *adminaccess.SelfGuard
 	if caller != nil {
-		if guard, err = rolepolicy.BeginSelfGuard(ctx, transaction, *caller); err != nil {
+		if guard, err = adminaccess.BeginSelfGuard(ctx, transaction, *caller); err != nil {
 			return 0, err
 		}
 	}
@@ -633,7 +701,7 @@ func (h *Handler) AdminRoleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	removed, err := h.deleteRole(r.Context(), target, body.Name)
+	removed, err := h.deleteRole(r, target, body.Name)
 	if err != nil {
 		var assigned roleInUseError
 		if errors.As(err, &assigned) {
@@ -665,8 +733,9 @@ func (e roleInUseError) Error() string {
 }
 
 func (h *Handler) deleteRole(
-	ctx context.Context, target roleTarget, name string,
+	r *http.Request, target roleTarget, name string,
 ) (projectRolesRemoved int64, err error) {
+	ctx := r.Context()
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin role delete: %w", err)
@@ -683,6 +752,16 @@ func (h *Handler) deleteRole(
 	}
 	if members > 0 {
 		return 0, roleInUseError{name: name, where: target.describe(), members: members}
+	}
+	// The set the role held, for its role_deleted event (ADR-0059 R1.5).
+	// Nobody holds the role (counted above), so its set is all it takes away.
+	scopeArg := any(target.mode)
+	if !target.central() {
+		scopeArg = target.projectID
+	}
+	held, err := roleSet(ctx, transaction, target.scope, scopeArg, name)
+	if err != nil {
+		return 0, err
 	}
 
 	var tag pgconn.CommandTag
@@ -726,6 +805,15 @@ func (h *Handler) deleteRole(
 		projectRolesRemoved = copyTag.RowsAffected()
 	}
 
+	deleted := roleLifecycleChange(target, name, securityaudit.AccessRoleDeleted, held)
+	if projectRolesRemoved > 0 {
+		// The same-named project roles went with it, with their permission
+		// rows (none had a member: counted above).
+		deleted.Change.Fields = []string{roleDeleteProjectCopiesField}
+	}
+	if err := h.appendAccessChange(ctx, transaction, r, deleted); err != nil {
+		return 0, fmt.Errorf("record role delete: %w", err)
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit role delete: %w", err)
 	}

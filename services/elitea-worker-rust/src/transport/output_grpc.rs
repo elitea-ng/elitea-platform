@@ -3478,6 +3478,7 @@ pub(crate) mod tests {
                                 crate::protocol::elitea::runtime::v1::WorkerEgressModeV1::Allowlist
                                     as i32,
                             allow: vec!["api.example.com".to_owned()],
+                            private_allow: Vec::new(),
                         },
                     ),
                     ..Default::default()

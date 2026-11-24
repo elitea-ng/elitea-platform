@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -168,7 +169,7 @@ func RequireResolvedMembershipPermissions(
 	requiredSet := permissionSet(required)
 
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return markAdministration(mode, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := auth.UserFromContext(r.Context())
 			if !ok {
 				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
@@ -177,7 +178,7 @@ func RequireResolvedMembershipPermissions(
 			// Fail closed, exactly as RequireResolvedPermissionsForProject
 			// does: a route composed without a resolver refuses everyone
 			// rather than running ungated.
-			if resolver == nil {
+			if resolver == nil || nativeAtAdministrationGate(user, mode) {
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
@@ -195,7 +196,7 @@ func RequireResolvedMembershipPermissions(
 			user.UserID = strconv.FormatInt(resolution.UserID, 10)
 			ctx := auth.ContextWithUser(r.Context(), user)
 			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+		}))
 	}
 }
 
@@ -218,7 +219,7 @@ func RequireResolvedPermissionsForProject(
 	requiredSet := permissionSet(required)
 
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return markAdministration(mode, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := auth.UserFromContext(r.Context())
 			if !ok {
 				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
@@ -231,6 +232,10 @@ func RequireResolvedPermissionsForProject(
 
 			resolvedProjectID, validProjectID := projectID(r)
 			if !validProjectID {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+			if nativeAtAdministrationGate(user, mode) {
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
@@ -256,8 +261,81 @@ func RequireResolvedPermissionsForProject(
 				mode: mode, projectID: resolvedProjectID, permissions: append([]string(nil), resolution.Permissions...),
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
-		})
+		}))
 	}
+}
+
+// administrationGate is the handler an administration-mode route gate of this
+// package wraps its route in. The type is the mark IsAdministrationGate reads:
+// the maintenance gate lets a holder of any administration permission through
+// to a route behind one, and the route gate decides (ADR-0059 R0.4b).
+type administrationGate struct{ http.Handler }
+
+// markAdministration wraps h in the mark when mode is the administration mode.
+func markAdministration(mode string, h http.Handler) http.Handler {
+	if isAdministrationMode(mode) {
+		return administrationGate{h}
+	}
+	return h
+}
+
+func isAdministrationMode(mode string) bool {
+	return strings.EqualFold(strings.TrimSpace(mode), auth.PermissionModeAdministration)
+}
+
+// IsAdministrationGated reports whether h is a handler an administration-mode
+// route gate of this package built, or one MarkAdministrationRoute marked.
+func IsAdministrationGated(h http.Handler) bool {
+	_, ok := h.(administrationGate)
+	return ok
+}
+
+// MarkAdministrationRoute marks a route whose administration-mode check is in
+// its handler, so that the maintenance gate treats it like a route behind an
+// administration gate (ADR-0059 R0.4b). It decides nothing. Use it only on a
+// route whose handler refuses every caller its administration check refuses:
+// a holder of any administration permission reaches the handler during a
+// window.
+func MarkAdministrationRoute(next http.Handler) http.Handler { return administrationGate{next} }
+
+// ModeGatedEndpoint is an endpoint whose {mode} path segment selects its gate
+// at request time, so no route-level middleware shows it (the secrets routes
+// serve the project vault and the global vault on one route). The router asks
+// it, with the {mode} of the request, whether an administration-mode route
+// gate decides that request.
+type ModeGatedEndpoint interface {
+	AdministrationGated(mode string) bool
+}
+
+// IsAdministrationGate reports whether mw is an administration-mode route gate
+// of this package: RequireCentralPermissions, RequireResolvedPermissions,
+// RequireResolvedPermissionsForProject or RequireResolvedMembershipPermissions
+// built for the administration mode. It wraps a handler that serves nothing to
+// read the mark, so call it on middleware, never per request.
+//
+// The router calls it once for each middleware of each route at start-up, as
+// chi already wraps each inline middleware once per route. That holds only
+// while wrapping is cheap: every middleware of the router builds its state
+// in its constructor and allocates nothing but the returned handler when it
+// wraps (audited for R0.4b: RequestID, cors, OtelMiddleware, the JSON
+// compressor, Auth, Audit, Maintenance and the gates of this file).
+func IsAdministrationGate(mw func(http.Handler) http.Handler) bool {
+	if mw == nil {
+		return false
+	}
+	return IsAdministrationGated(mw(http.NotFoundHandler()))
+}
+
+// nativeAtAdministrationGate reports a native device session (desktop,
+// mobile) at an administration-mode ROUTE gate. No such gate admits one
+// (ADR-0059 decision 7, "Native sessions"): the two permissions a native
+// session keeps (registry rows marked native_client) serve the two
+// in-application checks that call the resolver themselves, the maintenance
+// bypass and Marketplace moderation. Without this, `runtime.plugins`, a legacy
+// name many administration routes still accept, would open those routes to a
+// stolen desktop refresh token.
+func nativeAtAdministrationGate(user auth.User, mode string) bool {
+	return user.CredentialKind == auth.CredentialKindNative && isAdministrationMode(mode)
 }
 
 type resolvedProjectPermissionsKey struct{}

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { check, checkDesktopPackage, checkGoDuplicates, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
+import { check, checkDesktopPackage, checkGovernedConformance, GOVERNED_MUST_REACH, checkGoDuplicates, checkLoadGateMigrations, LOADGATE_MIGRATIONS, checkWebUnitSuite, GO_RUNS, load, main, DESKTOP_PACKAGE_PATHS, WEB_COVERAGE_RUNS, DRAFT_CONDITION, FAST_GATE_CONDITION, GATE_DRAFT_SKIP, MINIMUM_CALL_JOBS } from "./check-tiering.mjs";
 
 const call = (id, extra = {}) => ({ needs: ["changes"], if: `fromJSON(needs.changes.outputs.run)['${id}']`, uses: `./.github/workflows/${id}.yml`, ...extra });
 const heavyCall = (id) =>
@@ -281,4 +281,52 @@ test("the repository passes", () => {
   const errors = [...check(model), ...checkDesktopPackage(model)];
   assert.deepEqual(errors, []);
   assert.equal(main({ out: () => {}, err: () => {} }), 0);
+});
+
+test("the load gate starts on exactly the migrations that name the publish tables (#2940)", () => {
+  const dir = LOADGATE_MIGRATIONS;
+  const migrations = {
+    // Mentions a publish table only in comments: not a publish migration.
+    "0001_auth.sql": "-- buckets of time\nALTER TABLE elitea_auth.users ADD COLUMN x int; /* not elitea_storage.buckets */",
+    "0100_workspace.sql": "CREATE INDEX ON elitea_runtime.workspace_segments (seq);",
+  };
+  const paths = [".github/workflows/ci-handoff-loadgate.yml", `${dir}/0100_workspace.sql`];
+  const tiers = (list) => ({ jobs: { "ci-handoff-loadgate": { tier: "heavy", paths: list } } });
+  assert.deepEqual(checkLoadGateMigrations(tiers(paths), migrations), []);
+  // A new migration on a publish table that the filter misses is refused, in
+  // any spelling of the table: qualified, after SET search_path, quoted.
+  for (const sql of [
+    "ALTER TABLE elitea_storage.transfer_grants ADD COLUMN y int;",
+    "SET search_path = elitea_runtime;\nALTER TABLE workspace_refs ADD COLUMN y int;",
+    'CREATE TRIGGER t BEFORE INSERT ON elitea_storage."Buckets" FOR EACH ROW EXECUTE FUNCTION f();',
+  ]) {
+    has(checkLoadGateMigrations(tiers(paths), { ...migrations, "0200_new.sql": sql }), `${dir}/0200_new.sql names a table of the handoff publish path`);
+  }
+  // Any wildcard that reaches every shared migration is the old filter back.
+  for (const wildcard of [`${dir}/**`, "services/elitea-main/migrations/**", "services/elitea-main/**", "**"]) {
+    has(checkLoadGateMigrations(tiers([...paths, wildcard]), migrations), "wildcard");
+  }
+  // A listed file that names no publish table, or no longer exists, is refused.
+  has(checkLoadGateMigrations(tiers([...paths, `${dir}/0001_auth.sql`]), migrations), "names no table of the publish path");
+  has(checkLoadGateMigrations(tiers([...paths, `${dir}/0999_gone.sql`]), migrations), "does not exist");
+  // A scan that finds nothing fails, and so does an empty or missing list.
+  has(checkLoadGateMigrations(tiers(paths), { "0001_auth.sql": migrations["0001_auth.sql"] }), "the scan stopped finding them");
+  has(checkLoadGateMigrations(tiers([]), migrations), "has no paths list");
+  has(checkLoadGateMigrations({ jobs: {} }, migrations), "has no paths list");
+});
+
+test("the repository's load gate filter is exact", () => {
+  const model = load();
+  assert.deepEqual(checkLoadGateMigrations(model.tiers, model.migrations), []);
+});
+
+test("ci-governed-conformance: the worker's egress, governed and MCP code and the governed compose file start it (#2981)", () => {
+  assert.deepEqual(checkGovernedConformance(load().tiers), []);
+  // The filter before #2983: PR #2976's egress-guard and toolkits/mcp/governed.rs did not start it.
+  const old = { jobs: { "ci-governed-conformance": { paths: ["conformance/governed/**", "deploy/docker-compose.governed.yml", "deploy/governed/**"] } } };
+  const missed = checkGovernedConformance(old).join("\n");
+  assert.equal(checkGovernedConformance(old).length, GOVERNED_MUST_REACH.length - 1);
+  assert.match(missed, /egress-guard\/src\/private\.rs/);
+  assert.match(missed, /toolkits\/mcp\/governed\.rs/);
+  assert.deepEqual(checkGovernedConformance({ jobs: {} }), ["ci-governed-conformance: tier-paths.json has no path list"]);
 });

@@ -464,6 +464,8 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if err != nil {
 		return nil, err
 	}
+	// The deployment's private permit (#2950) joins the section's.
+	egressPolicy.WithOperatorPermit(config.WorkerEgressPrivatePermit)
 	// A policy that can never be assembled fails its run at once with a
 	// message naming the entry or the bound (shared 0197), instead of being
 	// retried until the deadline.

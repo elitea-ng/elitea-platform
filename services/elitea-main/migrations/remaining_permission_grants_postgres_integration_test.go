@@ -474,7 +474,7 @@ func resolveAdministrationModeFor(t *testing.T, pool *pgxpool.Pool, userID strin
 
 	resolution, err := legacyrbac.NewPostgresResolver(pool).ResolvePermissions(
 		ctx,
-		auth.User{ID: userID, UserID: userID},
+		auth.User{ID: userID, UserID: userID, CredentialKind: auth.CredentialKindSession},
 		auth.PermissionModeAdministration,
 		"",
 	)

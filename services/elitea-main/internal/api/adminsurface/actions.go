@@ -19,6 +19,19 @@ func (e Entry) IsWrite() bool {
 	return e.Method != http.MethodGet && e.Method != http.MethodHead
 }
 
+// NamesNoPermission reports whether every check of the entry reads the whole
+// answer (KindWholeSet): the route asks whether the caller holds any
+// administration permission, and requires none. The token mint of a native
+// session is one: it refuses the holder of any.
+func (e Entry) NamesNoPermission() bool {
+	for _, check := range e.Checks {
+		if check.Kind != KindWholeSet {
+			return false
+		}
+	}
+	return len(e.Checks) > 0
+}
+
 // SelectorValue answers the value a variant selects: the part of its name
 // after the first space ("action delete", "section email"), or "" for the
 // default variant.
@@ -35,8 +48,9 @@ func driveKey(method, pattern, selector string) string {
 
 // ActionFailures answers one message per entry of the surface that can change
 // something (IsWrite) with no action entry for its (method, pattern, selector
-// value); per action
-// entry whose permission none of the route's checks accepts, unless
+// value), unless it NamesNoPermission: an action entry names the permission
+// the action requires, and such a route requires none (a test pins which
+// writes those are); per action entry whose permission none of the route's checks accepts, unless
 // permissionExceptions holds the entry's Key with a reason; per stale
 // exception; and per action entry whose route and selector value the surface
 // does not have, so that the table and the surface stay one list.
@@ -46,7 +60,7 @@ func (res Result) ActionFailures(table adminaccess.Actions, permissionExceptions
 	usedException := map[string]bool{}
 	for _, entry := range res.Surface {
 		driven[driveKey(entry.Method, entry.Pattern, entry.SelectorValue())] = true
-		if !entry.IsWrite() {
+		if !entry.IsWrite() || entry.NamesNoPermission() {
 			continue
 		}
 		var matched []adminaccess.Action

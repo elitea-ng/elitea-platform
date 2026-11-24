@@ -8,7 +8,16 @@
 // the command is governed (it carries security_context_ref: the governed
 // credential profile forces the allowlist). Otherwise `open`, and the policy
 // is OMITTED, so the command's bytes are exactly what they were before the
-// field existed.
+// field existed, unless the private permit below names something.
+//
+// # The private permit
+//
+// The platform's `worker_egress.private_permit` (#2950) rides on the policy
+// in every mode (`private_allow`): the private destinations the worker's SSRF
+// rule admits anyway. Only that platform setting supplies it, never a project
+// setting or a toolkit's URL, so nobody who can save a toolkit can widen it.
+// An open run with a permit carries a policy in `open` mode holding only the
+// permit.
 //
 // # The entries
 //
@@ -49,6 +58,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -74,8 +84,9 @@ var ErrSecurityContextInvalid = errors.New("the run's security context is missin
 // keeps the policy inside the 32 KiB worker command with room for the rest of
 // it.
 const (
-	MaxEntries = platformconfig.MaxWorkerEgressPolicyEntries
-	MaxBytes   = 24 * 1024
+	MaxEntries        = platformconfig.MaxWorkerEgressPolicyEntries
+	MaxPrivateEntries = platformconfig.MaxWorkerEgressPrivatePolicyEntries
+	MaxBytes          = 24 * 1024
 )
 
 // PlatformReader reads the platform section.
@@ -113,6 +124,8 @@ type Resolver struct {
 	project  ProjectReader
 	inputs   InputReader
 	governed GovernedTargetReader
+	// operator is the deployment's private permit (OperatorPermitEnv).
+	operator []string
 }
 
 // NewResolver builds the resolver.
@@ -135,10 +148,12 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 		return nil, fmt.Errorf("worker egress: read the platform setting: %w", err)
 	}
 	governed := command.GetSecurityContextRef() != nil
-	if settings.Mode != platformconfig.WorkerEgressAllowlist && !governed {
-		return nil, nil
-	}
+	open := settings.Mode != platformconfig.WorkerEgressAllowlist && !governed
 	if command.GetConfigurationValidation() != nil {
+		if open {
+			return nil, nil
+		}
+
 		// A configuration validation is schema-only: the worker checks the
 		// settings against its pinned catalog and opens no connection
 		// (services/elitea-worker-rust/src/validation/mod.rs,
@@ -147,6 +162,18 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 		// no entries, which refuses every public host, and is never
 		// refused: nothing it reads could widen or break that.
 		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST, Allow: []string{}}, nil
+	}
+	// Built after the validation shortcut, so a permit that cannot be
+	// assembled refuses runs but never a schema-only validation.
+	private, err := AssemblePrivatePermit(append(slices.Clone(settings.PrivatePermit), r.operator...))
+	if err != nil {
+		return nil, err
+	}
+	if open {
+		if len(private) == 0 {
+			return nil, nil
+		}
+		return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_OPEN, PrivateAllow: private}, nil
 	}
 	projectID, err := strconv.ParseInt(command.GetResourceProjectId(), 10, 64)
 	if err != nil || projectID <= 0 {
@@ -181,7 +208,52 @@ func (r *Resolver) WorkerEgressPolicy(ctx context.Context, command *runtimev1.Wo
 	if err != nil {
 		return nil, err
 	}
-	return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST, Allow: allow}, nil
+	if size := entriesSize(allow) + entriesSize(private); size > MaxBytes {
+		return nil, refuse("This run's worker egress allowlist and private permit would be %d bytes, more than the %d a run may carry. %s",
+			size, MaxBytes, boundsFixer)
+	}
+	return &runtimev1.WorkerEgressPolicyV1{Mode: runtimev1.WorkerEgressModeV1_WORKER_EGRESS_MODE_V1_ALLOWLIST, Allow: allow, PrivateAllow: private}, nil
+}
+
+// AssemblePrivatePermit normalises the platform's private permit (#2950):
+// every entry parsed in the egresslib grammar, deduplicated and sorted. A
+// malformed entry, more than MaxPrivateEntries, or a list larger than
+// MaxBytes is a *RefusalError naming the entry or the bound: a permit is
+// never truncated, and an entry is never skipped.
+func AssemblePrivatePermit(entries []string) ([]string, error) {
+	seen := map[string]bool{}
+	private := []string{}
+	for _, raw := range entries {
+		entry, err := egresslib.ParseEntry(raw)
+		if err != nil {
+			return nil, refuse("The platform's worker egress private permit entry %s is not a valid host, host:port, *.domain or CIDR block (%v). %s",
+				quoteEntry(raw), err, platformFixer)
+		}
+		if text := entry.String(); !seen[text] {
+			seen[text] = true
+			private = append(private, text)
+		}
+	}
+	if len(private) > MaxPrivateEntries {
+		return nil, refuse("The platform's worker egress private permit has %d entries, more than the %d a run may carry. %s",
+			len(private), MaxPrivateEntries, platformFixer)
+	}
+	if size := entriesSize(private); size > MaxBytes {
+		return nil, refuse("The platform's worker egress private permit is %d bytes, more than the %d a run may carry. %s",
+			size, MaxBytes, platformFixer)
+	}
+	sort.Strings(private)
+	return private, nil
+}
+
+// entriesSize is the encoded size of repeated string entries: each entry and
+// its field tag and length.
+func entriesSize(entries []string) int {
+	size := 0
+	for _, entry := range entries {
+		size += len(entry) + 3
+	}
+	return size
 }
 
 // Assemble merges the three sources into the policy's entries: normalised,
@@ -220,11 +292,7 @@ func Assemble(platform, project, toolkits []string) ([]string, error) {
 		return nil, refuse("This run would need %d worker egress allowlist entries, more than the %d a run may have. %s",
 			len(allow), MaxEntries, boundsFixer)
 	}
-	size := 0
-	for _, entry := range allow {
-		size += len(entry) + 3 // the field tag and length of each repeated string
-	}
-	if size > MaxBytes {
+	if size := entriesSize(allow); size > MaxBytes {
 		return nil, refuse("This run's worker egress allowlist would be %d bytes, more than the %d a run may carry. %s",
 			size, MaxBytes, boundsFixer)
 	}

@@ -38,27 +38,26 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// adminRolePriority orders the administration-mode roles from most to least
-// privileged. A user may hold several rows in auth_core__user_role; the listing
-// reports the highest, matching `list_users_paginated`'s `role_priority`.
+// adminRolePriority orders the four legacy administration-mode roles from most
+// to least privileged. The listing's single `admin_role` field reports the
+// highest of them that the user holds, matching `list_users_paginated`'s
+// `role_priority`. `admin_roles` carries every role (ADR-0059 R0.8b); the
+// single field is kept for one release so the current page keeps working, and
+// R0.13 (issue 2502) removes it.
 var adminRolePriority = []string{"super_admin", "admin", "editor", "viewer"}
 
-// validAdminRoles is the set `set_admin_role` accepts, mirroring
-// auth_users.py's `valid_roles`. `system` is deliberately NOT assignable.
-var validAdminRoles = map[string]struct{}{
-	"super_admin": {},
-	"admin":       {},
-	"editor":      {},
-	"viewer":      {},
-}
+// maxAssignedRoles bounds the `role_names` set of one request. The built-in
+// catalogue has nine roles; a request naming more than this many is not a
+// person's role set.
+const maxAssignedRoles = 32
 
 // systemUserPredicate classifies "system" users. Copied verbatim from
 // `list_users_paginated`'s `is_system`, underscores included: SQLAlchemy's
@@ -172,28 +171,29 @@ FROM public.auth_core__user u`).Scan(&totalUsers, &systemUsers)
 	offsetPlaceholder := "$" + strconv.Itoa(len(args)+3)
 	listArgs := append(append([]any{}, args...), adminRolePriority, params.limit, params.offset)
 
-	// `admin_role` is resolved by a LATERAL sub-select rather than a LEFT JOIN.
+	// The roles are resolved by a LATERAL aggregate rather than a LEFT JOIN.
 	// A join multiplies the row out once per administration role the user holds
 	// — which the pre-A14 listing did, so a user with two roles appeared twice
-	// and `total` (a separate COUNT) disagreed with the page it labelled.
+	// and `total` (a separate COUNT) disagreed with the page it labelled. The
+	// aggregate lists the four legacy names first, highest first, then every
+	// other role by name, so the single `admin_role` is its first element
+	// when that is a legacy name.
 	rows, err := h.pool.Query(ctx, `
 SELECT u.id,
        COALESCE(u.name, u.email, '') AS name,
        COALESCE(u.email, '')         AS email,
        to_char(u.last_login, 'YYYY-MM-DD"T"HH24:MI:SS') AS last_login,
        u.suspended,
-       admin_role.name
+       COALESCE(admin_roles.names, '{}'::text[])
 FROM public.auth_core__user u
 LEFT JOIN LATERAL (
-    SELECT role.name
+    SELECT array_agg(role.name
+                     ORDER BY array_position(`+rolePlaceholder+`::text[], role.name) NULLS LAST, role.name) AS names
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
     WHERE assignment.user_id = u.id
       AND role.mode = 'administration'
-      AND role.name = ANY(`+rolePlaceholder+`::text[])
-    ORDER BY array_position(`+rolePlaceholder+`::text[], role.name)
-    LIMIT 1
-) AS admin_role ON TRUE`+where+`
+) AS admin_roles ON TRUE`+where+`
 ORDER BY `+sortColumn+` `+direction+` NULLS LAST, u.id `+direction+`
 LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 	if err != nil {
@@ -205,11 +205,13 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 	for rows.Next() {
 		var id int
 		var name, email string
-		var lastLogin, adminRole *string
+		var lastLogin *string
 		var suspended bool
-		if err := rows.Scan(&id, &name, &email, &lastLogin, &suspended, &adminRole); err != nil {
+		var adminRoles []string
+		if err := rows.Scan(&id, &name, &email, &lastLogin, &suspended, &adminRoles); err != nil {
 			return nil, fmt.Errorf("scan user row: %w", err)
 		}
+		adminRole := highestLegacyAdminRole(adminRoles)
 		items = append(items, map[string]any{
 			"id":         id,
 			"name":       name,
@@ -218,9 +220,12 @@ LIMIT `+limitPlaceholder+` OFFSET `+offsetPlaceholder, listArgs...)
 			"suspended":  suspended,
 			// `is_admin` and `is_active` are the legacy-era fields; both are
 			// kept so existing clients (admin_ui, the QA suite) keep working.
-			"is_admin":   adminRole != nil,
-			"is_active":  !suspended,
-			"admin_role": adminRole,
+			"is_admin":  len(adminRoles) > 0, // any administration role
+			"is_active": !suspended,
+			// The highest of the four legacy roles, kept for one release
+			// beside the set (ADR-0059 R0.8b); R0.13 removes it.
+			"admin_role":  adminRole,
+			"admin_roles": adminRoles,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -244,8 +249,15 @@ type authUsersActionRequest struct {
 	Users  []struct {
 		ID int `json:"id"`
 	} `json:"users"`
-	UserID   *int    `json:"user_id"`
-	RoleName *string `json:"role_name"`
+	UserID *int `json:"user_id"`
+	// RoleName is the single form of set_admin_role: "replace every
+	// administration role of the user with this one", null or "" for none.
+	// Kept for existing automation (ADR-0059 R0.8b). Raw, so that a present
+	// null can be told from an absent key.
+	RoleName json.RawMessage `json:"role_name"`
+	// RoleNames is the set form: the user's administration roles after the
+	// request, [] for none. A request with both forms is a 400.
+	RoleNames json.RawMessage `json:"role_names"`
 }
 
 // AuthUsersAction serves `POST /admin/auth_users/{mode}` — the single endpoint
@@ -304,18 +316,85 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	// users' personal memories (every project: no membership lookup, it would
 	// be gone with the cascade) commits or rolls back with the delete itself.
 	// auth_core__user's dependents all cascade (user_role, token, user_group,
-	// project_user_role, …), so the row delete is sufficient.
+	// project_user_role, …), so the row delete removes them, except that a
+	// central role assignment is revoked first, through rolegrants (issue
+	// 2922): the cascade would drop it with no history row, and the grant
+	// history would show the role as still granted.
 	ctx := r.Context()
+	caller, ruled, ok := h.accountDeleter(r)
+	if !ok {
+		adminaccess.Write(w, r, adminaccess.Unresolved(
+			"your own account could not be read, so the users were not deleted"))
+		return
+	}
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// The role-writes lock is the transaction's first statement, as every
+	// role write takes it (adminaccess.HoldRoleWrites says why).
+	if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	// The last-administrator rule (issue 2500): the delete is measured after
+	// it runs, in this transaction, and a delete that removed the last
+	// administrator rolls back whole, the other accounts of a bulk selection
+	// included.
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, tx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	origin := grantOrigin(r, caller)
+	for _, id := range ids {
+		heldBefore, err := adminaccess.UserCentralRoles(ctx, tx, id, adminaccess.ModeAdministration)
+		if err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+		// Deleting an account takes its administration roles, so the role
+		// rules of a removal apply: deleting a super_admin needs super_admin,
+		// the caller holds every permission of each role taken, and changes
+		// no role of its own. One refused account refuses the whole delete.
+		if ruled {
+			refusal, err := h.checkAccountDeletion(ctx, tx, caller, id)
+			if err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			}
+			if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
+		}
+		if _, err := rolegrants.RevokeAll(ctx, tx, int64(id), origin); err != nil {
+			slog.ErrorContext(ctx, "could not revoke the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+		// The administration roles the delete took are a role removal, and
+		// a security audit event like any other (ADR-0059 R1.5).
+		if err := h.appendRoleAssignment(ctx, tx, r, caller.UserID, id, adminaccess.ModeAdministration,
+			heldBefore, origin.Source); err != nil {
+			slog.ErrorContext(ctx, "could not record the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
 	tag, err := tx.Exec(ctx,
 		`DELETE FROM public.auth_core__user WHERE id = ANY($1::int[])`, ids)
 	if err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	}
+	if refusal, err := lastAdministrator.Check(ctx, tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	if h.memoryUsers != nil {
@@ -336,6 +415,44 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": tag.RowsAffected()})
 }
 
+// accountDeleter is the caller of an account delete, the actor of the
+// revocations it writes. It is resolved as the role routes resolve it; then
+// `ruled` is true and the role rules apply (checkAccountDeletion). A handler
+// built without a permission resolver (unit fixtures only) reads the actor
+// from the principal's own user id and applies no role rule. The history
+// needs an actor for a console or api change, so a caller who resolves to no
+// account deletes nothing (ok false).
+func (h *Handler) accountDeleter(r *http.Request) (caller adminaccess.Caller, ruled, ok bool) {
+	if h.resolver != nil {
+		caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
+		return caller, true, refusal == nil
+	}
+	principal, found := auth.UserFromContext(r.Context())
+	if !found {
+		return adminaccess.Caller{}, false, false
+	}
+	id, found := principal.OwningUserID()
+	if !found {
+		return adminaccess.Caller{}, false, false
+	}
+	return adminaccess.Caller{UserID: id}, false, true
+}
+
+// checkAccountDeletion applies the rules of a role removal to the
+// administration roles an account delete takes from `id`, under the
+// role-writes lock the delete holds.
+func (h *Handler) checkAccountDeletion(
+	ctx context.Context, tx pgx.Tx, caller adminaccess.Caller, id int,
+) (*adminaccess.Refusal, error) {
+	held, err := adminaccess.UserCentralRoles(ctx, tx, id, adminaccess.ModeAdministration)
+	if err != nil || len(held) == 0 {
+		return nil, err
+	}
+	return h.checkCentralRoles(ctx, tx, caller, centralChange{
+		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true,
+	})
+}
+
 func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body authUsersActionRequest) {
 	ctx := r.Context()
 	if body.UserID == nil || *body.UserID <= 0 {
@@ -343,21 +460,15 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		return
 	}
 	targetID := *body.UserID
+	mode := auth.PermissionModeAdministration
 
-	roleName := ""
-	if body.RoleName != nil {
-		roleName = *body.RoleName
-	}
-	if roleName != "" {
-		if _, ok := validAdminRoles[roleName]; !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": "Invalid role_name. Must be one of: [super_admin admin editor viewer] or null",
-			})
-			return
-		}
+	requested, single, problem := requestedAdminRoles(body)
+	if problem != "" {
+		apierr.WriteStatus(w, http.StatusBadRequest, problem)
+		return
 	}
 
-	currentRole, err := h.currentAdminRole(ctx, targetID)
+	held, err := h.userAdministrationRoles(ctx, targetID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			apierr.WriteStatus(w, http.StatusNotFound, "user not found")
@@ -366,13 +477,34 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
 		return
 	}
+	// A role the deployment does not define in the mode is a 400 that names
+	// it, before anything else. A role deleted between here and the write
+	// makes rolegrants answer ErrRoleNotFound, which rolls the write back.
+	// Reporting success would take the user's other roles and give nothing,
+	// the silent-data-loss shape this endpoint exists to avoid.
+	undefined, err := undefinedCentralRoles(ctx, h.pool, mode, requested)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
+	if len(undefined) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": fmt.Sprintf("administration role %q not found", undefined[0]),
+			"role":  undefined[0],
+		})
+		return
+	}
 
 	// Escalation guard, mirroring auth_users.py: granting super_admin, and
 	// revoking it from someone who has it, both require the caller to hold
 	// `admin.auth.users.super_admin` in administration mode. Enforced against
 	// the DATABASE, never against anything the client sent — the admin UI's
-	// `window.admin_ui_config.permissions` is presentation state only.
-	caller, ok := h.resolveAssigningCaller(w, r, roleName == "super_admin" || currentRole == "super_admin")
+	// `window.admin_ui_config.permissions` is presentation state only. This
+	// is the early answer; checkCentralRoles decides again under the lock.
+	given, taken := roleDifference(held, requested)
+	touchesSuperAdmin := slices.Contains(given, adminaccess.SuperAdminRole) ||
+		slices.Contains(taken, adminaccess.SuperAdminRole)
+	caller, ok := h.resolveAssigningCaller(w, r, touchesSuperAdmin)
 	if !ok {
 		return
 	}
@@ -384,36 +516,69 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	// The subset rule (issue 2488): the caller holds every permission of the
-	// role given AND of every administration role taken away. The write
-	// below takes every other administration role of the target, custom ones
-	// included, so all of them count. It is checked under the role-writes
-	// lock, inside this transaction, so no concurrent write outdates it.
-	if refusal, err := h.checkCentralAssignment(
-		ctx, transaction, caller, auth.PermissionModeAdministration, roleName, targetID,
-	); err != nil {
+	// The rules of issue 2488 and of R0.8a apply to EACH role of the
+	// difference (ADR-0059 R0.8b): the caller holds every permission of every
+	// role given and of every role taken, an unassignable role is given to
+	// nobody, and a caller who is not a standing global administrator changes
+	// none of its own roles. One role that fails refuses the whole request and
+	// nothing is written. The difference is computed again under the
+	// role-writes lock, inside this transaction, so no concurrent write
+	// outdates it.
+	if err := adminaccess.LockRoleWrites(ctx, transaction); err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
 		return
-	} else if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+	}
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(ctx, transaction)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
+	held, err = adminaccess.UserCentralRoles(ctx, transaction, targetID, mode)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
+	given, taken = roleDifference(held, requested)
+	refusal, err := h.checkCentralRoles(ctx, transaction, caller, centralChange{
+		mode: mode, given: given, taken: taken, targetID: targetID,
+		changes: len(given)+len(taken) > 0,
+	})
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to read current role")
+		return
+	}
+	if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
-	// Single-role-per-mode, exactly as `assign_user_to_role` enforces it, as a
-	// difference (issue 2499): every other administration role is taken, the
-	// new one (if any) is given, and each change writes one history row in
-	// this transaction. A role the user already holds is left untouched.
-	if _, err := rolegrants.Set(
-		ctx, transaction, int64(targetID), auth.PermissionModeAdministration, roleName, grantOrigin(r, caller),
+	// The difference, as rolegrants applies it (issues 2499 and 2574): each
+	// role taken and each role given writes one history row in this
+	// transaction, and a role in both sets is not touched.
+	origin := grantOrigin(r, caller)
+	if _, err := rolegrants.Replace(
+		ctx, transaction, int64(targetID), mode, requested, origin,
 	); err != nil {
-		// No matching administration role row means the deployment does not
-		// define that role. Reporting success here would revoke the user's
-		// role and grant nothing, the silent-data-loss shape this endpoint
-		// exists to avoid, so the transaction is rolled back instead.
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
 			apierr.WriteStatus(w, http.StatusBadRequest, "administration role not found")
 			return
 		}
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	// The last-administrator rule (issue 2500), measured after the change in
+	// this transaction: a set that takes the last holder's role is a 409.
+	if refusal, err := lastAdministrator.Check(ctx, transaction); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
+		return
+	}
+	// The security audit event of the change, in this transaction: a failed
+	// append rolls the change back (ADR-0059 R1.5).
+	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, targetID, mode, held, origin.Source); err != nil {
+		slog.ErrorContext(ctx, "admin: the role change could not be recorded", "err", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
@@ -423,7 +588,106 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "user_id": targetID, "role_name": body.RoleName})
+	// `role_name` echoes the single form, as before, and is null in the set
+	// form. `role_names` is the user's administration set after the request.
+	var roleName any
+	if single && len(requested) == 1 {
+		roleName = requested[0]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "user_id": targetID, "role_name": roleName, "role_names": requested,
+	})
+}
+
+// requestedAdminRoles reads the role set of a set_admin_role request: the
+// `role_names` set form, or the single `role_name` form ("this one role", null
+// or "" for none). A request with neither is the single form with null, as it
+// always was. It returns the set sorted and without duplicates, whether it
+// came from the single form, and the text of a 400 when the request is
+// malformed.
+func requestedAdminRoles(body authUsersActionRequest) ([]string, bool, string) {
+	hasSet := len(body.RoleNames) > 0 && string(body.RoleNames) != "null"
+	if hasSet && len(body.RoleName) > 0 {
+		return nil, false, "send role_name or role_names, not both"
+	}
+	if !hasSet {
+		var name *string
+		if len(body.RoleName) > 0 {
+			if err := json.Unmarshal(body.RoleName, &name); err != nil {
+				return nil, true, "role_name must be a role name or null"
+			}
+		}
+		if name == nil || strings.TrimSpace(*name) == "" {
+			return []string{}, true, ""
+		}
+		return []string{strings.TrimSpace(*name)}, true, ""
+	}
+	var names []string
+	if err := json.Unmarshal(body.RoleNames, &names); err != nil {
+		return nil, false, "role_names must be an array of role names"
+	}
+	if len(names) > maxAssignedRoles {
+		return nil, false, fmt.Sprintf("role_names holds at most %d roles", maxAssignedRoles)
+	}
+	set := make([]string, 0, len(names))
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return nil, false, "role_names must not hold an empty name"
+		}
+		set = append(set, trimmed)
+	}
+	slices.Sort(set)
+	return slices.Compact(set), false, ""
+}
+
+// roleDifference is what a request for `requested` changes on a user who
+// holds `held`: the roles given and the roles taken, each sorted.
+func roleDifference(held, requested []string) (given, taken []string) {
+	for _, name := range requested {
+		if !slices.Contains(held, name) {
+			given = append(given, name)
+		}
+	}
+	for _, name := range held {
+		if !slices.Contains(requested, name) {
+			taken = append(taken, name)
+		}
+	}
+	slices.Sort(given)
+	slices.Sort(taken)
+	return given, taken
+}
+
+// undefinedCentralRoles returns the names of `roles` that the deployment does
+// not define in `mode`, sorted.
+func undefinedCentralRoles(ctx context.Context, q adminaccess.Querier, mode string, roles []string) ([]string, error) {
+	if len(roles) == 0 {
+		return nil, nil
+	}
+	rows, err := q.Query(ctx, `
+SELECT requested.name
+FROM unnest($2::text[]) AS requested(name)
+WHERE NOT EXISTS (
+    SELECT 1 FROM public.auth_core__role role WHERE role.mode = $1 AND role.name = requested.name
+)
+ORDER BY 1`, mode, roles)
+	if err != nil {
+		return nil, fmt.Errorf("read defined roles: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// highestLegacyAdminRole is the single `admin_role` of the listing: the
+// highest of the four legacy names in `roles`, nil when it holds none.
+func highestLegacyAdminRole(roles []string) *string {
+	for _, legacy := range adminRolePriority {
+		if slices.Contains(roles, legacy) {
+			name := legacy
+			return &name
+		}
+	}
+	return nil
 }
 
 // UserSuspend serves `PUT /admin/user_suspend/{mode}/{userID}`.
@@ -470,6 +734,13 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(r.Context()) }()
+	// The last-administrator rule (issue 2500) runs under the role-writes
+	// lock, taken first, like every write that can remove an administrator.
+	lastAdministrator, err := adminaccess.BeginLastAdministratorGuard(r.Context(), tx)
+	if err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
 	tag, err := tx.Exec(r.Context(),
 		`UPDATE public.auth_core__user SET suspended = $1 WHERE id = $2`, *body.Suspended, userID)
 	if err != nil {
@@ -478,6 +749,13 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		apierr.WriteStatus(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if refusal, err := lastAdministrator.Check(r.Context(), tx); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+		return
+	} else if refusal != nil {
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 	if *body.Suspended {
@@ -527,86 +805,110 @@ func isAdministrationMode(r *http.Request) bool {
 	return chi.URLParam(r, "mode") == auth.PermissionModeAdministration
 }
 
-// currentAdminRole returns the target user's highest administration role, or ""
-// when they hold none. `pgx.ErrNoRows` means the user does not exist.
-func (h *Handler) currentAdminRole(ctx context.Context, userID int) (string, error) {
-	var role *string
+// userAdministrationRoles returns every administration role the user holds,
+// sorted; `pgx.ErrNoRows` means the user does not exist. It is the read before
+// the transaction; the write reads the set again under the role-writes lock.
+func (h *Handler) userAdministrationRoles(ctx context.Context, userID int) ([]string, error) {
+	var roles []string
 	err := h.pool.QueryRow(ctx, `
-SELECT (
-    SELECT role.name
+SELECT COALESCE((
+    SELECT array_agg(role.name ORDER BY role.name)
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
-    WHERE assignment.user_id = u.id
-      AND role.mode = 'administration'
-      AND role.name = ANY($2::text[])
-    ORDER BY array_position($2::text[], role.name)
-    LIMIT 1
-)
+    WHERE assignment.user_id = u.id AND role.mode = 'administration'
+), '{}'::text[])
 FROM public.auth_core__user u
-WHERE u.id = $1`, userID, adminRolePriority).Scan(&role)
-	if err != nil {
-		return "", err
-	}
-	if role == nil {
-		return "", nil
-	}
-	return *role, nil
-}
-
-// checkCentralAssignment applies the subset rule of issue 2488 to an
-// administration-plane assignment: the caller holds every permission of the
-// role given (`assigned`, "" for none) and of every role taken away. A holder
-// of admin.auth.users.super_admin is exempt. It fails closed.
-func (h *Handler) checkCentralAssignment(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, targetID int,
-) (*rolepolicy.Refusal, error) {
-	if err := rolepolicy.LockRoleWrites(ctx, q); err != nil {
-		return nil, err
-	}
-	removed, err := rolepolicy.UserCentralRoles(ctx, q, targetID, mode)
+WHERE u.id = $1`, userID).Scan(&roles)
 	if err != nil {
 		return nil, err
 	}
-	return h.checkCentralRoles(ctx, q, caller, mode, assigned, removed), nil
+	return roles, nil
 }
 
-// checkCentralRoles is the rule for one central assignment: `assigned` is the
-// role given ("" for none), `removed` the roles taken away. The caller must
-// hold rolepolicy.LockRoleWrites in the transaction `q` belongs to, and is
-// read again here, so the check and the write see the same state.
+// centralChange is one central assignment as checkCentralRoles sees it.
+type centralChange struct {
+	mode string
+	// given are the roles the write gives, sorted.
+	given []string
+	// taken are the roles the write takes away, sorted.
+	taken []string
+	// targetID is the user whose roles change.
+	targetID int
+	// changes is false when the write would leave the target's roles as they
+	// are; the not-yourself rule refuses only a change.
+	changes bool
+}
+
+// checkCentralRoles is the rule for one central assignment, applied to EACH
+// role it gives or takes (ADR-0059 R0.8b). The caller must hold
+// adminaccess.LockRoleWrites in the transaction `q` belongs to, and is read
+// again here, so the check and the write see the same state. A failed read of
+// the seed record is an error (500), not a refusal. A refusal names the role
+// that failed.
 //
+//   - A built-in role whose seed row is marked unassignable (the legacy
+//     `system`) is given to nobody, by any caller (ADR-0059 R0.8a).
 //   - super_admin, given or taken, needs admin.auth.users.super_admin, in
 //     every mode.
+//   - A caller who is not a standing global administrator changes no role of
+//     its own, in either direction (CodeSelfAssignment). It is decided before
+//     the subset rule, so the caller gets the more specific code. A write that
+//     changes nothing is not refused by it.
 //   - In the administration mode, the caller holds every permission of every
 //     role given or taken. The retired developer mode grants nothing that a
 //     route reads, so clearing a developer-mode row that the legacy runtime
 //     left behind needs no subset.
 func (h *Handler) checkCentralRoles(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, mode, assigned string, removed []string,
-) *rolepolicy.Refusal {
+	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, change centralChange,
+) (*adminaccess.Refusal, error) {
 	caller, err := caller.Reload(ctx)
 	if err != nil {
-		return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
 	}
-	roles := append([]string{}, removed...)
-	if assigned != "" {
-		roles = append(roles, assigned)
-	}
-	if !caller.SuperAdmin && slices.Contains(roles, rolepolicy.SuperAdminRole) {
-		return rolepolicy.SuperAdminRequired()
-	}
-	if caller.SuperAdmin || mode != rolepolicy.ModeAdministration {
-		return nil
-	}
-	required, err := rolepolicy.CentralRolePermissions(ctx, q, mode, roles)
+	mode := change.mode
+	unassignable, err := h.seededRolesMarked(ctx, q, mode, change.given, adminaccess.MarkerUnassignable)
 	if err != nil {
-		return rolepolicy.Unresolved("the permissions of the role could not be read, so the role change was refused")
+		return nil, err
 	}
-	role := assigned
-	if role == "" && len(removed) > 0 {
-		role = removed[0]
+	if len(unassignable) > 0 {
+		return adminaccess.Unassignable(unassignable[0]), nil
 	}
-	return rolepolicy.CheckAssignment(caller.Administration, false, role, required)
+	// Without the seed record nothing is marked, but `system` is still the
+	// service accounts' role: it stays unassignable by name there.
+	if mode == adminaccess.ModeAdministration && slices.Contains(change.given, adminaccess.RoleSystem) {
+		present, err := h.seedRecordPresent(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		if !present {
+			return adminaccess.Unassignable(adminaccess.RoleSystem), nil
+		}
+	}
+	roles := append(append([]string{}, change.given...), change.taken...)
+	if !caller.SuperAdmin && slices.Contains(roles, adminaccess.SuperAdminRole) {
+		return adminaccess.SuperAdminRequired(), nil
+	}
+	if change.changes && len(roles) > 0 {
+		if refusal := adminaccess.CheckSelfAssignment(
+			caller.UserID, caller.SuperAdmin, int64(change.targetID), roles[0],
+		); refusal != nil {
+			return refusal, nil
+		}
+	}
+	if caller.SuperAdmin || mode != adminaccess.ModeAdministration {
+		return nil, nil
+	}
+	// One role at a time, so that the refusal names the role that failed.
+	for _, role := range roles {
+		required, err := adminaccess.CentralRolePermissions(ctx, q, mode, []string{role})
+		if err != nil {
+			return adminaccess.Unresolved("the permissions of the role could not be read, so the role change was refused"), nil
+		}
+		if refusal := adminaccess.CheckAssignment(caller.Administration, false, role, required); refusal != nil {
+			return refusal, nil
+		}
+	}
+	return nil, nil
 }
 
 // resolveAssigningCaller reads the caller of an assignment once, before its
@@ -617,15 +919,15 @@ func (h *Handler) checkCentralRoles(
 // it again under the lock.
 func (h *Handler) resolveAssigningCaller(
 	w http.ResponseWriter, r *http.Request, touchesSuperAdmin bool,
-) (rolepolicy.Caller, bool) {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+) (adminaccess.Caller, bool) {
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if touchesSuperAdmin && (refusal != nil || !caller.SuperAdmin) {
-		rolepolicy.Write(w, r, rolepolicy.SuperAdminRequired())
-		return rolepolicy.Caller{}, false
+		adminaccess.Write(w, r, adminaccess.SuperAdminRequired())
+		return adminaccess.Caller{}, false
 	}
 	if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
-		return rolepolicy.Caller{}, false
+		adminaccess.Write(w, r, refusal)
+		return adminaccess.Caller{}, false
 	}
 	return caller, true
 }

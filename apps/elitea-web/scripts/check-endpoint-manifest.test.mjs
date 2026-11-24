@@ -966,9 +966,20 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 574 -> 577 (issue 2268, epic 2254 story S1c): the Microsoft sign-in start, callback and
 // redeem. The shared web feature that calls them is story S1d, so none is in the manifest yet and
 // MANIFEST_ENTRY_COUNT is unchanged.
-// 577 -> 582 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
+// 577 -> 578 (issue 2963): rotateWebhookSecret, the write-only webhook signing secret's rotation.
+// The Webhooks settings page calls it, so MANIFEST_ENTRY_COUNT moves too.
+// 578 -> 580 (issue 2574, ADR-0059 R0.8b): listAdminAuthUsers and adminAuthUsersAction, the admin
+// Users page routes that were hand-written until the contract described them. Like the other admin
+// operations they are not in the manifest, so MANIFEST_ENTRY_COUNT is unchanged.
+// 580 -> 582 (issue 2588, ADR-0059 R0.10b): listAdministrationRoleHolders and
+// listAdministrationRoleHistory, the Access reads. The Access page that calls them is R3.9, so
+// MANIFEST_ENTRY_COUNT is unchanged.
+// 582 -> 583 (issue 2495, ADR-0059 R0.6a): administrationUserDelete, the Remove of the admin
+// console's Manage project member dialog. Like the other admin operations it is not in the manifest,
+// so MANIFEST_ENTRY_COUNT is unchanged.
+// 583 -> 588 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
 // updateHttpActionRule, listHttpActionRuleNames.
-const GENERATED_OPERATION_COUNT = 582;
+const GENERATED_OPERATION_COUNT = 588;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1306,9 +1317,12 @@ const GENERATED_OPERATION_COUNT = 582;
  * 389 -> 393 (issue 1631, ADR-0051 M5): marketplace.getFeedback, saveReview, saveWorkforceReport and
  * actOnFeedback, the Feedback section of a listing. All generated.
  *
- * 393 -> 398 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
+ * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
+ * now that the signing secret is write-only. Generated.
+ *
+ * 394 -> 399 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
  */
-const MANIFEST_ENTRY_COUNT = 398;
+const MANIFEST_ENTRY_COUNT = 399;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

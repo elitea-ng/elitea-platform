@@ -45,12 +45,14 @@ import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import { useNodeOptions } from '../../lib/flow-editor/hooks/useNodeOptions';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { AIAssistantInput } from '../AIAssistantInput';
 import { InputSelect } from '../select/InputSelect';
 import { RouteSelect } from '../select/RouteSelect';
@@ -218,56 +220,49 @@ export const RouterNode = memo(function RouterNode(props: RouterNodeProps): Reac
         />
       )}
     >
-      <AIAssistantInput
-        value={conditionValue}
-        disabled={isFieldsDisabled}
-        label={t('pipelines.flowEditor.routerNode.condition', 'Condition')}
-        fieldName="Condition"
-        language="jinja"
-        modelConfig={resolvedLlmSettings}
-        fieldBinding={{ name: 'condition', onInput: handleConditionFilling }}
-      />
-      <RouteSelect
-        id={id}
-        label={t('pipelines.flowEditor.routerNode.routes', 'Routes')}
-        fieldName="routes"
-        disabled={isFieldsDisabled}
-        nodesFilter={(node: { readonly id: string }) => node.id !== id}
-        addEndNode
-      />
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.routerNode.input', 'Input')}
-        inputFieldName="input"
-        disabled={isFieldsDisabled}
-      />
-      <HeadingChip label={t('pipelines.flowEditor.routerNode.defaultOutput', 'Default output')} />
-      {/*
-        BUG FIX (found while writing this file's tests, `RouterNode.test.tsx`):
-        every other node-level `SingleSelect`/`RouteSelect`/`InputSelect` call
-        site in this slice is wrapped in (or itself applies) a `className=
-        "nopan nodrag"` shield -- see `./HITLNode.tsx`'s identical "Edit state
-        key" `SingleSelect`, `./HITLNode.parts.tsx`'s `HITLRouteRow`, and
-        `../select/{InputSelect,OutputSelect,RouteSelect}.tsx`'s own
-        `className` props -- so a mousedown on the control does not bubble to
-        React Flow's node wrapper and start a canvas drag. This one call site
-        had no such wrapper: reproduced empirically -- opening this exact
-        dropdown inside a real `<ReactFlow>` node throws out of `d3-drag`'s
-        `mousedowned` (`Cannot read properties of null (reading 'document')`),
-        the node-drag-start handler firing on a bubbled mousedown the Select's
-        own portal-rendered menu does not expect. Wrapped here to match the
-        established pattern, not a stylistic change.
-      */}
-      <Box className="nopan nodrag">
-        <SingleSelect
-          sx={{ marginBottom: 0 }}
-          value={defaultOutputNode}
-          onChange={handleDefaultOutput}
-          options={[...routes]}
+      <NodeConfigSection section="basic">
+        <AIAssistantInput
+          value={conditionValue}
+          disabled={isFieldsDisabled}
+          label={t('pipelines.flowEditor.routerNode.condition', 'Condition')}
+          fieldName="Condition"
+          language="jinja"
+          modelConfig={resolvedLlmSettings}
+          fieldBinding={{ name: 'condition', onInput: handleConditionFilling }}
+        />
+        <RouteSelect
+          id={id}
+          label={t('pipelines.flowEditor.routerNode.routes', 'Routes')}
+          fieldName="routes"
+          disabled={isFieldsDisabled}
+          nodesFilter={(node: { readonly id: string }) => node.id !== id}
+          addEndNode
+        />
+        <HeadingChip label={t('pipelines.flowEditor.routerNode.defaultOutput', 'Default output')} />
+        <Box className="nopan nodrag">
+          <SingleSelect
+            sx={{ marginBottom: 0 }}
+            value={defaultOutputNode}
+            onChange={handleDefaultOutput}
+            options={[...routes]}
+            disabled={isFieldsDisabled}
+          />
+        </Box>
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.routerNode.input', 'Input')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Router}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.routerNode.input', 'Input')}
+          inputFieldName="input"
           disabled={isFieldsDisabled}
         />
-      </Box>
-      <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.Router} disabled={isFieldsDisabled} />
+        <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.Router} disabled={isFieldsDisabled} />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

@@ -1195,6 +1195,10 @@ services:
       # and rejects settings for a dispatch plane that is not explicitly
       # enabled. Do not delete individual lines to "simplify" it.
       ELITEA_RUNTIME_ENABLED: "true"
+      # The worker refuses private addresses unless the private permit names
+      # them (#2950). The fixtures the toolkits and MCP servers reach live on
+      # this compose network, so the stack permits them by name.
+      ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: "${ELITEA_WORKER_EGRESS_PRIVATE_PERMIT:-mcp-mock,ado-mock,qtest-mock,llm-mock,llm-real}"
 
       # Configuration-validation dispatch: the base plane, always required.
       # The runtime command bus (docs/runtime-command-bus.md): JetStream on the
