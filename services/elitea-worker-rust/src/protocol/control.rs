@@ -150,7 +150,9 @@ impl AgentControlError {
             | Self::Semantic(ControlSemanticError::DependencyUnavailable(_)) => true,
             Self::Semantic(ControlSemanticError::Rejected(rejection)) => rejection.retryable(),
             Self::Transport(
-                ControlGrpcError::InvalidConfiguration(_) | ControlGrpcError::ResourceExhausted(_),
+                ControlGrpcError::InvalidConfiguration(_)
+                | ControlGrpcError::ResourceExhausted(_)
+                | ControlGrpcError::UnknownFieldRejected(_),
             )
             | Self::Semantic(
                 ControlSemanticError::InvalidInput(_)
@@ -274,9 +276,12 @@ pub struct AcceptedAgentClaim {
     /// The elitea-vector bearer Main minted for this claim, if any.
     vector_token: Option<VectorClaimToken>,
     /// Main reads the typed tool-run refusals (`ClaimReceiptV1`
-    /// `toolkit_typed_refusals`); without it the terminal is downgraded to
-    /// the shapes an older Main accepts.
+    /// `toolkit_typed_refusals` or `server_capabilities`); without it the
+    /// terminal is downgraded to the shapes an older Main accepts.
     toolkit_typed_refusals: bool,
+    /// Validated server capabilities negotiated on `ClaimReceiptV1` (merged
+    /// with legacy receipt fields for mixed-version compatibility).
+    server_capabilities: super::capabilities::NegotiatedCapabilities,
     /// The paused execution this continuation re-enters (`ClaimReceiptV1`
     /// `paused_writer`, FU-269), as Main served it; the pipeline validates it
     /// at assembly. `None` from an older Main.
@@ -296,6 +301,31 @@ impl AcceptedAgentClaim {
     #[must_use]
     pub(crate) const fn vector_token(&self) -> Option<&VectorClaimToken> {
         self.vector_token.as_ref()
+    }
+
+    /// Validated capabilities Main advertised for this claim.
+    #[must_use]
+    pub(crate) const fn server_capabilities(&self) -> &super::capabilities::NegotiatedCapabilities {
+        &self.server_capabilities
+    }
+
+    /// Fail closed if Main did not advertise `capability` on this claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlSemanticError::UnsupportedCapability`] when absent.
+    #[allow(dead_code)]
+    pub(crate) fn require_server_capability(
+        &self,
+        capability: &str,
+    ) -> Result<(), ControlSemanticError> {
+        if self.server_capabilities.has(capability) {
+            Ok(())
+        } else {
+            Err(ControlSemanticError::UnsupportedCapability(
+                "the runtime control server lacks a required capability",
+            ))
+        }
     }
 
     #[must_use]
@@ -652,6 +682,7 @@ impl AcceptedAgentClaim {
             // Output replay needs no vector access; the bearer is erased here.
             vector_token: _,
             toolkit_typed_refusals: _,
+            server_capabilities: _,
             paused_writer: _,
             governed: _,
             delegation: _,
@@ -2203,6 +2234,7 @@ pub(crate) fn test_lease_monitored_input_execution(
             arguments_entry: None,
             vector_token: None,
             toolkit_typed_refusals: false,
+            server_capabilities: super::capabilities::NegotiatedCapabilities::default(),
             paused_writer: None,
             governed: GovernedContext::default(),
             delegation: elitea_agent_runtime::delegation::DelegationPolicy::default(),
@@ -2687,6 +2719,9 @@ pub struct AgentControlClient<R> {
     /// `ELITEA_WORKER_GOVERNED_CONTEXT`: fresh claims say this worker
     /// fetches and verifies a governed command's security context.
     governed_security_context: bool,
+    /// Domain-named server capabilities that must be present on accepted claim
+    /// receipts; missing capabilities fail closed with `UnsupportedCapability`.
+    required_server_capabilities: Vec<String>,
     /// Where each execution's egress ledger lives (#1490); the process's
     /// registry outside tests.
     egress: Arc<super::egress::EgressRegistry>,
@@ -2727,6 +2762,7 @@ impl<R> AgentControlClient<R> {
             workload_session_id,
             producer_id,
             governed_security_context: false,
+            required_server_capabilities: Vec::new(),
             egress: super::egress::EgressRegistry::global(),
             steps: super::run_steps::RunStepRegistry::global(),
             ephemeral_agents: super::ephemeral_agents::EphemeralAgentRegistry::global(),
@@ -2844,6 +2880,42 @@ impl<R> AgentControlClient<R> {
         self.governed_security_context
     }
 
+    /// Require that Main advertises each named server capability on accepted
+    /// claims. Missing capabilities fail closed with
+    /// [`ControlSemanticError::UnsupportedCapability`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ControlSemanticError::InvalidInput`] if `required` violates
+    /// capability list bounds, syntax, or uniqueness.
+    pub fn with_required_server_capabilities(
+        mut self,
+        required: &[String],
+    ) -> Result<Self, ControlSemanticError> {
+        let parsed = super::capabilities::NegotiatedCapabilities::parse(required)?;
+        self.required_server_capabilities = parsed.as_slice().to_vec();
+        Ok(self)
+    }
+
+    pub(super) fn check_required_server_capabilities(
+        &self,
+        claim: &AcceptedAgentClaim,
+    ) -> Result<(), ControlSemanticError> {
+        claim
+            .server_capabilities()
+            .require(&self.required_server_capabilities)
+    }
+
+    fn check_required_server_capabilities_for_decision(
+        &self,
+        decision: &AgentClaimDecision,
+    ) -> Result<(), ControlSemanticError> {
+        if let AgentClaimDecision::Accepted(claim) = decision {
+            self.check_required_server_capabilities(claim)?;
+        }
+        Ok(())
+    }
+
     /// A fresh claim request with this worker's governed opt-in. The node
     /// recovery and checkpoint inspection claims never set it, because they
     /// do not fetch the context; the delivery router therefore sends every
@@ -2855,6 +2927,7 @@ impl<R> AgentControlClient<R> {
         let mut request =
             build_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
         request.governed_security_context_v1 = self.governed_security_context;
+        super::capabilities::sync_worker_capabilities(&mut request);
         Ok(request)
     }
 
@@ -2868,11 +2941,59 @@ impl<R> AgentControlClient<R> {
         let mut request =
             build_agent_claim_request(verified, &self.workload_session_id, &self.producer_id)?;
         request.governed_security_context_v1 = self.governed_security_context;
+        super::capabilities::sync_worker_capabilities(&mut request);
         Ok(request)
     }
 }
 
 impl<R: ControlRpc> AgentControlClient<R> {
+    /// Send a `ClaimCommand` request carrying both legacy boolean opt-ins and
+    /// `worker_capabilities`. If an older Main that predates field 22 rejects
+    /// the unknown field via `StrictProtoCodec` (`UnknownFieldRejected`) or a
+    /// pre-claim `PROTOCOL_VIOLATION`, retry once without `worker_capabilities`
+    /// while keeping every legacy boolean intact. Ambiguous transport failures
+    /// (`Unavailable`, `DeadlineExceeded`, generic `Internal`) never retry.
+    pub(super) async fn send_claim_command(
+        &self,
+        request: ClaimCommandRequestV1,
+    ) -> Result<ClaimCommandResponseV1, AgentControlError> {
+        let has_worker_caps = !request.worker_capabilities.is_empty();
+        let fallback_request = if has_worker_caps {
+            let mut legacy = request.clone();
+            legacy.worker_capabilities.clear();
+            Some(legacy)
+        } else {
+            None
+        };
+        match self.control.claim_command(request).await {
+            Ok(response) => {
+                let unknown_field_rejection = response.receipt.is_none()
+                    && response.rejection.as_ref().is_some_and(|rejection| {
+                        rejection.code == RuntimeErrorCodeV1::ProtocolViolation as i32
+                    });
+                if unknown_field_rejection && let Some(legacy_request) = fallback_request {
+                    return self
+                        .control
+                        .claim_command(legacy_request)
+                        .await
+                        .map_err(Into::into);
+                }
+                Ok(response)
+            }
+            Err(error @ ControlGrpcError::UnknownFieldRejected(_)) => {
+                if let Some(legacy_request) = fallback_request {
+                    return self
+                        .control
+                        .claim_command(legacy_request)
+                        .await
+                        .map_err(Into::into);
+                }
+                Err(error.into())
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Claim and validate one exact fresh agent command.
     ///
     /// # Errors
@@ -2884,15 +3005,16 @@ impl<R: ControlRpc> AgentControlClient<R> {
         now_unix_millis: i64,
     ) -> Result<AcceptedAgentClaim, AgentControlError> {
         let request = self.fresh_agent_claim_request(verified)?;
-        let response = self.control.claim_command(request).await?;
-        parse_accepted_agent_claim(
+        let response = self.send_claim_command(request).await?;
+        let claim = parse_accepted_agent_claim(
             verified,
             response,
             &self.workload_session_id,
             &self.producer_id,
             now_unix_millis,
-        )
-        .map_err(Into::into)
+        )?;
+        self.check_required_server_capabilities(&claim)?;
+        Ok(claim)
     }
 
     /// Claim one agent delivery and retain every restart disposition as a
@@ -2911,15 +3033,16 @@ impl<R: ControlRpc> AgentControlClient<R> {
         now_unix_millis: i64,
     ) -> Result<AgentClaimDecision, AgentControlError> {
         let request = self.fresh_agent_claim_request(verified)?;
-        let response = self.control.claim_command(request).await?;
-        parse_agent_claim_decision(
+        let response = self.send_claim_command(request).await?;
+        let decision = parse_agent_claim_decision(
             verified,
             response,
             &self.workload_session_id,
             &self.producer_id,
             now_unix_millis,
-        )
-        .map_err(Into::into)
+        )?;
+        self.check_required_server_capabilities_for_decision(&decision)?;
+        Ok(decision)
     }
 
     /// Claim one direct read-only toolkit delivery through the same durable
@@ -2935,15 +3058,16 @@ impl<R: ControlRpc> AgentControlClient<R> {
         now_unix_millis: i64,
     ) -> Result<AgentClaimDecision, AgentControlError> {
         let request = self.fresh_claim_request(verified)?;
-        let response = self.control.claim_command(request).await?;
-        parse_claim_decision(
+        let response = self.send_claim_command(request).await?;
+        let decision = parse_claim_decision(
             verified,
             response,
             &self.workload_session_id,
             &self.producer_id,
             now_unix_millis,
-        )
-        .map_err(Into::into)
+        )?;
+        self.check_required_server_capabilities_for_decision(&decision)?;
+        Ok(decision)
     }
 
     /// Cross the restart-safe `BeginExecution` fence, consuming the fresh claim.
@@ -3503,6 +3627,7 @@ pub fn build_agent_claim_request(
     // turn with an empty question, so Main may grant it an idle compaction
     // job. A capability, not a recovery mode: recovery claims keep it.
     request.idle_compaction = true;
+    super::capabilities::sync_worker_capabilities(&mut request);
     Ok(request)
 }
 
@@ -3528,6 +3653,7 @@ fn build_claim_request(
         // Legacy by default; AgentControlClient::fresh_claim_request sets it
         // for a worker that serves the governed security context (#1115).
         governed_security_context_v1: false,
+        worker_capabilities: Vec::new(),
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
         signed_command: Some(verified.signed().clone()),
@@ -3738,6 +3864,7 @@ fn validate_no_worker_authority_except_retirement(
         || receipt.settlement_recovery.is_some()
         || receipt.claim_started_at_unix_micros != 0
         || !receipt.node_recovery_receipt_json.is_empty()
+        || !receipt.server_capabilities.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the no-authority claim contains worker authority or business material",
@@ -3775,6 +3902,7 @@ fn validate_recovery_claim(
         || receipt.claim_handoff_watermark > i64::MAX as u64
         || receipt.claim_started_at_unix_micros != 0
         || !receipt.node_recovery_receipt_json.is_empty()
+        || !receipt.server_capabilities.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the recovery claim contains unexpected business material",
@@ -4021,6 +4149,7 @@ fn parse_input_claim_binding(
             "the accepted claim contains recovery material",
         ));
     }
+    let server_capabilities = super::capabilities::NegotiatedCapabilities::from_receipt(&receipt)?;
     let expected_identity = identity_from_command(verified);
     let identity = receipt.identity.ok_or(ControlSemanticError::InvalidInput(
         "the accepted claim identity is missing",
@@ -4052,14 +4181,11 @@ fn parse_input_claim_binding(
             "the claim handoff watermark exceeds the durable counter limit",
         ));
     }
-    let recovery_node = expected == ClaimDispositionV1::RecoverNodeVisit;
-    let desired_allowed = receipt.desired_state == DesiredExecutionStateV1::Running as i32
-        || (recovery_node && receipt.desired_state == DesiredExecutionStateV1::Suspended as i32);
-    if !desired_allowed || (!recovery_node && !receipt.node_recovery_receipt_json.is_empty()) {
-        return Err(ControlSemanticError::AuthorizationFailed(
-            "the accepted claim desired state is malformed",
-        ));
-    }
+    validate_accepted_claim_desired_state(
+        receipt.desired_state,
+        &receipt.node_recovery_receipt_json,
+        expected,
+    )?;
 
     let expected_reference =
         verified
@@ -4102,11 +4228,29 @@ fn parse_input_claim_binding(
         request_entry,
         arguments_entry,
         vector_token: VectorClaimToken::from_receipt(receipt.vector_token),
-        toolkit_typed_refusals: receipt.toolkit_typed_refusals,
+        toolkit_typed_refusals: server_capabilities
+            .has(super::capabilities::CAP_TOOLKIT_TYPED_REFUSALS),
+        server_capabilities,
         paused_writer: receipt.paused_writer,
         governed: governed_context(verified.command())?,
         delegation: delegation_policy(verified.command())?,
     })
+}
+
+fn validate_accepted_claim_desired_state(
+    desired_state: i32,
+    node_recovery_receipt_json: &[u8],
+    expected: ClaimDispositionV1,
+) -> Result<(), ControlSemanticError> {
+    let recovery_node = expected == ClaimDispositionV1::RecoverNodeVisit;
+    let desired_allowed = desired_state == DesiredExecutionStateV1::Running as i32
+        || (recovery_node && desired_state == DesiredExecutionStateV1::Suspended as i32);
+    if !desired_allowed || (!recovery_node && !node_recovery_receipt_json.is_empty()) {
+        return Err(ControlSemanticError::AuthorizationFailed(
+            "the accepted claim desired state is malformed",
+        ));
+    }
+    Ok(())
 }
 
 /// The command's delegation policy (ADR-0044 decision 3), as claim state.

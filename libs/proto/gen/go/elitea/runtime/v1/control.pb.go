@@ -414,8 +414,16 @@ type ClaimCommandRequestV1 struct {
 	// retry-later, so an older worker cannot run it as a fresh turn with an
 	// empty question. Recovery claims keep it.
 	IdleCompaction bool `protobuf:"varint,21,opt,name=idle_compaction,json=idleCompaction,proto3" json:"idle_compaction,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Bounded, domain-named capabilities the claiming worker supports
+	// (for example "runtime.idle_compaction.v1"). Additive with legacy boolean
+	// fields 16 to 21 so rolling upgrades need no deployment order. At most 64
+	// unique entries, each 1 to 128 bytes of lowercase dot-separated ASCII
+	// labels. Main refuses malformed, duplicate, or oversized lists with
+	// PROTOCOL_VIOLATION and missing required capabilities with
+	// UNSUPPORTED_CAPABILITY.
+	WorkerCapabilities []string `protobuf:"bytes,22,rep,name=worker_capabilities,json=workerCapabilities,proto3" json:"worker_capabilities,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ClaimCommandRequestV1) Reset() {
@@ -509,6 +517,13 @@ func (x *ClaimCommandRequestV1) GetIdleCompaction() bool {
 		return x.IdleCompaction
 	}
 	return false
+}
+
+func (x *ClaimCommandRequestV1) GetWorkerCapabilities() []string {
+	if x != nil {
+		return x.WorkerCapabilities
+	}
+	return nil
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must
@@ -630,9 +645,16 @@ type ClaimReceiptV1 struct {
 	// of an agent continuation whose job holds one. A worker that does not see
 	// it (an older Main) keeps the earlier behaviour: a continuation lost
 	// before its first root save ends typed. An older worker ignores it.
-	PausedWriter  *PausedWriterV1 `protobuf:"bytes,19,opt,name=paused_writer,json=pausedWriter,proto3" json:"paused_writer,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PausedWriter *PausedWriterV1 `protobuf:"bytes,19,opt,name=paused_writer,json=pausedWriter,proto3" json:"paused_writer,omitempty"`
+	// Bounded, domain-named capabilities Main supports for this claim
+	// (for example "runtime.toolkit_typed_refusals.v1"). Additive with legacy
+	// fields 18 and 19 so rolling upgrades need no deployment order. Set only on
+	// executable receipts (ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT,
+	// RECOVER_NODE_VISIT). At most 64 unique entries, each 1 to 128 bytes of
+	// lowercase dot-separated ASCII labels.
+	ServerCapabilities []string `protobuf:"bytes,20,rep,name=server_capabilities,json=serverCapabilities,proto3" json:"server_capabilities,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ClaimReceiptV1) Reset() {
@@ -773,6 +795,13 @@ func (x *ClaimReceiptV1) GetToolkitTypedRefusals() bool {
 func (x *ClaimReceiptV1) GetPausedWriter() *PausedWriterV1 {
 	if x != nil {
 		return x.PausedWriter
+	}
+	return nil
+}
+
+func (x *ClaimReceiptV1) GetServerCapabilities() []string {
+	if x != nil {
+		return x.ServerCapabilities
 	}
 	return nil
 }
@@ -2760,7 +2789,7 @@ var File_elitea_runtime_v1_control_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a'elitea/runtime/v1/browser_session.proto\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a$elitea/runtime/v1/egress_audit.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a elitea/runtime/v1/run_step.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\x9d\x04\n" +
+	"\x1felitea/runtime/v1/control.proto\x12\x11elitea.runtime.v1\x1a'elitea/runtime/v1/browser_session.proto\x1a\x1eelitea/runtime/v1/common.proto\x1a%elitea/runtime/v1/compiled_code.proto\x1a$elitea/runtime/v1/egress_audit.proto\x1a elitea/runtime/v1/envelope.proto\x1a\x1eelitea/runtime/v1/errors.proto\x1a\x1delitea/runtime/v1/input.proto\x1a\x1eelitea/runtime/v1/output.proto\x1a elitea/runtime/v1/run_step.proto\x1a\x1felitea/runtime/v1/sandbox.proto\"\xce\x04\n" +
 	"\x15ClaimCommandRequestV1\x12.\n" +
 	"\x13workload_session_id\x18\x01 \x01(\tR\x11workloadSessionId\x12\x1f\n" +
 	"\vproducer_id\x18\x02 \x01(\tR\n" +
@@ -2771,13 +2800,14 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x1cgoverned_security_context_v1\x18\x12 \x01(\bR\x19governedSecurityContextV1\x12<\n" +
 	"\x1afanout_interrupt_decisions\x18\x13 \x01(\bR\x18fanoutInterruptDecisions\x12@\n" +
 	"\x1cfanout_delegated_credentials\x18\x14 \x01(\bR\x1afanoutDelegatedCredentials\x12'\n" +
-	"\x0fidle_compaction\x18\x15 \x01(\bR\x0eidleCompactionJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
+	"\x0fidle_compaction\x18\x15 \x01(\bR\x0eidleCompaction\x12/\n" +
+	"\x13worker_capabilities\x18\x16 \x03(\tR\x12workerCapabilitiesJ\x04\b\x04\x10\x10\"\xc5\x02\n" +
 	"\x14SettlementRecoveryV1\x12C\n" +
 	"\bproposal\x18\x01 \x01(\v2'.elitea.runtime.v1.SettlementProposalV1R\bproposal\x12D\n" +
 	"\x0fproposal_digest\x18\x02 \x01(\v2\x1b.elitea.runtime.v1.DigestV1R\x0eproposalDigest\x12'\n" +
 	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x122\n" +
 	"\x15settlement_receipt_id\x18\x04 \x01(\tR\x13settlementReceiptId\x12?\n" +
-	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\xd0\b\n" +
+	"\aoutcome\x18\x05 \x01(\x0e2%.elitea.runtime.v1.ExecutionOutcomeV1R\aoutcomeJ\x04\b\x06\x10\x10\"\x81\t\n" +
 	"\x0eClaimReceiptV1\x12G\n" +
 	"\vdisposition\x18\x01 \x01(\x0e2%.elitea.runtime.v1.ClaimDispositionV1R\vdisposition\x12B\n" +
 	"\bidentity\x18\x02 \x01(\v2&.elitea.runtime.v1.ExecutionIdentityV1R\bidentity\x129\n" +
@@ -2797,7 +2827,8 @@ const file_elitea_runtime_v1_control_proto_rawDesc = "" +
 	"\x1anode_recovery_receipt_json\x18\x10 \x01(\fR\x17nodeRecoveryReceiptJson\x12H\n" +
 	"\fvector_token\x18\x11 \x01(\v2%.elitea.runtime.v1.VectorClaimTokenV1R\vvectorToken\x124\n" +
 	"\x16toolkit_typed_refusals\x18\x12 \x01(\bR\x14toolkitTypedRefusals\x12F\n" +
-	"\rpaused_writer\x18\x13 \x01(\v2!.elitea.runtime.v1.PausedWriterV1R\fpausedWriterJ\x04\b\r\x10\x10\"Y\n" +
+	"\rpaused_writer\x18\x13 \x01(\v2!.elitea.runtime.v1.PausedWriterV1R\fpausedWriter\x12/\n" +
+	"\x13server_capabilities\x18\x14 \x03(\tR\x12serverCapabilitiesJ\x04\b\r\x10\x10\"Y\n" +
 	"\x0ePausedWriterV1\x12!\n" +
 	"\fexecution_id\x18\x01 \x01(\tR\vexecutionId\x12\x1e\n" +
 	"\n" +
