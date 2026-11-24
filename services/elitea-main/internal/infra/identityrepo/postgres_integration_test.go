@@ -492,14 +492,18 @@ func newIdentityTestDatabase(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	if _, err := pool.Exec(ctx, dbschema.AuthCoreBaselineSQLCProjection); err != nil {
 		t.Fatal(err)
 	}
-	// The SCIM side table the shared adoption guard reads (adoption.go), from
-	// the migration's own file.
-	migration, err := os.ReadFile("../../../migrations/shared/0096_scim_provisioning.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatal(err)
+	// The SCIM side table the shared adoption guard reads (adoption.go), and
+	// the security audit outbox the initial-admin grant appends its
+	// admin.access.changed event to (ADR-0059 R1.5), from the migrations' own
+	// files.
+	for _, name := range []string{"0096_scim_provisioning.sql", "0183_security_audit_outbox.sql"} {
+		migration, err := os.ReadFile("../../../migrations/shared/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
 	}
 	return pool
 }
