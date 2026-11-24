@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "Адміністрування",
   "entities.token.table.adminInherit": "Усі ваші адміністративні дозволи",
   "entities.token.table.adminInheritEnds": "Усі ваші адміністративні дозволи, до {{date}}",
-  "entities.token.table.adminNone": "Немає"
+  "entities.token.table.adminNone": "Немає",
+  "agents.deleteApplicationButton.failed": "Не вдалося видалити агента.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "Не вдалося видалити: {{count}} {{noun}}.",
+  "features.agentLifecycle.import.failed": "Імпорт не вдався. Нічого не імпортовано.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} має містити kind: team.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} не є коректним YAML.",
+  "features.agentLifecycle.import.team.leadNotMember": "Провідний {{lead}} не входить до учасників {{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} посилається на файли, яких немає в zip: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} має перелічувати учасників шляхами до їхніх файлів .agent.md.",
+  "features.agentLifecycle.import.team.noName": "У {{file}} немає назви команди.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} вказує учасника двічі.",
+  "features.agentLifecycle.import.team.tooManyMembers": "У команді щонайбільше {{limit}} агентів.",
+  "features.agentLifecycle.import.teamLead": "Провідний: {{name}}",
+  "features.agentLifecycle.import.teamName": "Команда: {{name}}",
+  "features.agentTeams.exportAction": "Експорт",
+  "features.agentTeams.exportMemberFailed": "Не вдалося експортувати команду: не вдалося прочитати агента {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "Цей zip — команда. Імпортуйте його зі списку агентів."
 }

@@ -125,6 +125,10 @@ To verify, call `GET /api/v2/elitea_core/audit_chain_verify/administration` with
 
 Chaining serialises audit inserts: one transaction writes an audit row at a time. Admin and security requests arrive at a low rate, so this costs little.
 
+### Break-glass elevations are security events
+
+Each step of a break-glass elevation is a chained security audit event of type `ai.elitea.security.v1.admin.elevation` (OCSF 3005 User Access Management). It is written in the same transaction as the elevation ledger, so an elevation never starts or ends without its evidence. If the security audit store refuses the write, the step is refused. Your SIEM receives these events through the audit export along with the other `security_audit` events. Filter on `type`, or on `action` prefixed `admin.elevation.`. The event carries the reason code and, for a review note, the note's id and length. It never carries the reason text or the note text. The fields and the full action list are in [the audit event schema](/reference/audit-event-schema#adminelevation).
+
 ## Retention and legal hold
 
 ### The risk this control addresses

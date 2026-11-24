@@ -106,6 +106,12 @@ func (h *Handler) requireIdentityTrust(w http.ResponseWriter, r *http.Request, g
 	if caller.SuperAdmin || caller.Administration[adminaccess.IdentitySSOTrustManage] {
 		return true
 	}
+	// The caller is the STANDING set (ADR-0059 R2.1b), so no elevation
+	// passes here: an approved online elevation never changes identity trust
+	// (ADR-0059 decision 5, the rejected option "Let an approved elevation
+	// change identity trust"). The one elevation that may, a super_admin-level
+	// elevation on the sealed path, is opened here by R2.7a together with the
+	// sealed kind's union; until then the check fails closed.
 	writeTrustRefusal(w, r, gate, &adminaccess.Refusal{Code: gate.code, Message: gate.message})
 	return false
 }

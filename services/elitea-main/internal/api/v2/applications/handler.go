@@ -1112,18 +1112,37 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Guard: block deletion if any version is published/embedded
+	// Guard: a published agent is unpublished first, and an embedded sub-agent
+	// copy goes with the agent that holds it. A copy NO other agent holds any
+	// more (its parent was deleted before the delete took copies along) is an
+	// ordinary agent: refusing it left an agent in the list nothing could
+	// remove.
 	if h.pool != nil {
-		var pubCount int
-		if err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
-			`SELECT COUNT(*) FROM %s.application_versions WHERE application_id = $1 AND status IN ('published','embedded')`, s),
-			applicationID).Scan(&pubCount); err != nil {
+		var published, heldCopy bool
+		if err := h.pool.QueryRow(r.Context(), fmt.Sprintf(`
+SELECT
+    EXISTS (SELECT 1 FROM %[1]s.application_versions WHERE application_id = $1 AND status = 'published'),
+    EXISTS (
+        SELECT 1
+        FROM %[1]s.application_versions AS copy
+        JOIN %[1]s.elitea_tools AS tool
+          ON tool.type = 'application' AND tool.settings->>'application_id' = copy.application_id::text
+        JOIN %[1]s.entity_tool_mapping AS mapping ON mapping.tool_id = tool.id AND mapping.entity_type = 'agent'
+        JOIN %[1]s.application_versions AS holder ON holder.id = mapping.entity_version_id
+        WHERE copy.application_id = $1 AND copy.status = 'embedded' AND holder.application_id <> $1)`, s),
+			applicationID).Scan(&published, &heldCopy); err != nil {
 			apierr.Write(w, apierr.Internal("failed to check published versions"))
 			return
 		}
-		if pubCount > 0 {
+		if published {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
 				"error": "Unpublish first. Cannot delete application with published versions.",
+			})
+			return
+		}
+		if heldCopy {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": "This agent is the sub-agent copy of another agent. Delete or unpublish that agent, and this copy goes with it.",
 			})
 			return
 		}

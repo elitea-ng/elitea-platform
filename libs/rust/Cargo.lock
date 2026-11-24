@@ -2733,6 +2733,7 @@ dependencies = [
  "elitea-doc-extract",
  "elitea-workspace-store",
  "encoding_rs",
+ "getrandom 0.3.4",
  "globset",
  "grep-regex",
  "grep-searcher",

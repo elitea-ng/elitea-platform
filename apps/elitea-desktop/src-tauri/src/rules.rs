@@ -200,6 +200,21 @@ pub fn sanitize_proposal(file: RuleFile) -> (RuleFile, Vec<String>) {
                 rule.network = false;
             }
         }
+        // A login and named hosts are handed out by the person's own rules
+        // only: never by a repository's (conditions only narrow, so they
+        // stay).
+        if let Some(credential) = rule.credential.take() {
+            warnings.push(format!(
+                "Rule {index} (`{shown}`) asks to hand commands the `{credential}` login; it is imported without it (only your own rules grant a login)."
+            ));
+        }
+        if !rule.hosts.is_empty() {
+            warnings.push(format!(
+                "Rule {index} (`{shown}`) asks to allow the hosts {}; it is imported without them (such calls are asked).",
+                rule.hosts.join(", ")
+            ));
+            rule.hosts.clear();
+        }
         rule.origin = Some(RuleOrigin::Repository);
         let alone = RuleFile {
             rules: vec![rule.clone()],
@@ -936,5 +951,34 @@ mod tests {
         assert_eq!(set.rules().len(), 2);
         assert!(set.file().host_executables.is_empty());
         assert!(!set.rules()[0].network && set.rules()[0].sandbox.is_none());
+    }
+
+    /// A repository never hands out a login or hosts (#3006, #3005); the
+    /// conditions, which only narrow, are kept; the imported rule is the
+    /// repository's, so it grants nothing even if edited back in by hand.
+    #[test]
+    fn an_import_never_carries_a_grant() {
+        let (app, _workspaces, id, files) = store();
+        let folder = app.path().join("folder");
+        write(
+            &folder.join(PROPOSED_RULES),
+            r#"{"version":1,"rules":[
+                 {"pattern":["gh","api"],"credential":"gh","hosts":["api.github.com"],
+                  "conditions":{"flag_values":{"-X":["GET"]}}}]}"#,
+            0o644,
+        );
+        let proposal = RuleFiles::proposed(&folder, &[]).unwrap();
+        let rule = &proposal.file.clone().unwrap().rules[0];
+        assert!(rule.credential.is_none() && rule.hosts.is_empty());
+        assert!(!rule.conditions.is_empty());
+        assert_eq!(rule.origin, Some(RuleOrigin::Repository));
+        let warnings = proposal.warnings.join("\n");
+        for expected in ["`gh` login", "api.github.com"] {
+            assert!(warnings.contains(expected), "{expected}: {warnings}");
+        }
+        let set = files
+            .import_proposed(&id, &folder, &[], &proposal.digest)
+            .unwrap();
+        assert!(set.rules()[0].credential.is_none() && set.rules()[0].hosts.is_empty());
     }
 }

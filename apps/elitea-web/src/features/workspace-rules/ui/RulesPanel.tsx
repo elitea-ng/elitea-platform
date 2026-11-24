@@ -18,7 +18,10 @@ import type { PrefixRule, RuleDecision, RuleExplanation, RuleFile, RuleLoadError
 import { toWorkspaceIpcError } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
+import type { GrantDraft } from '../model/grantText';
+import { EMPTY_GRANT, grantDraftOf, withGrant } from '../model/grantText';
 import { formatExample, formatPattern, parseExamples, parsePattern, PatternSyntaxError } from '../model/patternText';
+import { GrantFields } from './GrantFields';
 import { ProposalReview } from './ProposalReview';
 import { decisionLabel, LoadErrorAlert, RuleSummary } from './ruleParts';
 
@@ -35,9 +38,10 @@ interface Draft {
   justification: string;
   match: string;
   notMatch: string;
+  grant: GrantDraft;
 }
 
-const EMPTY_DRAFT: Draft = { pattern: '', decision: 'allow', justification: '', match: '', notMatch: '' };
+const EMPTY_DRAFT: Draft = { pattern: '', decision: 'allow', justification: '', match: '', notMatch: '', grant: EMPTY_GRANT };
 
 const draftOf = (rule: PrefixRule): Draft => ({
   pattern: formatPattern(rule.pattern),
@@ -45,9 +49,10 @@ const draftOf = (rule: PrefixRule): Draft => ({
   justification: rule.justification ?? '',
   match: (rule.match ?? []).map(formatExample).join('\n'),
   notMatch: (rule.not_match ?? []).map(formatExample).join('\n'),
+  grant: grantDraftOf(rule),
 });
 
-/** The draft as a rule; the fields a draft cannot edit (sandbox, network) are kept from `base`. */
+/** The draft as a rule; the fields a draft cannot edit (sandbox, network) are kept from `base` (a grant drops the network). */
 const ruleOf = (draft: Draft, base: PrefixRule | undefined): PrefixRule => {
   const rule: PrefixRule = { ...base, pattern: parsePattern(draft.pattern), decision: draft.decision };
   const justification = draft.justification.trim();
@@ -59,7 +64,7 @@ const ruleOf = (draft: Draft, base: PrefixRule | undefined): PrefixRule => {
   else delete rule.match;
   if (notMatch.length > 0) rule.not_match = notMatch;
   else delete rule.not_match;
-  return rule;
+  return withGrant(rule, draft.grant);
 };
 
 /** Why the pattern's text does not parse, or `null`. */
@@ -73,9 +78,19 @@ function patternError(text: string): string | null {
   }
 }
 
-function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; busy: boolean; error: RuleLoadError | null; onSave: (draft: Draft) => void; onCancel: () => void }): React.JSX.Element {
+interface RuleFormProps {
+  initial: Draft;
+  /** The rule came from a repository: it never grants a login or hosts. */
+  fromRepository: boolean;
+  busy: boolean;
+  error: RuleLoadError | null;
+  onSave: (draft: Draft) => void;
+  onCancel: () => void;
+}
+
+function RuleForm({ initial, fromRepository, busy, error, onSave, onCancel }: RuleFormProps): React.JSX.Element {
   const [draft, setDraft] = useState(initial);
-  const field = (key: keyof Draft) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
+  const field = (key: Exclude<keyof Draft, 'grant'>) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
   const syntax = patternError(draft.pattern);
   return (
     <Stack spacing={1.5} component="form" data-testid="rule-form" onSubmit={(event) => (event.preventDefault(), syntax === null && onSave(draft))}>
@@ -98,6 +113,7 @@ function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; 
       <TextField size="small" label={t('workspace.rules.justification', 'Justification')} helperText={t('workspace.rules.justificationHelp', 'Shown to you and to the agent; for Forbidden, name what to do instead.')} value={draft.justification} onChange={field('justification')} />
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.match', 'Examples it must match (one per line)')} value={draft.match} onChange={field('match')} />
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.notMatch', 'Examples it must not match (one per line)')} value={draft.notMatch} onChange={field('notMatch')} />
+      {draft.decision === 'allow' && <GrantFields value={draft.grant} fromRepository={fromRepository} onChange={(grant) => setDraft((current) => ({ ...current, grant }))} />}
       {error !== null && <LoadErrorAlert error={error} />}
       <Stack direction="row" spacing={1}>
         <Button type="submit" variant="contained" disabled={busy || draft.pattern.trim() === '' || syntax !== null}>
@@ -194,7 +210,7 @@ function RuleRow({ scope, rule, index, busy, onEdit, onDelete }: { scope: RuleSc
 function ScopeFooter({ state, editing, busy, formError, onEdit, onSave, onCancel }: ScopeSectionProps): React.JSX.Element | null {
   if (editing !== null) {
     const rule = editing.index === undefined ? undefined : state.file?.rules[editing.index];
-    return <RuleForm key={`${state.scope}-${editing.index ?? 'new'}`} initial={rule === undefined ? EMPTY_DRAFT : draftOf(rule)} busy={busy} error={formError} onSave={onSave} onCancel={onCancel} />;
+    return <RuleForm key={`${state.scope}-${editing.index ?? 'new'}`} initial={rule === undefined ? EMPTY_DRAFT : draftOf(rule)} fromRepository={rule?.origin !== undefined} busy={busy} error={formError} onSave={onSave} onCancel={onCancel} />;
   }
   if (state.file === null) return null;
   return (

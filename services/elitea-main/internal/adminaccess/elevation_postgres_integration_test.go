@@ -378,6 +378,7 @@ func TestEndElevationEndsOnce(t *testing.T) {
 
 	second, changed := endElevation(t, pool, adminaccess.ElevationEnd{
 		ID: elevation.ID, Reason: adminaccess.ElevationEndApprover, At: elevationClock.Add(20 * time.Minute),
+		ActorUserID: elevation.ApproverUserID,
 	})
 	if changed {
 		t.Fatal("the second end reported a change")

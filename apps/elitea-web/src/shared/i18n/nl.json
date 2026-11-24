@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "Beheer",
   "entities.token.table.adminInherit": "Al uw beheerrechten",
   "entities.token.table.adminInheritEnds": "Al uw beheerrechten, tot {{date}}",
-  "entities.token.table.adminNone": "Geen"
+  "entities.token.table.adminNone": "Geen",
+  "agents.deleteApplicationButton.failed": "De agent kon niet worden verwijderd.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} {{noun}} konden niet worden verwijderd.",
+  "features.agentLifecycle.import.failed": "De import is mislukt. Er is niets geïmporteerd.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} moet kind: team hebben.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} is geen geldige YAML.",
+  "features.agentLifecycle.import.team.leadNotMember": "De leider {{lead}} is geen van de leden van {{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} noemt bestanden die de zip niet bevat: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} moet zijn leden opsommen als de paden van hun .agent.md-bestanden.",
+  "features.agentLifecycle.import.team.noName": "{{file}} heeft geen teamnaam.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} noemt een lid twee keer.",
+  "features.agentLifecycle.import.team.tooManyMembers": "Een team heeft maximaal {{limit}} agents.",
+  "features.agentLifecycle.import.teamLead": "Leider: {{name}}",
+  "features.agentLifecycle.import.teamName": "Team: {{name}}",
+  "features.agentTeams.exportAction": "Exporteren",
+  "features.agentTeams.exportMemberFailed": "Het team kon niet worden geëxporteerd: de agent {{name}} kon niet worden gelezen.",
+  "features.agentLifecycle.import.teamOnAgents": "Deze zip is een team. Importeer hem vanuit de lijst met agents."
 }

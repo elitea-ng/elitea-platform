@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 )
 
 const (
@@ -61,6 +62,76 @@ type PermissionResolution struct {
 	// other credential. Only the administration mode sets it; the token rule
 	// of the action table reads it (ADR-0059 R1.2b).
 	TokenAdminAccess string
+	// ElevatedPermissions are the permissions of Permissions that only an
+	// active elevation bound to the session gives (ADR-0059 decision 5,
+	// story R2.1b): the union of the open elevations' level sets minus the
+	// standing set. A permission the standing set holds too is not here, so
+	// "the permission that admitted the request came from the elevation"
+	// (R2.8a) is membership in this list. Sorted; nil when no elevation took
+	// part. Only the administration mode sets it.
+	ElevatedPermissions []string
+	// ElevationIDs are the active elevations bound to the session that took
+	// part in Permissions, sorted; nil when none did. An elevation adds no
+	// role name: Roles stays the standing roles.
+	ElevationIDs []string
+}
+
+// StandingPermissions is Permissions without what only an elevation gives:
+// the set the caller's standing roles decide for this credential. Sorted
+// when Permissions is, never nil.
+func (r PermissionResolution) StandingPermissions() []string {
+	standing := make([]string, 0, len(r.Permissions))
+	for _, permission := range r.Permissions {
+		if !slices.Contains(r.ElevatedPermissions, permission) {
+			standing = append(standing, permission)
+		}
+	}
+	return standing
+}
+
+// Elevated reports whether an elevation took part in the resolution.
+func (r PermissionResolution) Elevated() bool {
+	return r.ElevationID != "" || len(r.ElevationIDs) > 0 || len(r.ElevatedPermissions) > 0
+}
+
+// StandingAdministrationResolver is the standing-set call (ADR-0059 decision
+// 3, "The exemption is read from standing roles only"; story R2.1b): the
+// administration-mode resolution of ResolvePermissions with no elevation and
+// no provisional grant in it, ever. The role rules, the super_admin
+// exemption and the project self-membership check read the caller's own set
+// from it, so a super_admin-level elevation never carries the exemption.
+type StandingAdministrationResolver interface {
+	ResolveStandingAdministration(ctx context.Context, principal User) (PermissionResolution, error)
+}
+
+// ResolveStandingAdministration answers the standing administration set of
+// principal through resolver: its standing-set call when it has one, and
+// otherwise its administration-mode resolution with whatever it reports as
+// elevated taken out. Either way the answer reports no elevation.
+func ResolveStandingAdministration(ctx context.Context, resolver PermissionResolver, principal User) (PermissionResolution, error) {
+	if resolver == nil {
+		return PermissionResolution{}, ErrPermissionDenied
+	}
+	if standing, ok := resolver.(StandingAdministrationResolver); ok {
+		resolution, err := standing.ResolveStandingAdministration(ctx, principal)
+		if err != nil {
+			return PermissionResolution{}, err
+		}
+		return withoutElevation(resolution), nil
+	}
+	resolution, err := resolver.ResolvePermissions(ctx, principal, PermissionModeAdministration, "")
+	if err != nil {
+		return PermissionResolution{}, err
+	}
+	return withoutElevation(resolution), nil
+}
+
+func withoutElevation(resolution PermissionResolution) PermissionResolution {
+	resolution.Permissions = resolution.StandingPermissions()
+	resolution.ElevatedPermissions = nil
+	resolution.ElevationIDs = nil
+	resolution.ElevationID = ""
+	return resolution
 }
 
 // PermissionResolver resolves the permissions of a principal in one mode.

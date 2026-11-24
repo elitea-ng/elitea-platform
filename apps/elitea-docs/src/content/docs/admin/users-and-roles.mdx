@@ -174,6 +174,8 @@ The role name `break_glass` is reserved: creating a role with that name, or rena
 
 **The global administrator's exemption.** A holder of `admin.auth.users.super_admin` through a standing role is exempt from rules 1 to 3: it can assign and remove roles, its own included, and edit a custom role it holds. Rules 4 to 6 bind it too: it cannot add a seeded-only permission to another role, edit a built-in set or assign the `system` role.
 
+**What a break-glass elevation adds, and what it never adds.** An elevation adds the permissions of its level's role (`admin` or `super_admin`), read from that role at each request, to the one browser session it is bound to, until it ends or expires. Another browser session of the same person, a personal access token, a desktop or mobile session and a run token get nothing from it. It never adds the role's **name**, so it does not open project content (see [What the name `super_admin` reaches](#what-the-name-super_admin-reaches)) and the Audit Trail lists only your standing roles as the roles you acted with. It never adds the **exemption** either: the rules above read your standing roles only, so under a `super_admin`-level elevation you still cannot give yourself a role, edit a role you hold, give the `super_admin` role, or add yourself to a project you are not a member of, unless a standing role already allows it.
+
 In projects:
 
 - **Project members give only what they hold.** A project member who manages members (`/admin/users/default/{project}`) can give or take a project role only if they hold all of its permissions in that project.
