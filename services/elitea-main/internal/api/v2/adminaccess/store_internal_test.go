@@ -50,10 +50,12 @@ func TestAnAbsentSeedTableIsLookedForOncePerMinute(t *testing.T) {
 
 	pool.present = true
 	clock = clock.Add(absentFor)
-	if present, _ := roles.seedsPresent(context.Background()); !present {
-		t.Fatal("the table added after a minute was not seen")
+	if present, err := roles.seedsPresent(context.Background()); err != nil || !present {
+		t.Fatalf("present=%v err=%v: the table added after a minute was not seen", present, err)
 	}
-	roles.seedsPresent(context.Background())
+	if present, err := roles.seedsPresent(context.Background()); err != nil || !present {
+		t.Fatalf("present=%v err=%v, want the cached present answer", present, err)
+	}
 	if pool.lookups != 2 {
 		t.Fatalf("%d lookups, want 2: a present table is cached for good", pool.lookups)
 	}
