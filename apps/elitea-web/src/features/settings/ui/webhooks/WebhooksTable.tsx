@@ -1,7 +1,10 @@
 /**
  * WebhooksTable — the project Webhooks list (#876): one row per outbound
- * webhook, with reveal/copy of the secret, enable/disable, rotate and
- * delete.
+ * webhook, with enable/disable, rotate and delete.
+ *
+ * The secret column says only whether a signing secret is set. The value is
+ * write-only (issue 2963): no read returns it, so there is nothing to reveal
+ * or copy here. Rotate is how a lost value is replaced.
  *
  * Deliberately a plain MUI `Table`, not a DataGrid: five columns, no
  * pagination, no sort — the same "no `GridTableContainer`" call
@@ -13,8 +16,6 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import Box from '@mui/material/Box';
@@ -46,7 +47,8 @@ export interface WebhookViewRow {
   readonly id: string;
   readonly url: string;
   readonly events: readonly string[];
-  readonly secret: string;
+  /** Whether deliveries are signed. The secret itself never reaches the client after it is shown once. */
+  readonly hasSecret: boolean;
   readonly active: boolean;
 }
 
@@ -69,51 +71,24 @@ const secretCellSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', ga
 const eventsCellSx: SxProps<Theme> = { display: 'flex', flexWrap: 'wrap', gap: '0.25rem', maxWidth: '16rem' };
 const collapseCellSx: SxProps<Theme> = { paddingTop: 0, paddingBottom: 0, borderBottom: 'none' };
 
-/** One row's reveal state — local to the table, since it is purely a display toggle over data already fetched. */
-function useRevealedSecrets() {
-  const [revealed, setRevealed] = useState<ReadonlySet<string>>(new Set());
-  const toggle = (id: string) =>
-    setRevealed((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  return { isRevealed: (id: string) => revealed.has(id), toggle };
-}
-
-interface SecretCellProps {
-  readonly row: WebhookViewRow;
-  readonly canReveal: boolean;
-  readonly isRevealed: boolean;
-  readonly onToggle: () => void;
-}
-
-function SecretCell({ row, canReveal, isRevealed, onToggle }: SecretCellProps) {
-  const displayValue = isRevealed ? row.secret : MASKED_SECRET;
+/** A set secret shows as a mask with a "set" label; an unset one says so. Never the value. */
+function SecretCell({ row }: { readonly row: WebhookViewRow }) {
   return (
-    <Box sx={secretCellSx}>
-      <Typography variant="bodySmall" data-testid={`webhook-secret-${row.id}`}>
-        {displayValue}
-      </Typography>
-      {canReveal && (
-        <Tooltip title={isRevealed ? t('entities.webhook.table.hideSecret', 'Hide secret') : t('entities.webhook.table.showSecret', 'Show secret')}>
-          <IconButton size="small" onClick={onToggle} aria-label={t('entities.webhook.table.toggleSecretAria', 'Toggle secret visibility')}>
-            {isRevealed ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
-          </IconButton>
+    <Box sx={secretCellSx} data-testid={`webhook-secret-${row.id}`}>
+      {row.hasSecret ? (
+        <Tooltip title={t('entities.webhook.table.secretWriteOnly', 'Shown once when created or rotated. Rotate to get a new one.')}>
+          <Typography variant="bodySmall">{MASKED_SECRET}</Typography>
         </Tooltip>
+      ) : (
+        <Typography variant="bodySmall" color="text.secondary">
+          {t('entities.webhook.table.secretNotSet', 'Not set')}
+        </Typography>
       )}
-      <Tooltip title={t('entities.webhook.table.copySecret', 'Copy secret')}>
-        <IconButton size="small" onClick={() => void handleCopy(row.secret)} aria-label={t('entities.webhook.table.copySecretAria', 'Copy secret')}>
-          <ContentCopyIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
     </Box>
   );
 }
 
 export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit, onRotate, onToggleActive, onDelete }: WebhooksTableProps) {
-  const { isRevealed, toggle } = useRevealedSecrets();
   const [pendingDelete, setPendingDelete] = useState<WebhookViewRow | null>(null);
   // Deliveries panels are collapsed by default — WebhookDeliveriesPanel only
   // fetches while its row is expanded, so a project with many webhooks does
@@ -182,12 +157,7 @@ export function WebhooksTable({ projectId, rows, isLoading, permissions, onEdit,
                   </Box>
                 </TableCell>
                 <TableCell>
-                  <SecretCell
-                    row={row}
-                    canReveal={permissions.canReveal}
-                    isRevealed={isRevealed(row.id)}
-                    onToggle={() => toggle(row.id)}
-                  />
+                  <SecretCell row={row} />
                 </TableCell>
                 <TableCell>
                   <Switch

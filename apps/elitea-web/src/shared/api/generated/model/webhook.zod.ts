@@ -54,11 +54,10 @@ export const Webhook = zod
       .describe(
         "The event types this webhook fires on. Free-text — the server enforces no fixed vocabulary — matched against `ListByEvent`'s `$2 = ANY(events)`.\n",
       ),
-    secret: zod
-      .string()
-      .optional()
+    has_secret: zod
+      .boolean()
       .describe(
-        "HMAC-SHA256 signs the delivered body into the `X-Webhook-Signature` header. Always present on a read (omitted only when stored empty).\n",
+        "True when a signing secret is set, so every delivery carries an `X-Webhook-Signature` header. The value itself is never returned by a read.\n",
       ),
     active: zod
       .boolean()
@@ -67,7 +66,7 @@ export const Webhook = zod
     updated_at: zod.iso.datetime({ offset: true }),
   })
   .describe(
-    "NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row of the outbound webhook registry. `secret` carries the live value on every read; there is no separate reveal endpoint (see the /webhooks path block's own note on why).\n",
+    "NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row of the outbound webhook registry. The signing secret is write-only (issue 2963): it is stored in the project vault, and no read returns it. `has_secret` says whether deliveries are signed. Create and rotate_secret return the value once (WebhookWithSecret).\n",
   );
 
 export type Webhook = zod.input<typeof Webhook>;

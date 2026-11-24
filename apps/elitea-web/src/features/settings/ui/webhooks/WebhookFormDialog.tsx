@@ -5,7 +5,8 @@
  * The secret itself is never editable through this form: creating always
  * mints a fresh one (`generateWebhookSecret`), and rotating an existing
  * webhook's secret is a separate one-click row action
- * (`WebhooksTable.tsx`'s "Rotate secret") — mixing the two into one form
+ * (`WebhooksTable.tsx`'s "Rotate secret", which the server answers with a
+ * new value shown once; the secret is write-only, issue 2963) — mixing the two into one form
  * would let a url/events edit accidentally also rotate the secret, or vice
  * versa, neither of which the five words on the row's menu promise.
  */

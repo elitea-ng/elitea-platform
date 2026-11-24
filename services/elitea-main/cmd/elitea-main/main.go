@@ -515,7 +515,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	mcpAuthorizationEgressGuard := webhook.NewDestinationGuard(mcpOAuthAllowlist)
 
 	webhookDeliveries := webhookDeliveriesRepository(pool)
-	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
+	// The dispatcher reads each webhook's signing secret from the project
+	// vault per delivery (issue 2963), through the secrets handler, which
+	// holds the same SECRETS_MASTER_KEY source webhooksRepository seals with.
+	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries,
+		webhook.WithGuard(webhookDestinationGuard),
+		webhook.WithSecretResolver(v2secrets.NewHandler(pool)))
 
 	// The live-update plane: NATS core pub/sub (internal/infra/natsbus). One
 	// connection carries the project SSE stream (EventSource) and canvas
@@ -600,6 +605,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	}
 
 	backfillProjectSecretsHeaderValues(ctx, pool, logger)
+	moveWebhookSecretsToVault(ctx, pool, logger)
 
 	var productionAuth *api.ProductionAuthRoutes
 	var currentProjectList *v2projects.CurrentProjectListRoute
@@ -3546,7 +3552,63 @@ func webhooksRepository(pool *pgxpool.Pool) webhook.Repository {
 	if pool == nil {
 		return nil
 	}
-	return dbrepos.NewWebhooksRepo(pool)
+	return newWebhooksRepo(pool)
+}
+
+// newWebhooksRepo builds the webhook registry with the project vault its
+// signing secrets are sealed into (issue 2963). Without a usable vault the
+// repository still serves every read and every write that stores no secret;
+// a write that stores one answers 503 rather than falling back to plaintext.
+func newWebhooksRepo(pool *pgxpool.Pool) *dbrepos.WebhooksRepo {
+	vault := webhookSecretVault(pool)
+	if vault == nil {
+		return dbrepos.NewWebhooksRepo(pool)
+	}
+	return dbrepos.NewWebhooksRepo(pool, dbrepos.WithWebhookSecretVault(vault))
+}
+
+// webhookSecretVault is the vault writer webhook secrets are sealed into. It
+// is built exactly as the configurations router's sealer is: the ENCODED
+// SECRETS_MASTER_KEY (validated through MasterKeyFromEnv), and the secrets
+// handler as the one creator of a vault a project does not have yet.
+func webhookSecretVault(pool *pgxpool.Pool) dbrepos.WebhookSecretVault {
+	decoded, err := v2secrets.MasterKeyFromEnv(os.Getenv)
+	if err != nil {
+		return nil
+	}
+	clear(decoded)
+	masterKey := []byte(os.Getenv(v2secrets.MasterKeyEnvVar))
+	vault, err := dbrepos.NewCurrentSecretVaultRepository(pool, masterKey,
+		dbrepos.WithProjectVaultCreator(v2secrets.NewHandler(pool)))
+	clear(masterKey)
+	if err != nil || vault == nil {
+		return nil
+	}
+	return vault
+}
+
+// moveWebhookSecretsToVault seals every webhook signing secret still stored in
+// plain text into its project vault (issue 2963). It runs where the X-SECRET
+// backfill runs, for the same reason: SQL cannot open the vault, so the move
+// is Go, and it must run after the migrations and before the listeners.
+//
+// It never stops the service. A row it cannot move keeps signing with its
+// plaintext, is logged, and is retried on the next start.
+func moveWebhookSecretsToVault(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
+	if pool == nil {
+		return
+	}
+	report, err := newWebhooksRepo(pool).MoveLegacySecretsToVault(ctx)
+	if err != nil {
+		logger.ErrorContext(ctx, "the webhook signing secret move into the project vault did not finish",
+			"moved", report.Moved, "skipped", report.Skipped, "error", err)
+		return
+	}
+	if report.Moved == 0 && report.Skipped == 0 {
+		return
+	}
+	logger.InfoContext(ctx, "moved webhook signing secrets into the project vault",
+		"moved", report.Moved, "skipped", report.Skipped)
 }
 
 // webhookDeliveriesRepository backs the delivery log (#876's second half) —
