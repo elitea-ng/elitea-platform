@@ -51,12 +51,11 @@ adminTest('a global administrator gives a person two roles, and both survive a r
   try {
     await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
     await page.getByTestId('admin-users-search').fill(subject);
-    const main = page.getByRole('main');
-    await expect(main.getByText(subject)).toBeVisible({ timeout: 20_000 });
-
-    const picker = main.getByRole('combobox', { name: 'Administration roles' });
-    await expect(picker).toHaveCount(1);
-    await expect(picker).toHaveText('None');
+    // Scoped to the subject's row: the search narrows the table, but the
+    // first page can still be on screen when the assertion runs.
+    const row = page.getByRole('main').getByRole('row').filter({ hasText: subject });
+    const picker = row.getByRole('combobox', { name: 'Administration roles' });
+    await expect(picker).toHaveText('None', { timeout: 20_000 });
     await picker.click();
     await page.getByRole('option', { name: /^LLM manager/ }).click();
     await page.getByRole('option', { name: /^Security auditor/ }).click();
@@ -75,10 +74,7 @@ adminTest('a global administrator gives a person two roles, and both survive a r
 
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.getByTestId('admin-users-search').fill(subject);
-    await expect(main.getByText(subject)).toBeVisible({ timeout: 20_000 });
-    await expect(main.getByRole('combobox', { name: 'Administration roles' })).toHaveText(
-      'LLM manager, Security auditor',
-    );
+    await expect(picker).toHaveText('LLM manager, Security auditor', { timeout: 20_000 });
 
     await checkA11y(page);
   } finally {
