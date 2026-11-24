@@ -11,8 +11,8 @@ package admin_test
 //     one role that fails refuses the whole request, the refusal names it,
 //     and nothing is written.
 //   - POST /admin/modes/administration adds one role and keeps the others.
-//   - The listing returns every administration role (`admin_roles`) beside
-//     the kept single `admin_role`.
+//   - The listing returns every administration role (`admin_roles`, by name
+//     since R0.13) beside the kept single `admin_role`.
 //
 // Callers are resolved by the real legacyrbac resolver (newEscalationEnvironment);
 // the built-in roles carry their registry sets (seedBuiltInRoles).
@@ -255,13 +255,14 @@ func TestTheSingleFormStillReplacesTheSet(t *testing.T) {
 	if row.AdminRole == nil || *row.AdminRole != "editor" || !slices.Equal(row.AdminRoles, []string{"editor"}) {
 		t.Fatalf("listing after = %+v, want admin_role editor and admin_roles [editor]", row)
 	}
-	// The legacy roles come first in admin_roles, highest first.
+	// admin_roles is sorted by name, no name above another (ADR-0059 R0.13);
+	// the kept single field is still the highest legacy name.
 	giveRole(t, env, escalationPlainTarget, adminaccess.RoleLLMManager)
 	giveRole(t, env, escalationPlainTarget, "super_admin")
 	row = listedUser(t, router, plain)
-	if !slices.Equal(row.AdminRoles, []string{"super_admin", "editor", "llm_manager"}) ||
+	if !slices.Equal(row.AdminRoles, []string{"editor", "llm_manager", "super_admin"}) ||
 		row.AdminRole == nil || *row.AdminRole != "super_admin" {
-		t.Fatalf("listing = %+v, want [super_admin editor llm_manager] and admin_role super_admin", row)
+		t.Fatalf("listing = %+v, want [editor llm_manager super_admin] and admin_role super_admin", row)
 	}
 }
 

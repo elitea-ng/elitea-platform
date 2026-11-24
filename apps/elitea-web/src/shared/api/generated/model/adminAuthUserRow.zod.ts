@@ -73,7 +73,7 @@ export const AdminAuthUserRow = zod
     admin_roles: zod
       .array(zod.string())
       .describe(
-        "Every administration role the account holds: the four legacy names first, highest first, then every other role by name. Empty for an account with no administration role.\n",
+        "Every administration role the account holds, sorted by name: no role ranks above another (ADR-0059 R0.13). Empty for an account with no administration role.\n",
       ),
   })
   .describe(

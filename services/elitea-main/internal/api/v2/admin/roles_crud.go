@@ -48,11 +48,12 @@ package admin
 //     custom role. See seededRoles.
 //   - A CODE-NAMED role name is never a rename or delete target. `super_admin`,
 //     `admin`, `editor`, `viewer` and `system` are not conventions: they are
-//     string literals in this service's own SQL and Go. `users.go`'s
-//     `adminRolePriority`, `eliteacore`'s `usersPageQuery` (`r.name =
-//     'super_admin' AND r.mode = 'administration'`),
-//     `middleware/project_authorization.go`, `sqlcgen/auth_provisioning.sql.go`
-//     and `projectprovisioning`'s `systemProjectRole` all name them. Renaming
+//     string literals in this service's own SQL and Go. The reviewed list of
+//     every such site is internal/api/testdata/role_name_literals.reviewed
+//     (ADR-0059 R0.13); `eliteacore`'s `usersPageQuery` (`r.name =
+//     'super_admin' AND r.mode = 'administration'`), `projectaccess`,
+//     `sqlcgen/auth_provisioning.sql.go` and `projectprovisioning`'s
+//     `systemProjectRole` are among them. Renaming
 //     one does not rename those, so the platform would keep looking for a role
 //     that no longer exists — the failure is silent and looks like a
 //     permission bug.

@@ -69,9 +69,13 @@ export interface AdminUserRow {
   readonly last_login: string | null;
   readonly suspended: boolean;
   readonly is_admin: boolean;
-  /** The highest of the four legacy roles held; kept for one release (R0.13 removes it). */
+  /**
+   * The highest of the four legacy roles held. The server keeps it for one
+   * release beside `admin_roles` and no check reads it there (ADR-0059 R0.13);
+   * it goes, with `AdminRole`, when this page reads the set (R0.8c, issue 2586).
+   */
   readonly admin_role: AdminRole | null;
-  /** Every administration role held, legacy names first (ADR-0059 R0.8b). */
+  /** Every administration role held, sorted by name (ADR-0059 R0.8b, R0.13). */
   readonly admin_roles: readonly string[];
 }
 
