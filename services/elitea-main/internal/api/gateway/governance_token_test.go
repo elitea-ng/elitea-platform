@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
@@ -73,6 +76,26 @@ func TestAnInheritTokenIsRefusedTheGuardrailOutcomeOnly(t *testing.T) {
 		if !q.wrote {
 			t.Errorf("%s: the stored row was not written", tc.name)
 		}
+	}
+}
+
+// raceQuerier is a row that is a guardrail when the write's statement runs
+// and a throttle rule by the time the miss is read back.
+type raceQuerier struct{ storedKindQuerier }
+
+func (q *raceQuerier) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	tag, err := q.storedKindQuerier.Exec(ctx, sql, args...)
+	q.storedType = "rate_limit"
+	return tag, err
+}
+
+// A token's miss on a row that stopped being a guardrail is a 409 to retry,
+// not a missing permission (review of #2997).
+func TestATokenMissOnARowThatChangedIsAConflict(t *testing.T) {
+	q := &raceQuerier{storedKindQuerier{storedType: guardrailType}}
+	rr := doTokenJSON(NewGovernanceHandler(q), http.MethodDelete, "/governance/id1", "")
+	if rr.Code != http.StatusConflict || q.wrote {
+		t.Fatalf("delete = %d %s (wrote %v), want 409 and no write", rr.Code, rr.Body, q.wrote)
 	}
 }
 

@@ -74,6 +74,8 @@ func TestAnInheritTokenIsRefusedAGlobalProviderRouteChangeOnly(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"label": "Renamed"},
 		{"label": "Renamed again", "type": "open_ai", "data": map[string]any{"api_base": "http://autotest.invalid/v1"}},
+		// A restated type with no data arms the stored-row guard too.
+		{"label": "Typed", "type": "open_ai"},
 	} {
 		if recorder := adminProviderDo(t, token, http.MethodPut, target, body); recorder.Code != http.StatusOK {
 			t.Fatalf("token settings PUT %v = %d: %s", body, recorder.Code, recorder.Body.String())

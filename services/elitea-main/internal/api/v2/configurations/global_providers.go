@@ -662,8 +662,13 @@ func (h *Handler) rewriteGlobalProviderBody(
 		// A token that may not make the route change made a settings one
 		// against the row it read. The write holds it to that row, so a
 		// concurrent route change is not written back over by the merged data.
-		// A body with no `data` object leaves the column alone, so it needs none.
-		if _, merges := body["data"].(map[string]any); merges && stored.found && adminaccess.TokenRefused(r.Context(), http.MethodPut,
+		// A `type` in the body is written too, so it is held the same way: a
+		// type equal to the stored one counts as no change, and would write
+		// the type it read over a newer one. A body with neither leaves both
+		// columns alone, so it needs none.
+		_, merges := body["data"].(map[string]any)
+		_, typed := body["type"]
+		if (merges || typed) && stored.found && adminaccess.TokenRefused(r.Context(), http.MethodPut,
 			adminaccess.GlobalProviderUpdatePattern, adminaccess.OutcomeRoute) {
 			guard = &storedRowGuard{data: before, configType: stored.configType}
 		}

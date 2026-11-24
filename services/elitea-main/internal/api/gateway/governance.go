@@ -117,15 +117,19 @@ func (h *GovernanceHandler) writer(r *http.Request) governanceWriter {
 	if h.holds == nil {
 		return governanceWriter{}
 	}
-	return governanceWriter{
+	writer := governanceWriter{
 		legacy:     h.holds(r, adminaccess.ConfigurationGovernance),
 		guardrails: h.holds(r, adminaccess.LLMGuardrailsManage),
 		policy:     h.holds(r, adminaccess.LLMPolicyManage),
-		// The token rule (ADR-0059 R1.2b, issue 2993): a stored guardrail is
-		// the critical outcome of an update or a delete.
-		tokenNoGuardrail: adminaccess.TokenRefused(r.Context(), r.Method,
-			adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail),
 	}
+	// The token rule (ADR-0059 R1.2b, issue 2993): a stored guardrail is the
+	// critical outcome of an update or a delete. Only those two verbs are
+	// rows of GovernanceRowPattern; a create is decided on its body.
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+		writer.tokenNoGuardrail = adminaccess.TokenRefused(r.Context(), r.Method,
+			adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail)
+	}
+	return writer
 }
 
 // refuseTokenForType applies the token rule of the action table to the
@@ -146,13 +150,19 @@ func refuseTokenForType(w http.ResponseWriter, r *http.Request, pattern, rowType
 // permission reads.
 //
 // A stored guardrail that the write's statement left alone for the token
-// rule's sake is answered with the token rule's refusal.
+// rule's sake is answered with the token rule's refusal. A token's miss on a
+// row it may write now means the row changed between the statement and this
+// read (it was a guardrail then): that is a 409 to retry, not a missing
+// permission.
 func (h *GovernanceHandler) refuseMissedWrite(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
 	var stored string
 	err := h.db.QueryRow(ctx, `SELECT type FROM gateway.governance_config WHERE id::text = $1`, id).Scan(&stored)
+	writer := h.writer(r)
 	switch {
-	case err == nil && stored == guardrailType && h.writer(r).tokenNoGuardrail:
+	case err == nil && stored == guardrailType && writer.tokenNoGuardrail:
 		refuseTokenForType(w, r, adminaccess.GovernanceRowPattern, stored)
+	case err == nil && writer.tokenNoGuardrail && writer.may(stored):
+		writeError(w, http.StatusConflict, "the governance entry changed while this write was made: read it again and retry")
 	case err == nil:
 		writeForbidden(w)
 	case errors.Is(err, pgx.ErrNoRows):

@@ -14,7 +14,7 @@ action:
 |---|---|---|
 | `POST /api/v2/admin/gateway/governance`, `PUT` and `DELETE .../governance/{id}` | a row of type `guardrail`; an update where either the stored row or the body is a guardrail | every other row type |
 | `PUT /api/v2/admin/gateway/providers/{configID}` | a change of any field other than `label`, `display_name`, `description` and `tags` (the endpoint, the credential, the keyless identity, the type) | a change of only those four fields |
-| `PUT /api/v2/admin/retention/policies/{dataClass}`, `PUT` and `DELETE .../projects/{projectID}` | a change that lets data be deleted sooner: a lower maximum, a maximum where data was kept forever, a lower minimum, or an override delete that falls back to a shorter platform maximum | a change that keeps data as long or longer |
+| `PUT /api/v2/admin/retention/policies/{dataClass}`, `PUT` and `DELETE .../projects/{projectID}` | a change that lets data be deleted sooner: a lower maximum, a maximum where data was kept forever, a lower minimum, or turning on project overrides (a stored override below the platform maximum then applies) | a change that keeps data as long or longer |
 
 The comparison is with the stored row, read under the write's lock, so a
 concurrent change cannot turn an allowed change into the critical one:

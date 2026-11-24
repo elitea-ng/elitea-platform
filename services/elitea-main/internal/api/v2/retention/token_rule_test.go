@@ -84,21 +84,29 @@ func TestAnInheritTokenIsRefusedAShorterRetentionOnly(t *testing.T) {
 		name, method, target, body string
 		override                   *int
 		refused                    bool
+		overridesOff               bool
 	}{
 		{"platform maximum down", http.MethodPut, platformPath,
-			`{"min_age_days": 30, "max_age_days": 90, "allow_project_override": true}`, nil, true},
+			`{"min_age_days": 30, "max_age_days": 90, "allow_project_override": true}`, nil, true, false},
 		{"platform minimum down", http.MethodPut, platformPath,
-			`{"min_age_days": 7, "max_age_days": 365, "allow_project_override": true}`, nil, true},
+			`{"min_age_days": 7, "max_age_days": 365, "allow_project_override": true}`, nil, true, false},
 		{"platform maximum up", http.MethodPut, platformPath,
-			`{"min_age_days": 30, "max_age_days": 730, "allow_project_override": true}`, nil, false},
+			`{"min_age_days": 30, "max_age_days": 730, "allow_project_override": true}`, nil, false, false},
 		{"platform kept forever", http.MethodPut, platformPath,
-			`{"min_age_days": 30, "max_age_days": null, "allow_project_override": true}`, nil, false},
-		{"override below the platform maximum", http.MethodPut, overridePath, `{"max_age_days": 90}`, nil, true},
-		{"override raised", http.MethodPut, overridePath, `{"max_age_days": 200}`, days(90), false},
-		{"override lowered", http.MethodPut, overridePath, `{"max_age_days": 60}`, days(90), true},
-		{"override deleted, back to the longer platform maximum", http.MethodDelete, overridePath, "", days(90), false},
+			`{"min_age_days": 30, "max_age_days": null, "allow_project_override": true}`, nil, false, false},
+		{"override below the platform maximum", http.MethodPut, overridePath, `{"max_age_days": 90}`, nil, true, false},
+		{"override raised", http.MethodPut, overridePath, `{"max_age_days": 200}`, days(90), false, false},
+		{"override lowered", http.MethodPut, overridePath, `{"max_age_days": 60}`, days(90), true, false},
+		{"override deleted, back to the longer platform maximum", http.MethodDelete, overridePath, "", days(90), false, false},
+		// A stored override below the platform maximum takes effect once
+		// overrides apply, so turning them on shortens (review of #2997).
+		{"overrides turned on", http.MethodPut, platformPath,
+			`{"min_age_days": 30, "max_age_days": 365, "allow_project_override": true}`, days(60), true, true},
+		{"overrides turned off", http.MethodPut, platformPath,
+			`{"min_age_days": 30, "max_age_days": 365, "allow_project_override": false}`, days(60), false, false},
 	} {
 		store := platformStore(tc.override)
+		store.platform.AllowProjectOverride = !tc.overridesOff
 		before := *store
 		rec, annotation := serveAsToken(t, store, tc.method, tc.target, tc.body)
 		if refused := refusedByTheTokenRule(rec); refused != tc.refused {
@@ -115,7 +123,8 @@ func TestAnInheritTokenIsRefusedAShorterRetentionOnly(t *testing.T) {
 			t.Errorf("%s: audit action %q, want %s", tc.name, annotation.Action, adminaccess.TokenRefusedAuditAction)
 		}
 		if store.actor != 0 || store.override != before.override ||
-			*store.platform.MaxAgeDays != 365 || store.platform.MinAgeDays != 30 {
+			*store.platform.MaxAgeDays != 365 || store.platform.MinAgeDays != 30 ||
+			store.platform.AllowProjectOverride != !tc.overridesOff {
 			t.Errorf("%s: the store was written: %+v", tc.name, store)
 		}
 	}
