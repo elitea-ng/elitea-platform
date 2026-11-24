@@ -75,6 +75,11 @@ refuses "a short DeepWiki identity secret on the provider" "deepwiki.env.ELITEA_
   --set-string deepwiki.env.ELITEA_DEEPWIKI_IDENTITY_SECRET=short-identity
 refuses "a short gateway hop secret" "llmGateway.env.GATEWAY_HOP_SECRET is shorter than 32 bytes" "short-hop" \
   --set-string llmGateway.env.GATEWAY_HOP_SECRET=short-hop
+refuses "a short value padded with spaces" "main.env.APPLICATION_SECRET_KEY is shorter than 32 bytes" "" \
+  --set-string "main.env.APPLICATION_SECRET_KEY=   abcdefghijklmnopqrstuvwxyz012"
+refuses "a long value of one repeated character" "main.env.APPLICATION_SECRET_KEY repeats too few characters" "" \
+  --set-string "main.env.APPLICATION_SECRET_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+renders "an exactly empty optional value renders (unset, as the services read it)" --set-string "main.env.APPLICATION_SECRET_KEY="
 renders "a strong APPLICATION_SECRET_KEY renders" --set-string "main.env.APPLICATION_SECRET_KEY=${STRONG}"
 renders "no signing secret in env renders (the Secret references carry them)"
 
@@ -88,6 +93,11 @@ BASE=(-f "$REPO/deploy/kind/values-kind.yaml")
 refuses "the unwrapped opt-out next to the Form auth configuration" "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\" is refused next to a sign-in configuration" "" \
   --set-string main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true
 renders "the kind values render (generated Secrets, no opt-out)"
+# An enabled provider needs its identity secret on both sides (#2959).
+refuses "DeepWiki on with no identity secret on elitea-main" "deepwiki.enabled needs ELITEA_DEEPWIKI_IDENTITY_SECRET on main" "" \
+  --set main.secrets.ELITEA_DEEPWIKI_IDENTITY_SECRET=null
+refuses "Inventory on with no identity secret on the host" "inventory.enabled needs ELITEA_INVENTORY_IDENTITY_SECRET on inventory" "" \
+  --set inventory.secrets.ELITEA_INVENTORY_IDENTITY_SECRET=null
 
 if [ "$failures" -gt 0 ]; then
   echo "render-secret-strength: ${failures} check(s) failed" >&2

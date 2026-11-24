@@ -2,8 +2,8 @@
 elitea.secretStrength.validate — refuse a weak signing secret written as a
 plain env value (#2958).
 
-The services refuse these values at start-up (libs/go/secretstrength): an
-empty or blank value where one is set, a value shorter than 32 bytes, a
+The services refuse these values at start-up (libs/go/secretstrength): a
+blank value (spaces only), a value shorter than 32 bytes after trimming, a
 well-known placeholder, or a value that was once committed to this
 repository. The chart applies the SAME rule while rendering, so `helm
 template` stops with the variable's name instead of a pod that crash-loops.
@@ -36,7 +36,11 @@ cedf94ffa5b247c8c8ab51b05408e4e71bf885654ef506c95b71f633359d4b49
 
 {{- /* elitea.secretStrength.check — (dict "where" "main.env" "name" VAR "value" V) */ -}}
 {{- define "elitea.secretStrength.check" -}}
-{{- $raw := toString .value -}}
+{{- $raw := .value | default "" | toString -}}
+{{- /* An exactly empty value is "unset", as CheckIfSet reads it. A required
+       secret's absence is the service's to refuse: the chart cannot see a
+       Secret reference's value. */ -}}
+{{- if ne $raw "" -}}
 {{- $v := trim $raw -}}
 {{- $lower := lower $v -}}
 {{- $label := printf "%s.%s" .where .name -}}
@@ -55,12 +59,36 @@ cedf94ffa5b247c8c8ab51b05408e4e71bf885654ef506c95b71f633359d4b49
 {{- if or (has (sha256sum $raw) $burned) (has (sha256sum $v) $burned) -}}
 {{- fail (printf "%s holds a value that was published in this repository and is burned. Generate a new random value (for example: openssl rand -base64 32) and reference it from a Secret." $label) -}}
 {{- end -}}
-{{- if lt (len $raw) 32 -}}
+{{- if lt (len $v) 32 -}}
 {{- fail (printf "%s is shorter than 32 bytes. Generate a random value of at least 32 bytes (for example: openssl rand -base64 32) and reference it from a Secret." $label) -}}
+{{- end -}}
+{{- if lt (len (uniq (splitList "" $v))) 8 -}}
+{{- fail (printf "%s repeats too few characters to be random (fewer than 8 different ones). Generate a random value (for example: openssl rand -base64 32) and reference it from a Secret." $label) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* elitea.secretStrength.requireIdentity — (dict "Values" .Values "component" "deepwiki" "var" "ELITEA_DEEPWIKI_IDENTITY_SECRET")
+       An enabled provider needs its identity secret on BOTH sides: elitea-main
+       refuses to start without it, and the host refuses every call (#2959).
+       A side has it when its `secrets:` map references a Secret, or its `env:`
+       map holds a value. */ -}}
+{{- define "elitea.secretStrength.requireIdentity" -}}
+{{- $component := get .Values .component | default dict -}}
+{{- if $component.enabled -}}
+{{- range $side := list (dict "where" "main" "section" (.Values.main | default dict)) (dict "where" .component "section" $component) -}}
+{{- $ref := get ($side.section.secrets | default dict) $.var -}}
+{{- $env := get ($side.section.env | default dict) $.var -}}
+{{- if and (not (and $ref $ref.secretName $ref.key)) (not $env) -}}
+{{- fail (printf "%s.enabled needs %s on %s: set %s.secrets.%s.secretName / .key to a Secret holding at least 32 random bytes (for example: openssl rand -base64 32). elitea-main and the provider must carry the same value." $.component $.var $side.where $side.where $.var) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "elitea.secretStrength.validate" -}}
+{{- include "elitea.secretStrength.requireIdentity" (dict "Values" .Values "component" "deepwiki" "var" "ELITEA_DEEPWIKI_IDENTITY_SECRET") -}}
+{{- include "elitea.secretStrength.requireIdentity" (dict "Values" .Values "component" "inventory" "var" "ELITEA_INVENTORY_IDENTITY_SECRET") -}}
 {{- $names := list "APPLICATION_SECRET_KEY" "GATEWAY_IDENTITY_SECRET" "GATEWAY_HOP_SECRET" "ELITEA_DEEPWIKI_IDENTITY_SECRET" "ELITEA_INVENTORY_IDENTITY_SECRET" -}}
 {{- range $where, $section := dict "main.env" (.Values.main | default dict) "llmGateway.env" (.Values.llmGateway | default dict) "deepwiki.env" (.Values.deepwiki | default dict) "inventory.env" (.Values.inventory | default dict) -}}
 {{- $env := get $section "env" | default dict -}}

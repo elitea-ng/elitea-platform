@@ -72,6 +72,8 @@ func TestSigningSecretGuardIdentitySecrets(t *testing.T) {
 		{"deepwiki enabled, no secret", map[string]string{"ELITEA_DEEPWIKI_ENABLED": "true"}, "ELITEA_DEEPWIKI_IDENTITY_SECRET"},
 		{"deepwiki disabled, weak secret", map[string]string{"ELITEA_DEEPWIKI_IDENTITY_SECRET": "changeme"}, "ELITEA_DEEPWIKI_IDENTITY_SECRET"},
 		{"inventory enabled, no secret", map[string]string{"ELITEA_INVENTORY_ENABLED": "1"}, "ELITEA_INVENTORY_IDENTITY_SECRET"},
+		{"gateway composed, no identity secret", map[string]string{"LLM_GATEWAY_URL": "https://elitea-llm-gateway:8443"}, "GATEWAY_IDENTITY_SECRET"},
+		{"inventory enabled as T, no secret", map[string]string{"ELITEA_INVENTORY_ENABLED": "T"}, "ELITEA_INVENTORY_IDENTITY_SECRET"},
 		{"inventory enabled, short secret", map[string]string{"ELITEA_INVENTORY_ENABLED": "true", "ELITEA_INVENTORY_IDENTITY_SECRET": "e2e-inventory-identity"}, "ELITEA_INVENTORY_IDENTITY_SECRET"},
 	}
 	for _, tc := range cases {

@@ -21,13 +21,22 @@ var productionAuthVars = []string{"OIDC_ISSUER_URL", "ELITEA_AUTH_CONFIG_FILE"}
 //   - a strong <PREFIX>IDENTITY_SECRET: start;
 //   - a weak one (blank, short, a placeholder, a published value): refuse;
 //   - none: refuse, unless ELITEA_DEV_INSECURE_IDENTITY=true is set for a
-//     local stack, and that flag is itself refused next to a production
-//     authentication configuration.
+//     local stack. That flag is itself refused on a host with a mutual-TLS
+//     listener, and next to a production authentication configuration.
 //
 // No error carries the value.
 func identityStartupCheck(settings spi.Settings, lookup spi.Lookup) error {
 	name := settings.Prefix + "IDENTITY_SECRET"
 	if settings.IdentitySecret == "" && settings.InsecureIdentity {
+		// The host's own signal of a deployment: a mutual-TLS listener. The
+		// chart and every compose stack give the host a client CA; a
+		// developer's plaintext host has none. The two authentication
+		// variables are elitea-main's and usually absent here, so they are a
+		// second guard, not the only one.
+		if settings.TLSCAFile != "" {
+			return fmt.Errorf("%w: %s=true is a local-development flag and must not be set on a host with a mutual-TLS listener (%sTLS_CA_FILE); set %s and remove the flag",
+				spi.ErrConfig, spi.InsecureIdentityEnvVar, settings.Prefix, name)
+		}
 		for _, configured := range productionAuthVars {
 			if value, _ := lookup(configured); value != "" {
 				return fmt.Errorf("%w: %s=true is a local-development flag and must not be set when %s is configured; set %s and remove the flag",

@@ -23,6 +23,7 @@ func TestIdentityStartupCheck(t *testing.T) {
 		{"blank secret", map[string]string{"ELITEA_DEEPWIKI_IDENTITY_SECRET": "   "}, "ELITEA_DEEPWIKI_IDENTITY_SECRET"},
 		{"insecure flag next to OIDC_ISSUER_URL", map[string]string{spi.InsecureIdentityEnvVar: "true", "OIDC_ISSUER_URL": "https://issuer.example.test"}, "OIDC_ISSUER_URL"},
 		{"insecure flag next to ELITEA_AUTH_CONFIG_FILE", map[string]string{spi.InsecureIdentityEnvVar: "true", "ELITEA_AUTH_CONFIG_FILE": "/etc/elitea/auth.yaml"}, "ELITEA_AUTH_CONFIG_FILE"},
+		{"insecure flag on a mutual-TLS host", map[string]string{spi.InsecureIdentityEnvVar: "true", "ELITEA_DEEPWIKI_TLS_CERTFILE": "/certs/s.crt", "ELITEA_DEEPWIKI_TLS_KEYFILE": "/certs/s.key", "ELITEA_DEEPWIKI_TLS_CA_FILE": "/certs/ca.crt"}, "ELITEA_DEEPWIKI_TLS_CA_FILE"},
 		{"insecure flag alone", map[string]string{spi.InsecureIdentityEnvVar: "true"}, ""},
 		{"strong secret", map[string]string{"ELITEA_DEEPWIKI_IDENTITY_SECRET": strong, spi.InsecureIdentityEnvVar: "false"}, ""},
 	}

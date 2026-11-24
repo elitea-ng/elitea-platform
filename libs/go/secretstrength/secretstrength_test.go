@@ -30,6 +30,9 @@ func TestCheckRefusesWeakValues(t *testing.T) {
 		"password":            "password",
 		"elitea":              "elitea",
 		"committed e2e value": "changeme-e2e",
+		"one repeated byte":   strings.Repeat("x", 40),
+		"all-A Fernet key":    strings.Repeat("A", 43) + "=",
+		"two bytes repeated":  strings.Repeat("ab", 20),
 	} {
 		err := Check("SOME_SIGNING_SECRET", value)
 		if err == nil {

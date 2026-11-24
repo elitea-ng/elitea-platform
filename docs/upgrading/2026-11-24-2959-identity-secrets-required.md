@@ -9,8 +9,14 @@
 - **A sub-application host** (DeepWiki, Inventory) refuses to start without
   its `<PREFIX>IDENTITY_SECRET`, and refuses every call when it has none.
   `ELITEA_DEV_INSECURE_IDENTITY=true` lets a host start without the secret on
-  a development machine. The host refuses that flag next to `OIDC_ISSUER_URL`
-  or `ELITEA_AUTH_CONFIG_FILE`.
+  a development machine. The host refuses that flag when it has a mutual-TLS
+  listener (`<PREFIX>TLS_CA_FILE`), and next to `OIDC_ISSUER_URL` or
+  `ELITEA_AUTH_CONFIG_FILE`.
+- **elitea-main** refuses to start without `GATEWAY_IDENTITY_SECRET` when
+  `LLM_GATEWAY_URL` is set, because the gateway refuses every unsigned call.
+- **The chart** refuses a render with `deepwiki.enabled` or
+  `inventory.enabled` and no identity secret reference on elitea-main or on
+  the host. The host's reference is now `optional: false`.
 - **Outbound webhooks.** Creating a webhook without a secret now generates a
   random 32-byte secret, returned once in the create response, as a submitted
   secret is. An update with no secret, or an empty one, keeps the stored

@@ -4,7 +4,8 @@
 (DeepWiki, Inventory) check their signing secrets before they derive a key
 from them. A secret is refused when it is blank, shorter than 32 bytes, a
 well-known placeholder (`changeme`, `secret`, `password`, `elitea` and
-similar), or a value that was once committed to this repository. The error
+similar), a value with fewer than 8 different characters (for example the
+all-`A` example key), or a value that was once committed to this repository. The error
 names the variable, never the value. The checked variables:
 
 - elitea-main: `APPLICATION_SECRET_KEY`, `GATEWAY_IDENTITY_SECRET`,

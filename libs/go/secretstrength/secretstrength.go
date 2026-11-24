@@ -105,7 +105,29 @@ func Check(name, value string) error {
 		return fmt.Errorf("%w: %s is %d bytes long and must be at least %d; set it to a random value (for example `openssl rand -base64 32`)",
 			ErrWeak, name, len(trimmed), MinBytes)
 	}
+	if distinctBytes(trimmed) < MinDistinctBytes {
+		return fmt.Errorf("%w: %s repeats too few characters to be random (fewer than %d different ones); set it to a random value (for example `openssl rand -base64 32`)",
+			ErrWeak, name, MinDistinctBytes)
+	}
 	return nil
+}
+
+// MinDistinctBytes is a cheap floor on randomness: a value such as 32 copies
+// of one character, or the all-"A" Fernet key of the examples, is long
+// enough and still known. Random base64 or hex of 32 bytes always has far
+// more different characters than this.
+const MinDistinctBytes = 8
+
+func distinctBytes(value string) int {
+	var seen [256]bool
+	n := 0
+	for i := 0; i < len(value); i++ {
+		if !seen[value[i]] {
+			seen[value[i]] = true
+			n++
+		}
+	}
+	return n
 }
 
 // CheckIfSet is Check for an optional secret: an unset or empty value passes,
