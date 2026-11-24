@@ -240,6 +240,9 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   'platform.email.manage',
   'platform.maintenance.manage',
   'platform.operations.view',
+  // The break_glass Configuration section's gate (ADR-0059 R2.2a), from the
+  // same 0261 grant.
+  'access.breakglass.manage',
   // 001_initial.sql grants the next two in the administration mode.
   'configuration.native_clients',
   'configuration.microsoft_apps',

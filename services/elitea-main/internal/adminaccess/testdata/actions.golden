@@ -110,6 +110,7 @@ PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	approval_policy	n
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	approvals	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	auth	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	branding	none	false	allow	allowed
+PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	break_glass	critical	true	deny	never
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	browser	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	catalogue	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	circuit_breaker	none	false	allow	allowed

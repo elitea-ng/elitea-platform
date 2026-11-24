@@ -359,6 +359,9 @@ func actionRows() []Action {
 		section("approval_policy", ConfigurationGovernance),
 		section("approvals", ConfigurationGovernance),
 		section("auth", RuntimePlugins),
+		// The break-glass policy (ADR-0059 R2.2a): durations, caps and the
+		// approval switch. An elevation never changes its own controls.
+		section("break_glass", AccessBreakglassManage).critical(deny),
 		section("branding", ConfigurationBranding),
 		section("browser", ConfigurationGovernance),
 		section("catalogue", ConfigurationGovernance),

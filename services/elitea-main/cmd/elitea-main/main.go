@@ -168,6 +168,15 @@ func main() {
 		os.Exit(code)
 	}
 
+	// The break-glass operator command (break_glass.go, ADR-0059 R2.13): end
+	// an elevation without the console. It runs and exits.
+	if len(os.Args) > 1 && os.Args[1] == breakGlassCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runBreakGlass(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	// The credential policy operator command (credential_governance.go).
 	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -472,6 +481,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	if err := startRunSpendCap(ctx, pool, logger); err != nil {
+		return err
+	}
+	// The break-glass elevation reconciler (ADR-0059 R2.16): the
+	// main.elevation_reconciler routine, every minute. It records what ran
+	// out and stops with ctx; access itself never waits for it.
+	if err := startElevationReconciler(ctx, pool, logger); err != nil {
 		return err
 	}
 

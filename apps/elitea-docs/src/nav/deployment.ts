@@ -38,6 +38,7 @@ export const deploymentTab: NavTab = {
         { kind: 'page', slug: 'deployment/hardening-checklist', title: 'Hardening checklist' },
         { kind: 'page', slug: 'deployment/verify-artifacts', title: 'Verify release artifacts' },
         { kind: 'page', slug: 'deployment/emergency-stop-runbook', title: 'Emergency stop runbook' },
+        { kind: 'page', slug: 'deployment/break-glass-runbook', title: 'Break-glass runbook' },
       ],
     },
   ],

@@ -474,3 +474,18 @@ func lineDiff(want, got string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// The break_glass section's save is critical, refused under an elevation and
+// never callable with a token (ADR-0059 R2.2a): an elevation never changes
+// the controls of break-glass itself.
+func TestBreakGlassSectionActionIsCriticalDenyNever(t *testing.T) {
+	t.Parallel()
+	entry, ok := adminaccess.ActionFor(http.MethodPut, adminaccess.ConfigurationValuesPattern, "break_glass")
+	if !ok {
+		t.Fatal("no action entry for the break_glass section")
+	}
+	if entry.Danger != adminaccess.DangerCritical || entry.Elevation != adminaccess.ElevationDeny ||
+		entry.Token != adminaccess.TokenNever || entry.Permission != adminaccess.AccessBreakglassManage {
+		t.Fatalf("break_glass entry = %+v; want critical, elevation deny, token never, access.breakglass.manage", entry)
+	}
+}
