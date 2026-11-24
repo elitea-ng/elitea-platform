@@ -21,6 +21,16 @@ The token value is shown only once, in the dialog right after you generate it. I
 </Step>
 </Steps>
 
+## Administration access
+
+A new token has no administration access, also when you are an administrator. If you hold administration permissions and are signed in to the web app in a browser, the form shows **Administration access**: a list of the administration permissions you may give the token. Check only the ones the token needs. Leave all unchecked for a token without administration access.
+
+- The list holds only permissions you have. Some permissions are never offered, such as the global administrator's own permission, identity trust and break-glass.
+- Giving a token administration permissions needs a recent sign-in, 15 minutes by default. If your sign-in is older, **Generate** takes you through a fresh sign-in (your identity provider, or your password for Form sign-in) and brings you back to the form with what you entered. Click **Generate** again.
+- The desktop and mobile apps do not show the list: tokens created there have no administration access.
+
+The token list shows an **Administration** column when one of your tokens has administration access. A token with chosen permissions lists them. A token marked **All your administration permissions** is an older token that inherits everything you hold; once the end date of that access is set, the column shows it. Replace such a token before then: create a new token with only the permissions it needs, update what uses the old token, and delete the old one. Administrators can also change the permissions of an existing token through the API (see [Administration scopes on a token](/admin/authentication#administration-scopes-on-a-token)).
+
 ## Name limit
 
 A token name is at most 128 characters. The field shows a counter as you approach the limit and **Generate** stays disabled while the name is longer. The same limit applies to the names of agents, pipelines, toolkits, credentials, folders, conversations and skills, and descriptions are at most 2000 characters; the API answers 400 with `field` and `max_length` for a longer value.

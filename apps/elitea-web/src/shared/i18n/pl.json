@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "Właściciel wdrożenia.",
   "pages.admin.users.roles.superAdmin.label": "Administrator globalny",
   "pages.admin.users.roles.viewer.description": "Rola starszego typu. Zachowuje uprawnienia, które miała podczas aktualizacji.",
-  "pages.admin.users.roles.viewer.label": "Przeglądający"
+  "pages.admin.users.roles.viewer.label": "Przeglądający",
+  "entities.token.form.adminScopesHelp": "Wybierz uprawnienia administracyjne, których może używać ten token. Nie wybieraj żadnego, aby utworzyć token bez dostępu administracyjnego. Wybranie któregokolwiek wymaga niedawnego logowania.",
+  "entities.token.form.adminScopesTitle": "Dostęp administracyjny",
+  "entities.token.form.recentSignInUnavailable": "Uprawnienia administracyjne wymagają niedawnego logowania. Wyloguj się, zaloguj ponownie i utwórz token w ciągu kilku minut.",
+  "entities.token.form.scopeBrowserRequired": "Uprawnienia administracyjne można nadać tokenowi tylko po zalogowaniu się własnym kontem w aplikacji internetowej.",
+  "entities.token.form.scopeNotSettable": "To logowanie nie pozwala nadać tokenowi uprawnień administracyjnych. Usuń je albo zaloguj się ponownie i spróbuj jeszcze raz.",
+  "entities.token.form.scopeRefused": "Ten token nie może mieć tych uprawnień administracyjnych: {{scopes}}. Usuń je i utwórz token ponownie.",
+  "entities.token.table.adminAccess": "Administracja",
+  "entities.token.table.adminInherit": "Wszystkie Twoje uprawnienia administracyjne",
+  "entities.token.table.adminInheritEnds": "Wszystkie Twoje uprawnienia administracyjne, do {{date}}",
+  "entities.token.table.adminNone": "Brak"
 }

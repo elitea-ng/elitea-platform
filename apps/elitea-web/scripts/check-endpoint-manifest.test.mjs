@@ -1318,7 +1318,7 @@ const GENERATED_OPERATION_COUNT = 586;
  * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
  * now that the signing secret is write-only. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 394;
+const MANIFEST_ENTRY_COUNT = 395;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -135,8 +135,8 @@ import { getNativeTransport, type NativeTransport } from './nativeTransport';
 import {
   credentialRefusalCode,
   needsReauth,
-  resourceAuthorizationBody,
   sessionExpiredLoginUrl,
+  surfacedRefusalBody,
 } from './reauth-policy';
 
 /* ── behaviour 1: credentials resolution ─────────────────────────────────── */
@@ -278,7 +278,7 @@ async function expiredSessionRefusal<T>(
  * nowhere else; every other one is a session failure with no body to keep.
  */
 async function authRefusal<T>(response: Response): Promise<HttpResult<T>> {
-  const resourceAuth = await resourceAuthorizationBody(response);
+  const resourceAuth = await surfacedRefusalBody(response);
   if (resourceAuth !== undefined) {
     return failure({ kind: 'http', status: response.status, url: response.url, body: resourceAuth });
   }
@@ -337,7 +337,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
     if (needsReauth(response) && options.background !== true) {
       // Behaviour 2b first: a resource-authorization 401 is not a session
       // failure — surface its body instead of burning it on a re-auth.
-      const resourceAuth = await resourceAuthorizationBody(response);
+      const resourceAuth = await surfacedRefusalBody(response);
       if (resourceAuth !== undefined) {
         return failure({ kind: 'http', status: response.status, url: response.url, body: resourceAuth });
       }

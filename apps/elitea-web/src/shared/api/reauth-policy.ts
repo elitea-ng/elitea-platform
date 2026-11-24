@@ -96,6 +96,44 @@ export async function resourceAuthorizationBody(response: Response): Promise<unk
   return undefined;
 }
 
+/* ── behaviour 2b': a recent sign-in is asked for (ADR-0059) ─────────────── */
+
+/** The code `middleware/reauth.go` writes when an action needs a fresh sign-in. */
+const REAUTHENTICATION_REQUIRED_CODE = 'reauthentication_required';
+
+/**
+ * The body a `reauthentication_required` 401 becomes, or `undefined` when this
+ * 401 is not that answer.
+ *
+ * It is not a session failure either: the session is valid, only too old for
+ * this one action. The silent re-auth popup cannot help (it restores the SAME
+ * session, and the replay gets the same 401), and funnelling it into
+ * `kind: 'auth'` would drop the two headers the page needs to start the right
+ * sign-in. So the body is surfaced like a resource-authorization one, with the
+ * headers folded in under `reauthentication`:
+ * `{..., reauthentication: {max_age: <seconds>, method: 'oidc'|'saml'|'form'|null}}`.
+ */
+async function recentSignInBody(response: Response): Promise<unknown> {
+  if ((await credentialRefusalCode(response)) !== REAUTHENTICATION_REQUIRED_CODE) return undefined;
+  const maxAge = Number.parseInt(response.headers.get('x-elitea-reauthentication-max-age') ?? '', 10);
+  const body = (await response.clone().json()) as Record<string, unknown>;
+  return {
+    ...body,
+    reauthentication: {
+      max_age: Number.isFinite(maxAge) && maxAge >= 0 ? maxAge : null,
+      method: response.headers.get('x-elitea-reauthentication-method'),
+    },
+  };
+}
+
+/**
+ * The body of a 401 that is about something other than the session — a
+ * resource authorization (2b) or a recent sign-in (2b') — or `undefined`.
+ */
+export async function surfacedRefusalBody(response: Response): Promise<unknown> {
+  return (await resourceAuthorizationBody(response)) ?? recentSignInBody(response);
+}
+
 /* ── behaviour 2c: the session-expiry contract ───────────────────────────── */
 
 /** The one code the app shell navigates on. Written by `writeSessionExpired`. */

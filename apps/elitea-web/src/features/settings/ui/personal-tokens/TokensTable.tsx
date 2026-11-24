@@ -52,6 +52,7 @@ import {
 } from '@/entities/token';
 import type { PersonalAccessToken } from '@/entities/token';
 import { ExpiryCell, ActionsCell } from './TokenRow';
+import { TokenAdminAccessCell } from './TokenAdminAccessCell';
 import { tokensTableStyles } from './TokensTable.styles';
 
 /**
@@ -79,7 +80,7 @@ function selectPersonalProjectId(context: unknown): string | undefined {
 /* ── column definitions ────────────────────────────────────────────────── */
 
 interface ColumnDef {
-  id: 'name' | 'token' | 'project' | 'expires' | 'actions';
+  id: 'name' | 'token' | 'project' | 'admin' | 'expires' | 'actions';
   label: string;
   sortable: boolean;
 }
@@ -91,6 +92,17 @@ const COLUMNS: ColumnDef[] = [
   { id: 'expires', label: t('entities.token.table.expiration', 'Expiration'), sortable: true },
   { id: 'actions', label: t('entities.token.table.actions', 'Actions'), sortable: false },
 ];
+
+/**
+ * The administration column (ADR-0059 R1.3b) appears only when a token has
+ * administration access: for everyone else the table stays as it was.
+ */
+const ADMIN_COLUMN: ColumnDef = { id: 'admin', label: t('entities.token.table.adminAccess', 'Administration'), sortable: false };
+const COLUMNS_WITH_ADMIN: ColumnDef[] = [...COLUMNS.slice(0, 3), ADMIN_COLUMN, ...COLUMNS.slice(3)];
+
+function columnsFor(tokens: readonly PersonalAccessToken[]): ColumnDef[] {
+  return tokens.some((token) => (token.admin_access ?? 'none') !== 'none') ? COLUMNS_WITH_ADMIN : COLUMNS;
+}
 
 /* ── project binding cell (spec-llm-project-scope §4) ──────────────────── */
 
@@ -192,6 +204,7 @@ export const TokensTable = memo(function TokensTable({
     }
     return base;
   }, [filteredTokens, sortField, sortDir]);
+  const columns = useMemo(() => columnsFor(tokens), [tokens]);
 
   /* ── render cell ──────────────────────────────────────────────────── */
 
@@ -234,6 +247,8 @@ export const TokensTable = memo(function TokensTable({
       if (column.id === 'expires') {
         return <ExpiryCell expires={row.expires} />;
       }
+
+      if (column.id === 'admin') return <TokenAdminAccessCell token={row} />;
 
       return '-';
     },
@@ -286,7 +301,7 @@ export const TokensTable = memo(function TokensTable({
       <Table size="small">
         <TableHead>
           <TableRow>
-            {COLUMNS.map((col) => (
+            {columns.map((col) => (
               <TableCell
                 key={col.id}
                 sx={styles.headerCell}
@@ -321,7 +336,7 @@ export const TokensTable = memo(function TokensTable({
                     : 'inherit',
               }}
             >
-              {COLUMNS.map((col) => (
+              {columns.map((col) => (
                 <TableCell key={col.id}>
                   {col.id === 'actions'
                     ? renderActions(row)

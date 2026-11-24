@@ -7365,5 +7365,15 @@
   "pages.admin.users.error.rolesUnavailable": "The list of administration roles could not be read, so each picker shows only the roles the person holds. Reading it needs the configuration.roles.permissions.view permission.",
   "pages.admin.roles.deprecated": "Deprecated",
   "pages.admin.roles.deprecatedHint": "Ends on a sunset date. Existing grants keep working; it can no longer be added to a role.",
-  "pages.admin.roles.refusal.deprecated": "This permission is being retired, so it can no longer be added to a role. Grant the narrower permission that replaces it."
+  "pages.admin.roles.refusal.deprecated": "This permission is being retired, so it can no longer be added to a role. Grant the narrower permission that replaces it.",
+  "entities.token.form.adminScopesHelp": "Choose the administration permissions this token may use. Choose none for a token without administration access. Choosing any asks for a recent sign-in.",
+  "entities.token.form.adminScopesTitle": "Administration access",
+  "entities.token.form.recentSignInUnavailable": "Administration permissions need a recent sign-in. Sign out, sign in again, and create the token within a few minutes.",
+  "entities.token.form.scopeBrowserRequired": "Administration permissions can be given to a token only after you sign in with your own account in the web app.",
+  "entities.token.form.scopeNotSettable": "This sign-in cannot give a token administration permissions. Remove them, or sign in again and retry.",
+  "entities.token.form.scopeRefused": "This token cannot have these administration permissions: {{scopes}}. Remove them and create the token again.",
+  "entities.token.table.adminAccess": "Administration",
+  "entities.token.table.adminInherit": "All your administration permissions",
+  "entities.token.table.adminInheritEnds": "All your administration permissions, until {{date}}",
+  "entities.token.table.adminNone": "None"
 }

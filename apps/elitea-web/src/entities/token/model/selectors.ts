@@ -155,3 +155,26 @@ export function tokenMintRefusal(error: unknown): TokenMintRefusal | null {
   const projectId = readObject(nested, 'project_id');
   return { code, projectId: typeof projectId === 'number' ? projectId : null };
 }
+
+/**
+ * The refusal of the administration scopes on a create (ADR-0059 R1.3a,
+ * server `internal/api/v2/auth/token_admin_scopes.go`): every code starts
+ * with `token_scope`, and the two scope checks name the refused scopes in
+ * `error.scopes`. The screen offers only what the server offered, so this
+ * is reached when the person's permissions changed since the page loaded.
+ */
+export interface TokenScopeRefusal {
+  readonly code: string;
+  readonly scopes: readonly string[];
+}
+
+export function tokenScopeRefusal(error: unknown): TokenScopeRefusal | null {
+  const nested = nestedTokenError(error);
+  const code = readObject(nested, 'code');
+  if (typeof code !== 'string' || !code.startsWith('token_scope')) return null;
+  const scopes = readObject(nested, 'scopes');
+  return {
+    code,
+    scopes: Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === 'string') : [],
+  };
+}
