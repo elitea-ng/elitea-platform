@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -45,7 +46,8 @@ type adminUserRow struct {
 	LastLogin *string `json:"last_login"`
 	Suspended bool    `json:"suspended"`
 	IsAdmin   bool    `json:"is_admin"`
-	AdminRole *string `json:"admin_role"`
+	// AdminRoles is every administration role held, sorted by name.
+	AdminRoles []string `json:"admin_roles"`
 }
 
 type adminUsersListing struct {
@@ -260,16 +262,16 @@ func TestSetAdminRoleAssignsReplacesAndClears(t *testing.T) {
 
 	t.Run("assigns a role that was absent", func(t *testing.T) {
 		before, _ := userByEmail(t, readUsers(t, router, ""), target)
-		if before.AdminRole != nil {
-			t.Fatalf("fixture user already has role %v", *before.AdminRole)
+		if len(before.AdminRoles) != 0 {
+			t.Fatalf("fixture user already has roles %v", before.AdminRoles)
 		}
 		setRole(t, "editor")
 		after, found := userByEmail(t, readUsers(t, router, ""), target)
 		if !found {
 			t.Fatalf("%s vanished from the listing", target)
 		}
-		if after.AdminRole == nil || *after.AdminRole != "editor" {
-			t.Fatalf("admin_role after assign = %v, want \"editor\"", after.AdminRole)
+		if !slices.Equal(after.AdminRoles, []string{"editor"}) {
+			t.Fatalf("admin_roles after assign = %v, want [editor]", after.AdminRoles)
 		}
 		if !after.IsAdmin {
 			t.Fatalf("is_admin = false after assigning editor")
@@ -279,11 +281,10 @@ func TestSetAdminRoleAssignsReplacesAndClears(t *testing.T) {
 	t.Run("replaces rather than accumulates", func(t *testing.T) {
 		setRole(t, "admin")
 		after, _ := userByEmail(t, readUsers(t, router, ""), target)
-		if after.AdminRole == nil || *after.AdminRole != "admin" {
-			t.Fatalf("admin_role after replace = %v, want \"admin\"", after.AdminRole)
+		if !slices.Equal(after.AdminRoles, []string{"admin"}) {
+			t.Fatalf("admin_roles after replace = %v, want [admin]", after.AdminRoles)
 		}
-		// The listing reports only the highest role, so it alone cannot tell an
-		// exclusive assignment from an accumulating one. SQL can.
+		// SQL agrees with the listing.
 		if names := adminRoleNamesSQL(t, pool, id); len(names) != 1 || names[0] != "admin" {
 			t.Fatalf("administration role rows = %v, want exactly [admin]", names)
 		}
@@ -292,8 +293,8 @@ func TestSetAdminRoleAssignsReplacesAndClears(t *testing.T) {
 	t.Run("a null role_name clears every administration role", func(t *testing.T) {
 		setRole(t, nil)
 		after, _ := userByEmail(t, readUsers(t, router, ""), target)
-		if after.AdminRole != nil {
-			t.Fatalf("admin_role after clear = %v, want null", *after.AdminRole)
+		if len(after.AdminRoles) != 0 {
+			t.Fatalf("admin_roles after clear = %v, want none", after.AdminRoles)
 		}
 		if after.IsAdmin {
 			t.Fatalf("is_admin = true after clearing every role")
@@ -396,8 +397,8 @@ func TestSetAdminRoleGuardsSuperAdminEscalation(t *testing.T) {
 			t.Fatalf("status = %d, want 200 (body %s)", recorder.Code, recorder.Body.String())
 		}
 		row, _ := userByEmail(t, readUsers(t, router, ""), target)
-		if row.AdminRole == nil || *row.AdminRole != "super_admin" {
-			t.Fatalf("admin_role = %v, want \"super_admin\"", row.AdminRole)
+		if !slices.Contains(row.AdminRoles, "super_admin") {
+			t.Fatalf("admin_roles = %v, want super_admin among them", row.AdminRoles)
 		}
 	})
 
@@ -626,9 +627,9 @@ SELECT $1, id FROM public.auth_core__role WHERE name = 'viewer' AND mode = 'admi
 		if len(listing.Rows) != listing.Total {
 			t.Fatalf("len(rows) = %d but total = %d", len(listing.Rows), listing.Total)
 		}
-		// Highest-priority role wins, matching list_users_paginated.
-		if row.AdminRole == nil || *row.AdminRole != "editor" {
-			t.Fatalf("admin_role = %v, want \"editor\" (editor outranks viewer)", row.AdminRole)
+		// Both roles, sorted by name (ADR-0059 R0.13).
+		if !slices.Equal(row.AdminRoles, []string{"editor", "viewer"}) {
+			t.Fatalf("admin_roles = %v, want [editor viewer]", row.AdminRoles)
 		}
 	})
 }

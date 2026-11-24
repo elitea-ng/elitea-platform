@@ -34,7 +34,6 @@ function person(id: number, name: string): AdminUserRow {
     last_login: '2026-08-01T10:00:00',
     suspended: false,
     is_admin: false,
-    admin_role: null,
     admin_roles: [],
   };
 }

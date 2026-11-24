@@ -37,9 +37,9 @@
  *
  * ## Authorisation
  *
- * Every route this page calls is gated server-side on `runtime.plugins`
- * (`internal/api/router.go`) — the same permission the Configuration page it
- * replaces already required. `window.admin_ui_config.permissions` hides the nav
+ * Every route this page calls is gated server-side on `runtime.plugins` or
+ * the narrow `platform.email.manage` (`internal/api/router.go`, the e-mail
+ * section's `singleAccess`); the nav item lists both (ADR-0059 R0.16). `window.admin_ui_config.permissions` hides the nav
  * item and never gates anything: see `./adminUiConfig`.
  */
 import { useEffect, useState } from 'react';

@@ -216,13 +216,13 @@ func TestProjectOverrideOutsideBoundsIsRefused(t *testing.T) {
 	}
 	if _, err := store.SetPlatformPolicy(ctx, retention.Policy{
 		Class: retention.ClassConversation, MinAgeDays: 30, MaxAgeDays: ptrInt(365), AllowProjectOverride: true,
-	}, 1); err != nil {
+	}, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, days := range []int{10, 400} {
 		_, err := store.SetProjectOverride(ctx, retention.Policy{
 			Class: retention.ClassConversation, ProjectID: ptrInt64(1), MaxAgeDays: ptrInt(days),
-		}, 1)
+		}, 1, nil)
 		var apiErr *apierr.APIError
 		if !errors.As(err, &apiErr) || apiErr.Status != 400 {
 			t.Fatalf("%d days: got %v, want 400", days, err)
@@ -234,7 +234,7 @@ func TestProjectOverrideOutsideBoundsIsRefused(t *testing.T) {
 	}
 	if _, err := store.SetProjectOverride(ctx, retention.Policy{
 		Class: retention.ClassConversation, ProjectID: ptrInt64(1), MaxAgeDays: ptrInt(90),
-	}, 1); err != nil {
+	}, 1, nil); err != nil {
 		t.Fatalf("in-bounds override: %v", err)
 	}
 }

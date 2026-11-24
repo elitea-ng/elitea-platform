@@ -45,14 +45,6 @@ const ADMIN_MODE = 'administration';
 export type AdminUserType = 'platform' | 'system';
 
 /**
- * The four legacy administration roles the page's single-role picker offers.
- * `null` clears them all. The server accepts any role of the mode, and a
- * person may hold several (`admin_roles`); the picker for several roles is
- * R0.8c (issue 2586).
- */
-export type AdminRole = 'super_admin' | 'admin' | 'editor' | 'viewer';
-
-/**
  * One row of `GET /admin/auth_users/administration`.
  *
  * `suspended` is a BOOLEAN, and there is no `status` column: `auth_core__user`
@@ -69,9 +61,7 @@ export interface AdminUserRow {
   readonly last_login: string | null;
   readonly suspended: boolean;
   readonly is_admin: boolean;
-  /** The highest of the four legacy roles held; kept for one release (R0.13 removes it). */
-  readonly admin_role: AdminRole | null;
-  /** Every administration role held, legacy names first (ADR-0059 R0.8b). */
+  /** Every administration role held, sorted by name (ADR-0059 R0.8b, R0.13); the page reads only this (R0.8c). */
   readonly admin_roles: readonly string[];
 }
 
@@ -176,37 +166,16 @@ export function useDeleteAdminUsers(): UseMutationResult<void, Error, readonly n
   });
 }
 
-const LEGACY_ADMIN_ROLES: readonly string[] = ['super_admin', 'admin', 'editor', 'viewer'];
-
 /**
- * The role set the single-role picker means: the picked legacy role (or none)
- * in place of the legacy role held, and every other role the person holds
- * kept. The picker shows only the four legacy names, so sending the single
- * `role_name` form, which replaces the whole set, would silently take a role
- * the page never showed (an `llm_manager` beside `admin`).
+ * `POST … {action:'set_admin_role', role_names}` — the person's whole set of
+ * administration roles afterwards (`[]` for none). The server applies the
+ * difference and checks each role given or taken (ADR-0059 R0.8b).
  */
-function pickedRoleSet(heldRoles: readonly string[], roleName: AdminRole | null): string[] {
-  const kept = heldRoles.filter((role) => !LEGACY_ADMIN_ROLES.includes(role));
-  return roleName === null ? kept : [...kept, roleName];
-}
-
-/**
- * `POST … {action:'set_admin_role', role_names}` — swaps the legacy role for
- * `roleName` (`null` clears it) and keeps the person's other roles.
- */
-export function useSetAdminRole(): UseMutationResult<
-  void,
-  Error,
-  { userId: number; roleName: AdminRole | null; heldRoles: readonly string[] }
-> {
+export function useSetAdminRoles(): UseMutationResult<void, Error, { userId: number; roleNames: readonly string[] }> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ userId, roleName, heldRoles }) =>
-      postAdminUsersAction({
-        action: 'set_admin_role',
-        user_id: userId,
-        role_names: pickedRoleSet(heldRoles, roleName),
-      }),
+    mutationFn: ({ userId, roleNames }) =>
+      postAdminUsersAction({ action: 'set_admin_role', user_id: userId, role_names: [...roleNames] }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminUsersKeys.all }),
   });
 }

@@ -31,9 +31,9 @@ import { renderAdminRoute } from './__tests__/testRouter';
 
 /**
  * The contract's own examples (v2.yaml `listAdminAuthUsers` and
- * `adminAuthUsersAction`, ADR-0059 R0.8b): rows carry `suspended` (boolean),
- * the single `admin_role` (string or null) and every role in `admin_roles`;
- * `counts` is unfiltered and labels the tabs.
+ * `adminAuthUsersAction`, ADR-0059 R0.8b): rows carry `suspended` (boolean)
+ * and every role in `admin_roles`; `counts` is unfiltered and labels the tabs.
+ * The listing has no single `admin_role` since R0.8c; the page reads `admin_roles`.
  */
 const USERS_BODY = getListAdminAuthUsersResponseMock();
 const ACTION_BODY = getAdminAuthUsersActionResponseMock();
@@ -46,6 +46,31 @@ interface RecordedRequest {
 
 let recorded: RecordedRequest[] = [];
 
+/**
+ * The central matrix (`GET /admin/permissions/administration/administration`)
+ * on a fresh database with one custom role: `editor` and `viewer` hold
+ * nothing, `system` is the legacy role a seed row marks `unassignable`, and
+ * `e2e_ops` is a custom role with one permission.
+ */
+const ROLE_MATRIX_BODY = {
+  total: 3,
+  rows: [
+    { name: 'admin.auth.users', super_admin: true, admin: true, llm_manager: false, security_auditor: false, editor: false, viewer: false, system: true, e2e_ops: true },
+    { name: 'llm.catalogue.view', super_admin: true, admin: true, llm_manager: true, security_auditor: false, editor: false, viewer: false, system: true, e2e_ops: false },
+    { name: 'models.admin.audit_trail.view', super_admin: true, admin: true, llm_manager: false, security_auditor: true, editor: false, viewer: false, system: true, e2e_ops: false },
+  ],
+  roles: [
+    { name: 'super_admin', built_in: true, marker: 'declared', display_name: 'Global administrator' },
+    { name: 'admin', built_in: true, marker: 'declared', display_name: 'Platform administrator' },
+    { name: 'llm_manager', built_in: true, marker: 'declared', display_name: 'LLM manager' },
+    { name: 'security_auditor', built_in: true, marker: 'declared', display_name: 'Security auditor' },
+    { name: 'editor', built_in: true, marker: 'as_found', display_name: 'Editor' },
+    { name: 'viewer', built_in: true, marker: 'as_found', display_name: 'Viewer' },
+    { name: 'system', built_in: true, marker: 'unassignable', display_name: 'System' },
+    { name: 'e2e_ops', built_in: false, marker: null },
+  ],
+};
+
 /** Full admin-panel surface: the listing plus both write routes. */
 function useAdminUserHandlers(): void {
   server.use(
@@ -57,6 +82,7 @@ function useAdminUserHandlers(): void {
       recorded.push({ method: 'POST', url: request.url, body: await request.json() });
       return HttpResponse.json(ACTION_BODY);
     }),
+    http.get('*/admin/permissions/administration/administration', () => HttpResponse.json(ROLE_MATRIX_BODY)),
     http.put('*/admin/user_suspend/administration/*', async ({ request }) => {
       recorded.push({ method: 'PUT', url: request.url, body: await request.json() });
       return HttpResponse.json({ id: 11, suspended: true });
@@ -170,41 +196,133 @@ describe('Admin › Users', () => {
     expect(writes()[0]!.url).toContain('/admin/user_suspend/administration/12');
   });
 
-  // Ada holds admin and llm_manager (the v2.yaml example). The picker shows
-  // only the legacy role, so it swaps that one and keeps llm_manager: the
-  // single role_name form would replace the whole set and drop it unseen.
-  it('swaps the legacy role and keeps the roles the picker does not show', async () => {
+  it('shows every administration role of a person', async () => {
+    server.use(
+      http.get('*/admin/auth_users/administration', () =>
+        HttpResponse.json({
+          ...USERS_BODY,
+          rows: [{ ...USERS_BODY.rows[0]!, admin_roles: ['llm_manager', 'security_auditor'] }],
+          total: 1,
+        }),
+      ),
+    );
+    renderAdminRoute(<AdminUsers />);
+    await screen.findByText('Ada Admin');
+
+    const picker = await screen.findByRole('combobox', { name: 'Administration roles' });
+    await waitFor(() => expect(picker).toHaveTextContent('LLM manager, Security auditor'));
+  });
+
+  it('saves a set of two roles as one request with both role_names', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
 
-    await user.click(screen.getAllByRole('combobox', { name: 'Admin Role' })[0]!);
-    await user.click(await screen.findByRole('option', { name: 'Viewer' }));
+    // Bo holds no role.
+    const pickers = await screen.findAllByRole('combobox', { name: 'Administration roles' });
+    await user.click(pickers[1]!);
+    await user.click(await screen.findByRole('option', { name: /^LLM manager/ }));
+    await user.click(screen.getByRole('option', { name: /^Security auditor/ }));
+    // Choosing writes nothing; closing the menu saves the set.
+    expect(writes()).toHaveLength(0);
+    await user.keyboard('{Escape}');
 
     await waitFor(() => expect(writes()).toHaveLength(1));
-    expect(writes()[0]!.method).toBe('POST');
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
-      user_id: 11,
-      role_names: ['llm_manager', 'viewer'],
+      user_id: 12,
+      role_names: ['llm_manager', 'security_auditor'],
     });
   });
 
-  it('clears the legacy role with None and keeps the other roles', async () => {
+  it('keeps the roles it did not change when one is added', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
 
-    await user.click(screen.getAllByRole('combobox', { name: 'Admin Role' })[0]!);
-    await user.click(await screen.findByRole('option', { name: 'None' }));
+    // Ada holds admin and llm_manager (the v2.yaml example).
+    await user.click((await screen.findAllByRole('combobox', { name: 'Administration roles' }))[0]!);
+    await user.click(await screen.findByRole('option', { name: /^e2e_ops/ }));
+    await user.keyboard('{Escape}');
 
     await waitFor(() => expect(writes()).toHaveLength(1));
-    // `''` is the DOM value; it must never reach the server as a role name.
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
       user_id: 11,
-      role_names: ['llm_manager'],
+      role_names: ['admin', 'llm_manager', 'e2e_ops'],
     });
+  });
+
+  it('lists the roles that hold permissions, built-in by display name and custom by name', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminUsers />);
+    await screen.findByText('Ada Admin');
+
+    await user.click((await screen.findAllByRole('combobox', { name: 'Administration roles' }))[1]!);
+    const listbox = await screen.findByRole('listbox');
+    // An option's name is its label followed by its description.
+    const names = within(listbox)
+      .getAllByRole('option')
+      .map((option) => option.textContent ?? '');
+    expect(names).toHaveLength(5);
+    for (const [index, label] of [
+      'Global administrator',
+      'Platform administrator',
+      'LLM manager',
+      'Security auditor',
+      'e2e_ops',
+    ].entries()) {
+      expect(names[index]).toMatch(new RegExp(`^${label}`));
+    }
+    for (const absent of ['Editor', 'Viewer', 'System']) {
+      expect(names.some((name) => name.startsWith(absent))).toBe(false);
+    }
+    // A built-in role carries its one-line description.
+    expect(within(listbox).getByText('Providers, models, the catalogue, routing, budgets and alerts.')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['role_self_assignment', 'You cannot change your own administration roles. Ask another administrator.'],
+    ['role_permission_not_held', 'You can grant, assign or remove only permissions that you hold yourself.'],
+  ])('shows the message of a 403 %s', async (code, message) => {
+    const user = userEvent.setup();
+    server.use(
+      http.post('*/admin/auth_users/administration', () =>
+        HttpResponse.json({ error: 'refused', code, role: 'llm_manager' }, { status: 403 }),
+      ),
+    );
+    renderAdminRoute(<AdminUsers />);
+    await screen.findByText('Ada Admin');
+
+    await user.click((await screen.findAllByRole('combobox', { name: 'Administration roles' }))[1]!);
+    await user.click(await screen.findByRole('option', { name: /^LLM manager/ }));
+    await user.keyboard('{Escape}');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+  });
+
+  it('says so when the roles list cannot be read', async () => {
+    server.use(
+      http.get('*/admin/permissions/administration/administration', () =>
+        HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
+      ),
+    );
+    renderAdminRoute(<AdminUsers />);
+    expect(await screen.findByTestId('admin-users-roles-unavailable')).toHaveTextContent(
+      'configuration.roles.permissions.view',
+    );
+  });
+
+  it('says the server refused when the listing answers 403', async () => {
+    server.use(
+      http.get('*/admin/auth_users/administration', () =>
+        HttpResponse.json({ error: 'insufficient permissions' }, { status: 403 }),
+      ),
+    );
+    renderAdminRoute(<AdminUsers />);
+    expect(await screen.findByTestId('admin-users-load-error')).toHaveTextContent(
+      'You do not have the permission to see the users.',
+    );
   });
 
   it('deletes only after the confirmation modal is confirmed', async () => {
@@ -294,8 +412,8 @@ describe('Admin › Users', () => {
     expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
 
     const lines = (await exported!.text()).split('\r\n');
-    expect(lines[0]).toBe('Name,Email,Last login,Status,Admin Role');
-    expect(lines[1]).toBe('Ada Admin,ada@example.com,2026-08-01T10:00:00,Active,Admin');
+    expect(lines[0]).toBe('Name,Email,Last login,Status,Administration roles');
+    expect(lines[1]).toBe('Ada Admin,ada@example.com,2026-08-01T10:00:00,Active,Platform administrator; LLM manager');
     // `suspended` again, and a null last_login as "Never" — same readings the
     // table makes, so the file cannot disagree with the screen.
     expect(lines[2]).toBe('Bo Blocked,bo@example.com,Never,Suspended,None');
@@ -335,7 +453,7 @@ describe('Admin › Users', () => {
     // here is that hiding them does not also hide the LISTING.
     expect(screen.queryByRole('button', { name: 'Delete user' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Suspend user' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Admin Role' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Administration roles' })).not.toBeInTheDocument();
     expect(screen.getByText('ada@example.com')).toBeInTheDocument();
   });
 
@@ -354,7 +472,7 @@ describe('Admin › Users', () => {
     // offered no role/suspend/delete control for them and neither does this
     // port.
     expect(screen.queryByRole('button', { name: 'Delete user' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Admin Role' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Administration roles' })).not.toBeInTheDocument();
 
     // Activity survives, and it is the whole reason the actions column is
     // pushed unconditionally: the column used to exist only `if (onToggleSuspended

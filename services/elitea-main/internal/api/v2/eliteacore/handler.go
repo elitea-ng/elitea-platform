@@ -47,6 +47,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/publicproject"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
@@ -76,6 +77,9 @@ type Handler struct {
 	memoryUsers        MemoryUserJournal
 	pool               *pgxpool.Pool
 	permissionResolver auth.PermissionResolver
+	// accessAudit appends the admin.access.changed events of the central
+	// member routes (users_write_events.go); nil is the PostgreSQL appender.
+	accessAudit securityaudit.Appender
 
 	// maintenanceState reads the maintenance window in place of pool for the
 	// platform_settings flag read (WithMaintenanceState); nil reads pool.
@@ -884,6 +888,10 @@ func (h *Handler) writeProjectIcon(
 // as well. Only the `administration` mode grants central access. Without
 // `r.mode = 'administration'` every holder of a same-named role joined every
 // project's member list as a phantom member.
+//
+// The central administrators are found by the role NAME super_admin, on
+// purpose and with the scope of projectaccess.Membership (ADR-0059 decision 7,
+// story R0.13): a custom role or an elevation is not listed.
 //
 // They are package constants rather than locals for a second reason:
 // scripts/validate_contract_static.sh reads only the first 80 lines of the

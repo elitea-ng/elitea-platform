@@ -1,0 +1,92 @@
+# The reviewed checks by role NAME (ADR-0059 decision 7, "Checks by role
+# name", story R0.13). Read by internal/api/role_name_literals_test.go, which
+# fails on a site of `super_admin` or `admin` that is not listed here and on
+# a row whose site is gone. The web client has its own list,
+# apps/elitea-web/src/pages/admin/roleNameLiterals.reviewed.json.
+#
+# What is scanned: every non-test Go file of services/elitea-main and every
+# .sql query file, outside any directory named migrations (migrations/ and the
+# bootstrap schema internal/infra/db/migrations: applied migrations are
+# immutable, so what they seed is data the rows below act on) and testdata/.
+# Generated code (sqlcgen) is scanned too and carries the decision of its
+# .sql source.
+#
+# Row: file | scope | form | count | decision | why
+#   form: literal:<name> (a Go string equal to the name), sql:<name> (a SQL
+#         literal inside a Go string or a .sql query), const:<Name> (a
+#         comparison with a constant whose value is the name).
+#   decision:
+#     kept      the check tests the name on purpose (the ADR's "Kept").
+#     compat    kept for one release beside the role set (R0.8b), removed with
+#               the field it serves (R0.8c, issue 2586).
+#     seed      the name is data (a built-in role, a default); no check here
+#               decides access by it.
+#     project   a PROJECT role name (auth_core__project_role), the owner role
+#               of a project; ADR-0059 does not change the project roles.
+#     unrelated the string is not a role name.
+#
+# Replaced by R0.13 (no longer in the source): the priority ordering of the
+# Users listing (users.go adminRolePriority in the listing SQL) is gone, the
+# listing returns the set by name; currentAdminRole was removed by R0.8b and
+# the demotion guard tests admin.auth.users.super_admin
+# (adminaccess.Caller.SuperAdmin), not the caller's role name. R0.8c removed
+# the listing's single `admin_role` field and its legacyAdminRoleOrder.
+
+# ── The ADR's table ─────────────────────────────────────────────────────────
+internal/infra/db/projectaccess/projectaccess.go | func Membership | sql:super_admin | 1 | kept | The standing administration role named super_admin passes the project access check of every project. An elevation gives permissions, not the name, and a custom role is not the name: neither passes (middleware/project_authorization_elevation_postgres_integration_test.go). Break-glass repairs the platform; it does not open project content.
+internal/api/v2/eliteacore/handler.go | const usersCountQuery | sql:super_admin | 1 | kept | Holders of the standing super_admin are counted as members of every project; same scope as projectaccess.Membership.
+internal/api/v2/eliteacore/handler.go | const usersPageQuery | sql:super_admin | 2 | kept | Holders of the standing super_admin are listed as members of every project (roles ARRAY['super_admin']); same scope as projectaccess.Membership.
+internal/db/queries/auth_provisioning.sql | query HasAuthAdministrationAdminRole | sql:admin | 1 | kept | admin or super_admin gets the extra project roles at public-project enrollment; narrow roles do not.
+internal/db/queries/auth_provisioning.sql | query HasAuthAdministrationAdminRole | sql:super_admin | 1 | kept | As above: the two names, by decision.
+internal/db/sqlcgen/auth_provisioning.sql.go | const hasAuthAdministrationAdminRole | sql:admin | 1 | kept | Generated from auth_provisioning.sql HasAuthAdministrationAdminRole.
+internal/db/sqlcgen/auth_provisioning.sql.go | const hasAuthAdministrationAdminRole | sql:super_admin | 1 | kept | Generated from auth_provisioning.sql HasAuthAdministrationAdminRole.
+
+# ── The super_admin role as the TARGET of a write ───────────────────────────
+# Giving or taking the role named super_admin needs the permission
+# admin.auth.users.super_admin; the caller is tested by the permission, the
+# role being given or taken is named.
+internal/api/v2/admin/users.go | func (Handler).setAdminRole | const:adminaccess.SuperAdminRole | 2 | kept | The early guard: the difference gives or takes super_admin, so the caller must hold admin.auth.users.super_admin (resolveAssigningCaller).
+internal/api/v2/admin/users.go | func (Handler).checkCentralRoles | const:adminaccess.SuperAdminRole | 1 | kept | The same guard under the role-writes lock; tests caller.SuperAdmin, the permission.
+internal/api/v2/admin/modes.go | func (Handler).ModesAssign | const:adminaccess.SuperAdminRole | 1 | kept | Assigning super_admin on the modes route needs the permission.
+internal/api/v2/admin/modes.go | func (Handler).ModesRemove | literal:super_admin | 1 | kept | Removing super_admin on the modes route needs the permission, in every mode a legacy database carries the name in.
+internal/adminaccess/policy.go | const SuperAdminRole | literal:super_admin | 1 | kept | The role that alone may hold admin.auth.users.super_admin (ADR-0059 decision 3); the constant the guards above name.
+internal/adminaccess/policy.go | func CheckReserved | const:SuperAdminRole | 1 | kept | admin.auth.users.super_admin is reserved to the role named super_admin: the matrix adds it to no other role (migrations/super_admin_permission_holders_postgres_integration_test.go).
+
+# ── Names as data ───────────────────────────────────────────────────────────
+internal/adminaccess/builtin_roles.go | const RoleSuperAdmin | literal:super_admin | 1 | seed | The built-in role catalogue (R0.7): the name of a seeded role and its set.
+internal/adminaccess/builtin_roles.go | const RoleAdmin | literal:admin | 1 | seed | The built-in role catalogue (R0.7).
+internal/api/v2/admin/roles_crud.go | var codeNamedRoles | literal:super_admin | 1 | seed | Refuses to rename or delete a role this list names, because the kept sites above name it; it grants nothing.
+internal/api/v2/admin/roles_crud.go | var codeNamedRoles | literal:admin | 1 | seed | As above.
+internal/application/identity/provision.go | const InitialAdministrationRole | literal:super_admin | 1 | seed | The role the bootstrap-only initial administrators receive (R0.12b); it is assigned, not tested.
+
+# ── Project roles ───────────────────────────────────────────────────────────
+internal/api/router.go | func (supportProjectProvisioner).Provision | literal:admin | 1 | project | The project role the support project's administrator gets at creation.
+internal/api/v2/projects/create.go | func (Handler).CreateProject | literal:admin | 1 | project | The project role the creator of a project gets.
+internal/api/v2/moderation/project_requests.go | func (Handler).decideProjectRequest | literal:admin | 1 | project | The project role the requester of an approved project gets.
+internal/application/projectprovisioning/steps.go | const ownerProjectRole | literal:admin | 1 | project | The owner role of a new project.
+internal/api/v2/eliteacore/handler.go | func (Handler).Roles | literal:admin | 1 | project | The default project role list served when a project has none.
+internal/api/v2/admin/projects.go | const projectPageSQL | sql:admin | 1 | project | The admin Projects page lists each project's admins (project role admin).
+internal/db/queries/auth_projects.sql | query CanManageCurrentTracingConfiguration | sql:admin | 1 | project | Project roles admin, super_admin and system of the project manage its tracing configuration.
+internal/db/queries/auth_projects.sql | query CanManageCurrentTracingConfiguration | sql:super_admin | 1 | project | As above: a project role named super_admin, not the administration role.
+internal/db/queries/auth_projects.sql | query ListCurrentUserProjects | sql:admin | 1 | project | Marks the projects where the caller holds the project role admin.
+internal/db/sqlcgen/auth_projects.sql.go | const canManageCurrentTracingConfiguration | sql:admin | 1 | project | Generated from auth_projects.sql CanManageCurrentTracingConfiguration.
+internal/db/sqlcgen/auth_projects.sql.go | const canManageCurrentTracingConfiguration | sql:super_admin | 1 | project | Generated from auth_projects.sql CanManageCurrentTracingConfiguration.
+internal/db/sqlcgen/auth_projects.sql.go | const listCurrentUserProjects | sql:admin | 1 | project | Generated from auth_projects.sql ListCurrentUserProjects.
+internal/infra/db/chatauthority/access.go | func Load | sql:admin | 1 | project | A project admin (project role admin or super_admin) has the admin scope of chat in the project.
+internal/infra/db/chatauthority/access.go | func Load | sql:super_admin | 1 | project | As above.
+internal/infra/db/repos/agent_breaker.go | func projectAdminIDs | sql:admin | 1 | project | The project admins notified when an agent breaker trips.
+internal/infra/db/repos/agent_breaker.go | func projectAdminIDs | sql:super_admin | 1 | project | As above.
+internal/infra/db/repos/artifact_bucket_permissions.go | func (ArtifactBucketPermissionsRepository).IsProjectAdmin | sql:admin | 1 | project | A project admin manages the project's artifact bucket permissions.
+internal/infra/db/repos/artifact_bucket_permissions.go | func (ArtifactBucketPermissionsRepository).IsProjectAdmin | sql:super_admin | 1 | project | As above.
+internal/infra/db/repos/conversation_activity.go | func (ConversationActivityRepo).projectAdmins | sql:admin | 1 | project | The project admins who see the conversation activity of the project.
+internal/infra/db/repos/conversation_activity.go | func (ConversationActivityRepo).projectAdmins | sql:super_admin | 1 | project | As above.
+internal/infra/db/repos/model_prices.go | func (AmountVisibility).IsProjectAdmin | sql:admin | 1 | project | A project admin sees the amounts of the project's model prices.
+
+# ── Not a role name ─────────────────────────────────────────────────────────
+internal/api/gateway/metered_prices.go | const upsertMeteredPriceSQL | sql:admin | 1 | unrelated | The `source` of an operator-authored price.
+internal/api/v2/admin/roles.go | var retiredPermissions | literal:admin | 1 | unrelated | A retired permission string, not a role.
+internal/api/v2/secrets/admin.go | const adminVaultKey | literal:admin | 1 | unrelated | The id of the shared administration secret vault row.
+internal/infra/storage/postgres_secret_vault.go | const currentAdminVaultID | literal:admin | 1 | unrelated | The id of the shared administration secret vault row.
+internal/infra/db/repos/model_default.go | func (CurrentSecretVaultRepository).ClearCurrentModelDefault | literal:admin | 1 | unrelated | The id of the shared administration secret vault row.
+internal/infra/db/repos/secret_vault.go | func (CurrentSecretVaultRepository).MutateAdmin | literal:admin | 1 | unrelated | The id of the shared administration secret vault row.
+internal/nativeauth/store.go | const ReasonAdmin | literal:admin | 1 | unrelated | The revocation reason of a device session an administrator revoked.

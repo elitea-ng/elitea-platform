@@ -117,11 +117,27 @@ func (h *GovernanceHandler) writer(r *http.Request) governanceWriter {
 	if h.holds == nil {
 		return governanceWriter{}
 	}
-	return governanceWriter{
+	writer := governanceWriter{
 		legacy:     h.holds(r, adminaccess.ConfigurationGovernance),
 		guardrails: h.holds(r, adminaccess.LLMGuardrailsManage),
 		policy:     h.holds(r, adminaccess.LLMPolicyManage),
 	}
+	// The token rule (ADR-0059 R1.2b, issue 2993): a stored guardrail is the
+	// critical outcome of an update or a delete. Only those two verbs are
+	// rows of GovernanceRowPattern; a create is decided on its body.
+	if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+		writer.tokenNoGuardrail = adminaccess.TokenRefused(r.Context(), r.Method,
+			adminaccess.GovernanceRowPattern, adminaccess.OutcomeGuardrail)
+	}
+	return writer
+}
+
+// refuseTokenForType applies the token rule of the action table to the
+// outcome of a row of rowType on (r.Method, pattern): a guardrail is the
+// critical outcome (adminaccess.GovernanceRowAction). It answers true after
+// writing the 403.
+func refuseTokenForType(w http.ResponseWriter, r *http.Request, pattern, rowType string) bool {
+	return adminaccess.RefuseToken(w, r, r.Method, pattern, adminaccess.GovernanceRowAction(rowType))
 }
 
 // refuseMissedWrite answers a write that matched no row: 404 when the row
@@ -132,10 +148,21 @@ func (h *GovernanceHandler) writer(r *http.Request) governanceWriter {
 // The 403 tells a caller that the id exists. That is no disclosure: ids are
 // UUIDs, and the kind of every row is in the listing, which the policy view
 // permission reads.
-func (h *GovernanceHandler) refuseMissedWrite(ctx context.Context, w http.ResponseWriter, id string) {
+//
+// A stored guardrail that the write's statement left alone for the token
+// rule's sake is answered with the token rule's refusal. A token's miss on a
+// row it may write now means the row changed between the statement and this
+// read (it was a guardrail then): that is a 409 to retry, not a missing
+// permission.
+func (h *GovernanceHandler) refuseMissedWrite(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) {
 	var stored string
 	err := h.db.QueryRow(ctx, `SELECT type FROM gateway.governance_config WHERE id::text = $1`, id).Scan(&stored)
+	writer := h.writer(r)
 	switch {
+	case err == nil && stored == guardrailType && writer.tokenNoGuardrail:
+		refuseTokenForType(w, r, adminaccess.GovernanceRowPattern, stored)
+	case err == nil && writer.tokenNoGuardrail && writer.may(stored):
+		writeError(w, http.StatusConflict, "the governance entry changed while this write was made: read it again and retry")
 	case err == nil:
 		writeForbidden(w)
 	case errors.Is(err, pgx.ErrNoRows):
@@ -195,6 +222,10 @@ func (h *GovernanceHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !h.mayWriteType(w, r, body.Type) {
 		return
 	}
+	// The token rule on the kind of the new row (ADR-0059 R1.2b).
+	if refuseTokenForType(w, r, adminaccess.GovernanceCreatePattern, body.Type) {
+		return
+	}
 	if err := validateGovernanceRow(body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -232,6 +263,13 @@ func (h *GovernanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !h.mayWriteType(w, r, body.Type) {
 		return
 	}
+	// The token rule (ADR-0059 R1.2b): an update is a guardrail write when
+	// either side is a guardrail. The body's side is checked here; the stored
+	// side is checked in the statement (storedClause), and refuseMissedWrite
+	// answers a miss on it.
+	if refuseTokenForType(w, r, adminaccess.GovernanceRowPattern, body.Type) {
+		return
+	}
 	if err := validateGovernanceRow(body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -253,7 +291,7 @@ func (h *GovernanceHandler) Update(w http.ResponseWriter, r *http.Request) {
 	row, err := scanGovernanceRow(h.db.QueryRow(ctx, q, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			h.refuseMissedWrite(ctx, w, id)
+			h.refuseMissedWrite(ctx, w, r, id)
 			return
 		}
 		if isUniqueViolation(err) {
@@ -280,7 +318,7 @@ func (h *GovernanceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ct.RowsAffected() == 0 {
-		h.refuseMissedWrite(ctx, w, id)
+		h.refuseMissedWrite(ctx, w, r, id)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

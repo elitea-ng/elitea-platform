@@ -109,8 +109,11 @@ const projectUserNameLikePattern = `project\_user\_%`
 
 // AdminPermissions serves `GET /admin/permissions/{scope}/{mode}`.
 //
-// Response body: {total, rows:[{name, <role>: bool, …}]} — one row per known
-// permission, one boolean column per role in the selected scope.
+// Response body: {total, rows:[{name, <role>: bool, …}], catalogue:[{name,
+// deprecated}]} — one row per known permission, one boolean column per role in
+// the selected scope, and one catalogue entry per row. The central scope adds
+// `roles`, one entry per column with its seed record (ADR-0059 R0.8c): the
+// Users page lists the assignable roles from it.
 func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	if !isKnownScope(scope) {
@@ -123,10 +126,18 @@ func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matrix, err := h.readMatrix(r.Context(), scope, chi.URLParam(r, "mode"))
+	mode := chi.URLParam(r, "mode")
+	matrix, err := h.readMatrix(r.Context(), scope, mode)
 	if err != nil {
 		writeMatrixError(w, err)
 		return
+	}
+	if scope == scopeAdministration {
+		// Only the read describes the columns; the writes diff the cells.
+		if matrix.columns, err = h.centralColumns(r.Context(), mode, matrix.roles); err != nil {
+			writeMatrixError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, matrix.response())
 }
@@ -143,6 +154,21 @@ type permissionMatrix struct {
 	inherited bool
 	// projectID is 0 for the central (administration) scope.
 	projectID int
+	// columns describes each role of a central matrix; nil for a project one.
+	columns []matrixColumn
+}
+
+// matrixColumn is one role of the central matrix with its seed record
+// (elitea_auth.admin_role_seeds, shared 0263): built-in is a recorded fact,
+// not a name. The Users page hides a role marked `unassignable` (the legacy
+// `system` role) and labels a built-in role by its display name.
+type matrixColumn struct {
+	Name    string `json:"name"`
+	BuiltIn bool   `json:"built_in"`
+	// Marker is the seed row's marker, null for a custom role.
+	Marker *string `json:"marker"`
+	// DisplayName is the registry's name for a built-in role, empty otherwise.
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func (m permissionMatrix) response() map[string]any {
@@ -156,7 +182,74 @@ func (m permissionMatrix) response() map[string]any {
 	}
 	// `total` counts the CATALOGUE, matching the legacy `len(all_permissions)`.
 	// It is not a page count — this endpoint is never paginated.
-	return map[string]any{"total": len(rows), "rows": rows}
+	body := map[string]any{"total": len(rows), "rows": rows, "catalogue": catalogueEntries(m.catalogue)}
+	if m.columns != nil {
+		body["roles"] = m.columns
+	}
+	return body
+}
+
+// centralColumns describes the roles of a central mode with their seed rows.
+// A database without the seed table records no built-in role.
+func (h *Handler) centralColumns(ctx context.Context, mode string, roles []string) ([]matrixColumn, error) {
+	markers := map[string]string{}
+	present, err := h.seedRecordPresent(ctx, h.pool)
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		rows, err := h.pool.Query(ctx, `
+SELECT role.name, seed.marker
+FROM elitea_auth.admin_role_seeds AS seed
+JOIN public.auth_core__role AS role ON role.id = seed.role_id
+WHERE role.mode = $1`, mode)
+		if err != nil {
+			return nil, fmt.Errorf("read the built-in roles: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name, marker string
+			if err := rows.Scan(&name, &marker); err != nil {
+				return nil, fmt.Errorf("read the built-in roles: %w", err)
+			}
+			markers[name] = marker
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read the built-in roles: %w", err)
+		}
+	}
+	columns := make([]matrixColumn, 0, len(roles))
+	for _, role := range roles {
+		column := matrixColumn{Name: role}
+		if marker, ok := markers[role]; ok {
+			column.BuiltIn = true
+			column.Marker = &marker
+			if declared, ok := adminaccess.LookupBuiltInRole(role); ok {
+				column.DisplayName = declared.DisplayName
+			}
+		}
+		columns = append(columns, column)
+	}
+	return columns, nil
+}
+
+// catalogueEntry describes one permission of the catalogue. It is served
+// beside `rows`, not in them: every key of a row other than `name` is a role
+// column, and the page sends the rows back on a save.
+type catalogueEntry struct {
+	Name string `json:"name"`
+	// Deprecated marks a legacy name (ADR-0059 decision 2, R0.14a): it keeps
+	// working where it is granted until the sunset date, and a save that adds
+	// it to a role answers 400 permission_deprecated.
+	Deprecated bool `json:"deprecated"`
+}
+
+func catalogueEntries(catalogue []string) []catalogueEntry {
+	entries := make([]catalogueEntry, 0, len(catalogue))
+	for _, name := range catalogue {
+		entries = append(entries, catalogueEntry{Name: name, Deprecated: adminaccess.IsLegacy(name)})
+	}
+	return entries
 }
 
 func (h *Handler) readMatrix(ctx context.Context, scope, mode string) (permissionMatrix, error) {
@@ -628,6 +721,13 @@ func (h *Handler) saveGrants(
 	if len(toGrant) == 0 && len(toRevoke) == 0 {
 		return 0, 0, nil
 	}
+	// A legacy name is added to no role (ADR-0059 decision 2, R0.14a). It is
+	// decided first, before the caller is read, so a global administrator
+	// gets the 400 too. The materialised cells of an inherited project matrix
+	// are cells the project already had, so they are not new grants.
+	if refusal := adminaccess.CheckDeprecated(policyCells(newCells(current, toGrant))); refusal != nil {
+		return 0, 0, refusal
+	}
 	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return 0, 0, refusal
@@ -664,16 +764,7 @@ func (h *Handler) checkMatrixEdit(
 	current permissionMatrix, toGrant, toRevoke []grant,
 ) error {
 	if !centralPlane {
-		added := toGrant
-		if current.inherited {
-			added = nil
-			for _, cell := range toGrant {
-				if !current.granted[cell.role][cell.permission] {
-					added = append(added, cell)
-				}
-			}
-		}
-		if refusal := adminaccess.CheckReserved("", policyCells(added)); refusal != nil {
+		if refusal := adminaccess.CheckReserved("", policyCells(newCells(current, toGrant))); refusal != nil {
 			return refusal
 		}
 		return nil
@@ -726,6 +817,21 @@ func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, 
 		return adminaccess.SetLocked(seeded)
 	}
 	return nil
+}
+
+// newCells is toGrant without the materialised cells of an inherited project
+// matrix: those the project already had through the central fallback.
+func newCells(current permissionMatrix, toGrant []grant) []grant {
+	if !current.inherited {
+		return toGrant
+	}
+	var added []grant
+	for _, cell := range toGrant {
+		if !current.granted[cell.role][cell.permission] {
+			added = append(added, cell)
+		}
+	}
+	return added
 }
 
 func policyCells(cells []grant) []adminaccess.Cell {
@@ -1018,7 +1124,7 @@ func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 		adminaccess.Write(w, r, refusal)
 		return
 	}
-	result, err := h.syncDefaultPermissionsToProjects(r.Context(), caller)
+	result, err := h.syncDefaultPermissionsToProjects(r, caller)
 	if err != nil {
 		writeRoleWriteError(w, r, err)
 		return
@@ -1049,7 +1155,11 @@ type syncResult struct {
 // The sync rewrites the caller's own project roles too, wherever the caller is
 // a member of a shared project, so it runs the effect guard of the
 // no-escalation rule on its transaction (issue 2488).
-func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller adminaccess.Caller) (syncResult, error) {
+//
+// The sync appends one project_permissions_pushed event per role it changed,
+// in this transaction (permission_push_events.go).
+func (h *Handler) syncDefaultPermissionsToProjects(r *http.Request, caller adminaccess.Caller) (syncResult, error) {
+	ctx := r.Context()
 	publicProjectID, err := h.scopeProjectID(ctx, scopePublic)
 	if err != nil {
 		return syncResult{}, err
@@ -1079,7 +1189,8 @@ ON CONFLICT (project_id, name) DO NOTHING`, publicProjectID)
 	}
 
 	// 2. Grant everything the central matrix has.
-	addedTag, err := transaction.Exec(ctx, `
+	changes := pushChanges{}
+	granted, err := changes.changedPermissionsByRole(ctx, transaction, true, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
 SELECT project_role.project_id, project_role.id, central_grant.permission
 FROM public.auth_core__project_role project_role
@@ -1089,7 +1200,8 @@ JOIN public.auth_core__role central_role
 JOIN public.auth_core__role_permission central_grant
   ON central_grant.role_id = central_role.id AND central_grant.permission IS NOT NULL
 WHERE `+syncScopePredicate+`
-ON CONFLICT (project_id, role_id, permission) DO NOTHING`, publicProjectID)
+ON CONFLICT (project_id, role_id, permission) DO NOTHING
+RETURNING role_id, permission`, publicProjectID)
 	if err != nil {
 		return syncResult{}, fmt.Errorf("sync project permissions: %w", err)
 	}
@@ -1098,7 +1210,7 @@ ON CONFLICT (project_id, role_id, permission) DO NOTHING`, publicProjectID)
 	//    add, so a permission removed centrally would live on in every project —
 	//    the failure mode that matters most here, because it is a privilege the
 	//    operator believes they revoked.
-	removedTag, err := transaction.Exec(ctx, `
+	revoked, err := changes.changedPermissionsByRole(ctx, transaction, false, `
 DELETE FROM public.auth_core__project_role_permission override
 USING public.auth_core__project_role project_role, centry.project project
 WHERE project_role.id = override.role_id
@@ -1111,7 +1223,8 @@ WHERE project_role.id = override.role_id
     WHERE central_role.mode = 'default'
       AND central_role.name = project_role.name
       AND central_grant.permission = override.permission
-  )`, publicProjectID)
+  )
+RETURNING override.role_id, override.permission`, publicProjectID)
 	if err != nil {
 		return syncResult{}, fmt.Errorf("prune project permissions: %w", err)
 	}
@@ -1119,13 +1232,16 @@ WHERE project_role.id = override.role_id
 	if err := guard.Check(ctx, transaction); err != nil {
 		return syncResult{}, err
 	}
+	if err := h.appendPushEvents(ctx, transaction, r, caller.UserID, pushTargetTeam, centralFallbackMode, changes); err != nil {
+		return syncResult{}, fmt.Errorf("record the permission sync: %w", err)
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return syncResult{}, fmt.Errorf("commit sync: %w", err)
 	}
 	return syncResult{
 		rolesCreated: createdTag.RowsAffected(),
-		granted:      addedTag.RowsAffected(),
-		revoked:      removedTag.RowsAffected(),
+		granted:      granted,
+		revoked:      revoked,
 	}, nil
 }
 

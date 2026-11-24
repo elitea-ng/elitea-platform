@@ -1554,6 +1554,11 @@ func (h *Handler) applyConfigurationUpdate(
 	if err != nil {
 		return c, nil, err
 	}
+	// The row a token's global provider update was classified against
+	// (stored_row_guard.go), under the row lock, before anything is sealed.
+	if failure, err := checkStoredRowGuard(ctx, tx, schema, configID); failure != nil || err != nil {
+		return c, failure, err
+	}
 	// The required-field rule, for the `data` object this body carries. It runs
 	// on the resolved type — which the body may have omitted — and before any
 	// secret is sealed, so a refused update writes nothing and mints no vault
