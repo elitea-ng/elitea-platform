@@ -52,7 +52,12 @@ async function openEditor(page: Page, pipeline: CreatedPipeline): Promise<Locato
   await expect(page.getByTestId('rf__wrapper')).toBeVisible({ timeout: 30_000 });
   const card = page.locator(`.react-flow__node[data-id="${LLM_NODE_ID}"]`);
   await expect(card).toBeVisible({ timeout: 20_000 });
-  return card;
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${LLM_NODE_ID}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  return panel;
 }
 
 /** The `task` row's own `Type` control — the SECOND of the card's three (`system`, `task`, `chat_history`), by DOM order. */
@@ -202,7 +207,7 @@ test('the dropdown reflects a newly added state variable without a reload', asyn
   await newVarName.fill('new_result');
   await newVarName.press('Enter');
   await expect(page.getByText('new_result', { exact: true })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: 'Close' }).click();
+  await page.getByTestId('pipeline-state-drawer-close-button').click();
 
   // Clean slate — the field still carries the unclosed `{` from above.
   await field.fill('');

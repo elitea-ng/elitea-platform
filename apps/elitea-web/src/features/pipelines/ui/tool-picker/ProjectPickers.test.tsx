@@ -172,4 +172,108 @@ describe('Project pickers and AgentVersionSelect', () => {
       await findByText('This version no longer exists. Select another one.'),
     ).toBeInTheDocument();
   });
+
+  it('ProjectAgentPicker attachedOnly handles attachment & wire shapes without self-disabling or duplicating and filters by search', async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+
+    const { findByTestId, findByPlaceholderText, getAllByTestId, queryByText } = renderWithRouterAndProject(
+      <ProjectAgentPicker
+        attachedOnly
+        onSelect={onSelect}
+        pickerContext={{
+          projectId: PROJECT_ID,
+          yamlJsonObject: {
+            nodes: [{ id: 'n1', type: 'agent', agent_name: 'WireAgent' }],
+          },
+          attachedTools: [
+            {
+              id: undefined,
+              type: 'application',
+              name: 'AttachedApp',
+              settings: { application_id: 42 },
+            },
+            {
+              id: '123',
+              type: 'application',
+              name: 'WireAgent',
+            },
+            {
+              id: '456',
+              type: 'application',
+              name: 'SubPipe',
+              agent_type: 'pipeline',
+            },
+          ],
+        }}
+        data-testid="agent-attached-picker"
+      />,
+      PROJECT_ID,
+    );
+
+    await user.click(await findByTestId('agent-attached-picker'));
+
+    const options = getAllByTestId('agent-attached-picker-option');
+    expect(options).toHaveLength(3);
+    for (const option of options) {
+      expect(option).not.toHaveAttribute('aria-disabled', 'true');
+    }
+
+    const searchInput = await findByPlaceholderText('Search agents and pipelines...');
+    await user.type(searchInput, 'Attached');
+
+    expect(getAllByTestId('agent-attached-picker-option')).toHaveLength(1);
+    expect(queryByText('WireAgent')).not.toBeInTheDocument();
+    expect(queryByText('SubPipe')).not.toBeInTheDocument();
+
+    await user.click(getAllByTestId('agent-attached-picker-option')[0]!);
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: 'AttachedApp', id: 42, isAttached: true }));
+  });
+
+  it('ProjectToolkitPicker and ProjectToolkitsMultiPicker attachedOnly filter unused attached items by search', async () => {
+    const user = userEvent.setup();
+
+    const single = renderWithRouterAndProject(
+      <ProjectToolkitPicker
+        attachedOnly
+        pickerContext={{
+          projectId: PROJECT_ID,
+          attachedTools: [
+            { id: 1, type: 'github', name: 'GitHub Alpha', toolkit_name: 'gh_alpha' },
+            { id: 2, type: 'jira', name: 'Jira Beta', toolkit_name: 'jira_beta' },
+          ],
+        }}
+        data-testid="tk-attached-picker"
+      />,
+      PROJECT_ID,
+    );
+
+    await user.click(await single.findByTestId('tk-attached-picker'));
+    expect(single.getAllByTestId('tk-attached-picker-option')).toHaveLength(2);
+    await user.type(await single.findByPlaceholderText('Search toolkits...'), 'Jira');
+    expect(single.getAllByTestId('tk-attached-picker-option')).toHaveLength(1);
+    expect(single.queryByText('GitHub Alpha')).not.toBeInTheDocument();
+    single.unmount();
+
+    const multi = renderWithRouterAndProject(
+      <ProjectToolkitsMultiPicker
+        attachedOnly
+        pickerContext={{
+          projectId: PROJECT_ID,
+          attachedTools: [
+            { id: 1, type: 'github', name: 'GitHub Alpha', toolkit_name: 'gh_alpha' },
+            { id: 2, type: 'mcp', name: 'Docs MCP', toolkit_name: 'docs_mcp', meta: { mcp: true } },
+          ],
+        }}
+        data-testid="multi-attached-picker"
+      />,
+      PROJECT_ID,
+    );
+
+    await user.click(await multi.findByTestId('multi-attached-picker'));
+    expect(multi.getAllByTestId('multi-attached-picker-option')).toHaveLength(2);
+    await user.type(await multi.findByPlaceholderText('Search toolkits and MCPs...'), 'Docs');
+    expect(multi.getAllByTestId('multi-attached-picker-option')).toHaveLength(1);
+    expect(multi.queryByText('GitHub Alpha')).not.toBeInTheDocument();
+  });
 });

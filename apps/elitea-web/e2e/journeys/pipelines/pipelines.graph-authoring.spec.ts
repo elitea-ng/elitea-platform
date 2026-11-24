@@ -195,6 +195,14 @@ async function settleCanvas(page: Page): Promise<void> {
  */
 async function compactCanvas(page: Page): Promise<void> {
   await settleCanvas(page);
+  const closePanel = page.getByTestId('pipeline-node-panel-close');
+  await expect(async () => {
+    if ((await page.getByTestId('pipeline-node-panel').count()) === 0) return;
+    if (await closePanel.isVisible().catch(() => false)) {
+      await closePanel.click({ timeout: 2_000 }).catch(() => undefined);
+    }
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Auto-arrange' }).click();
   await page.getByRole('menuitem', { name: 'Arrange top to bottom' }).click();
   await settleCanvas(page);

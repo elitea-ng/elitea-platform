@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -78,7 +79,8 @@ func TestSecretLikeNamePatternCatchesTheForbiddenNames(t *testing.T) {
 
 func TestEveryEventTypeHasAnOCSFClass(t *testing.T) {
 	for _, typ := range []EventType{TypeDecision, TypeCredentialRedeem, TypeGrantChanged, TypeBindingChanged,
-		TypeMandateChanged, TypeDelegationChanged, TypeEpochBumped, TypeProbe, TypeExternalIdentityChanged, TypeExternalIdentityDrift, TypeAgentSession, TypeIdentityLinkChanged, TypeAgentMemoryChanged, TypeAgentProposalChanged, TypeAgentWorkforceChanged} {
+		TypeMandateChanged, TypeDelegationChanged, TypeEpochBumped, TypeProbe, TypeExternalIdentityChanged, TypeExternalIdentityDrift, TypeAgentSession, TypeIdentityLinkChanged, TypeAgentMemoryChanged, TypeAgentProposalChanged, TypeAgentWorkforceChanged,
+		TypeAdminAccessChanged} {
 		class, ok := OCSFClassUID(typ)
 		if !ok || class < 1000 {
 			t.Errorf("%s has no OCSF class", typ)
@@ -239,4 +241,193 @@ func jsonbLike(t *testing.T, canonical []byte) []byte {
 		t.Fatal(err)
 	}
 	return bytes.TrimSpace(out.Bytes())
+}
+
+/* ── admin.access.changed (ADR-0059 R1.5) ─────────────────────────────── */
+
+// sampleAccessEvent is a role assignment as the admin routes append it.
+func sampleAccessEvent() SecurityEvent {
+	event := NewAdminAccessChanged(AdminAccessChanged{
+		ActorUserID: 7,
+		SubjectType: "user",
+		SubjectID:   "42",
+		Change: AccessChange{
+			Kind:   AccessRoleAssignment,
+			Mode:   "administration",
+			Source: "console",
+			Before: []string{"editor"},
+			After:  []string{"admin", "editor"},
+		},
+	})
+	event.ID = "0192f0c1-7b6e-7c3a-8f00-000000000009"
+	event.Source = "elitea-main/test"
+	event.Time = time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	return event
+}
+
+func TestAdminAccessChangedIsAKnownTypeWithItsOCSFClass(t *testing.T) {
+	class, ok := OCSFClassUID(TypeAdminAccessChanged)
+	if !ok || class != OCSFClassUserAccessManagement {
+		t.Fatalf("OCSF class = %d, %v; want User Access Management", class, ok)
+	}
+	if !regexp.MustCompile(`^ai\.elitea\.security\.v1\.[a-z.]{1,64}$`).MatchString(string(TypeAdminAccessChanged)) {
+		t.Fatalf("%s does not match the outbox event_type check (shared 0183)", TypeAdminAccessChanged)
+	}
+	for _, kind := range AccessChangeKinds() {
+		if !kind.Valid() {
+			t.Errorf("%s is listed but not valid", kind)
+		}
+	}
+}
+
+func TestAdminAccessChangedCanonicalCarriesTheSets(t *testing.T) {
+	event := sampleAccessEvent()
+	canonical, err := event.Canonical(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Subject string `json:"subject"`
+		Data    struct {
+			Action       string     `json:"action"`
+			PrincipalRef string     `json:"principal_ref"`
+			Access       accessData `json:"access"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(canonical, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Subject != "user/42" || decoded.Data.Action != "admin.access.role_assignment" ||
+		decoded.Data.PrincipalRef != "user:7" {
+		t.Fatalf("decoded = %+v", decoded)
+	}
+	access := decoded.Data.Access
+	if access.Kind != "role_assignment" || access.Source != "console" ||
+		strings.Join(access.Before, ",") != "editor" || strings.Join(access.After, ",") != "admin,editor" {
+		t.Fatalf("access = %+v", access)
+	}
+	// The stored form decodes back into the same bytes (the verifier's
+	// recanonicalize).
+	_, again, err := recanonicalize(canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(again) != string(canonical) {
+		t.Fatalf("recanonicalize changed the bytes:\n%s\n%s", canonical, again)
+	}
+}
+
+// Every other event type has no access payload, so its canonical bytes are
+// what they were before the field existed.
+func TestEventsWithoutAnAccessChangeOmitIt(t *testing.T) {
+	canonical, err := sampleEvent().Canonical(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(canonical), `"access"`) {
+		t.Fatalf("a decision event carries an access key: %s", canonical)
+	}
+}
+
+// The existing rule refuses a secret-shaped value in an access set, and the
+// payload has its own contract.
+func TestAdminAccessChangedRefusesSecretShapedAndMalformedValues(t *testing.T) {
+	cases := map[string]func(*SecurityEvent){
+		"jwt in after":      func(e *SecurityEvent) { e.Access.After = []string{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig"} },
+		"bearer in before":  func(e *SecurityEvent) { e.Access.Before = []string{"Bearer abc"} },
+		"bearer in fields":  func(e *SecurityEvent) { e.Access.Fields = []string{"Bearer abc"} },
+		"empty item":        func(e *SecurityEvent) { e.Access.After = []string{""} },
+		"free source":       func(e *SecurityEvent) { e.Access.Source = "The console" },
+		"free reason code":  func(e *SecurityEvent) { e.Access.ReasonCode = "Because I said so" },
+		"unknown kind":      func(e *SecurityEvent) { e.Access.Kind = "role_renamed" },
+		"wrong action":      func(e *SecurityEvent) { e.Action = "admin.access.role_created" },
+		"no payload":        func(e *SecurityEvent) { e.Access = nil },
+		"payload elsewhere": func(e *SecurityEvent) { e.Type = TypeGrantChanged },
+		"facts on a role":   func(e *SecurityEvent) { e.Access.Membership = &MembershipFacts{} },
+		"too many items":    func(e *SecurityEvent) { e.Access.After = make([]string, maxAccessSetItems+1) },
+		"control in mode":   func(e *SecurityEvent) { e.Access.Mode = "a\x00b" },
+		"jwt in elevation":  func(e *SecurityEvent) { e.Access.ElevationID = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig" },
+		"membership no data": func(e *SecurityEvent) {
+			e.Access.Kind = AccessProjectMembership
+			e.Action = AccessProjectMembership.Action()
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			event := sampleAccessEvent()
+			change := *event.Access
+			event.Access = &change
+			mutate(&event)
+			err := event.Validate()
+			if !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("Validate = %v, want ErrInvalidEvent", err)
+			}
+			if strings.Contains(err.Error(), "eyJ") || strings.Contains(err.Error(), "Bearer abc") {
+				t.Fatalf("the error echoes the value: %v", err)
+			}
+		})
+	}
+	if err := sampleAccessEvent().Validate(); err != nil {
+		t.Fatalf("sample access event: %v", err)
+	}
+}
+
+// reasonTextName matches a field that could hold the reason TEXT: a chained
+// event carries the reason code only (ADR-0059 decision 6).
+var reasonTextName = regexp.MustCompile(`(?i)^(reason|reason_?text|note|comment|justification|description|message)$`)
+
+// The event has no reason-text field: not on the Go payload, not in its
+// canonical form, and not in the export schema of elitea.audit.v1.
+func TestAccessChangeHasNoReasonText(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(AccessChange{}), reflect.TypeOf(accessData{}),
+		reflect.TypeOf(MembershipFacts{}), reflect.TypeOf(membershipData{}),
+		reflect.TypeOf(AdminAccessChanged{}),
+	} {
+		for i := 0; i < typ.NumField(); i++ {
+			field := typ.Field(i)
+			tag := strings.Split(field.Tag.Get("json"), ",")[0]
+			if reasonTextName.MatchString(field.Name) || (tag != "" && reasonTextName.MatchString(tag)) {
+				t.Errorf("%s.%s can hold free text; an access change carries the reason code only", typ.Name(), field.Name)
+			}
+		}
+	}
+
+	raw, err := os.ReadFile("../../../../libs/jsonschema/audit/v1/event.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Properties           map[string]json.RawMessage `json:"properties"`
+			AdditionalProperties *bool                      `json:"additionalProperties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	access, ok := schema.Defs["accessChange"]
+	if !ok || len(access.Properties) == 0 {
+		t.Fatal("the export schema has no accessChange definition")
+	}
+	if access.AdditionalProperties == nil || *access.AdditionalProperties {
+		t.Fatal("accessChange must refuse additional properties, or a reason text could ride along")
+	}
+	for name := range access.Properties {
+		if reasonTextName.MatchString(name) {
+			t.Errorf("the export schema's accessChange has the free-text property %q", name)
+		}
+	}
+	// And the schema names exactly the canonical form's keys.
+	typ := reflect.TypeOf(accessData{})
+	for i := 0; i < typ.NumField(); i++ {
+		tag := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		if _, ok := access.Properties[tag]; !ok {
+			t.Errorf("the export schema's accessChange lacks %q", tag)
+		}
+	}
+	if len(access.Properties) != typ.NumField() {
+		t.Errorf("the export schema's accessChange has %d properties, the canonical form %d",
+			len(access.Properties), typ.NumField())
+	}
 }

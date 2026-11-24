@@ -1,4 +1,11 @@
 export {
+  buildDuplicateNodeId,
+  cloneYamlNodeForDuplicate,
+  duplicatePipelineNode,
+  type DuplicateNodeArgs,
+} from './duplicateNode.helpers';
+export { FlowNodeConfigDrawer, type FlowNodeConfigDrawerProps } from './FlowNodeConfigDrawer';
+export {
   NODE_CONFIG_DRAWER_WIDTH_REM,
   NodeConfigDrawer,
   type NodeConfigDrawerProps,
@@ -20,4 +27,12 @@ export {
   type NodeConfigSectionProps,
   type NodeFieldHeadingProps,
 } from './NodeConfigSection';
+export { NodeDeprecationBanner, type NodeDeprecationBannerProps } from './NodeDeprecationBanner';
+export { NodeNameField, type NodeNameFieldProps } from './NodeNameField';
 export { NodeYamlView, type NodeYamlViewProps } from './NodeYamlView';
+export {
+  MAX_NODE_YAML_BYTES,
+  useNodeYamlEditor,
+  type UseNodeYamlEditorArgs,
+  type UseNodeYamlEditorResult,
+} from './useNodeYamlEditor';

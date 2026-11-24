@@ -140,6 +140,27 @@ The workload identity on the platform listener (`dns:` or `spiffe://`, from
 `ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS`: the agent worker, and the Inventory
 engine's callback identity) only admits the call to the service.
 
+## Admin audit role use and tamper evidence
+
+<a id="admin-audit-role-use-not-tamper-evident"></a>
+
+Every administration-mode row of `centry.audit_events` (a request during which
+the permission resolver answered the `administration` mode for the caller)
+records the capacity it was written in (ADR-0059 decision 8, story R1.4a,
+shared migration 0268): `acting_roles` (the caller's standing administration
+roles, from the resolution the request already made), `elevation_id`,
+`credential_kind` (`session`, `form`, `sealed`, `token`, `native`, `run`,
+`system`, `scim`; NULL when unknown, never a guess), `central_override`,
+`reason_code`, `reason` and `reason_missing`.
+
+**These fields are not tamper-evident until R1.4b (issue 2576).** They are
+plain nullable columns outside the row hash: `centry.audit_event_canonical`
+(shared 0206) does not name them, so the chain verifier does not cover them
+and the append-only trigger does not guard them. A person with write access
+to the table can change them without breaking the chain. R1.4b moves them
+into a versioned canonical form and into the `elitea.audit.v1` export. Until
+then, read them as recorded facts, not as evidence.
+
 ## Shared Libraries
 
 | Library | Purpose |

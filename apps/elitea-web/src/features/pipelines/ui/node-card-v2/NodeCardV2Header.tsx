@@ -66,7 +66,8 @@ export const NodeCardV2Header = memo(function NodeCardV2Header({
   issues,
   admissionBadge,
 }: NodeCardV2HeaderProps): ReactNode {
-  const displayType = (PipelineNodeDisplayNames as Readonly<Record<string, string>>)[type] ?? type;
+  const displayNames = PipelineNodeDisplayNames as Readonly<Record<string, string>>;
+  const displayType = Object.hasOwn(displayNames, type) ? displayNames[type]! : type;
 
   return (
     <Box sx={containerSx} data-testid="pipeline-node-v2-header">
