@@ -157,6 +157,15 @@ func main() {
 		os.Exit(code)
 	}
 
+	// The administrative roles operator command (admin_role.go, ADR-0059
+	// R0.12a): grant, revoke, list, reset. It runs and exits.
+	if len(os.Args) > 1 && os.Args[1] == adminRoleCommand {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runAdminRole(ctx, os.Args[2:], os.LookupEnv, os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	// The credential policy operator command (credential_governance.go).
 	if len(os.Args) > 1 && os.Args[1] == credentialPolicyCommand {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
