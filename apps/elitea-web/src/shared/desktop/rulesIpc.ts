@@ -28,8 +28,29 @@ export interface PrefixRule {
   not_match?: RuleExample[];
   sandbox?: 'read-only' | 'workspace-write' | 'full-access';
   network?: boolean;
+  /**
+   * Allow rules only, the person's own (#3006): hand the program its stored
+   * login (a credential profile id, `gh`) inside the sandbox.
+   */
+  credential?: string;
+  /** Allow rules only (#3005): the host names the command may reach, through the filtering proxy. */
+  hosts?: string[];
+  /** Allow rules only (#3007): argument conditions that must all hold for the rule to match. */
+  conditions?: RuleConditions;
   /** Imported from a repository's proposal: its justification never reaches the model. */
   origin?: 'repository';
+}
+
+/** A rule's argument conditions (IPC.md, "Approval rules"). */
+export interface RuleConditions {
+  /** Flags that must not appear anywhere in the command (`-f`, `--input`). */
+  forbid_flags?: string[];
+  /** Flags that must appear (`--draft`). */
+  require_flags?: string[];
+  /** Flags whose every value must be one of these (`{"-X": ["GET"]}`); case-insensitive. */
+  flag_values?: Record<string, string[]>;
+  /** `gh api graphql`: queries only, never a mutation or subscription. */
+  graphql?: 'query';
 }
 
 export interface RuleFile {
