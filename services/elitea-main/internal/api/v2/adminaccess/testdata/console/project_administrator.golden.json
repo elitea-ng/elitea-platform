@@ -1,0 +1,50 @@
+{
+  "areas": [
+    {
+      "id": "people_access",
+      "label_key": "pages.admin.console.area.people_access",
+      "items": [
+        {
+          "id": "scim",
+          "label_key": "pages.admin.console.item.scim",
+          "level": "read"
+        }
+      ]
+    },
+    {
+      "id": "projects",
+      "label_key": "pages.admin.console.area.projects",
+      "items": [
+        {
+          "id": "projects",
+          "label_key": "pages.admin.console.item.projects",
+          "level": "write"
+        },
+        {
+          "id": "app-requests",
+          "label_key": "pages.admin.console.item.app-requests",
+          "level": "write"
+        }
+      ]
+    },
+    {
+      "id": "models_spend",
+      "label_key": "pages.admin.console.area.models_spend",
+      "items": [
+        {
+          "id": "budgets-alerts",
+          "label_key": "pages.admin.console.item.budgets-alerts",
+          "level": "read"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "project_administrator",
+      "display_name": "Project administrator (all projects)",
+      "built_in": true
+    }
+  ],
+  "elevation": null
+}

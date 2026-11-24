@@ -46,6 +46,8 @@ var declaredWithoutDecision = map[string]string{
 		"any signed-in user may ask; the approval is the gated PUT /moderation_status/administration",
 	"GET /api/v2/admin/moderation_status/project_requests/mine": "the caller's own project " +
 		"requests (#871); no permission decision",
+	"GET /api/v2/admin/console/items/{item_id}": "a console item and the roles that grant it, by role " +
+		"name (ADR-0059 R3.1a); any signed-in user may read it, so it resolves nobody's permissions",
 	"GET /api/v2/projects/project/{mode}/{projectID}": "lists the caller's own projects; " +
 		"no permission decision whatever the mode segment says",
 	"POST /api/v2/secrets/secrets/{mode}/{projectID}": "bulk replacement of the vault answers 501 " +
@@ -507,5 +509,22 @@ func TestAdministrationSurfaceReachesSessionAndWindowChecks(t *testing.T) {
 	want := []string{adminsurface.TokenMint.String() + " " + adminsurface.VariantNativeSession}
 	if !slices.Equal(wholeSet, want) {
 		t.Errorf("writes that name no permission: got %q, want %q", wholeSet, want)
+	}
+}
+
+// TestTheConsoleCapabilityDocumentNamesNoPermission: GET /admin/console is on
+// the composed router and on the administration surface, and its one check
+// reads the caller's whole administration set (ADR-0059 R3.1a): it requires
+// no permission, every signed-in caller gets an answer, and what it answers
+// depends on everything the caller holds.
+func TestTheConsoleCapabilityDocumentNamesNoPermission(t *testing.T) {
+	t.Parallel()
+	entries := drivenComposedSurface(t).result.Find(http.MethodGet, "/api/v2/admin/console")
+	if len(entries) != 1 {
+		t.Fatalf("GET /api/v2/admin/console: %d surface entries, want 1 (is it mounted?)", len(entries))
+	}
+	entry := entries[0]
+	if !entry.NamesNoPermission() || len(entry.Checks) != 1 || entry.Checks[0].Gate {
+		t.Errorf("GET /api/v2/admin/console: got checks %+v, want one in-handler check of the whole set", entry.Checks)
 	}
 }

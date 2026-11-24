@@ -133,7 +133,7 @@ export function ChatBoxComposer(props: ChatBoxComposerProps): ReactNode {
       <NewChatInput
         ref={chatInputRef}
         conversationId={conversationId !== undefined ? String(conversationId) : undefined}
-        state={{ isLoading: inputState.isComposerBusy, disabledInput: inputState.isDraftInputBusy, isStreaming, disabledSend: inputState.disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
+        state={{ isLoading: inputState.isComposerLoading, disabledInput: inputState.isDraftInputBusy, isStreaming, disabledSend: inputState.disabledSend, isCreatingConversation: data.lifecycle.isCreating, allowSendWhileStreaming: true }}
         content={{ placeholder: t('widgets.chatBox.inputPlaceholder', 'Type your message...'), clearInputAfterSubmit: true, slashHighlights: mentions.highlightRanges, draftKey: chatDraftKey({ projectId, conversationId, pendingConversationId: conversation.pendingConversationId, scratch: [isAgentsPage, conversation.editorTest] }) }}
         callbacks={{ onSend: steering.onSend, onStopGeneration: composer.stopTurn, onNormalKeyDown: state.onNormalKeyDown, onInputChange: mentions.onInputChange }}
         agentEditor={buildAgentEditorProps({

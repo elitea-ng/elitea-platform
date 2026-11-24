@@ -1124,7 +1124,7 @@ func (h *Handler) AdminPermissionsSync(w http.ResponseWriter, r *http.Request) {
 		adminaccess.Write(w, r, refusal)
 		return
 	}
-	result, err := h.syncDefaultPermissionsToProjects(r.Context(), caller)
+	result, err := h.syncDefaultPermissionsToProjects(r, caller)
 	if err != nil {
 		writeRoleWriteError(w, r, err)
 		return
@@ -1155,7 +1155,11 @@ type syncResult struct {
 // The sync rewrites the caller's own project roles too, wherever the caller is
 // a member of a shared project, so it runs the effect guard of the
 // no-escalation rule on its transaction (issue 2488).
-func (h *Handler) syncDefaultPermissionsToProjects(ctx context.Context, caller adminaccess.Caller) (syncResult, error) {
+//
+// The sync appends one project_permissions_pushed event per role it changed,
+// in this transaction (permission_push_events.go).
+func (h *Handler) syncDefaultPermissionsToProjects(r *http.Request, caller adminaccess.Caller) (syncResult, error) {
+	ctx := r.Context()
 	publicProjectID, err := h.scopeProjectID(ctx, scopePublic)
 	if err != nil {
 		return syncResult{}, err
@@ -1185,7 +1189,8 @@ ON CONFLICT (project_id, name) DO NOTHING`, publicProjectID)
 	}
 
 	// 2. Grant everything the central matrix has.
-	addedTag, err := transaction.Exec(ctx, `
+	changes := pushChanges{}
+	granted, err := changes.changedPermissionsByRole(ctx, transaction, true, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
 SELECT project_role.project_id, project_role.id, central_grant.permission
 FROM public.auth_core__project_role project_role
@@ -1195,7 +1200,8 @@ JOIN public.auth_core__role central_role
 JOIN public.auth_core__role_permission central_grant
   ON central_grant.role_id = central_role.id AND central_grant.permission IS NOT NULL
 WHERE `+syncScopePredicate+`
-ON CONFLICT (project_id, role_id, permission) DO NOTHING`, publicProjectID)
+ON CONFLICT (project_id, role_id, permission) DO NOTHING
+RETURNING role_id, permission`, publicProjectID)
 	if err != nil {
 		return syncResult{}, fmt.Errorf("sync project permissions: %w", err)
 	}
@@ -1204,7 +1210,7 @@ ON CONFLICT (project_id, role_id, permission) DO NOTHING`, publicProjectID)
 	//    add, so a permission removed centrally would live on in every project —
 	//    the failure mode that matters most here, because it is a privilege the
 	//    operator believes they revoked.
-	removedTag, err := transaction.Exec(ctx, `
+	revoked, err := changes.changedPermissionsByRole(ctx, transaction, false, `
 DELETE FROM public.auth_core__project_role_permission override
 USING public.auth_core__project_role project_role, centry.project project
 WHERE project_role.id = override.role_id
@@ -1217,7 +1223,8 @@ WHERE project_role.id = override.role_id
     WHERE central_role.mode = 'default'
       AND central_role.name = project_role.name
       AND central_grant.permission = override.permission
-  )`, publicProjectID)
+  )
+RETURNING override.role_id, override.permission`, publicProjectID)
 	if err != nil {
 		return syncResult{}, fmt.Errorf("prune project permissions: %w", err)
 	}
@@ -1225,13 +1232,16 @@ WHERE project_role.id = override.role_id
 	if err := guard.Check(ctx, transaction); err != nil {
 		return syncResult{}, err
 	}
+	if err := h.appendPushEvents(ctx, transaction, r, caller.UserID, pushTargetTeam, centralFallbackMode, changes); err != nil {
+		return syncResult{}, fmt.Errorf("record the permission sync: %w", err)
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return syncResult{}, fmt.Errorf("commit sync: %w", err)
 	}
 	return syncResult{
 		rolesCreated: createdTag.RowsAffected(),
-		granted:      addedTag.RowsAffected(),
-		revoked:      removedTag.RowsAffected(),
+		granted:      granted,
+		revoked:      revoked,
 	}, nil
 }
 

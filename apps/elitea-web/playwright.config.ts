@@ -35,6 +35,7 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import { ADMIN_PERSONAS, personaStateFile, type BuiltInAdminRole } from './e2e/fixtures/adminPersonas';
 import {
   isLiveToolkitConfigured,
   liveImageModel,
@@ -74,6 +75,15 @@ export const STORAGE_STATE = {
    * nothing had ever assigned a real user that role before).
    */
   viewer: path.join(STATE_DIR, 'viewer.json'),
+  /**
+   * The built-in role personas (ADR-0059 R3.13a), one per built-in
+   * administration role, each holding exactly that role and no project
+   * membership: see `e2e/fixtures/adminPersonas.ts`. A persona journey selects
+   * one with `test.use({ storageState: STORAGE_STATE.personas.llm_manager })`.
+   */
+  personas: Object.fromEntries(
+    ADMIN_PERSONAS.map((persona) => [persona.role, path.join(STATE_DIR, personaStateFile(persona.role))]),
+  ) as Record<BuiltInAdminRole, string>,
 };
 
 /**

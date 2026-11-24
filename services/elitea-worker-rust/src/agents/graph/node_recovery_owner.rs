@@ -5,6 +5,7 @@ use super::node_recovery_receipt::NodeRecoveryRequiredReceipt;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const HTTP_RECEIPT_AUDIENCE: &str = "elitea.runtime.http-action-receipt.v2";
+pub(crate) const DIRECT_TOOL_RECEIPT_AUDIENCE: &str = "elitea.runtime.direct-tool-receipt.v1";
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NodeRecoveryOwnerProofKind {
@@ -71,8 +72,11 @@ impl NodeRecoveryOwnerProof {
                     ReplaySafety::UnknownExternalEffect { .. }
                 ) && self.owner_receipt_ref.as_ref().is_some_and(|reference| {
                     self.valid_reference(reference)
-                        && reference.required_grant_audience
-                            == crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                        && matches!(
+                            reference.required_grant_audience.as_str(),
+                            crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                                | DIRECT_TOOL_RECEIPT_AUDIENCE
+                        )
                 })
             }
             (NodeRecoveryOwnerProofKind::CommittedResult, Some(reference)) => {
@@ -80,7 +84,9 @@ impl NodeRecoveryOwnerProof {
                     && self.valid_reference(reference)
                     && matches!(
                         reference.required_grant_audience.as_str(),
-                        HTTP_RECEIPT_AUDIENCE | crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                        HTTP_RECEIPT_AUDIENCE
+                            | crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                            | DIRECT_TOOL_RECEIPT_AUDIENCE
                     )
             }
             _ => false,
@@ -107,8 +113,11 @@ impl NodeRecoveryOwnerProof {
             && self.result_ref.is_none()
             && self.owner_receipt_ref.as_ref().is_some_and(|reference| {
                 self.valid_reference(reference)
-                    && reference.required_grant_audience
-                        == crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                    && matches!(
+                        reference.required_grant_audience.as_str(),
+                        crate::sandbox::code_recovery::CODE_RESULT_AUDIENCE
+                            | DIRECT_TOOL_RECEIPT_AUDIENCE
+                    )
                     && reference.byte_length == bytes.len() as u64
                     && self.owner_receipt_sha256
                         == hex(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
