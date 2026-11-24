@@ -44,6 +44,7 @@ pub(crate) enum AdmittedNodeFamily {
     Llm,
     Toolkit,
     Mcp,
+    Http,
 }
 
 impl AdmittedNodeFamily {
@@ -55,6 +56,7 @@ impl AdmittedNodeFamily {
             Self::Llm => "llm",
             Self::Toolkit => "toolkit",
             Self::Mcp => "mcp",
+            Self::Http => "http",
         }
     }
 }
@@ -232,6 +234,7 @@ impl RawSettingsCatalog {
                 SettingsFamily::Llm => AdmittedNodeFamily::Llm,
                 SettingsFamily::Toolkit => AdmittedNodeFamily::Toolkit,
                 SettingsFamily::Mcp => AdmittedNodeFamily::Mcp,
+                SettingsFamily::Http => AdmittedNodeFamily::Http,
                 SettingsFamily::NotYet => {
                     return Err(refusal(&id, NodeSettingsRefusal::FamilyNotYet));
                 }

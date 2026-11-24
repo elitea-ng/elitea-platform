@@ -11,9 +11,16 @@ import (
 	runtimev1 "github.com/elitea-ng/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/httpaction"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/guardrails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
+
+// HTTPActionRetryableHeader carries the rule's authoritative effect class
+// ("true" = class I, "false" = class C) on ExecuteHTTPAction gRPC responses
+// without altering the 8-field receipt schema or disclosing the rule body.
+const HTTPActionRetryableHeader = "x-elitea-http-action-retryable"
 
 // HTTP action pool (T-5D §3.4, decision D5): a dedicated pool so HTTP calls
 // (up to 30 s each) never hold the shared content slots that token, version
@@ -236,6 +243,11 @@ func (s *ContentServer) ExecuteHTTPAction(ctx context.Context, request *runtimev
 	if err != nil || len(body) > 3*1024*1024 {
 		return nil, contentStatus(codes.Unavailable)
 	}
+	retryableHeader := "false"
+	if receipt.Retryable {
+		retryableHeader = "true"
+	}
+	_ = grpc.SetHeader(ctx, metadata.Pairs(HTTPActionRetryableHeader, retryableHeader))
 	return &runtimev1.ExecuteHTTPActionResponseV1{ReceiptJson: body}, nil
 }
 

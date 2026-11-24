@@ -132,6 +132,10 @@ type Receipt struct {
 	State         string      `json:"state"`
 	FailureCode   *string     `json:"failure_code"`
 	Result        *Projection `json:"result"`
+	// Retryable carries the rule's effect class (D2: safe method or
+	// replay=idempotency_key + bound key) in memory for Main's gRPC response
+	// metadata header; it is never serialized into the 8-field receipt wire.
+	Retryable bool `json:"-"`
 }
 
 func Decode(data []byte, target any) error {
@@ -290,7 +294,7 @@ func (r *Request) Validate() error {
 	for _, header := range r.Headers {
 		name := strings.ToLower(header.Name)
 		total += len(header.Name) + len(header.Value)
-		if RestrictedHeader(name) || !validHeaderName(name) || seen[name] || len(header.Name) > 128 || len(header.Value) > 8192 || total > 16384 || strings.ContainsAny(header.Value, "\r\n\x00") || !httpguts.ValidHeaderFieldValue(header.Value) {
+		if RestrictedHeader(name) || !validHeaderName(name) || seen[name] || len(header.Name) > 128 || len(header.Value) > 8192 || total > 16384 || !validHeaderValue(header.Value) {
 			return ErrInvalid
 		}
 		seen[name] = true
@@ -336,7 +340,7 @@ func (r *Request) Validate() error {
 		}
 	case "text":
 		var text string
-		if json.Unmarshal(r.Body.Value, &text) != nil || len(text) > 256*1024 || r.Body.Reference != nil || !validMedia(r.Body.ContentType) {
+		if json.Unmarshal(r.Body.Value, &text) != nil || len(text) > 256*1024 || r.Body.Reference != nil || (r.Body.ContentType != "" && !validMedia(r.Body.ContentType)) {
 			return ErrInvalid
 		}
 	case "artifact":
@@ -391,12 +395,24 @@ func validHeaderName(v string) bool {
 	}
 	return true
 }
+func validHeaderValue(v string) bool {
+	if strings.ContainsAny(v, "\r\n\x00") || !httpguts.ValidHeaderFieldValue(v) {
+		return false
+	}
+	for _, r := range v {
+		if r == '\u0085' || r == '\u2028' || r == '\u2029' {
+			return false
+		}
+	}
+	return true
+}
+
 func RestrictedHeader(name string) bool {
-	if strings.HasPrefix(name, "x-elitea-") {
+	if strings.HasPrefix(name, "x-elitea-") || strings.HasPrefix(name, "x-forwarded-") || strings.HasPrefix(name, "x-auth-") {
 		return true
 	}
 	switch name {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key", "host", "connection", "content-length", "content-type", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "keep-alive", "idempotency-key":
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key", "host", "connection", "content-length", "content-type", "transfer-encoding", "te", "trailer", "upgrade", "proxy-connection", "keep-alive", "idempotency-key", "forwarded":
 		return true
 	}
 	return false

@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"golang.org/x/net/http/httpguts"
 )
 
 // NodeSchema is the `type: http`, `revision: 2` node shape
@@ -39,7 +37,7 @@ func ParseNode(raw []byte) (Node, error) {
 	if len(raw) == 0 || len(raw) > maxRawNodeBytes {
 		return Node{}, ErrInvalid
 	}
-	fields, err := strictObject(raw, "id", "type", "revision", "operation", "request", "response", "timeout_ms", "output", "transition")
+	fields, err := strictObject(raw, "id", "type", "revision", "operation", "request", "response", "timeout_ms", "input", "output", "transition", "settings")
 	if err != nil {
 		return Node{}, err
 	}
@@ -58,6 +56,17 @@ func ParseNode(raw []byte) (Node, error) {
 		decodeStrict(fields["operation"], &operation) != nil || len(operation) > maxRuleNameBytes || !operationPattern.MatchString(operation) ||
 		decodeStrict(fields["output"], &output) != nil || len(output) != 1 || !validFrozenOutput(output[0]) {
 		return Node{}, ErrInvalid
+	}
+	if rawInput, found := fields["input"]; found {
+		var inputs []string
+		if decodeStrict(rawInput, &inputs) != nil || len(inputs) > 64 {
+			return Node{}, ErrInvalid
+		}
+		for _, key := range inputs {
+			if !validFrozenOutput(key) {
+				return Node{}, ErrInvalid
+			}
+		}
 	}
 	node.Output = output[0]
 	if raw, found := fields["transition"]; found {
@@ -84,9 +93,22 @@ func ParseNode(raw []byte) (Node, error) {
 			template[name] = decoded
 		}
 	}
+	var effectiveTimeout int64
 	if raw, found := fields["timeout_ms"]; found {
-		if err := validTimeoutMS(raw); err != nil {
+		v, err := parseTimeoutMS(raw)
+		if err != nil {
 			return Node{}, err
+		}
+		effectiveTimeout = v
+	}
+	if rawSettings, found := fields["settings"]; found {
+		settingsTimeout, err := validateNodeSettingsBlock(rawSettings)
+		if err != nil {
+			return Node{}, err
+		}
+		if settingsTimeout > 0 && (effectiveTimeout == 0 || settingsTimeout < effectiveTimeout) {
+			effectiveTimeout = settingsTimeout
+			template["timeout_ms"] = ruleNumber(effectiveTimeout)
 		}
 	}
 	node.TemplateWire = canonicalValue(template)
@@ -130,16 +152,32 @@ func DecodeTemplate(wire []byte) (NodeTemplate, error) {
 	return template, nil
 }
 
-func validTimeoutMS(raw json.RawMessage) error {
+func parseTimeoutMS(raw json.RawMessage) (int64, error) {
 	var timeout json.Number
 	if decodeStrict(raw, &timeout) != nil || !integerToken.MatchString(timeout.String()) {
-		return ErrInvalid
+		return 0, ErrInvalid
 	}
 	value, err := timeout.Int64()
 	if err != nil || value < 1 || value > 30000 {
-		return ErrInvalid
+		return 0, ErrInvalid
 	}
-	return nil
+	return value, nil
+}
+
+func validTimeoutMS(raw json.RawMessage) error {
+	_, err := parseTimeoutMS(raw)
+	return err
+}
+
+func validateNodeSettingsBlock(raw json.RawMessage) (int64, error) {
+	fields, err := strictObject(raw, "retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms")
+	if err != nil {
+		return 0, err
+	}
+	if rawTimeout, found := fields["timeout_ms"]; found && string(rawTimeout) != "null" {
+		return parseTimeoutMS(rawTimeout)
+	}
+	return 0, nil
 }
 
 func parseRequestTemplate(raw json.RawMessage) (RequestTemplate, error) {
@@ -159,11 +197,17 @@ func parseRequestTemplate(raw json.RawMessage) (RequestTemplate, error) {
 		if decodeStrict(headers, &list) != nil || list == nil || len(list) > 32 {
 			return RequestTemplate{}, ErrInvalid
 		}
+		seenHeaders := make(map[string]bool, len(list))
 		for _, entry := range list {
 			header, err := parseHeaderBinding(entry)
 			if err != nil {
 				return RequestTemplate{}, err
 			}
+			lower := strings.ToLower(header.Name)
+			if seenHeaders[lower] {
+				return RequestTemplate{}, ErrInvalid
+			}
+			seenHeaders[lower] = true
 			template.Headers = append(template.Headers, header)
 		}
 	}
@@ -265,7 +309,7 @@ func parseHeaderBinding(raw json.RawMessage) (HeaderBinding, error) {
 	}
 	if value, found := fields["value"]; found {
 		var text string
-		if decodeStrict(value, &text) != nil || len(text) > maxHeaderLiteralString || bytes.ContainsAny([]byte(text), "\x00\r\n") || !httpguts.ValidHeaderFieldValue(text) {
+		if decodeStrict(value, &text) != nil || len(text) > maxHeaderLiteralString || !validHeaderValue(text) {
 			return HeaderBinding{}, ErrInvalid
 		}
 	}

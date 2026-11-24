@@ -20,6 +20,7 @@ export const NodeSettingsLimits = {
   default_wait_between_tries_ms: 1_000,
   min_node_timeout_ms: 1_000,
   max_node_timeout_ms: 900_000,
+  max_http_timeout_ms: 30_000,
   max_node_errors: 64,
   max_node_error_entry_bytes: 1_024,
   max_node_error_object_bytes: 512,
@@ -39,6 +40,7 @@ const DETERMINISTIC_KEYS = ['on_error', 'error_transition', 'always_output_data'
 export const NodeSettingsFamilies: Readonly<Record<string, readonly string[]>> = {
   aggregate: DETERMINISTIC_KEYS,
   code: NODE_SETTINGS_KEYS,
+  http: NODE_SETTINGS_KEYS,
   llm: NODE_SETTINGS_KEYS,
   mcp: NODE_SETTINGS_KEYS,
   router: DETERMINISTIC_KEYS,
@@ -62,6 +64,7 @@ export const NodeSettingsRefusalTexts = {
   max_tries_range: 'Max tries must be between 2 and 5.',
   wait_range: 'Wait between tries must be between 100 and 300000 ms.',
   timeout_range: 'Timeout must be between 1000 and 900000 ms.',
+  http_timeout_range: 'HTTP timeout must be between 1000 and 30000 ms.',
   retry_fields_need_retry: 'Max tries and wait between tries need Retry on fail.',
   error_transition_required: "On error 'error output' needs an error transition.",
   error_transition_unexpected: "An error transition needs On error 'error output'.",
@@ -310,6 +313,7 @@ const NODE_CHECKS: readonly (readonly [(block: Block, context: NodeContext) => b
   [({ node }) => familyKeys(node) === undefined, 'family_not_yet'],
   [({ node, settings }) => settings.retry_on_fail && !(familyKeys(node) ?? []).includes('retry_on_fail'), 'retry_not_allowed'],
   [({ node, settings }) => settings.timeout_ms !== undefined && !(familyKeys(node) ?? []).includes('timeout_ms'), 'timeout_not_allowed'],
+  [({ node, settings }) => node.type === 'http' && settings.timeout_ms !== undefined && settings.timeout_ms > NodeSettingsLimits.max_http_timeout_ms, 'http_timeout_range'],
   [({ node }, { owned }) => owned.has(node.id), 'fanout_owned'],
   [badErrorTarget, 'error_transition_target'],
   // C5: the raw key, never the runtime's END default.

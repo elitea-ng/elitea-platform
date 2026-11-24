@@ -8,6 +8,7 @@
  * budget only; the two halves share `AdmissionGraph` and are composed into
  * one catalogue by `GRAPH_ADMISSION_RULES` there.
  */
+import { httpRequiredFields } from './graphHttpAdmission.helpers';
 import { mapOwnedWorkerChannels } from './graphMapAdmission.helpers';
 import { FlowEditorConstants, RuntimeContractConstants } from './flow-editor/constants';
 import type { RouteTargetRef } from './graphAdmission.nodeReads';
@@ -94,6 +95,7 @@ function requiredFieldIssues(node: AdmissionNode): readonly GraphAdmissionIssue[
   if (node.type === 'printer') return printerRequiredFields(node);
   if (node.type === 'decision') return decisionRequiredFields(node);
   if (node.type === 'hitl') return hitlRequiredFields(node);
+  if (node.type === 'http') return httpRequiredFields(node);
   return [];
 }
 

@@ -42,7 +42,7 @@ describe('AddNodeMenu', () => {
   });
 
   /** Compiler code parsing is supported; execution requires an admitted sandbox (compiler.rs:1544 and :1029). Custom remains unsupported. */
-  it('offers exactly the fourteen node types the pipeline editor authors, including Code and Parallel and excluding Custom', async () => {
+  it('offers exactly the fifteen node types the pipeline editor authors, including Code, HTTP Request and Parallel and excluding Custom', async () => {
     const user = userEvent.setup();
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
 
@@ -53,6 +53,7 @@ describe('AddNodeMenu', () => {
       .map((item) => item.getAttribute('aria-label'));
 
     expect(labels).toContain('Code');
+    expect(labels).toContain('HTTP Request');
     expect(labels).not.toContain('Custom');
 
     expect([...labels].sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(
@@ -61,6 +62,7 @@ describe('AddNodeMenu', () => {
         'Aggregate',
         'Code',
         'Decision',
+        'HTTP Request',
         'Human-in-the-loop',
         'LLM',
         'MCP',

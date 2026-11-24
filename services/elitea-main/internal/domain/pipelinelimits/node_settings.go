@@ -28,6 +28,7 @@ const (
 	DefaultWaitBetweenTriesMs  = 1_000
 	MinNodeTimeoutMs           = 1_000
 	MaxNodeTimeoutMs           = 900_000
+	MaxHTTPTimeoutMs           = 30_000
 	MaxNodeErrors              = 64
 	MaxNodeErrorEntryBytes     = 1_024
 	MaxNodeErrorObjectBytes    = 512
@@ -51,6 +52,7 @@ var NodeSettingsRefusalTexts = map[string]string{
 	"max_tries_range":               "Max tries must be between 2 and 5.",
 	"wait_range":                    "Wait between tries must be between 100 and 300000 ms.",
 	"timeout_range":                 "Timeout must be between 1000 and 900000 ms.",
+	"http_timeout_range":            "HTTP timeout must be between 1000 and 30000 ms.",
 	"retry_fields_need_retry":       "Max tries and wait between tries need Retry on fail.",
 	"error_transition_required":     "On error 'error output' needs an error transition.",
 	"error_transition_unexpected":   "An error transition needs On error 'error output'.",
@@ -66,6 +68,7 @@ var NodeSettingsRefusalTexts = map[string]string{
 var settingsFamilies = map[string][]string{
 	"aggregate":      {"on_error", "error_transition", "always_output_data", "execute_once"},
 	"code":           {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
+	"http":           {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
 	"llm":            {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
 	"mcp":            {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
 	"router":         {"on_error", "error_transition", "always_output_data", "execute_once"},
@@ -362,6 +365,9 @@ func checkOneNodeSettings(block declaredSettings, ids, owned, failureHandlers ma
 	}
 	if settings.timeoutMs != nil && !contains(admittedKeys, "timeout_ms") {
 		return settingsRefusal(id, "timeout_not_allowed")
+	}
+	if nodeType == "http" && settings.timeoutMs != nil && *settings.timeoutMs > MaxHTTPTimeoutMs {
+		return settingsRefusal(id, "http_timeout_range")
 	}
 	if _, isOwned := owned[id]; isOwned {
 		return settingsRefusal(id, "fanout_owned")

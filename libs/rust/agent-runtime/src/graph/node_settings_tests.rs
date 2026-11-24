@@ -178,6 +178,7 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         ),
         ("min_node_timeout_ms", MIN_NODE_TIMEOUT_MS),
         ("max_node_timeout_ms", MAX_NODE_TIMEOUT_MS),
+        ("max_http_timeout_ms", MAX_HTTP_TIMEOUT_MS),
         ("max_node_errors", MAX_NODE_ERRORS as u64),
         (
             "max_node_error_entry_bytes",
@@ -213,7 +214,7 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         .iter()
         .map(|family| family.node_type())
         .collect();
-    expected_families.extend(["code", "llm", "toolkit", "mcp"]);
+    expected_families.extend(["code", "http", "llm", "toolkit", "mcp"]);
     assert_eq!(
         families.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         expected_families
@@ -223,6 +224,7 @@ fn the_constants_tables_and_texts_are_the_contracts() {
         .map(|family| (family.node_type(), SettingsFamily::Deterministic(*family)))
         .chain([
             ("code", SettingsFamily::Code),
+            ("http", SettingsFamily::Http),
             ("llm", SettingsFamily::Llm),
             ("toolkit", SettingsFamily::Toolkit),
             ("mcp", SettingsFamily::Mcp),
@@ -258,6 +260,18 @@ fn the_constants_tables_and_texts_are_the_contracts() {
             .collect::<BTreeSet<_>>(),
         keys
     );
+}
+
+#[test]
+fn http_family_enforces_30s_timeout_cap() {
+    let at_cap = parse("{timeout_ms: 30000, retry_on_fail: true, max_tries: 3}").expect("30000");
+    assert_eq!(at_cap.check_family(SettingsFamily::Http), Ok(()));
+    let over_cap = parse("{timeout_ms: 30001}").expect("30001");
+    assert_eq!(
+        over_cap.check_family(SettingsFamily::Http),
+        Err(NodeSettingsRefusal::HttpTimeoutRange)
+    );
+    assert_eq!(over_cap.check_family(SettingsFamily::Code), Ok(()));
 }
 
 #[test]

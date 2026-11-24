@@ -28,12 +28,14 @@ describe('NodeTypeSelector', () => {
     vi.clearAllMocks();
   });
 
-  it('renders the title and all 14 compiler-admitted node types with their descriptions', () => {
+  it('renders the title and all 15 compiler-admitted node types with their descriptions', () => {
     renderSelector();
 
     expect(screen.getByText('Select node type')).toBeInTheDocument();
     const cards = screen.getAllByTestId(/^pipeline-add-node-menu-item-/);
-    expect(cards).toHaveLength(14);
+    expect(cards).toHaveLength(15);
+    expect(screen.getByText(PipelineNodeDisplayNames[PipelineNodeTypes.Http])).toBeInTheDocument();
+    expect(screen.getByText(PipelineNodeDescriptions[PipelineNodeTypes.Http] ?? '')).toBeInTheDocument();
     expect(screen.getByText(PipelineNodeDisplayNames[PipelineNodeTypes.Hitl])).toBeInTheDocument();
     expect(screen.getByText(PipelineNodeDescriptions[PipelineNodeTypes.LLM] ?? '')).toBeInTheDocument();
     expect(screen.getByText(PipelineNodeDescriptions[PipelineNodeTypes.Aggregate] ?? '')).toBeInTheDocument();

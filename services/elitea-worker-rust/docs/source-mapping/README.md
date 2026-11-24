@@ -52,6 +52,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [HTTP Request node admitted (5d-2)](http-action-node-admitted-20261124.md) admits `type: http` (`revision: 2`) across `elitea-agent-runtime` (25/25 render vectors), Rust Worker (`ExecuteHTTPAction` gRPC client, durable `RecoverableNode` journal, 5b `settings:` with 30 s cap, class I/C recovery & `HTTP_RECEIPT_AUDIENCE` owner-proof projection, typed fan-out refusal until 5d-3), Go Main save-time admission & rule existence/enabled checks, and the Web pipeline editor (`HttpNode`, `HttpActionSettings`, `listHttpActionRuleNames` picker).
 - [HTTP action Main foundation (5d-1)](http-action-main-foundation-20261123.md) adds project HTTP action rules (migration `shared/0270`, admin API, Settings > HTTP actions UI), revision-2 rendering and start snapshots, invocation v3, the fenced effect ledger, `openapi` credential resolution with singleflight OAuth2 token fetching, dedicated 32/8 pool isolation, and the HTTPS-only egress-guarded `http.RoundTripper` transport (closes FU-073 and Main half of FU-072).
 
 - [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.

@@ -95,6 +95,12 @@ func (executor *postgresInternalApplicationExecutor) updateVersion(
 			if err := pipelinelimits.Check(state.instructions); err != nil {
 				return internalApplicationBadRequest(err.Error())
 			}
+			if err := repos.CheckHTTPActionOperations(ctx, tx, projectID, state.instructions); err != nil {
+				if refusal := pipelinelimits.Refusal(err); refusal != nil {
+					return internalApplicationBadRequest(refusal.Message)
+				}
+				return internalApplicationExecution{}, fmt.Errorf("check http action operations: %w", err)
+			}
 		}
 		if refused, err := refuseInternalComposition(ctx, tx, schema, applicationID, versionID, agentType, state.instructions, false); refused != nil || err != nil {
 			return *refused, err
@@ -203,6 +209,12 @@ func (executor *postgresInternalApplicationExecutor) patchInstructions(
 	if state.agentType == "pipeline" {
 		if err := pipelinelimits.Check(updatedInstructions); err != nil {
 			return internalApplicationBadRequest(err.Error())
+		}
+		if err := repos.CheckHTTPActionOperations(ctx, tx, projectID, updatedInstructions); err != nil {
+			if refusal := pipelinelimits.Refusal(err); refusal != nil {
+				return internalApplicationBadRequest(refusal.Message)
+			}
+			return internalApplicationExecution{}, fmt.Errorf("check http action operations: %w", err)
 		}
 		// FU-244: and the same composition check as the REST write.
 		if refused, err := refuseInternalComposition(ctx, tx, schema, applicationID, versionID, "", updatedInstructions, true); refused != nil || err != nil {

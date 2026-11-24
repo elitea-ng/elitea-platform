@@ -33,9 +33,52 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     renderWithTheme(<AddNodeMenu onAddNode={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Add node' }));
     const entries = within(await screen.findByRole('menu')).getAllByRole('menuitem').map((item) => item.getAttribute('aria-label'));
-    expect(entries).toHaveLength(14);
+    expect(entries).toHaveLength(15);
     expect(entries).toContain('SplitOut');
     expect(entries).toContain('Aggregate');
     expect(entries).toContain('Parallel');
+    expect(entries).toContain('HTTP Request');
+  });
+
+  it('validates HTTP response mode (artifact vs empty), forbidden configuration_id, and state refs', () => {
+    const artifactDoc = {
+      entry_point: 'fetch',
+      state: { run_id: 'str', fx: 'dict' },
+      nodes: [
+        {
+          id: 'fetch',
+          type: 'http',
+          revision: 2,
+          operation: 'fx_reference.rates',
+          request: { path: { run_id: { from: 'run_id' } } },
+          response: { mode: 'artifact' },
+          output: ['fx'],
+          transition: 'END',
+        },
+      ],
+    };
+    expect(collectGraphAdmissionIssues(artifactDoc)).toEqual([]);
+
+    const badDoc = {
+      entry_point: 'fetch',
+      state: { fx: 'dict' },
+      nodes: [
+        {
+          id: 'fetch',
+          type: 'http',
+          revision: 2,
+          operation: 'fx_reference.rates',
+          configuration_id: 7,
+          request: { path: { run_id: { from: 'missing_var' } } },
+          response: { mode: 'empty' },
+          output: ['fx'],
+          transition: 'END',
+        },
+      ],
+    };
+    const issues = collectGraphAdmissionIssues(badDoc);
+    expect(issues.some((i) => i.field === 'response.mode')).toBe(true);
+    expect(issues.some((i) => i.field === 'configuration_id')).toBe(true);
+    expect(issues.some((i) => i.field === 'request.path.run_id' && i.message.includes('missing_var'))).toBe(true);
   });
 });

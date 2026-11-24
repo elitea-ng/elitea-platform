@@ -47,6 +47,8 @@ pub const DEFAULT_WAIT_BETWEEN_TRIES_MS: u64 = 1_000;
 pub const MIN_NODE_TIMEOUT_MS: u64 = 1_000;
 /// Longest per-node timeout; below the sandbox job limit of one hour.
 pub const MAX_NODE_TIMEOUT_MS: u64 = 900_000;
+/// Longest per-call timeout for an HTTP Request node (T-5D §3.4).
+pub const MAX_HTTP_TIMEOUT_MS: u64 = 30_000;
 /// Most entries `node_errors` holds in one turn; the next failure is not
 /// continued and fails the node typed, so nothing is dropped.
 pub const MAX_NODE_ERRORS: usize = 64;
@@ -171,6 +173,7 @@ pub enum NodeSettingsRefusal {
     MaxTriesRange,
     WaitRange,
     TimeoutRange,
+    HttpTimeoutRange,
     RetryFieldsNeedRetry,
     ErrorTransitionRequired,
     ErrorTransitionUnexpected,
@@ -183,7 +186,7 @@ pub enum NodeSettingsRefusal {
 
 impl NodeSettingsRefusal {
     /// Every refusal, in contract order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Malformed,
         Self::FamilyNotYet,
         Self::FamilyPause,
@@ -194,6 +197,7 @@ impl NodeSettingsRefusal {
         Self::MaxTriesRange,
         Self::WaitRange,
         Self::TimeoutRange,
+        Self::HttpTimeoutRange,
         Self::RetryFieldsNeedRetry,
         Self::ErrorTransitionRequired,
         Self::ErrorTransitionUnexpected,
@@ -218,6 +222,7 @@ impl NodeSettingsRefusal {
             Self::MaxTriesRange => "max_tries_range",
             Self::WaitRange => "wait_range",
             Self::TimeoutRange => "timeout_range",
+            Self::HttpTimeoutRange => "http_timeout_range",
             Self::RetryFieldsNeedRetry => "retry_fields_need_retry",
             Self::ErrorTransitionRequired => "error_transition_required",
             Self::ErrorTransitionUnexpected => "error_transition_unexpected",
@@ -249,6 +254,7 @@ impl NodeSettingsRefusal {
             Self::MaxTriesRange => "Max tries must be between 2 and 5.",
             Self::WaitRange => "Wait between tries must be between 100 and 300000 ms.",
             Self::TimeoutRange => "Timeout must be between 1000 and 900000 ms.",
+            Self::HttpTimeoutRange => "HTTP timeout must be between 1000 and 30000 ms.",
             Self::RetryFieldsNeedRetry => "Max tries and wait between tries need Retry on fail.",
             Self::ErrorTransitionRequired => "On error 'error output' needs an error transition.",
             Self::ErrorTransitionUnexpected => "An error transition needs On error 'error output'.",
@@ -340,6 +346,10 @@ pub enum SettingsFamily {
     /// `readOnlyHint` is untrusted for retry), on-error, always-output,
     /// run-once and timeout.
     Mcp,
+    /// HTTP Request node (5d-2): effect-class I retries (safe methods or
+    /// `replay: idempotency_key` + bound key) and class C reconcile, on-error,
+    /// always-output, run-once and timeout <= `30_000` ms.
+    Http,
     /// A node type whose slice has not wired settings yet (5b-4..5b-5):
     /// the whole block is refused.
     NotYet,
@@ -356,6 +366,7 @@ impl SettingsFamily {
             "split_out" => Self::Deterministic(DeterministicFamily::SplitOut),
             "aggregate" => Self::Deterministic(DeterministicFamily::Aggregate),
             "code" => Self::Code,
+            "http" => Self::Http,
             "llm" => Self::Llm,
             "toolkit" => Self::Toolkit,
             "mcp" => Self::Mcp,
@@ -374,7 +385,7 @@ impl SettingsFamily {
                 "always_output_data",
                 "execute_once",
             ],
-            Self::Code | Self::Llm | Self::Toolkit | Self::Mcp => &[
+            Self::Code | Self::Http | Self::Llm | Self::Toolkit | Self::Mcp => &[
                 "retry_on_fail",
                 "max_tries",
                 "wait_between_tries_ms",
@@ -526,6 +537,7 @@ impl NodeSettings {
             SettingsFamily::Pause => return Err(NodeSettingsRefusal::FamilyPause),
             SettingsFamily::Deterministic(_)
             | SettingsFamily::Code
+            | SettingsFamily::Http
             | SettingsFamily::Llm
             | SettingsFamily::Toolkit
             | SettingsFamily::Mcp => {}
@@ -536,6 +548,13 @@ impl NodeSettings {
         }
         if self.timeout_ms.is_some() && !admitted.contains(&"timeout_ms") {
             return Err(NodeSettingsRefusal::TimeoutNotAllowed);
+        }
+        if family == SettingsFamily::Http
+            && self
+                .timeout_ms
+                .is_some_and(|timeout_ms| timeout_ms > MAX_HTTP_TIMEOUT_MS)
+        {
+            return Err(NodeSettingsRefusal::HttpTimeoutRange);
         }
         Ok(())
     }

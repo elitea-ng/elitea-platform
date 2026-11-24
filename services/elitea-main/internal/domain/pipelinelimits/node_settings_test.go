@@ -49,6 +49,7 @@ func TestNodeSettingsMatchTheSharedContract(t *testing.T) {
 		"default_wait_between_tries_ms": pipelinelimits.DefaultWaitBetweenTriesMs,
 		"min_node_timeout_ms":           pipelinelimits.MinNodeTimeoutMs,
 		"max_node_timeout_ms":           pipelinelimits.MaxNodeTimeoutMs,
+		"max_http_timeout_ms":           pipelinelimits.MaxHTTPTimeoutMs,
 		"max_node_errors":               pipelinelimits.MaxNodeErrors,
 		"max_node_error_entry_bytes":    pipelinelimits.MaxNodeErrorEntryBytes,
 		"max_node_error_object_bytes":   pipelinelimits.MaxNodeErrorObjectBytes,

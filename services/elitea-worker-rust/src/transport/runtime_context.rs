@@ -36,10 +36,10 @@ use crate::protocol::elitea::runtime::v1::{
     RedeemCredentialRequestV1, RedeemCredentialResponseV1, redeem_credential_response_v1,
 };
 use crate::protocol::elitea::runtime::v1::{
-    DeleteArtifactRequestV1, GetApplicationVersionRequestV1, GetAttachmentObjectRequestV1,
-    GetEliteaClientTokenRequestV1, ListArtifactsRequestV1, ReadArtifactRequestV1,
-    RuntimeContentScopeV1, WriteArtifactRequestV1, WriteProjectContextRequestV1,
-    WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
+    DeleteArtifactRequestV1, ExecuteHttpActionRequestV1, GetApplicationVersionRequestV1,
+    GetAttachmentObjectRequestV1, GetEliteaClientTokenRequestV1, ListArtifactsRequestV1,
+    ReadArtifactRequestV1, RuntimeContentScopeV1, WriteArtifactRequestV1,
+    WriteProjectContextRequestV1, WriteSkillRequestV1, get_attachment_object_response_v1::Outcome,
 };
 use crate::protocol::elitea::runtime::v1::{
     ForgetAgentMemoryRequestV1, HandFloorRequestV1, MarketplaceWorkforceRequestV1,
@@ -1181,10 +1181,126 @@ impl RuntimeContextClient {
             .map_err(|_| RuntimeContextError::Timeout("the Marketplace tool call timed out"))?
     }
 
+    /// Execute one HTTP Request pipeline node invocation (`ExecuteHTTPAction`)
+    /// through Main's claim-scoped gRPC surface.
+    ///
+    /// Main owns the rule origin, credentials, egress guard, effect-ledger
+    /// deduplication, and retries-safety classification (`x-elitea-http-action-retryable`).
+    /// Missing or unrecognized retryable metadata fails closed to `false` (Class C).
+    pub(crate) async fn execute_http_action(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        invocation: &elitea_agent_runtime::graph::http_action::HttpActionInvocationV3,
+        call_timeout: Duration,
+    ) -> Result<HttpActionRpcResponse, HttpActionRpcError> {
+        const HTTP_ACTION_RETRYABLE_HEADER: &str = "x-elitea-http-action-retryable";
+        const MAX_HTTP_ACTION_RPC_TIMEOUT: Duration = Duration::from_millis(
+            elitea_agent_runtime::graph::http_action::MAX_HTTP_TIMEOUT_MS as u64 + 15_000,
+        );
+
+        let binding = authority.redemption_binding();
+        if validate_binding(&binding).is_err() {
+            return Err(HttpActionRpcError::InvalidInput);
+        }
+        let invocation_json = invocation.to_bounded_json().map_err(|err| match err {
+            elitea_agent_runtime::graph::http_action::HttpActionError::ResourceExhausted => {
+                HttpActionRpcError::ResourceExhausted
+            }
+            _ => HttpActionRpcError::InvalidInput,
+        })?;
+        let request = scoped(
+            &binding,
+            ExecuteHttpActionRequestV1 {
+                scope: Some(scope(&binding)),
+                invocation_json,
+            },
+            "the HTTP action request authority is malformed",
+        )
+        .map_err(|_| HttpActionRpcError::InvalidInput)?;
+        let effective_timeout = call_timeout.min(MAX_HTTP_ACTION_RPC_TIMEOUT);
+        if effective_timeout.is_zero() {
+            return Err(HttpActionRpcError::Timeout);
+        }
+        let mut rpc = self.rpc();
+        let operation = async {
+            let response = rpc
+                .execute_http_action(request)
+                .await
+                .map_err(|status| http_action_status(&status))?;
+            let retryable = response
+                .metadata()
+                .get(HTTP_ACTION_RETRYABLE_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == "true");
+            let body = response.into_inner().receipt_json;
+            if body.is_empty()
+                || body.len() > elitea_agent_runtime::graph::http_action::MAX_HTTP_RECEIPT_BYTES
+            {
+                return Err(HttpActionRpcError::InvalidReceipt);
+            }
+            let receipt = elitea_agent_runtime::graph::http_action::decode_receipt_v2(&body)
+                .map_err(|_| HttpActionRpcError::InvalidReceipt)?;
+            Ok(HttpActionRpcResponse { receipt, retryable })
+        };
+        timeout(effective_timeout, operation)
+            .await
+            .map_err(|_| HttpActionRpcError::Timeout)?
+    }
+
     /// One artifact response document, within the artifact family's own
     /// envelope ceiling.
     fn artifact_document(&self, body: Vec<u8>) -> Result<Zeroizing<Vec<u8>>, RuntimeContextError> {
         bounded_document(body, self.config.max_artifact_response_bytes)
+    }
+}
+
+/// Decoded response of Main's `ExecuteHTTPAction` gRPC RPC.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HttpActionRpcResponse {
+    pub(crate) receipt: elitea_agent_runtime::graph::http_action::HttpActionReceiptV2,
+    /// Server-authoritative retry safety classification (`x-elitea-http-action-retryable`).
+    /// Fails closed to `false` (Class C) when absent.
+    pub(crate) retryable: bool,
+}
+
+/// Data-free transport/protocol errors from Main's `ExecuteHTTPAction` RPC.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HttpActionRpcError {
+    /// Main was unreachable, returned `Unavailable` (503 / pool saturated), or
+    /// dropped the transport before returning a receipt. Safe to resend the
+    /// identical `Invocation` (`Lookup` runs before `Begin`).
+    Unavailable,
+    /// Local RPC deadline expired before Main returned a receipt; the remote
+    /// effect state is unknown until reconciled or settled via `Lookup`.
+    Timeout,
+    /// Main returned `Aborted` (409 `nondeterministic_inputs`).
+    NondeterministicInputs,
+    /// Main returned `InvalidArgument` (400).
+    InvalidInput,
+    /// Main returned `ResourceExhausted` (413).
+    ResourceExhausted,
+    /// Main returned `PermissionDenied` (403).
+    PolicyDenied,
+    /// Main returned `Unauthenticated` (401).
+    AuthenticationDenied,
+    /// Main returned a malformed or out-of-contract receipt.
+    InvalidReceipt,
+    /// Any other server-side failure (`Internal`, `Unknown`, etc.).
+    Internal,
+}
+
+fn http_action_status(status: &Status) -> HttpActionRpcError {
+    if is_transport_status(status) || status.code() == Code::Unavailable {
+        return HttpActionRpcError::Unavailable;
+    }
+    match status.code() {
+        Code::DeadlineExceeded => HttpActionRpcError::Timeout,
+        Code::Aborted => HttpActionRpcError::NondeterministicInputs,
+        Code::InvalidArgument => HttpActionRpcError::InvalidInput,
+        Code::ResourceExhausted => HttpActionRpcError::ResourceExhausted,
+        Code::PermissionDenied => HttpActionRpcError::PolicyDenied,
+        Code::Unauthenticated => HttpActionRpcError::AuthenticationDenied,
+        _ => HttpActionRpcError::Internal,
     }
 }
 

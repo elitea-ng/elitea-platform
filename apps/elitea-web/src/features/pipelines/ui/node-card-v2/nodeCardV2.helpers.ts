@@ -112,6 +112,17 @@ function getHitlRoutesSummary(routesValue: unknown): string {
     .join(' · ');
 }
 
+function getHttpSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData {
+  const operation = toPreviewText(yamlNode['operation']);
+  const response = readRecord(yamlNode['response']);
+  const mode = toPreviewText(response?.['mode']);
+  const output = joinList(yamlNode['output']);
+  return {
+    primary: operation,
+    secondary: [mode, output].filter(Boolean).join(' → '),
+  };
+}
+
 function getExtensionSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData | null {
   switch (yamlNode.type ?? '') {
     case PipelineNodeTypes.Map: {
@@ -135,6 +146,8 @@ function getExtensionSummary(yamlNode: YamlPipelineNode): NodeCardV2SummaryData 
         secondary: ops.length ? pluralize(ops.length, 'operation') : '',
       };
     }
+    case PipelineNodeTypes.Http:
+      return getHttpSummary(yamlNode);
     default:
       return null;
   }

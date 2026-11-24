@@ -79,7 +79,7 @@ func Refusal(err error) *apierr.APIError {
 		return nil
 	}
 	switch api.Code {
-	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, CodeMapFormUnsupported, CodeNodeSettingsInvalid, outputcontract.Code:
+	case CodeNodeTypeUnsupported, CodeToolkitNotAttached, CodeParallelBranchUnsupported, CodeMapFormUnsupported, CodeNodeSettingsInvalid, CodeHTTPNodeInvalid, outputcontract.Code:
 		return api
 	}
 	if errors.Is(err, ErrInstructionsTooLarge) || errors.Is(err, ErrTooManyNodes) || errors.Is(err, ErrExpansionTooLarge) {
@@ -172,6 +172,9 @@ func check(instructions string, attached *[]string) error {
 		if err := checkMapForms(declared); err != nil {
 			return err
 		}
+		if err := checkHTTPNodes(nodes.Content); err != nil {
+			return err
+		}
 		if err := checkNodeSettings(declared, state); err != nil {
 			return err
 		}
@@ -231,6 +234,14 @@ func checkParallelBranches(declared []map[string]*yaml.Node) error {
 					Code:   CodeParallelBranchUnsupported,
 					Message: fmt.Sprintf("%s runs node %s, a %s node, as a Parallel branch, but %s. Put the Router in a saved pipeline and run that pipeline from an Agent node.",
 						nodeLabel(owner["id"]), quoted(target), quoted(nodeType), routerChildText),
+				}
+			}
+			if nodeType == "http" {
+				return &apierr.APIError{
+					Status: http.StatusBadRequest,
+					Code:   CodeParallelBranchUnsupported,
+					Message: fmt.Sprintf("%s runs node %s, an %s node, as a Parallel branch, but HTTP nodes inside Parallel or Map fan-out children are not supported yet (arrives with 5d-3). Move the HTTP node outside Parallel before saving.",
+						nodeLabel(owner["id"]), quoted(target), quoted(nodeType)),
 				}
 			}
 			return &apierr.APIError{
@@ -324,6 +335,14 @@ func checkMapForms(declared []map[string]*yaml.Node) error {
 						Code:   CodeMapFormUnsupported,
 						Message: fmt.Sprintf("%s runs node %s, a %s node, as its worker, but %s. Put the Router in a saved pipeline and run that pipeline from an Agent node before saving.",
 							nodeLabel(owner["id"]), quoted(worker), quoted(workerType), routerChildText),
+					}
+				}
+				if workerType == "http" {
+					return &apierr.APIError{
+						Status: http.StatusBadRequest,
+						Code:   CodeMapFormUnsupported,
+						Message: fmt.Sprintf("%s runs node %s, an %s node, as its worker, but HTTP nodes inside Parallel or Map fan-out children are not supported yet (arrives with 5d-3). Move the HTTP node outside Map before saving.",
+							nodeLabel(owner["id"]), quoted(worker), quoted(workerType)),
 					}
 				}
 				return &apierr.APIError{
@@ -467,7 +486,7 @@ func ascii(value string) bool {
 // Worker's and the Web editor's. `map` and `parallel` are listed there as
 // pending Wave 2a drift.
 var admittedNodeTypes = map[string]struct{}{
-	"aggregate": {}, "agent": {}, "code": {}, "decision": {}, "hitl": {}, "llm": {},
+	"aggregate": {}, "agent": {}, "code": {}, "decision": {}, "hitl": {}, "http": {}, "llm": {},
 	"map": {}, "mcp": {}, "parallel": {}, "printer": {}, "router": {},
 	"split_out": {}, "state_modifier": {}, "toolkit": {},
 }

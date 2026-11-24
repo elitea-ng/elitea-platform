@@ -27,6 +27,9 @@ mod code_timing;
 mod code_tool;
 pub(crate) mod code_trace;
 mod code_workspace;
+pub(crate) mod http_action_runtime;
+#[cfg(test)]
+mod http_action_tests;
 pub(crate) use code_remote::CodeRuntimeFactory;
 mod aggregate;
 #[cfg(test)]

@@ -73,6 +73,14 @@ export const NODE_FIELD_KEYS = {
   branches: 'branches',
   wait: 'wait',
   join: 'join',
+  // HTTP Request node (5d-2)
+  operation: 'operation',
+  request: 'request',
+  response: 'response',
+  responseMode: 'response_mode',
+  acceptedStatuses: 'accepted_statuses',
+  maxBytes: 'max_bytes',
+  idempotencyKey: 'idempotency_key',
   // Per-node resilience settings (5b-1)
   onError: 'on_error',
   alwaysOutputData: 'always_output_data',
@@ -287,6 +295,20 @@ export const NODE_FIELD_INFO: Readonly<Partial<Record<PipelineNodeType, Readonly
   [PipelineNodeTypes.Pipeline]: {
     ...DEPRECATED_COMMON_FIELD_INFO,
     [K.pipeline]: 'Deprecated: use the Agent node. The pipeline to run as a step.',
+  },
+  [PipelineNodeTypes.Http]: {
+    [K.operation]:
+      'Name of the project HTTP action rule configured under Settings → HTTP actions. Origin, method, and credentials are managed by the rule.',
+    [K.request]:
+      'Structured request bindings (path, query, headers, body, and optional idempotency key) populated from pipeline state or literal values.',
+    [K.response]:
+      'Response decoding contract: mode (json, text, or artifact), accepted HTTP status ranges, and maximum response size in bytes.',
+    [K.responseMode]: 'How the response body is decoded into the output state variable (json, text, or artifact).',
+    [K.acceptedStatuses]: 'HTTP status code ranges treated as successful responses (default 200-299).',
+    [K.maxBytes]: 'Maximum allowed response body size in bytes (1 to 2097152).',
+    [K.idempotencyKey]: 'Optional state variable or literal value sent as the rule-configured idempotency key.',
+    [K.output]: 'Single state variable (dict or str) where {status, content_type, byte_length, data} is saved.',
+    [K.timeoutMs]: 'Per-attempt HTTP request timeout in milliseconds (1000 to 30000 ms).',
   },
   [PipelineNodeTypes.Custom]: CUSTOM_FIELD_INFO,
   // Custom nodes are rendered as the Default node type

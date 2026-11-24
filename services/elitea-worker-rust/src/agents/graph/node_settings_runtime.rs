@@ -71,6 +71,16 @@ pub(crate) const fn direct_tool_failure_fault(
     }
 }
 
+/// The registered failure code of a settled HTTP Request node failure (5d-2).
+/// Driven strictly by `NodeFailureClass` so live and restored entries are
+/// byte-identical and never carry URLs, headers, credentials, or bodies.
+pub(crate) const fn http_failure_fault(class: NodeFailureClass) -> Code {
+    match class {
+        NodeFailureClass::AttemptTimeout => codes::PIPELINE_HTTP_TIMEOUT,
+        _ => codes::PIPELINE_HTTP_FAILED,
+    }
+}
+
 /// The registered failure code of any admitted node family's settled failure.
 pub(crate) const fn settled_failure_fault(
     family: AdmittedNodeFamily,
@@ -83,6 +93,7 @@ pub(crate) const fn settled_failure_fault(
         AdmittedNodeFamily::Toolkit | AdmittedNodeFamily::Mcp => {
             direct_tool_failure_fault(family, class)
         }
+        AdmittedNodeFamily::Http => http_failure_fault(class),
     }
 }
 

@@ -6,6 +6,7 @@
 //! capabilities rather than being hidden inside toolkits or model clients.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 
@@ -14,10 +15,10 @@ use super::runtime_context::{
     AgentMemoryRememberRequest, AgentMemoryRemembered, ArtifactDeleteOutcome,
     ArtifactDeleteRequest, ArtifactListOutcome, ArtifactListRequest, ArtifactReadOutcome,
     ArtifactReadRequest, ArtifactWriteOutcome, ArtifactWriteRequest, ClaimScopedEliteaContext,
-    HandFloorRequest, MarketplaceWorkforceRequest, ProjectContextWriteOutcome,
-    ProjectContextWriteRequest, ProposeAgentRequest, ProposeDismissalRequest,
-    RuntimeApplicationVersion, RuntimeAttachmentObject, RuntimeContextClient, RuntimeContextError,
-    SkillWriteOutcome, SkillWriteRequest,
+    HandFloorRequest, HttpActionRpcError, HttpActionRpcResponse, MarketplaceWorkforceRequest,
+    ProjectContextWriteOutcome, ProjectContextWriteRequest, ProposeAgentRequest,
+    ProposeDismissalRequest, RuntimeApplicationVersion, RuntimeAttachmentObject,
+    RuntimeContextClient, RuntimeContextError, SkillWriteOutcome, SkillWriteRequest,
 };
 
 /// Shared platform transport facade. Invocation authority is always supplied
@@ -51,6 +52,19 @@ impl PlatformClient {
     > {
         self.runtime_context
             .redeem_credential(authority, invocation)
+            .await
+    }
+
+    /// Execute one HTTP Request pipeline node invocation (`ExecuteHTTPAction`)
+    /// through the live execution claim.
+    pub(crate) async fn execute_http_action(
+        &self,
+        authority: &ClaimBoundRuntimeContextAuthority,
+        invocation: &elitea_agent_runtime::graph::http_action::HttpActionInvocationV3,
+        call_timeout: Duration,
+    ) -> Result<HttpActionRpcResponse, HttpActionRpcError> {
+        self.runtime_context
+            .execute_http_action(authority, invocation, call_timeout)
             .await
     }
 

@@ -76,14 +76,15 @@ describe('getNodeTypeSelectorLayout', () => {
 });
 
 describe('getAddableNodeTypes', () => {
-  it('returns all 14 compiler-admitted node types in alphabetical display-name order', () => {
+  it('returns all 15 compiler-admitted node types in alphabetical display-name order', () => {
     const types = getAddableNodeTypes();
-    expect(types).toHaveLength(14);
+    expect(types).toHaveLength(15);
     expect(types).toEqual([
       PipelineNodeTypes.Agent,
       PipelineNodeTypes.Aggregate,
       PipelineNodeTypes.Code,
       PipelineNodeTypes.Decision,
+      PipelineNodeTypes.Http,
       PipelineNodeTypes.Hitl,
       PipelineNodeTypes.LLM,
       PipelineNodeTypes.Map,
