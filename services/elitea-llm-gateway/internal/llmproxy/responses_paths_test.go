@@ -32,7 +32,7 @@ func TestResponsesAPIRoundTrip(t *testing.T) {
 		Model:  "gpt-4o",
 		Status: strPtr(schemas.ResponsesResponseStatusCompleted),
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	// text.format is the Responses-API response_format. json_schema with a
 	// strict schema is the most structured shape a caller can send.
@@ -97,7 +97,7 @@ func TestResponsesAPIRoundTrip_MinimalStringInput(t *testing.T) {
 		Object: "response",
 		Status: strPtr(schemas.ResponsesResponseStatusCompleted),
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses", `{"model":"gpt-4o","input":"hi"}`)
 	if rec.Code != http.StatusOK {
@@ -122,7 +122,7 @@ func TestCountTokensSubPath(t *testing.T) {
 		InputTokens: 42,
 		TotalTokens: &total,
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages/count_tokens",
 		`{"model":"anthropic/claude-3-5-sonnet","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`)

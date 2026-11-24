@@ -1404,7 +1404,7 @@ The variable has three states. They are not equivalent:
 | State | What `elitea-main` and `elitea-llm-gateway` do | What is stored |
 |---|---|---|
 | Set, valid | Wraps each project vault key with the master key. | The key row is a Fernet token. |
-| **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
+| **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. `elitea-main` refuses the opt-out next to `OIDC_ISSUER_URL` or `ELITEA_AUTH_CONFIG_FILE` (#2958), and so does the chart. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
 | **Set, malformed** | **Refuses to start.** The message names the variable. | Nothing. |
 
 A malformed key stops the service on purpose (#412). Before that change the
@@ -1433,10 +1433,14 @@ stray space or tab **is** malformed.
   `main.secrets.SECRETS_MASTER_KEY.secretName` / `.key` when set. That Secret
   must exist even with the gateway disabled. The render fails when there is no
   source, and refuses the key as a plain `main.env` value.
-- The E2E stack, `docker-compose.standalone-full.yml` (for `elitea-main` and
-  the gateway) and the kind stack set
-  `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`. They seed unwrapped key rows, so
-  they need no key.
+- The E2E stack, `docker-compose.standalone-full.yml` and the kind stack get
+  a generated key: the stack scripts make one per stack
+  (`deploy/scripts/lib/stack-secrets.sh`, or a Secret for kind) together with
+  the signing secrets, and keep it across restarts (#2958). Their seeds still
+  write the fixed vault key rows in the clear, then wrap them with that key
+  (`stack_wrap_seeded_vault_keys`). They no longer set the opt-out: each one
+  signs in through OIDC or a Form auth document, and `elitea-main` refuses the
+  opt-out there.
 
 ### Changing the key
 

@@ -103,7 +103,7 @@ func newDialHandler(t *testing.T, row fakeModelRow, credentialType string, opts 
 		},
 	}
 	opts = append([]HandlerOption{WithModelResolver(NewModelResolver(ModelResolverConfig{DB: db}))}, opts...)
-	h := NewHandler(spy, nil, nil, opts...)
+	h := newTestHandler(spy, nil, nil, opts...)
 	return h.route(), spy
 }
 

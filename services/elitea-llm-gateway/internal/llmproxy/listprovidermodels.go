@@ -132,7 +132,7 @@ var providerModelListers = map[string]providerModelLister{
 // see at its provider. It writes nothing, invokes no model, and bills nothing:
 // every call it makes is the provider's own listing endpoint.
 func (h *Handler) ListProviderModels(w http.ResponseWriter, r *http.Request) {
-	if !verifySignature(r.Header, h.identitySecret) {
+	if !h.verifyIdentity(r.Header) {
 		writeError(w, http.StatusForbidden, "permission_error", "invalid identity signature", "")
 		return
 	}

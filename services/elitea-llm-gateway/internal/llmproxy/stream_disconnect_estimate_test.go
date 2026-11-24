@@ -170,7 +170,7 @@ func newEstimateHarness(t *testing.T, chunks int) *estimateHarness {
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
 	// The full grace is armed: the old design would keep the upstream running
 	// for up to 15 s after the hangup. The cancel must not wait for it.
-	h := NewHandler(NewBifrostRouter(core), nil, nil,
+	h := newTestHandler(NewBifrostRouter(core), nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(newRecordingEvents()),
 		WithStreamGrace(MaxStreamGrace))

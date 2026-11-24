@@ -3,7 +3,9 @@
 #   1. Set the vault key: export SECRETS_MASTER_KEY=<your staging Fernet key>
 #      (issue #280 — a real-shaped key used to live in this file. Do not
 #      reuse the old exposed value; get the current key from wherever the
-#      team stores staging secrets.)
+#      team stores staging secrets. elitea-main and the gateway refuse the
+#      old value at start-up, #2958.)
+#      Set the token key too: export APPLICATION_SECRET_KEY=$(openssl rand -base64 32)
 #   2. Load dump: bash deploy/scripts/load-staging-dump.sh ~/tmp/stagin-dump/saas-stage2_*.sql.gz
 #   3. Start:     podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.staging.yml up --build
 #   4. Provision a login for one of the dumped users against the local mock
@@ -18,7 +20,7 @@ services:
     environment:
       DATABASE_URL: "postgres://eliteausr:elitea@postgres:5432/eliteadmstage2?sslmode=disable"
       SKIP_MIGRATIONS: "true"
-      APPLICATION_SECRET_KEY: "staging-secret-for-local-dev"
+      APPLICATION_SECRET_KEY: "${APPLICATION_SECRET_KEY:?set a random value of at least 32 bytes in your environment, for example the output of openssl rand -base64 32}"
       # issue #280: this field held a committed, real-shaped Fernet key. The
       # field now requires the value from your shell environment. It decrypts
       # vault data from the loaded staging dump, so a placeholder cannot

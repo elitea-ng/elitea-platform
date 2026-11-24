@@ -57,7 +57,7 @@ var meteredTestSecret = []byte("metered-test-identity-secret")
 
 func newMeteredHandler(gate BudgetChecker, pricer MeteredPricer, opts ...HandlerOption) *Handler {
 	opts = append([]HandlerOption{WithBudgetGate(gate, &fakeCostEstimator{}), WithMeteredPrices(pricer)}, opts...)
-	return NewHandler(&trackingRouter{}, nil, meteredTestSecret, opts...)
+	return newTestHandler(&trackingRouter{}, nil, meteredTestSecret, opts...)
 }
 
 func meteredRequest(t *testing.T, path, project, user, execution string, body any) *http.Request {
@@ -115,7 +115,7 @@ func llmRefusalBody(t *testing.T, gate BudgetChecker) []byte {
 	t.Helper()
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "unreached"}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{}))
 	rec := httptest.NewRecorder()
 	h.Chat(rec, memberChatRequest(t, "42", "7"))
 	return rec.Body.Bytes()
@@ -176,7 +176,7 @@ func TestMeteredAdmitUnpricedRefused(t *testing.T) {
 		t.Fatalf("the budget gate was asked %v for an unpriced operation", gate.checkedScopes())
 	}
 	// A gateway with no pricer at all refuses every operation the same way.
-	bare := NewHandler(&trackingRouter{}, nil, meteredTestSecret, WithBudgetGate(gate, &fakeCostEstimator{}))
+	bare := newTestHandler(&trackingRouter{}, nil, meteredTestSecret, WithBudgetGate(gate, &fakeCostEstimator{}))
 	if rec := admit(t, bare, "tavily", "web_search"); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("no pricer: status = %d, want 422", rec.Code)
 	}
@@ -429,7 +429,7 @@ func TestMeteredSettleBillsTheDocumentedFailureCharge(t *testing.T) {
 // per-process key would sign admissions no other replica can verify.
 func TestMeteredRoutesRefuseWithoutASharedSecret(t *testing.T) {
 	gate := newScopedChecker(allow(), allow())
-	h := NewHandler(&trackingRouter{}, nil, nil,
+	h := newTestHandler(&trackingRouter{}, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{}), WithMeteredPrices(defaultMeteredPrices()))
 	for _, path := range []string{"/llm/v1/metered/admit", "/llm/v1/metered/settle"} {
 		rec := httptest.NewRecorder()

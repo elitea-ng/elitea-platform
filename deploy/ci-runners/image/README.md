@@ -208,6 +208,22 @@ template:
             ephemeral-storage: 8Gi
 ```
 
+### Action archives (`/opt/action-archive-cache`)
+
+Every remote action the workflows use, as the tarball the runner would fetch
+from codeload, at `<owner>_<repo>/<commit sha>.tar.gz`, with
+`ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE` pointing there. The pool shares one
+egress address and codeload answered 429 to it (#3003). The build workflow
+fills `action-archive/` with `scripts/ci/action-archive-list.mjs --download`
+before the build; the directory is never committed. A commit that is not in
+the image is downloaded by the runner as before, so the cache can lag a
+Dependabot bump by up to a week without breaking anything. About 50 MB.
+docs/contributing/ci.md, "Action archives come from the image", has the
+details. The scale-set values set the variable explicitly too (pod env wins
+over the image), so both must name the same directory;
+`scripts/ci/action-archive-list.test.mjs` holds the Containerfile and
+`../values-eng-runner.yaml` to it.
+
 ### Why Ubuntu
 
 The Debian 13 single-OS-family rule covers the images we build and ship.

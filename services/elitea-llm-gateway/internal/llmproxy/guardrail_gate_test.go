@@ -78,7 +78,7 @@ func serveLogged(t *testing.T, serve http.HandlerFunc, req *http.Request) (*http
 
 func guardHandler(t *testing.T, router *trackingRouter, rows ...policy.Row) *Handler {
 	t.Helper()
-	return NewHandler(router, nil, nil,
+	return newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithEgressPolicy(fakeEgressPolicy{allow: true, privateNetwork: true}),
 		WithGovernancePolicy(fixedPolicy{snapshotOf(t, rows...)}, nil, nil))
@@ -313,7 +313,7 @@ func TestGuardrailUnaryOutputMaskAndInputBlock(t *testing.T) {
 
 func TestGuardrailInputMaskReachesTheProviderMasked(t *testing.T) {
 	router := &capturingRouter{}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snapshotOf(t, secretsRow("input", "mask"))}, nil, nil))
 	body := `{"model":"openai/gpt-4o","messages":[{"role":"user","content":"use ` + guardTestSecret + `"}]}`

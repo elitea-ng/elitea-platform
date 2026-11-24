@@ -5,6 +5,7 @@ go 1.26.11
 replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
 
 require (
+	github.com/elitea-ng/elitea-platform/libs/go/secretstrength v0.0.0-00010101000000-000000000000
 	github.com/elitea-ng/elitea-platform/libs/proto/gen/go v0.0.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/nats-io/nats-server/v2 v2.15.2
@@ -41,3 +42,5 @@ require (
 replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 
 replace github.com/elitea-ng/elitea-platform/libs/go/faults => ../../libs/go/faults
+
+replace github.com/elitea-ng/elitea-platform/libs/go/secretstrength => ../../libs/go/secretstrength

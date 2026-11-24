@@ -54,7 +54,7 @@ func TestSignIdentityHeaders_WithSecret(t *testing.T) {
 }
 
 // TestSignIdentityHeaders_NoSecret verifies that an empty secret omits the
-// signature header (and verifySignature still returns true for empty secrets).
+// signature header, and that verifySignature refuses an empty secret.
 func TestSignIdentityHeaders_NoSecret(t *testing.T) {
 	h := http.Header{}
 	SignIdentityHeaders(h, nil, "proj-1", "user-1", "tenant-1", "")
@@ -62,8 +62,8 @@ func TestSignIdentityHeaders_NoSecret(t *testing.T) {
 	if got := h.Get(headerSignature); got != "" {
 		t.Errorf("signature header must be absent when secret is empty; got %q", got)
 	}
-	if !verifySignature(h, nil) {
-		t.Error("verifySignature must return true for empty secret")
+	if verifySignature(h, nil) {
+		t.Error("verifySignature must refuse every identity when the secret is empty")
 	}
 }
 
@@ -390,7 +390,7 @@ func TestTrySoftAlert_NotCrossed(t *testing.T) {
 			SoftThresholdNear: false, // still below 80% after increment
 		},
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	// preDec: the pre-increment snapshot (SoftThresholdNear=false — was below).
 	preDec := failmode.Decision{
@@ -419,7 +419,7 @@ func TestTrySoftAlert_CrossedNATSHealthy(t *testing.T) {
 		},
 		alertFired: true,
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{
 		Verdict:           failmode.Allow,
@@ -444,7 +444,7 @@ func TestTrySoftAlert_CrossedBlock402(t *testing.T) {
 		},
 		alertFired: true,
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{Verdict: failmode.Allow, State: failmode.StateNATSHealthy}
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
@@ -465,7 +465,7 @@ func TestTrySoftAlert_CrossedDownPGFreshNear(t *testing.T) {
 		},
 		alertFired: true,
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{Verdict: failmode.Allow, State: failmode.StateNATSHealthy}
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
@@ -488,7 +488,7 @@ func TestTrySoftAlert_CooldownSuppresses(t *testing.T) {
 		},
 		alertFired: false, // cooldown window active — suppress
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{
 		Verdict:           failmode.Allow,
@@ -512,7 +512,7 @@ func TestTrySoftAlert_PostCheckError(t *testing.T) {
 		checkResult: failmode.Decision{},
 		checkErr:    fmt.Errorf("simulated post-increment CheckBudget error"),
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{Verdict: failmode.Allow, State: failmode.StateNATSHealthy}
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
@@ -537,7 +537,7 @@ func TestTrySoftAlert_AlertCooldownError(t *testing.T) {
 		alertFired: false,
 		alertErr:   fmt.Errorf("simulated TryAlertCooldown error"),
 	}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	preDec := failmode.Decision{
 		Verdict:           failmode.Allow,
@@ -568,7 +568,7 @@ func TestUpdateUsageDirect_BillsImageCost(t *testing.T) {
 	}
 	calc := &fakeCostEstimator{totalNano: 0} // token cost = 0 so direct path is taken
 
-	h := NewHandler(nil, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(gate, calc))
 
 	// Call updateUsageDirect directly with a known cost.
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
@@ -595,7 +595,7 @@ func TestUpdateUsageDirect_ZeroCostNoOp(t *testing.T) {
 		updated:      make(chan struct{}),
 	}
 	calc := &fakeCostEstimator{totalNano: 0}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(gate, calc))
 
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	ctx.SetValue(schemas.BifrostContextKeyVirtualKey, "42")
@@ -612,7 +612,7 @@ func TestUpdateUsageDirect_ZeroCostNoOp(t *testing.T) {
 // when budgetGate is nil.
 func TestUpdateUsageDirect_NilGateNoOp(t *testing.T) {
 	// Handler with no budget gate.
-	h := NewHandler(nil, nil, nil)
+	h := newTestHandler(nil, nil, nil)
 
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	ctx.SetValue(schemas.BifrostContextKeyVirtualKey, "42")
@@ -644,7 +644,7 @@ func TestImageGeneration_PerImageFallbackBilling(t *testing.T) {
 		// No Usage field → fallback billing path
 	}
 
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	body := `{"model":"openai/dall-e-3","prompt":"a cat"}`
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/generations", strings.NewReader(body))
@@ -687,7 +687,7 @@ func TestImageGeneration_TokenBillingPath(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	body := `{"model":"openai/gpt-image-1","prompt":"a dog"}`
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/generations", strings.NewReader(body))
@@ -721,7 +721,7 @@ func TestImageGeneration_Block402_ProviderNotCalled(t *testing.T) {
 		Data: []schemas.ImageData{{URL: "should-not-be-called"}},
 	}
 
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{}))
 
 	body := `{"model":"openai/dall-e-3","prompt":"a cat"}`
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/generations", strings.NewReader(body))

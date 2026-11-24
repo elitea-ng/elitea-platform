@@ -14,7 +14,7 @@ import (
 // the request reaches the router.
 func TestImageVariationEndpointMissingModel(t *testing.T) {
 	fake := &fakeRouter{}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	body, ct := multipartBody(t, nil, map[string][]byte{"image[]": []byte("DATA")})
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/variations", body)
@@ -33,7 +33,7 @@ func TestImageVariationEndpointMissingModel(t *testing.T) {
 // TestImageVariationBadMultipartBody covers the parseMultipart 400 path for the
 // variations endpoint (the edit endpoint's equivalent is already covered).
 func TestImageVariationBadMultipartBody(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil)
+	h := newTestHandler(&fakeRouter{}, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/variations", strings.NewReader("not multipart"))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=xxx")
@@ -84,7 +84,7 @@ func TestImageVariationEndToEnd_RouterError(t *testing.T) {
 		StatusCode: intPtr(http.StatusUnauthorized),
 		Error:      &schemas.ErrorField{Message: "bad key"},
 	}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	body, ct := multipartBody(t,
 		map[string]string{"model": "m"},

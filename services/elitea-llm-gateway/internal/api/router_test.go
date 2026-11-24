@@ -62,7 +62,7 @@ func (recordingRouter) TranscriptionRequest(_ *schemas.BifrostContext, _ *schema
 }
 
 func testRouter() http.Handler {
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil)
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret)
 	return NewRouter(h)
 }
 
@@ -71,7 +71,7 @@ func post(t *testing.T, r http.Handler, path, body string) *httptest.ResponseRec
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, signedRequest(req))
 	return rec
 }
 
@@ -136,7 +136,7 @@ func TestUnknownRouteIs404(t *testing.T) {
 func TestWrongMethodIs405(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/chat/completions", nil)
 	rec := httptest.NewRecorder()
-	testRouter().ServeHTTP(rec, req)
+	testRouter().ServeHTTP(rec, signedRequest(req))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}

@@ -94,7 +94,7 @@ func TestStreamedChatLogsItsUsage(t *testing.T) {
 		&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c1", Object: "chat.completion.chunk"}},
 		usageChunk(2351, 42),
 	)
-	h := NewHandler(&fakeRouter{streamChan: chunks}, nil, nil)
+	h := newTestHandler(&fakeRouter{streamChan: chunks}, nil, nil)
 
 	row := loggedRequest(t, h, "/llm/v1/chat/completions",
 		`{"model":"openai/gpt-4o","messages":[],"stream":true}`)
@@ -115,7 +115,7 @@ func TestStreamedChatLogsItsUsage(t *testing.T) {
 // both describes neither.
 func TestStreamedChatLogsTheStreamingFlag(t *testing.T) {
 	chunks := newChunkChan(usageChunk(10, 5))
-	h := NewHandler(&fakeRouter{streamChan: chunks}, nil, nil)
+	h := newTestHandler(&fakeRouter{streamChan: chunks}, nil, nil)
 
 	row := loggedRequest(t, h, "/llm/v1/chat/completions",
 		`{"model":"openai/gpt-4o","messages":[],"stream":true}`)
@@ -128,7 +128,7 @@ func TestStreamedChatLogsTheStreamingFlag(t *testing.T) {
 // A buffered request keeps the flag false and still logs its usage. Without
 // this the test above passes on a handler that hardcodes `true`.
 func TestBufferedChatLogsUsageAndIsNotMarkedStreaming(t *testing.T) {
-	h := NewHandler(&fakeRouter{chatResp: &schemas.BifrostChatResponse{
+	h := newTestHandler(&fakeRouter{chatResp: &schemas.BifrostChatResponse{
 		ID:    "cmpl-1",
 		Model: "gpt-4o",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 11, CompletionTokens: 7, TotalTokens: 18},

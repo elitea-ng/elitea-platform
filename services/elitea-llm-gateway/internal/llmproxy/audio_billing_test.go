@@ -99,7 +99,7 @@ func TestTranscription_TokenPriceNotFromTheCatalogIsCounted(t *testing.T) {
 		Text:  "hello",
 		Usage: &schemas.TranscriptionUsage{Type: "tokens", InputTokens: &in, OutputTokens: &out},
 	}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",
 		map[string]string{"model": "gpt-4o-transcribe"}, []byte("RIFF"))
@@ -135,7 +135,7 @@ func TestTranscription_TokenPriceFromTheCatalogIsNotCounted(t *testing.T) {
 		Text:  "hello",
 		Usage: &schemas.TranscriptionUsage{Type: "tokens", InputTokens: &in, OutputTokens: &out},
 	}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",
 		map[string]string{"model": "gpt-4o-transcribe"}, []byte("RIFF"))
@@ -166,7 +166,7 @@ func TestTranscription_BillsADurationOnTheSecondsBasis(t *testing.T) {
 		Text:  "hello",
 		Usage: &schemas.TranscriptionUsage{Type: "duration", Seconds: &seconds},
 	}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",
 		map[string]string{"model": "whisper-1"}, []byte("RIFF"))
@@ -202,7 +202,7 @@ func TestSpeech_BillsGeneratedAudioOnTheSecondsBasis(t *testing.T) {
 		Audio: []byte{0x01},
 		Usage: &schemas.SpeechUsage{AudioSeconds: 30},
 	}}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioJSON(t, h, "/llm/v1/audio/speech",
 		`{"model":"tts-1","input":"hello","voice":"alloy"}`)
@@ -240,7 +240,7 @@ func TestSpeech_BillsInputTextOnTheCharacterBasis(t *testing.T) {
 	router := &bifrostLikeSpeechRouter{fakeRouter{speechResp: &schemas.BifrostSpeechResponse{
 		Audio: []byte{0x01},
 	}}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	const input = "здравствуйте, hello"
 	wantChars := int64(utf8.RuneCountInString(input)) // 19 runes, 30 bytes
@@ -278,7 +278,7 @@ func TestSpeech_NeverBillsTwoBases(t *testing.T) {
 			InputTokens: 10, OutputTokens: 2, AudioSeconds: 30,
 		},
 	}}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioJSON(t, h, "/llm/v1/audio/speech",
 		`{"model":"gpt-4o-mini-tts","input":"hello","voice":"alloy"}`)
@@ -316,7 +316,7 @@ func TestAudio_CatalogWithNoRateIsCountedNotBilled(t *testing.T) {
 		Text:  "hello",
 		Usage: &schemas.TranscriptionUsage{Type: "duration", Seconds: &seconds},
 	}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",
 		map[string]string{"model": "whisper-1"}, []byte("RIFF"))
@@ -346,7 +346,7 @@ func TestTranscription_NoUsageAtAllIsCountedNotBilled(t *testing.T) {
 	gate := allowingGate()
 	calc := &fakeCostEstimator{totalNano: 999}
 	router := &fakeRouter{transcriptionResp: &schemas.BifrostTranscriptionResponse{Text: "hello"}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)).route()
 
 	rec := postAudioFile(t, h, "/llm/v1/audio/transcriptions",
 		map[string]string{"model": "whisper-1"}, []byte("RIFF"))
@@ -411,7 +411,7 @@ func TestChat_FallbackTokenPriceDoesNotLogAsAudio(t *testing.T) {
 		ID:    "chat-fallback",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 30, CompletionTokens: 7},
 	}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))

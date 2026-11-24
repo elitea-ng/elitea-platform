@@ -335,7 +335,7 @@ func TestGatewayIntegration(t *testing.T) {
 
 		router := &trackingRouter{}
 		router.chatResp = &schemas.BifrostChatResponse{ID: "should-never-reach"}
-		h := NewHandler(router, nil, nil, WithBudgetGate(gs, calc))
+		h := newTestHandler(router, nil, nil, WithBudgetGate(gs, calc))
 
 		req := chatReqWithProject(t, integProjectIDStr, false)
 		rec := httptest.NewRecorder()
@@ -386,7 +386,7 @@ func TestGatewayIntegration(t *testing.T) {
 			Model: "gpt-4o",
 			Usage: &schemas.BifrostLLMUsage{PromptTokens: 100, CompletionTokens: 50},
 		}
-		h := NewHandler(router, nil, nil, WithBudgetGate(gs, calc))
+		h := newTestHandler(router, nil, nil, WithBudgetGate(gs, calc))
 
 		req := chatReqWithProject(t, integProjectIDStr, false)
 		rec := httptest.NewRecorder()
@@ -454,7 +454,7 @@ func TestGatewayIntegration(t *testing.T) {
 			Model: "openai/gpt-4o",
 			Usage: &schemas.BifrostLLMUsage{PromptTokens: 200, CompletionTokens: 100},
 		}
-		h := NewHandler(router, nil, nil, WithBudgetGate(gs, calc))
+		h := newTestHandler(router, nil, nil, WithBudgetGate(gs, calc))
 
 		req := chatReqWithProject(t, integProjectIDStr, false)
 		rec := httptest.NewRecorder()

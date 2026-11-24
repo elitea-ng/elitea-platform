@@ -372,4 +372,21 @@ ENV RUNNER_TOOL_CACHE=/home/runner/_work/_tool \
     npm_config_cache=/home/runner/_work/_cache/npm \
     PIP_CACHE_DIR=/home/runner/_work/_cache/pip
 
+# The action archive cache. Every pool job used to download each action's
+# tarball from codeload.github.com, and the pool shares one egress address, so
+# codeload answered 429 and jobs failed in "Set up job". The runner (2.320+)
+# first looks for <cache>/<owner>_<repo>/<commit sha>.tar.gz under
+# ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE and downloads only what is missing, so a
+# pin newer than this image still works (one download per job until the next
+# weekly build). The build workflow fills action-archive/ with
+# scripts/ci/action-archive-list.mjs --download before this COPY; in a plain
+# checkout the directory holds only its .gitignore and the cache is empty.
+# Read-only to the runner user: it is action code every job executes.
+COPY action-archive/ /opt/action-archive-cache/
+RUN set -eux; \
+    rm -f /opt/action-archive-cache/.gitignore; \
+    chown -R root:root /opt/action-archive-cache; \
+    chmod -R u=rwX,go=rX /opt/action-archive-cache
+ENV ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE=/opt/action-archive-cache
+
 USER runner

@@ -27,7 +27,7 @@ func cachedUsage(prompt, completion, cacheRead, cacheWrite int) *schemas.Bifrost
 }
 
 func TestBufferedChatLogsCacheTokensAndAPlatformCredential(t *testing.T) {
-	h := NewHandler(&fakeRouter{
+	h := newTestHandler(&fakeRouter{
 		chatResp:      &schemas.BifrostChatResponse{ID: "cmpl-1", Model: "gpt-4o", Usage: cachedUsage(1200, 30, 1000, 150)},
 		selectedKeyID: "shared:pub-1",
 	}, nil, nil)
@@ -44,7 +44,7 @@ func TestBufferedChatLogsCacheTokensAndAPlatformCredential(t *testing.T) {
 }
 
 func TestBufferedChatLogsAProjectCredential(t *testing.T) {
-	h := NewHandler(&fakeRouter{
+	h := newTestHandler(&fakeRouter{
 		chatResp:      &schemas.BifrostChatResponse{ID: "cmpl-1", Model: "gpt-4o", Usage: cachedUsage(10, 5, 0, 0)},
 		selectedKeyID: "17",
 	}, nil, nil)
@@ -60,7 +60,7 @@ func TestBufferedChatLogsAProjectCredential(t *testing.T) {
 // A response from a router that selected no key leaves the owner empty. An
 // empty owner is "unknown", which is the only true statement here.
 func TestBufferedChatWithoutASelectedKeyLeavesTheOwnerEmpty(t *testing.T) {
-	h := NewHandler(&fakeRouter{
+	h := newTestHandler(&fakeRouter{
 		chatResp: &schemas.BifrostChatResponse{ID: "cmpl-1", Model: "gpt-4o", Usage: cachedUsage(10, 5, 0, 0)},
 	}, nil, nil)
 
@@ -79,7 +79,7 @@ func TestStreamedChatLogsCacheTokensAndTheCredentialOwner(t *testing.T) {
 			ID: "trailer", Object: "chat.completion.chunk", Usage: cachedUsage(2351, 42, 2048, 0),
 		}},
 	)
-	h := NewHandler(&fakeRouter{streamChan: chunks, selectedKeyID: "shared:pub-1"}, nil, nil)
+	h := newTestHandler(&fakeRouter{streamChan: chunks, selectedKeyID: "shared:pub-1"}, nil, nil)
 
 	row := loggedRequest(t, h, "/llm/v1/chat/completions",
 		`{"model":"openai/gpt-4o","messages":[],"stream":true}`)
@@ -96,7 +96,7 @@ func TestStreamedChatLogsCacheTokensAndTheCredentialOwner(t *testing.T) {
 }
 
 func TestBufferedResponsesLogsCacheTokens(t *testing.T) {
-	h := NewHandler(&fakeRouter{respResp: &schemas.BifrostResponsesResponse{
+	h := newTestHandler(&fakeRouter{respResp: &schemas.BifrostResponsesResponse{
 		Usage: &schemas.ResponsesResponseUsage{
 			InputTokens:  900,
 			OutputTokens: 12,

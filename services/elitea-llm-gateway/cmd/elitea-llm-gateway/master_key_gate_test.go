@@ -114,7 +114,7 @@ func TestGatewayRefusesToStartWithoutAMasterKey(t *testing.T) {
 			"DATABASE_URL=not-a-database-url",
 			"GATEWAY_NATS_URL=",
 			"LLM_BUDGET_REQUIRE_ENFORCEMENT="+config.RequireEnforcementOff,
-			"GATEWAY_IDENTITY_SECRET=master-key-gate-test",
+			"GATEWAY_IDENTITY_SECRET=master-key-gate-test-identity-0123456789",
 			"GATEWAY_HTTP_ADDR=127.0.0.1:0",
 		)
 		out := &bytes.Buffer{}

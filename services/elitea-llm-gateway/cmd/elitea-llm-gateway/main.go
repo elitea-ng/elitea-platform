@@ -14,10 +14,10 @@
 // loud startup warning.
 // FIX #7: cfg.NATSDegradedCapUSD is converted to int64 nano-USD and set on
 // failmode.Params.DegradedCapNano before the GovernanceStore is constructed.
-// FIX #9: startup guard — GATEWAY_IDENTITY_SECRET must be non-empty when
-// GATEWAY_NATS_URL is set (enforcement on), otherwise the HMAC is bypassable.
-// Issue #11 widened that guard: the credential-backed Account is a second,
-// independent reason the secret is mandatory (see startupIdentityCheck).
+// FIX #9: startup guard — GATEWAY_IDENTITY_SECRET must be set, otherwise the
+// HMAC is bypassable. Issue #11 widened that guard to the credential-backed
+// Account, and #2959 made it unconditional: the secret is required and must
+// be strong (see startupIdentityCheck).
 package main
 
 import (
@@ -40,6 +40,7 @@ import (
 
 	"github.com/maximhq/bifrost/core/schemas"
 
+	"github.com/elitea-ng/elitea-platform/libs/go/secretstrength"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/account"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/api"
 	"github.com/elitea-ng/elitea-platform/services/elitea-llm-gateway/internal/config"
@@ -82,6 +83,14 @@ func main() {
 	} else if masterKeyWarning != "" {
 		logger.Warn(masterKeyWarning,
 			"variable", account.MasterKeyEnvVar, "opt_out", account.AllowUnwrappedEnvVar)
+	}
+
+	// The identity secret and the hop secret, before any key is derived from
+	// either (the metered admission key, the hop marker) and before anything
+	// is opened or served (#2958, #2959).
+	if err := startupIdentityCheck(cfg.IdentitySecret, cfg.HopSecret); err != nil {
+		slog.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -135,15 +144,6 @@ func main() {
 			Logger:          logger,
 			PublicProjectID: cfg.PublicProjectIDString(),
 		})
-	}
-
-	// Issue #11: the identity-secret guard MUST run once the two conditions that
-	// make the secret mandatory are both known — budget enforcement (NATSURL)
-	// and the credential-backed Account (pool). It runs here, before
-	// server.New and therefore before the listener accepts a single request.
-	if err := startupIdentityCheck(cfg.IdentitySecret, cfg.NATSURL != "", pool != nil); err != nil {
-		slog.Error("FATAL: refusing to start", "err", err)
-		os.Exit(1)
 	}
 
 	// ISSUE #164: the hop marker, built from its OWN key material.
@@ -735,46 +735,36 @@ func shutdownSequence(
 	return err
 }
 
-// startupIdentityCheck returns a non-nil error when the gateway would serve
-// traffic with identity verification switched off while something downstream
-// depends on that identity being authentic. main() turns the error into a FATAL
-// log + exit(1) BEFORE the listener is created.
+// startupIdentityCheck returns a non-nil error when the gateway must not
+// start with the identity material it was given. main() turns the error into
+// a FATAL log + exit(1) BEFORE any key is derived and before the listener is
+// created.
 //
-// verifySignature (internal/llmproxy/identity.go) treats an EMPTY secret as
-// "verification disabled" and returns true unconditionally. Whatever the caller
-// puts in X-Elitea-Project-Id is then taken as the project identity verbatim.
-// Two independent consumers make that fatal rather than merely degraded:
+// GATEWAY_IDENTITY_SECRET is REQUIRED, whatever else is configured (#2959).
+// The signed X-Elitea-* identity headers select the tenant: the vault-backed
+// Account resolves and decrypts that project's provider credentials from
+// them (issue #11), budget enforcement charges that project (FIX #9), and
+// the metered admissions are keyed from the secret. The proxy serves in every
+// deployment, so there is no shape in which an unverified identity is safe.
+// The older rule required the secret only when a database or NATS was
+// configured; the verifier now refuses every identity when the secret is
+// empty, so a gateway without one could serve nothing anyway.
 //
-//   - budgetEnforcement (GATEWAY_NATS_URL set) — an unverified project id lets
-//     any caller spend against any project's budget (the original FIX #9).
-//   - credentialAccount (a Postgres pool, so the vault-backed Account is wired)
-//     — GetKeysForProvider resolves and DECRYPTS that project's provider keys
-//     from the Fernet vault. An unverified project id therefore hands any
-//     caller any tenant's decrypted provider credentials (issue #11). This is
-//     the case the NATS-only condition missed: a NATS-less deployment with a
-//     database still wires the Account.
+// The value must also be strong (#2958): at least secretstrength.MinBytes,
+// not a placeholder, not a value published in the repository.
 //
-// Note the operational consequence, recorded in DECISIONS.md: DATABASE_URL has
-// a non-empty default and pgxpool.New only PARSES the DSN (it does not dial),
-// so credentialAccount is true in effectively every deployment. The guard is
-// therefore unconditional in practice — GATEWAY_IDENTITY_SECRET is a required
-// setting, and the Helm chart marks its Secret non-optional to match.
-func startupIdentityCheck(identitySecret string, budgetEnforcement, credentialAccount bool) error {
-	if identitySecret != "" {
-		return nil
+// GATEWAY_HOP_SECRET stays optional (an unset value is the documented
+// UNARMED posture, see logHopMarkerMode). A value that IS set must be strong
+// too: a guessable marker key lets anyone mint the marker.
+//
+// No error repeats a value.
+func startupIdentityCheck(identitySecret, hopSecret string) error {
+	if err := secretstrength.Check("GATEWAY_IDENTITY_SECRET", identitySecret); err != nil {
+		return fmt.Errorf("%w. It signs the X-Elitea-* identity headers elitea-main sends, and the gateway "+
+			"refuses every unsigned identity; set the SAME value on elitea-main", err)
 	}
-	switch {
-	case credentialAccount && budgetEnforcement:
-		return fmt.Errorf("GATEWAY_IDENTITY_SECRET is empty: identity verification is disabled while the " +
-			"vault-backed Account resolves per-project provider credentials AND budget enforcement is on — " +
-			"an unauthenticated X-Elitea-Project-Id would select any tenant's decrypted credentials and budget")
-	case credentialAccount:
-		return fmt.Errorf("GATEWAY_IDENTITY_SECRET is empty: identity verification is disabled while the " +
-			"vault-backed Account resolves per-project provider credentials from the Fernet vault — " +
-			"an unauthenticated X-Elitea-Project-Id would select any tenant's decrypted credentials (issue #11)")
-	case budgetEnforcement:
-		return fmt.Errorf("GATEWAY_IDENTITY_SECRET is empty: identity verification is disabled while budget " +
-			"enforcement is enabled (GATEWAY_NATS_URL is set) — the per-project HMAC would be bypassable")
+	if err := secretstrength.CheckIfSet("GATEWAY_HOP_SECRET", hopSecret); err != nil {
+		return err
 	}
 	return nil
 }

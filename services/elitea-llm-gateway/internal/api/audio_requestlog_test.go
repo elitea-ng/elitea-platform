@@ -61,14 +61,14 @@ func TestAudioRequestsReachTheRequestLog(t *testing.T) {
 	if recorder == nil {
 		t.Fatal("the recorder is nil, so this test would assert nothing")
 	}
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil)
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret)
 	r := NewRouterWithLog(h, recorder)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/audio/speech",
 		strings.NewReader(`{"model":"tts-1","input":"hi","voice":"alloy"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	r.ServeHTTP(rec, signedRequest(req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}

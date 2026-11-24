@@ -64,7 +64,7 @@ func decodeCheckConnectionResponse(t *testing.T, rec *httptest.ResponseRecorder)
 }
 
 func newCheckConnectionHandler(policy EgressPolicy) *Handler {
-	h := NewHandler(nil, nil, nil)
+	h := newTestHandler(nil, nil, nil)
 	h.egressPolicy = policy
 	return h
 }
@@ -154,7 +154,7 @@ func TestCheckConnection_NilPolicyFailsClosed(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := NewHandler(nil, nil, nil) // no WithEgressPolicy: h.egressPolicy is nil
+	h := newTestHandler(nil, nil, nil) // no WithEgressPolicy: h.egressPolicy is nil
 	rec := doCheckConnection(t, h, checkConnectionRequest{Type: "open_ai", APIBase: fp.URL})
 
 	resp := decodeCheckConnectionResponse(t, rec)
@@ -379,7 +379,7 @@ func TestCheckConnection_IdentitySignatureRequiredWhenConfigured(t *testing.T) {
 	fp := newFakeProvider(http.StatusOK)
 	defer fp.Close()
 
-	h := NewHandler(nil, nil, []byte("shared-secret"))
+	h := newTestHandler(nil, nil, []byte("shared-secret"))
 	h.egressPolicy = fakeEgressPolicy{allow: true, privateNetwork: true}
 
 	raw, _ := json.Marshal(checkConnectionRequest{Type: "ollama", APIBase: fp.URL})

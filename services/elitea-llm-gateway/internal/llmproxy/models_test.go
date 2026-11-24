@@ -459,7 +459,7 @@ func TestModels_ListEnvelope(t *testing.T) {
 }
 
 func TestModels_ListNilResolverEmpty(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil) // no WithModelResolver
+	h := newTestHandler(&fakeRouter{}, nil, nil) // no WithModelResolver
 	rec := getModels(t, h.route(), "/llm/v1/models", "42")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -513,7 +513,7 @@ func TestModel_SlashInIDViaWildcard(t *testing.T) {
 }
 
 func TestModel_NilResolver404(t *testing.T) {
-	h := NewHandler(&fakeRouter{}, nil, nil)
+	h := newTestHandler(&fakeRouter{}, nil, nil)
 	rec := getModels(t, h.route(), "/llm/v1/models/gpt-4o", "42")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("nil resolver single: status = %d, want 404", rec.Code)
@@ -524,7 +524,7 @@ func TestModels_InvalidSignature403(t *testing.T) {
 	db := &fakeModelDB{rows: []fakeModelRow{{title: "gpt-4o"}}}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db})
 	// A configured identity secret with a missing signature header → 403.
-	h := NewHandler(&fakeRouter{}, nil, []byte("secret"), WithModelResolver(resolver))
+	h := newTestHandler(&fakeRouter{}, nil, []byte("secret"), WithModelResolver(resolver))
 
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
 	req.Header.Set(headerProjectID, "42") // no signature
@@ -542,7 +542,7 @@ func TestModels_ValidSignatureResolves(t *testing.T) {
 	db := &fakeModelDB{rows: []fakeModelRow{{title: "gpt-4o"}}}
 	resolver := NewModelResolver(ModelResolverConfig{DB: db})
 	secret := []byte("secret")
-	h := NewHandler(&fakeRouter{}, nil, secret, WithModelResolver(resolver))
+	h := newTestHandler(&fakeRouter{}, nil, secret, WithModelResolver(resolver))
 
 	id := identity{projectID: "42"}
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/models", nil)
@@ -579,7 +579,7 @@ func TestModelNameFromPath(t *testing.T) {
 // identity secret (signature verification disabled), returning the http.Handler.
 func newModelsHandler(db modelRowQuerier) http.Handler {
 	resolver := NewModelResolver(ModelResolverConfig{DB: db})
-	h := NewHandler(&fakeRouter{}, nil, nil, WithModelResolver(resolver))
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithModelResolver(resolver))
 	return h.route()
 }
 

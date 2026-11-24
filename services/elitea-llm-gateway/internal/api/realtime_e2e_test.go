@@ -181,11 +181,11 @@ func TestRealtimeRouteIsMountedAndBillsATurn(t *testing.T) {
 	prov := newE2EProviderSocket()
 	gate := &e2eGate{changed: make(chan struct{}, 8)}
 	dialer := &e2eDialer{sock: prov}
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil,
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret,
 		llmproxy.WithRealtimeDialer(dialer),
 		llmproxy.WithBudgetGate(gate, e2eCosts{}),
 	)
-	srv := httptest.NewServer(NewRouter(h))
+	srv := httptest.NewServer(signingHandler(NewRouter(h)))
 	defer srv.Close()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") +
@@ -264,10 +264,10 @@ func TestRealtimeRouteIsMountedAndBillsATurn(t *testing.T) {
 // TestRealtimeRouteAnswersGET is the route-shape guard. A WebSocket handshake is
 // a GET, and a route registered only for POST answers 405 to every real client.
 func TestRealtimeRouteAnswersGET(t *testing.T) {
-	h := llmproxy.NewHandler(recordingRouter{}, nil, nil)
+	h := llmproxy.NewHandler(recordingRouter{}, nil, testIdentitySecret)
 	req := httptest.NewRequest(http.MethodGet, "/llm/v1/realtime?model=m", nil)
 	rec := httptest.NewRecorder()
-	NewRouter(h).ServeHTTP(rec, req)
+	NewRouter(h).ServeHTTP(rec, signedRequest(req))
 	if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound {
 		t.Fatalf("GET /llm/v1/realtime = %d; the handshake method must reach the handler", rec.Code)
 	}

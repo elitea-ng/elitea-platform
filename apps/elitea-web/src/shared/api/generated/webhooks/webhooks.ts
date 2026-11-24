@@ -317,7 +317,7 @@ export const getCreateWebhookUrl = (projectID: string) => {
 };
 
 /**
- * handler.go's Create. A `secret` in the body is sealed into the project vault and returned in this response only; the web UI generates one client-side (256 random bits, base64url). Answers 503 when the deployment has no usable project vault, rather than storing the secret in plain text.
+ * handler.go's Create. A `secret` in the body is sealed into the project vault and returned in this response only; the web UI generates one client-side (256 random bits, base64url), and the server generates one when the body carries none, so every webhook signs its deliveries. Answers 503 when the deployment has no usable project vault, rather than storing the secret in plain text.
  * @summary Register a new outbound webhook
  */
 export const createWebhook = async (

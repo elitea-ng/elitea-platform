@@ -162,7 +162,7 @@ func TestStreamCut_AccumulatedUsageIsBilledDeterministically(t *testing.T) {
 		router.preamble = []*schemas.BifrostStreamChunk{chatDelta("c1", "hello "), chatDelta("c2", "world")}
 		router.accIn, router.accOut = 11, 22
 
-		h := NewHandler(router, nil, nil,
+		h := newTestHandler(router, nil, nil,
 			WithBudgetGate(gate, calc),
 			WithOpsEventPublisher(newRecordingEvents()),
 			WithStreamGrace(20*time.Millisecond))
@@ -209,7 +209,7 @@ func TestStreamCut_PlaceholderAccumulatedCount_IsNotBilled(t *testing.T) {
 		// Exactly what message_start leaves on the handle.
 		accIn: 5000, accOut: 1,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(20*time.Millisecond))
@@ -250,7 +250,7 @@ func TestStreamCut_PartialBill_StillReportsTheGap(t *testing.T) {
 		preamble: []*schemas.BifrostStreamChunk{chatDelta("c1", "hello "), chatDelta("c2", "world")},
 		accIn:    11, accOut: 22,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(20*time.Millisecond))
@@ -300,7 +300,7 @@ func TestStreamCut_TerminalTrailerOutranksAccumulatedCount(t *testing.T) {
 		trailer:      chatTrailer(11, 22),
 		trailerDelay: 20 * time.Millisecond,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(2*time.Second))
@@ -336,7 +336,7 @@ func TestStreamCut_AccumulatedUsageSurvivesDrainSaturation(t *testing.T) {
 		preamble: []*schemas.BifrostStreamChunk{chatDelta("c1", "hello")},
 		accIn:    11, accOut: 22,
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(events),
 		WithStreamGrace(5*time.Second),
@@ -375,7 +375,7 @@ func TestStreamCut_AccumulatedUsageSurvivesDrainSaturation(t *testing.T) {
 func TestStreamCut_AccumulatedCountIsReadOnlyAfterTheChannelCloses(t *testing.T) {
 	gate := allowGate()
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(&fakeRouter{}, nil, nil,
+	h := newTestHandler(&fakeRouter{}, nil, nil,
 		WithBudgetGate(gate, calc),
 		WithOpsEventPublisher(newRecordingEvents()))
 

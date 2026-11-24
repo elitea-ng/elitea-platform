@@ -59,6 +59,9 @@ node_modules/.vite/
 # Local standalone-stack mTLS material (deploy/scripts/gen-gateway-certs.sh)
 deploy/certs/
 
+# Generated stack signing secrets (deploy/scripts/lib/stack-secrets.sh)
+deploy/.stack-secrets/
+
 # Go coverage profiles (task coverage / ci-go.yml write one per module)
 coverage.out
 
