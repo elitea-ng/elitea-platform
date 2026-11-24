@@ -59,12 +59,14 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -107,10 +109,11 @@ const projectUserNameLikePattern = `project\_user\_%`
 
 // AdminPermissions serves `GET /admin/permissions/{scope}/{mode}`.
 //
-// Response body: {total, rows:[{name, <role>: bool, …}]} — one row per known
-// permission, one boolean column per role in the selected scope. The central
-// scope adds `roles`, one entry per column with its seed record (ADR-0059
-// R0.8c): the Users page lists the assignable roles from it.
+// Response body: {total, rows:[{name, <role>: bool, …}], catalogue:[{name,
+// deprecated}]} — one row per known permission, one boolean column per role in
+// the selected scope, and one catalogue entry per row. The central scope adds
+// `roles`, one entry per column with its seed record (ADR-0059 R0.8c): the
+// Users page lists the assignable roles from it.
 func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	if !isKnownScope(scope) {
@@ -179,7 +182,7 @@ func (m permissionMatrix) response() map[string]any {
 	}
 	// `total` counts the CATALOGUE, matching the legacy `len(all_permissions)`.
 	// It is not a page count — this endpoint is never paginated.
-	body := map[string]any{"total": len(rows), "rows": rows}
+	body := map[string]any{"total": len(rows), "rows": rows, "catalogue": catalogueEntries(m.catalogue)}
 	if m.columns != nil {
 		body["roles"] = m.columns
 	}
@@ -228,6 +231,25 @@ WHERE role.mode = $1`, mode)
 		columns = append(columns, column)
 	}
 	return columns, nil
+}
+
+// catalogueEntry describes one permission of the catalogue. It is served
+// beside `rows`, not in them: every key of a row other than `name` is a role
+// column, and the page sends the rows back on a save.
+type catalogueEntry struct {
+	Name string `json:"name"`
+	// Deprecated marks a legacy name (ADR-0059 decision 2, R0.14a): it keeps
+	// working where it is granted until the sunset date, and a save that adds
+	// it to a role answers 400 permission_deprecated.
+	Deprecated bool `json:"deprecated"`
+}
+
+func catalogueEntries(catalogue []string) []catalogueEntry {
+	entries := make([]catalogueEntry, 0, len(catalogue))
+	for _, name := range catalogue {
+		entries = append(entries, catalogueEntry{Name: name, Deprecated: adminaccess.IsLegacy(name)})
+	}
+	return entries
 }
 
 func (h *Handler) readMatrix(ctx context.Context, scope, mode string) (permissionMatrix, error) {
@@ -690,7 +712,6 @@ func rowPermissionName(row map[string]json.RawMessage, index int) (string, error
 func (h *Handler) saveGrants(
 	r *http.Request, scope, mode string, current permissionMatrix, submission matrixSubmission,
 ) (granted, revoked int, err error) {
-	ctx := r.Context()
 	baseline := current.granted
 	if current.inherited {
 		baseline = map[string]map[string]bool{}
@@ -700,6 +721,13 @@ func (h *Handler) saveGrants(
 	if len(toGrant) == 0 && len(toRevoke) == 0 {
 		return 0, 0, nil
 	}
+	// A legacy name is added to no role (ADR-0059 decision 2, R0.14a). It is
+	// decided first, before the caller is read, so a global administrator
+	// gets the 400 too. The materialised cells of an inherited project matrix
+	// are cells the project already had, so they are not new grants.
+	if refusal := adminaccess.CheckDeprecated(policyCells(newCells(current, toGrant))); refusal != nil {
+		return 0, 0, refusal
+	}
 	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return 0, 0, refusal
@@ -708,7 +736,7 @@ func (h *Handler) saveGrants(
 	check := func(ctx context.Context, q adminaccess.Querier) error {
 		return h.checkMatrixEdit(ctx, q, caller, centralPlane, mode, current, toGrant, toRevoke)
 	}
-	if err := h.applyGrantChanges(ctx, scope, mode, toGrant, toRevoke, caller, !centralPlane, check); err != nil {
+	if err := h.applyGrantChanges(r, scope, mode, toGrant, toRevoke, caller, !centralPlane, check); err != nil {
 		return 0, 0, err
 	}
 	return len(toGrant), len(toRevoke), nil
@@ -736,16 +764,7 @@ func (h *Handler) checkMatrixEdit(
 	current permissionMatrix, toGrant, toRevoke []grant,
 ) error {
 	if !centralPlane {
-		added := toGrant
-		if current.inherited {
-			added = nil
-			for _, cell := range toGrant {
-				if !current.granted[cell.role][cell.permission] {
-					added = append(added, cell)
-				}
-			}
-		}
-		if refusal := adminaccess.CheckReserved("", policyCells(added)); refusal != nil {
+		if refusal := adminaccess.CheckReserved("", policyCells(newCells(current, toGrant))); refusal != nil {
 			return refusal
 		}
 		return nil
@@ -798,6 +817,21 @@ func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, 
 		return adminaccess.SetLocked(seeded)
 	}
 	return nil
+}
+
+// newCells is toGrant without the materialised cells of an inherited project
+// matrix: those the project already had through the central fallback.
+func newCells(current permissionMatrix, toGrant []grant) []grant {
+	if !current.inherited {
+		return toGrant
+	}
+	var added []grant
+	for _, cell := range toGrant {
+		if !current.granted[cell.role][cell.permission] {
+			added = append(added, cell)
+		}
+	}
+	return added
 }
 
 func policyCells(cells []grant) []adminaccess.Cell {
@@ -873,9 +907,10 @@ func sortGrants(cells []grant) {
 // adminaccess.LockRoleWrites and before the first statement, so no concurrent
 // role write can outdate it before the commit.
 func (h *Handler) applyGrantChanges(
-	ctx context.Context, scope, mode string, granted, revoked []grant,
+	r *http.Request, scope, mode string, granted, revoked []grant,
 	caller adminaccess.Caller, guardSelf bool, check func(context.Context, adminaccess.Querier) error,
 ) error {
+	ctx := r.Context()
 	insertSQL, deleteSQL, scopeArg, err := h.grantStatements(ctx, scope, mode)
 	if err != nil {
 		return err
@@ -901,6 +936,13 @@ func (h *Handler) applyGrantChanges(
 			return err
 		}
 	}
+	// The permission set of every role the edit touches, before it: the
+	// admin.access.changed event of each names the sets before and after
+	// (ADR-0059 R1.5).
+	roleSets, err := h.readRoleSets(ctx, transaction, scope, scopeArg, granted, revoked)
+	if err != nil {
+		return err
+	}
 	for _, cell := range granted {
 		if _, err := transaction.Exec(ctx, insertSQL, scopeArg, cell.role, cell.permission); err != nil {
 			return fmt.Errorf("grant %s to %s: %w", cell.permission, cell.role, err)
@@ -914,8 +956,100 @@ func (h *Handler) applyGrantChanges(
 	if err := guard.Check(ctx, transaction); err != nil {
 		return err
 	}
+	if err := h.appendRolePermissionChanges(r, transaction, caller, scope, mode, scopeArg, roleSets); err != nil {
+		return fmt.Errorf("record permission update: %w", err)
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit permission update: %w", err)
+	}
+	return nil
+}
+
+// readRoleSets reads, in the write transaction, the permission set of each
+// role a matrix edit touches: the central role of the mode (scope
+// administration) or the project role (scopeArg is the project id).
+func (h *Handler) readRoleSets(
+	ctx context.Context, q adminaccess.Querier, scope string, scopeArg any, granted, revoked []grant,
+) (map[string][]string, error) {
+	sets := map[string][]string{}
+	for _, cell := range append(append([]grant(nil), granted...), revoked...) {
+		if _, read := sets[cell.role]; read {
+			continue
+		}
+		set, err := roleSet(ctx, q, scope, scopeArg, cell.role)
+		if err != nil {
+			return nil, err
+		}
+		sets[cell.role] = set
+	}
+	return sets, nil
+}
+
+func roleSet(ctx context.Context, q adminaccess.Querier, scope string, scopeArg any, role string) ([]string, error) {
+	statement := `
+SELECT grant_row.permission FROM public.auth_core__role_permission grant_row
+JOIN public.auth_core__role role ON role.id = grant_row.role_id
+WHERE role.mode = $1 AND role.name = $2
+ORDER BY 1`
+	if scope != scopeAdministration {
+		statement = `
+SELECT override.permission FROM public.auth_core__project_role_permission override
+JOIN public.auth_core__project_role role ON role.id = override.role_id
+WHERE role.project_id = $1 AND role.name = $2
+ORDER BY 1`
+	}
+	rows, err := q.Query(ctx, statement, scopeArg, role)
+	if err != nil {
+		return nil, fmt.Errorf("read the permissions of %s: %w", role, err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("read the permissions of %s: %w", role, err)
+	}
+	return names, nil
+}
+
+// appendRolePermissionChanges appends one role_permissions event per role
+// whose set the edit changed, in name order, in the edit's transaction. A
+// central role is the subject "<mode>:<name>" on the platform partition; a
+// project role is "<project>:<name>" on the project's partition.
+func (h *Handler) appendRolePermissionChanges(
+	r *http.Request, tx pgx.Tx, caller adminaccess.Caller,
+	scope, mode string, scopeArg any, before map[string][]string,
+) error {
+	ctx := r.Context()
+	roles := make([]string, 0, len(before))
+	for role := range before {
+		roles = append(roles, role)
+	}
+	slices.Sort(roles)
+	for _, role := range roles {
+		after, err := roleSet(ctx, tx, scope, scopeArg, role)
+		if err != nil {
+			return err
+		}
+		if slices.Equal(sortedSet(before[role]), sortedSet(after)) {
+			continue
+		}
+		change := securityaudit.AdminAccessChanged{
+			ActorUserID: caller.UserID,
+			SubjectType: "role",
+			SubjectID:   mode + ":" + role,
+			Change: securityaudit.AccessChange{
+				Kind: securityaudit.AccessRolePermissions, Mode: mode,
+				Before: sortedSet(before[role]), After: sortedSet(after),
+			},
+		}
+		if projectID, ok := scopeArg.(int); ok {
+			change.SubjectType = "project_role"
+			change.SubjectID = strconv.Itoa(projectID) + ":" + role
+			change.TenantProjectID = int64(projectID)
+			// As roleLifecycleChange: a project role has no central mode.
+			change.Change.Mode = ""
+		}
+		if err := h.appendAccessChange(ctx, tx, r, change); err != nil {
+			return err
+		}
 	}
 	return nil
 }

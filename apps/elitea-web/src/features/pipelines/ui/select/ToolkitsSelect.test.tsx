@@ -14,7 +14,22 @@ const PROJECT_ID = 'proj-1';
 
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
-  server.use(http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})));
+  server.use(
+    http.get(`${BASE}/elitea_core/toolkits/prompt_lib/${PROJECT_ID}`, () => HttpResponse.json({})),
+    http.get(`${BASE}/elitea_core/platform_settings/prompt_lib`, () =>
+      HttpResponse.json({ mcp_enabled: true, mcp_in_menu_enabled: true }),
+    ),
+    http.get(`${BASE}/elitea_core/tools/prompt_lib/${PROJECT_ID}`, ({ request }) => {
+      const url = new URL(request.url);
+      if (url.searchParams.get('mcp') === 'true') {
+        return HttpResponse.json({ rows: [], total: 0 });
+      }
+      return HttpResponse.json({
+        rows: [{ id: 1, type: 'github', name: 'github', toolkit_name: 'github' }],
+        total: 1,
+      });
+    }),
+  );
 });
 
 afterEach(() => {
@@ -22,7 +37,7 @@ afterEach(() => {
 });
 
 describe('ToolkitsSelect', () => {
-  it('lists non-application toolkits from versionTools as options', async () => {
+  it('renders the grouped Toolkits picker label', async () => {
     const contextValue = buildFlowEditorContextValue({ yamlJsonObject: { nodes: [{ id: 'LLM 1' }] } });
 
     const { findByText } = renderWithRouterAndProject(
@@ -38,10 +53,11 @@ describe('ToolkitsSelect', () => {
     expect(await findByText('Toolkits')).toBeInTheDocument();
   });
 
-  it('excludes application-type tools unless allowApplications is set', async () => {
+  it('excludes application-type tools from the grouped picker menu', async () => {
+    const user = userEvent.setup();
     const contextValue = buildFlowEditorContextValue({ yamlJsonObject: { nodes: [{ id: 'LLM 1' }] } });
 
-    const { findByRole } = renderWithRouterAndProject(
+    const { findByTestId, queryByText } = renderWithRouterAndProject(
       <FlowEditorContext.Provider value={contextValue}>
         <ToolkitsSelect
           id="LLM 1"
@@ -51,8 +67,8 @@ describe('ToolkitsSelect', () => {
       PROJECT_ID,
     );
 
-    // No non-application toolkits -> disabled, empty options.
-    expect(await findByRole('combobox')).toHaveAttribute('aria-disabled', 'true');
+    await user.click(await findByTestId('pipeline-llm-toolkits-picker'));
+    expect(queryByText('My Agent')).not.toBeInTheDocument();
   });
 
   it('reads the current selection from tool_names keys', async () => {
@@ -81,7 +97,7 @@ describe('ToolkitsSelect', () => {
       setYamlJsonObject,
     });
 
-    const { findByRole, getByRole } = renderWithRouterAndProject(
+    const { findByTestId, findByText } = renderWithRouterAndProject(
       <FlowEditorContext.Provider value={contextValue}>
         <ToolkitsSelect
           id="LLM 1"
@@ -91,8 +107,8 @@ describe('ToolkitsSelect', () => {
       PROJECT_ID,
     );
 
-    await user.click(await findByRole('combobox'));
-    await user.click(getByRole('option', { name: 'github' }));
+    await user.click(await findByTestId('pipeline-llm-toolkits-picker'));
+    await user.click(await findByText('github'));
 
     expect(setYamlJsonObject).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -106,7 +122,7 @@ describe('ToolkitsSelect', () => {
     const onValueChange = vi.fn();
     const contextValue = buildFlowEditorContextValue({ yamlJsonObject: { nodes: [{ id: 'LLM 1' }] } });
 
-    const { findByRole, getByRole } = renderWithRouterAndProject(
+    const { findByTestId, findByText } = renderWithRouterAndProject(
       <FlowEditorContext.Provider value={contextValue}>
         <ToolkitsSelect
           id="LLM 1"
@@ -117,8 +133,8 @@ describe('ToolkitsSelect', () => {
       PROJECT_ID,
     );
 
-    await user.click(await findByRole('combobox'));
-    await user.click(getByRole('option', { name: 'github' }));
+    await user.click(await findByTestId('pipeline-llm-toolkits-picker'));
+    await user.click(await findByText('github'));
 
     expect(onValueChange).toHaveBeenCalledWith(['github']);
   });

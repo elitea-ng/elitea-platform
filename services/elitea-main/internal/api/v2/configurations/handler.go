@@ -27,6 +27,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/mcpoauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 const (
@@ -74,6 +75,10 @@ type Handler struct {
 	// response's `shared` block serves. Zero means "not configured", and the
 	// block is then empty — see sharedConfigurationSchema.
 	publicProjectID int
+
+	// accessAudit appends the admin.access.changed events of the global
+	// provider routes (ADR-0059 R1.5); nil means the PostgreSQL appender.
+	accessAudit securityaudit.Appender
 	// tracingAccess contains the current platform's temporary containment:
 	// tracing credentials may be managed only by project admins or inside the
 	// actor's own personal project. It is derived from the same pool by default
@@ -1329,7 +1334,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var uuid string
 	var createdAt time.Time
 	err = h.withConfigurationSecretTx(ctx, pID, secretMutations, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, q,
+		if err := tx.QueryRow(ctx, q,
 			pID,
 			label,
 			title,
@@ -1339,7 +1344,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			metaBytes,
 			shared,
 			authorID,
-		).Scan(&id, &uuid, &createdAt)
+		).Scan(&id, &uuid, &createdAt); err != nil {
+			return err
+		}
+		// The security audit event of a route that asked for one (the
+		// global provider routes, ADR-0059 R1.5), in this transaction.
+		return securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(id))
 	})
 	if err != nil {
 		writeConfigurationCreateFailure(ctx, w, projectID, err)
@@ -1595,6 +1605,11 @@ func (h *Handler) applyConfigurationUpdate(
 	if err = h.purgeOrphanedHiddenSecrets(ctx, tx, schema, int64(projectID), previousSecrets); err != nil {
 		return c, nil, err
 	}
+	// The security audit event of a route that asked for one (the global
+	// provider routes, ADR-0059 R1.5), in this transaction.
+	if err = securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(c.ID)); err != nil {
+		return c, nil, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return c, nil, err
 	}
@@ -1821,7 +1836,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		if err := tx.QueryRow(ctx, q, configID).Scan(&id, &section, &title, &dataName, &shared, &data); err != nil {
 			return err
 		}
-		return h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data))
+		if err := h.purgeOrphanedHiddenSecrets(ctx, tx, schema, projectNumber, hiddenSecretReferencesIn(data)); err != nil {
+			return err
+		}
+		// The security audit event of a route that asked for one (the
+		// global provider routes, ADR-0059 R1.5), in this transaction.
+		return securityaudit.RunChangeHook(ctx, tx, strconv.Itoa(int(id)))
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")

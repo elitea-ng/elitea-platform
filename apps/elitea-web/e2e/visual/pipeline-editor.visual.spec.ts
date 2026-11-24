@@ -479,6 +479,14 @@ test('@visual pipeline-editor-authored-graph', async ({ page }) => {
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await expect(page.getByTestId('edit-pipeline-test-chat-disabled')).toBeVisible({ timeout: 20_000 });
+  const closePanel = page.getByTestId('pipeline-node-panel-close');
+  await expect(async () => {
+    if ((await page.getByTestId('pipeline-node-panel').count()) === 0) return;
+    if (await closePanel.isVisible().catch(() => false)) {
+      await closePanel.click({ timeout: 2_000 }).catch(() => undefined);
+    }
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   // The last menu click leaves the pointer where the menu item was, which can
   // be over the canvas's State toggle: one run caught its hover outline, the
   // next its resting fill. Park it, as `admin.visual.spec.ts` does.
@@ -527,7 +535,13 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
 
   const card = page.locator('.react-flow__node[data-id="Agent_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });
-  const issues = card.getByTestId('node-admission-issues');
+  await expect(card.getByTestId('pipeline-node-v2-status-needs-configuration')).toBeVisible({ timeout: 15_000 });
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="Agent_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  const issues = panel.getByTestId('node-admission-issues');
   await expect(issues).toBeVisible({ timeout: 15_000 });
   // The exact sentence, not merely "an alert is present". The panel names the
   // YAML FIELD and says what is wrong with it, and that specificity is the
@@ -538,6 +552,8 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
   await expect(gate).toBeVisible({ timeout: 15_000 });
   await expect(gate).toContainText('Agent_1');
   await expect(page.getByTestId('pipeline-save-button')).toBeDisabled();
+  await page.mouse.move(0, 0);
+  await pinScrollToTop(page);
   await settle(page);
 
   await expect(page).toHaveScreenshot('pipeline-editor-node-admission.png', {
@@ -553,16 +569,85 @@ test('@visual pipeline-editor-interrupts-enabled', async ({ page }) => {
 
   const card = page.locator('.react-flow__node[data-id="LLM_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });
-  await expect(card.getByRole('switch', { name: 'Interrupt before' })).toBeEnabled();
-  await expect(card.getByRole('switch', { name: 'Interrupt before' })).not.toBeChecked();
-  await expect(card.getByRole('switch', { name: 'Interrupt after' })).toBeEnabled();
-  await expect(card.getByRole('switch', { name: 'Interrupt after' })).not.toBeChecked();
-  await expect(card.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="LLM_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await card.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+
+  const basicSection = panel.getByTestId('pipeline-node-panel-basic-section');
+  const basicToggle = basicSection.getByRole('button', { name: 'Basic', exact: true });
+  await expect(basicToggle).toBeVisible({ timeout: 10_000 });
+  if ((await basicToggle.getAttribute('aria-expanded')) === 'true') {
+    await basicToggle.click();
+  }
+  await expect(basicToggle).toHaveAttribute('aria-expanded', 'false', { timeout: 10_000 });
+
+  const advancedSection = panel.getByTestId('pipeline-node-panel-advanced-section');
+  const advancedToggle = advancedSection.getByRole('button', { name: 'Advanced', exact: true });
+  await expect(advancedToggle).toBeVisible({ timeout: 10_000 });
+  if ((await advancedToggle.getAttribute('aria-expanded')) !== 'true') {
+    await advancedToggle.click();
+  }
+  await expect(advancedToggle).toHaveAttribute('aria-expanded', 'true', { timeout: 10_000 });
+
+  const interruptBefore = advancedSection.getByRole('switch', { name: 'Interrupt before' });
+  await expect(interruptBefore).toBeEnabled();
+  await expect(interruptBefore).not.toBeChecked();
+  const interruptAfter = advancedSection.getByRole('switch', { name: 'Interrupt after' });
+  await expect(interruptAfter).toBeEnabled();
+  await expect(interruptAfter).not.toBeChecked();
+  await expect(panel.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
   // The document is admissible, so neither admission surface is on screen —
   // this shot must not double as the admission one.
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
+
+  await page.mouse.move(0, 0);
+  await pinScrollToTop(page);
+  // Freeze MUI accordion collapse/expand transitions and finish font metrics
+  // before positioning the drawer scroll body so `scrollHeight` is final.
   await settle(page);
+
+  const drawerBody = panel.getByTestId('pipeline-node-panel-view-toggle').locator('..');
+  await drawerBody.evaluate((node) => {
+    const el = node as HTMLElement;
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+  });
+  await expect
+    .poll(
+      () =>
+        drawerBody.evaluate((node) => {
+          const el = node as HTMLElement;
+          const target = Math.max(0, el.scrollHeight - el.clientHeight);
+          return Math.abs(el.scrollTop - target);
+        }),
+      { timeout: 10_000, message: 'node config drawer body did not settle at its bottom scroll offset' },
+    )
+    .toBeLessThanOrEqual(1);
+  await page.evaluate(
+    async () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            resolve();
+          });
+        });
+      }),
+  );
+
+  const drawerBox = await drawerBody.boundingBox();
+  const beforeBox = await interruptBefore.boundingBox();
+  const afterBox = await interruptAfter.boundingBox();
+  expect(drawerBox).not.toBeNull();
+  expect(beforeBox).not.toBeNull();
+  expect(afterBox).not.toBeNull();
+  if (drawerBox && beforeBox && afterBox) {
+    expect(beforeBox.y).toBeGreaterThanOrEqual(drawerBox.y);
+    expect(beforeBox.y + beforeBox.height).toBeLessThanOrEqual(drawerBox.y + drawerBox.height);
+    expect(afterBox.y).toBeGreaterThanOrEqual(drawerBox.y);
+    expect(afterBox.y + afterBox.height).toBeLessThanOrEqual(drawerBox.y + drawerBox.height);
+  }
 
   await expect(page).toHaveScreenshot('pipeline-editor-interrupts-enabled.png', {
     fullPage: false,

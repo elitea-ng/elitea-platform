@@ -61,11 +61,7 @@ export interface AdminUserRow {
   readonly last_login: string | null;
   readonly suspended: boolean;
   readonly is_admin: boolean;
-  /**
-   * Every administration role held, legacy names first (ADR-0059 R0.8b). The
-   * page reads only this; the single `admin_role` the server still sends for
-   * one release is not read (R0.8c).
-   */
+  /** Every administration role held, sorted by name (ADR-0059 R0.8b, R0.13); the page reads only this (R0.8c). */
   readonly admin_roles: readonly string[];
 }
 

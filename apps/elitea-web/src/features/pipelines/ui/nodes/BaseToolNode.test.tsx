@@ -8,7 +8,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
 import { applyToolkitSelection, BaseToolNode, computeFunctionOptions, type BaseToolNodeProps } from './BaseToolNode';
@@ -61,7 +61,16 @@ function renderBaseToolNode(
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: fullProps.data ?? {} }]}
           edges={[]}
-          nodeTypes={{ testNode: () => <BaseToolNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <BaseToolNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <BaseToolNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -96,14 +105,14 @@ describe('BaseToolNode', () => {
       const noSelectionTools: readonly PipelineToolEntry[] = [{ type: 'github', toolkit_name: 'my-github' }];
       const { getAllByRole, findByText } = renderBaseToolNode({ versionTools: noSelectionTools });
       await findByText('my-github');
-      // Toolkit ToolSelect + InputSelect + OutputSelect -- no fourth "Tool" combobox.
-      expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3);
+      // InputSelect + OutputSelect (Toolkit uses ProjectToolkitPicker trigger) -- no third "Tool" combobox.
+      expect(getAllByRole('combobox', { hidden: true })).toHaveLength(2);
     });
 
     it('renders a "Tool" sub-select once the selected toolkit has explicit selected_tools', async () => {
       const { getAllByRole, findByText } = renderBaseToolNode({});
       await findByText('my-github');
-      await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(4));
+      await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3));
     });
 
     it('renders the Structured output switch only when showStructuredOutput is true', async () => {
@@ -121,8 +130,18 @@ describe('BaseToolNode', () => {
     it('disables the toolkit select and every switch when isRunningPipeline is true', async () => {
       const { getAllByRole, findByText } = renderBaseToolNode({}, { isRunningPipeline: true });
       await findByText('my-github');
-      // The toolkit ToolSelect is always the first combobox in DOM order.
       await waitFor(() => expect(getAllByRole('combobox', { hidden: true })[0]).toHaveAttribute('aria-disabled', 'true'));
+      for (const switchControl of getAllByRole('switch', { hidden: true })) {
+        expect(switchControl).toBeDisabled();
+      }
+    });
+
+    it('disables every combobox (including OutputSelect) and switch when disabled is true (read-only/deprecated lock)', async () => {
+      const { getAllByRole, findByText } = renderBaseToolNode({}, { disabled: true });
+      await findByText('my-github');
+      for (const combo of getAllByRole('combobox', { hidden: true })) {
+        expect(combo).toHaveAttribute('aria-disabled', 'true');
+      }
       for (const switchControl of getAllByRole('switch', { hidden: true })) {
         expect(switchControl).toBeDisabled();
       }
@@ -173,7 +192,7 @@ describe('BaseToolNode', () => {
       // not an empty result) because 'create_issue' survives the filter.
       const { getAllByRole, findByText } = renderBaseToolNode({});
       await findByText('my-github');
-      await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(4));
+      await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3));
     });
   });
 });
@@ -263,8 +282,8 @@ describe('BaseToolNode dynamic tool catalogue (#440)', () => {
     const { getAllByRole, findByText, queryByTestId } = renderBaseToolNode({ versionTools: dynamicVersionTools });
 
     await findByText('my-github');
-    // Toolkit ToolSelect + the "Tool" select + InputSelect + OutputSelect.
-    await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(4));
+    // The "Tool" select + InputSelect + OutputSelect (Toolkit uses ProjectToolkitPicker trigger).
+    await waitFor(() => expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3));
     expect(queryByTestId('tool-list-error')).not.toBeInTheDocument();
   });
 
@@ -290,7 +309,7 @@ describe('BaseToolNode dynamic tool catalogue (#440)', () => {
     const alert = await findByTestId('tool-list-error');
     expect(alert).toBeInTheDocument();
     // No "Tool" select stands in for the failure.
-    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3);
+    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(2);
 
     // The retry runs BOTH reads that feed this picker.
     const beforeSchemaReads = schemaReads;
@@ -315,7 +334,7 @@ describe('BaseToolNode dynamic tool catalogue (#440)', () => {
     await findByText('my-github');
     await waitFor(() => expect(requestCount).toBe(1));
     expect(queryByTestId('tool-list-error')).not.toBeInTheDocument();
-    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(3);
+    expect(getAllByRole('combobox', { hidden: true })).toHaveLength(2);
   });
 
   it('shows an error when the toolkit type schema read fails and leaves the picker empty', async () => {

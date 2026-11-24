@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +18,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 const projectViewerRole = "viewer"
@@ -300,7 +303,11 @@ func ApplyInitialAdministrationRole(
 	// first sign-in of the same account committed it (and its history row)
 	// first. The user then holds the role, which is what this grant is for, so
 	// that is not an error.
-	_, err = rolegrants.Grant(ctx, db, int64(userID), mode, role,
+	before, err := adminaccess.UserCentralRoles(ctx, db, int(userID), mode)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	granted, err := rolegrants.Grant(ctx, db, int64(userID), mode, role,
 		rolegrants.Origin{Source: rolegrants.SourceBootstrap})
 	if errors.Is(err, rolegrants.ErrRoleNotFound) {
 		return errors.New("identityrepo: initial administration role is unavailable")
@@ -308,7 +315,52 @@ func ApplyInitialAdministrationRole(
 	if err != nil {
 		return fmt.Errorf("identityrepo: assign initial administration role: %w", err)
 	}
+	if !granted {
+		return nil
+	}
+	return appendBootstrapRoleAssignment(ctx, db, userID, mode, before)
+}
+
+// bootstrapEventSource is the CloudEvents source of the first sign-in's
+// admin.access.changed event.
+const bootstrapEventSource = "elitea-main/identity"
+
+// appendBootstrapRoleAssignment appends the admin.access.changed event of the
+// bootstrap grant (ADR-0059 R1.5): a role_assignment with source bootstrap
+// and no actor, in the sign-in's transaction, so a failed append fails the
+// sign-in and no administrator is made without its evidence. The DBTX of
+// both provisioning planes is a transaction; anything else is refused.
+func appendBootstrapRoleAssignment(ctx context.Context, db sqlcgen.DBTX, userID int32, mode string, before []string) error {
+	tx, ok := db.(pgx.Tx)
+	if !ok {
+		return errors.New("identityrepo: the initial administration role is granted inside a transaction only")
+	}
+	after, err := adminaccess.UserCentralRoles(ctx, tx, int(userID), mode)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	appender, err := securityaudit.NewPostgresAppender(bootstrapEventSource)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	event := securityaudit.NewAdminAccessChanged(securityaudit.AdminAccessChanged{
+		SubjectType: "user",
+		SubjectID:   strconv.Itoa(int(userID)),
+		Change: securityaudit.AccessChange{
+			Kind: securityaudit.AccessRoleAssignment, Mode: mode, Source: rolegrants.SourceBootstrap,
+			Before: sortedRoles(before), After: sortedRoles(after),
+		},
+	})
+	if err := appender.Append(ctx, tx, event); err != nil {
+		return fmt.Errorf("identityrepo: record the initial administration role: %w", err)
+	}
 	return nil
+}
+
+func sortedRoles(roles []string) []string {
+	out := append([]string{}, roles...)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func reconcileProjectEnrollment(

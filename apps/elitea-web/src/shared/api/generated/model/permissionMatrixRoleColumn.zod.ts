@@ -50,7 +50,7 @@ export const PermissionMatrixRoleColumn = zod
     display_name: zod.string().optional(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/roles.go:162. `built_in` is true when elitea_auth.admin_role_seeds holds a record for the role, not because of its name. `marker` is the record's marker (declared, as_found or unassignable), null for a custom role. `display_name` is set for a built-in role Elitea defines.\n",
+    "NOTE(W2): internal/api/v2/admin/roles.go:165. `built_in` is true when elitea_auth.admin_role_seeds holds a record for the role, not because of its name. `marker` is the record's marker (declared, as_found or unassignable), null for a custom role. `display_name` is set for a built-in role Elitea defines.\n",
   );
 
 export type PermissionMatrixRoleColumn = zod.input<

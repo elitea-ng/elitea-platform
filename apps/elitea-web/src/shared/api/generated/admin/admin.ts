@@ -3143,11 +3143,9 @@ export const getListAdminAuthUsersUrl = (
  * user's e-mail address. `counts` is computed over ALL users, unfiltered,
  * because it labels the page's two tabs.
  *
- * `admin_roles` lists every administration role of the account: the four
- * legacy names first (highest first), then every other role by name.
- * `admin_role` is the highest of the four legacy names the account holds
- * (null when it holds none of them); it is kept for one release beside
- * `admin_roles` (ADR-0059 R0.8b) and is then removed (R0.13).
+ * `admin_roles` lists every administration role of the account, sorted
+ * by name. The single `admin_role` field (the highest of the four legacy
+ * names) was removed in ADR-0059 R0.8c: read `admin_roles`.
  * @summary List every user account of the deployment
  */
 export const listAdminAuthUsers = async (
@@ -24689,7 +24687,7 @@ export type updateUserProjectPermissionsResponse200 = {
 };
 
 export type updateUserProjectPermissionsResponse400 = {
-  data: N400Response;
+  data: AdminRoleRefusal;
   status: 400;
 };
 
@@ -24767,6 +24765,11 @@ export const getUpdateUserProjectPermissionsUrl = (
  * estate. An unknown permission name is always a 400. The `system` role is
  * neither written nor rejected: it appears in every body the GET produces,
  * so rejecting it would make that body unsavable.
+ *
+ * A save that adds `runtime.plugins` or `configuration.governance` to a
+ * role that does not hold it in a target project is a 400 with the code
+ * `permission_deprecated`, and nothing is written (ADR-0059 R0.14a). A
+ * role that holds it already keeps it.
  * @summary Apply a permission matrix across every personal or team project
  */
 export const updateUserProjectPermissions = async (
@@ -24823,7 +24826,7 @@ export const getUpdateUserProjectPermissionsQueryKey = (
 
 export const getUpdateUserProjectPermissionsQueryOptions = <
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -24866,11 +24869,11 @@ export type UpdateUserProjectPermissionsQueryResult = NonNullable<
   Awaited<ReturnType<typeof updateUserProjectPermissions>>
 >;
 export type UpdateUserProjectPermissionsQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  AdminRoleRefusal | N401Response | N403Response | N500Response;
 
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params: undefined | UpdateUserProjectPermissionsParams,
@@ -24898,7 +24901,7 @@ export function useUpdateUserProjectPermissions<
 };
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -24926,7 +24929,7 @@ export function useUpdateUserProjectPermissions<
 };
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -24950,7 +24953,7 @@ export function useUpdateUserProjectPermissions<
 
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,

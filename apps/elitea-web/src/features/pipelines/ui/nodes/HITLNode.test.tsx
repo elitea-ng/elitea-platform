@@ -5,7 +5,7 @@ import { waitFor, type RenderResult } from '@testing-library/react';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { HITLNode } from './HITLNode';
 
@@ -31,7 +31,16 @@ function renderHITLNode(flowEditorOverrides: Partial<FlowEditorContextValue> = {
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={[]}
-          nodeTypes={{ testNode: HITLNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <HITLNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <HITLNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -48,16 +57,12 @@ describe('HITLNode', () => {
   });
 
   it('renders the Input label, the User message chip, and the Router mapping accordion (expanded by default)', async () => {
-    const { findByText, getByText } = renderHITLNode();
+    const { findByText, getByText, getAllByText } = renderHITLNode();
 
     expect(await findByText('Node1')).toBeInTheDocument();
-    expect(getByText('Input')).toBeInTheDocument();
+    expect(getAllByText('Input').length).toBeGreaterThan(0);
     expect(getByText('User message')).toBeInTheDocument();
     expect(getByText('Router mapping')).toBeInTheDocument();
-    // Accordion is `defaultExpanded` -- every route chip is already in the DOM, no
-    // click needed. (Not asserting `.toBeVisible()`: React Flow renders every node
-    // with inline `visibility: hidden` until its own `ResizeObserver` measurement
-    // fires -- the test env's stub never calls back, same as `SubgraphNode.test.tsx`.)
     expect(getByText('APPROVE')).toBeInTheDocument();
     expect(getByText('EDIT')).toBeInTheDocument();
     expect(getByText('REJECT')).toBeInTheDocument();
@@ -75,10 +80,9 @@ describe('HITLNode', () => {
     });
     await findByText('Node1');
 
-    // Combobox order: [0] Input multi-select, [1] user_message Type select,
-    // [2..4] approve/edit/reject route selects, [5] edit-state-key select.
+    // Combobox order: [0] user_message Type select, [1..3] approve/edit/reject route selects, [4] edit-state-key, [5] Input (Advanced).
     const routeSelects = getAllByRole('combobox', { hidden: true });
-    await user.click(routeSelects[2] as HTMLElement);
+    await user.click(routeSelects[1] as HTMLElement);
     await user.click(getByRole('option', { name: 'Target1' }));
 
     const nextDoc = setYamlJsonObject.mock.calls[0]?.[0];
@@ -106,11 +110,11 @@ describe('HITLNode', () => {
     const { findByText, getAllByRole } = renderHITLNode({ yamlJsonObject: { nodes: [{ id: 'Node1' }] } });
     await findByText('Node1');
 
-    // approve(2), edit(3), reject(4).
+    // approve(1), edit(2), reject(3).
     const routeSelects = getAllByRole('combobox', { hidden: true });
-    expect(routeSelects[2]).not.toHaveAttribute('aria-disabled', 'true');
-    expect(routeSelects[3]).toHaveAttribute('aria-disabled', 'true');
-    expect(routeSelects[4]).not.toHaveAttribute('aria-disabled', 'true');
+    expect(routeSelects[1]).not.toHaveAttribute('aria-disabled', 'true');
+    expect(routeSelects[2]).toHaveAttribute('aria-disabled', 'true');
+    expect(routeSelects[3]).not.toHaveAttribute('aria-disabled', 'true');
   });
 
   it('enables the edit route select once an edit_state_key is set, and shows no validation error', async () => {
@@ -120,7 +124,7 @@ describe('HITLNode', () => {
     await findByText('Node1');
 
     const routeSelects = getAllByRole('combobox', { hidden: true });
-    expect(routeSelects[3]).not.toHaveAttribute('aria-disabled', 'true');
+    expect(routeSelects[2]).not.toHaveAttribute('aria-disabled', 'true');
     expect(queryByText('Provide an edit state key before using the Edit route.')).not.toBeInTheDocument();
   });
 
@@ -148,8 +152,8 @@ describe('HITLNode', () => {
     await findByText('Node1');
 
     const routeSelects = getAllByRole('combobox', { hidden: true });
-    // The edit-state-key select is the 6th combobox (index 5).
-    await user.click(routeSelects[5] as HTMLElement);
+    // The edit-state-key select is the 5th combobox (index 4).
+    await user.click(routeSelects[4] as HTMLElement);
     await user.click(getByRole('option', { name: 'input' }));
 
     expect(setYamlJsonObject).toHaveBeenCalledWith(
@@ -163,7 +167,16 @@ describe('HITLNode', () => {
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={[]}
-          nodeTypes={{ testNode: HITLNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <HITLNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <HITLNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </ReactFlowProvider>,
       PROJECT_ID,

@@ -82,14 +82,16 @@ test('deleting a node and saving removes it from the stored pipeline, not just t
     ADDED_NODE_ID,
   );
 
-  // Delete it through its own "Delete" menu item — a confirm dialog gates it.
-  // Fit View first: a node added at the viewport centre can land under the
-  // (reopened, post-save) configuration panel otherwise (the same trap
-  // `pipelines.node-actions.spec.ts`'s `fitAndSettle` exists for).
-  await page.getByRole('button', { name: 'Fit View' }).click();
-  await expect(addedNode.getByRole('button', { name: 'Node actions' })).toBeVisible({ timeout: 10_000 });
-  await addedNode.getByRole('button', { name: 'Node actions' }).click();
-  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  // Delete it through the Wave U2 node config drawer's Delete button — a confirm dialog gates it.
+  // Fit view first so the newly added node card is clickable on the canvas.
+  await page.getByRole('button', { name: 'Fit view' }).click();
+  await expect(addedNode).toBeVisible({ timeout: 10_000 });
+  const nodePanel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="Printer_1"]');
+  if (!(await nodePanel.isVisible().catch(() => false))) {
+    await addedNode.click();
+  }
+  await expect(nodePanel).toBeVisible({ timeout: 10_000 });
+  await nodePanel.getByTestId('pipeline-node-panel-delete').click();
   await expect(page.getByRole('heading', { name: 'Delete node?', exact: true })).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Remove' }).click();
   await expect(addedNode).toHaveCount(0);

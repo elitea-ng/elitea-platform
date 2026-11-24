@@ -156,6 +156,7 @@ SELECT create_tenant_schema('p_%d');`,
 		storedCheckProject, storedCheckOther, storedCheckProject, storedCheckOther)); err != nil {
 		t.Fatalf("create the tenant schemas: %v", err)
 	}
+	applySecurityAuditOutbox(t, ctx, pool)
 	// The naive-clock probe the dbtest template installs, after the last
 	// schema statement: a writer that stores the session-local clock in a
 	// `timestamp` WITHOUT time zone column fails instead of passing unread.

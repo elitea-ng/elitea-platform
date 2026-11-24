@@ -33,7 +33,7 @@ import { renderAdminRoute } from './__tests__/testRouter';
  * The contract's own examples (v2.yaml `listAdminAuthUsers` and
  * `adminAuthUsersAction`, ADR-0059 R0.8b): rows carry `suspended` (boolean)
  * and every role in `admin_roles`; `counts` is unfiltered and labels the tabs.
- * The page does not read the single `admin_role` (R0.8c).
+ * The listing has no single `admin_role` since R0.8c; the page reads `admin_roles`.
  */
 const USERS_BODY = getListAdminAuthUsersResponseMock();
 const ACTION_BODY = getAdminAuthUsersActionResponseMock();
@@ -201,7 +201,7 @@ describe('Admin › Users', () => {
       http.get('*/admin/auth_users/administration', () =>
         HttpResponse.json({
           ...USERS_BODY,
-          rows: [{ ...USERS_BODY.rows[0]!, admin_role: null, admin_roles: ['llm_manager', 'security_auditor'] }],
+          rows: [{ ...USERS_BODY.rows[0]!, admin_roles: ['llm_manager', 'security_auditor'] }],
           total: 1,
         }),
       ),

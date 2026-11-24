@@ -29,6 +29,24 @@ A second view mode, alongside events, shows execution traces and their individua
 
 From the Users page's row menu, the activity drawer filters this same audit data to one account — useful when investigating a specific person's actions rather than browsing the whole trail. See [Users and roles](/admin/users-and-roles).
 
+## Role use on administration rows
+
+Every row of a request to the administration surface also records the capacity the person acted in. The page does not show these fields yet; the break-glass review, the reason prompt and the access export will. They are in the `centry.audit_events` table today:
+
+| Column | Meaning |
+|---|---|
+| `acting_roles` | The administration roles the person held when the request was made, by name. Empty for a credential that acts with no role, such as a personal access token with no administration access or an agent run token. |
+| `credential_kind` | The credential that sent the request: `session` (single sign-on), `form` (Form sign-in), `sealed` (a sealed break-glass session), `token` (a personal access token), `native` (the desktop or mobile app), `run` (an agent run token), `system` (a project system token) or `scim` (a SCIM client). Empty when the kind is unknown. |
+| `elevation_id` | The break-glass elevation the request was made under, when there was one. |
+| `central_override` | The write went through the central override of a platform administrator. |
+| `reason_code`, `reason`, `reason_missing` | The reason given for a dangerous or critical action, and whether a required reason was missing. |
+
+A request that never checked administration permissions leaves these fields empty.
+
+<Warning>
+These fields are not covered by the audit trail's tamper-evident chain yet. The chain still verifies every other column of every row. A later release adds them to the chain and to the SIEM export.
+</Warning>
+
 ## Export to your SIEM
 
 Audit Trail is the place to look; it is not where evidence should be kept. The hash chain on security audit events makes tampering detectable, but immutability and long retention belong to your SIEM or WORM store. Elitea sends two streams there, in one versioned envelope, [`elitea.audit.v1`](/reference/audit-event-schema):

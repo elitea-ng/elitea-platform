@@ -16,6 +16,7 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Turn on the credential governance profile, so agents run under their own identity and every credential use needs an approved grant. See [Credential governance](/deployment/credential-governance) and its [runbook](/deployment/credential-governance-runbook).
 - [ ] Store toolkit secrets in Vault or OpenBao through the secret-store integration. See [Secrets](/admin/secrets).
 - [ ] Set personal access tokens to expire, and keep expiry notices on.
+- [ ] Move automation off critical administration actions: a personal access token is refused them. Keep `inherit` tokens only for the identity trust repair path, held by a global administrator. See [Tokens and critical actions](/admin/authentication#tokens-and-critical-actions).
 
 ## Tools and network
 

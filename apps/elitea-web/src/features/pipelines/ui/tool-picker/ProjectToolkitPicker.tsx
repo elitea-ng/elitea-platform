@@ -30,6 +30,7 @@ import { useCreateInNewTab } from '../../lib/tool-picker/useCreateInNewTab';
 import { useIsVersionLocked } from '../../lib/tool-picker/useIsVersionLocked';
 import { usePickerMenu } from '../../lib/tool-picker/usePickerMenu';
 import { useProjectToolkitsList } from '../../lib/tool-picker/useProjectToolkitsList';
+import { buildAttachedToolkitPickerItems } from './attachedOnlyPickerItems.helpers';
 import { PickerEntityIcon } from './PickerEntityIcon';
 import { PickerItemRow } from './PickerItemRow';
 import { PickerMcpStatus } from './PickerMcpStatus';
@@ -55,6 +56,7 @@ export interface ProjectToolkitPickerProps {
   readonly onSelect?: ((source: PickerToolEntry | ToolkitListRow, toolkitName: string) => void) | undefined;
   readonly onClear?: (() => void) | undefined;
   readonly disabled?: boolean | undefined;
+  readonly attachedOnly?: boolean | undefined;
   readonly pickerContext?: ProjectToolkitPickerContext | undefined;
   readonly 'data-testid'?: string | undefined;
 }
@@ -125,6 +127,7 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
   onSelect,
   onClear,
   disabled = false,
+  attachedOnly = false,
   pickerContext,
   'data-testid': testId,
 }: ProjectToolkitPickerProps): ReactNode {
@@ -138,7 +141,7 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
   const resolvedLabel = getToolkitPickerLabel(mcp, label);
 
   const { anchorEl, isOpen, hasOpened, search, setSearch, query, openMenu, closeMenu } = usePickerMenu();
-  const list = useProjectToolkitsList({ mcp, query, skip: !hasOpened, projectId });
+  const list = useProjectToolkitsList({ mcp, query, skip: attachedOnly || !hasOpened, projectId });
   const openCreatePage = useCreateInNewTab(list.reload);
 
   const attachedTools = useMemo(
@@ -152,15 +155,23 @@ export const ProjectToolkitPicker = memo(function ProjectToolkitPicker({
 
   const items = useMemo(
     () =>
-      buildToolkitPickerItems({
-        rows: list.rows,
-        attachedTools,
-        usedNames,
-        query: search,
-        getToolkitName: getToolkitNameFromSchema,
-        getLabel: getToolkitDisplayName,
-      }),
-    [attachedTools, getToolkitNameFromSchema, list.rows, search, usedNames],
+      attachedOnly
+        ? buildAttachedToolkitPickerItems({
+            attachedTools,
+            usedNames,
+            query: search,
+            getToolkitName: getToolkitNameFromSchema,
+            getLabel: getToolkitDisplayName,
+          })
+        : buildToolkitPickerItems({
+            rows: list.rows,
+            attachedTools,
+            usedNames,
+            query: search,
+            getToolkitName: getToolkitNameFromSchema,
+            getLabel: getToolkitDisplayName,
+          }),
+    [attachedOnly, attachedTools, getToolkitNameFromSchema, list.rows, search, usedNames],
   );
 
   const selectedTool = useMemo(

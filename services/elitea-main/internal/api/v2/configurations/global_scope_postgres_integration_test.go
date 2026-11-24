@@ -116,6 +116,7 @@ func newGlobalScopePool(t *testing.T) *pgxpool.Pool {
 	})
 
 	applyTenantSchema(t, ctx, pool)
+	applySecurityAuditOutbox(t, ctx, pool)
 	return pool
 }
 

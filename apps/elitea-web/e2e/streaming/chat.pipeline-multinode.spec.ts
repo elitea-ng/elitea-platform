@@ -90,11 +90,15 @@ const MINTED_LLM_NODE_ID = 'LLM_1';
 async function renameNodeThroughCard(page: Page, fromId: string, toId: string): Promise<void> {
   const node = page.locator(`.react-flow__node[data-id="${fromId}"]`);
   await expect(node).toBeVisible({ timeout: 20_000 });
-  await node.getByText(fromId, { exact: true }).dblclick();
-  const nameInput = node.locator('input').first();
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${fromId}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await node.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const nameInput = panel.getByTestId('pipeline-node-panel-name-input');
   await expect(nameInput).toBeVisible({ timeout: 10_000 });
   await nameInput.fill(toId);
-  await nameInput.press('Tab');
+  await nameInput.blur();
   await expect(page.locator(`.react-flow__node[data-id="${toId}"]`)).toBeVisible({ timeout: 10_000 });
   await expect(page.locator(`.react-flow__node[data-id="${fromId}"]`)).toHaveCount(0);
 }
@@ -145,14 +149,19 @@ async function openSelect(select: Locator): Promise<void> {
  */
 async function mapTaskToTurnInput(page: Page, nodeId: string): Promise<void> {
   const node = page.locator(`.react-flow__node[data-id="${nodeId}"]`);
-  const typeSelects = node.getByRole('combobox', { name: 'Type' });
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${nodeId}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await node.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const typeSelects = panel.getByRole('combobox', { name: 'Type' });
   await expect(typeSelects).toHaveCount(3, { timeout: 20_000 });
   await openSelect(typeSelects.nth(1));
   await page.getByRole('option', { name: 'Variable', exact: true }).click();
 
-  // Only the `task` row is a variable on this card now, so this names exactly
-  // one field.
-  const valueSelect = node.getByRole('combobox', { name: 'Value' });
+  // Only the `task` row is a variable inside this drawer now, so this names
+  // exactly one field.
+  const valueSelect = panel.getByRole('combobox', { name: 'Value' });
   await expect(valueSelect).toHaveCount(1, { timeout: 10_000 });
   await openSelect(valueSelect);
   await page.getByRole('option', { name: 'input', exact: true }).click();
@@ -198,6 +207,14 @@ async function settleCanvas(page: Page): Promise<void> {
  */
 async function compactCanvas(page: Page): Promise<void> {
   await settleCanvas(page);
+  const closePanel = page.getByTestId('pipeline-node-panel-close');
+  await expect(async () => {
+    if ((await page.getByTestId('pipeline-node-panel').count()) === 0) return;
+    if (await closePanel.isVisible().catch(() => false)) {
+      await closePanel.click({ timeout: 2_000 }).catch(() => undefined);
+    }
+    await expect(page.getByTestId('pipeline-node-panel')).toHaveCount(0, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Auto-arrange' }).click();
   await page.getByRole('menuitem', { name: 'Arrange top to bottom' }).click();
   await settleCanvas(page);

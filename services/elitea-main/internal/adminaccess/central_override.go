@@ -12,7 +12,7 @@ package adminaccess
 //
 // Each such write marks its audit record `central_override`
 // (MarkCentralOverride); the audit middleware keeps the mark only on a
-// response below 400, so a refused or failed request is not one. R1.4a persists the flag as an audit column.
+// response below 400, so a refused or failed request is not one. The admin audit row stores it as central_override (shared 0268, R1.4a).
 
 import (
 	"context"

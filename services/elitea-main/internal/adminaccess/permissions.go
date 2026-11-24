@@ -136,7 +136,7 @@ func row(name string, area Area, class Class) Permission {
 	return Permission{Name: name, Area: area, Class: class, Grantable: GrantableAny}
 }
 
-// rows is the permission table. Every row other than the three set apart below
+// rows is the permission table. Every row other than the four set apart below
 // takes the defaults of row.
 func rows() []Permission {
 	superAdmin := row(AdminAuthUsersSuperAdmin, AreaPeopleAccess, ClassWrite)
@@ -152,6 +152,15 @@ func rows() []Permission {
 	// platform.maintenance.manage. A native session keeps it.
 	runtimePlugins.NativeClient = true
 	runtimePlugins.Maintenance = true
+	// Legacy: it ends on the sunset date (ADR-0059 decision 2). The Roles
+	// matrix adds it to no role that does not already hold it, and the gates
+	// that name it may only shrink (story R0.14a).
+	runtimePlugins.Legacy = true
+
+	governance := row(ConfigurationGovernance, AreaAgentsGovernance, ClassWrite)
+	// Legacy, like runtime.plugins: the llm.* names and, from R0.15,
+	// agents.governance.* replace it.
+	governance.Legacy = true
 
 	publishedAgents := row(RuntimeAdminPublishedAgents, AreaProjects, ClassRead)
 	// Marketplace moderation (eliteacore/marketplace_read.go), the second
@@ -192,7 +201,7 @@ func rows() []Permission {
 		row(ModelsAdminProjectBudgetsEdit, AreaModelsSpend, ClassWrite),
 
 		// Agents and governance.
-		row(ConfigurationGovernance, AreaAgentsGovernance, ClassWrite),
+		governance,
 		row(ConnectorApprove, AreaAgentsGovernance, ClassApprove),
 		row(CredentialsInventoryRead, AreaAgentsGovernance, ClassRead),
 		row(CredentialsInventoryManage, AreaAgentsGovernance, ClassWrite),

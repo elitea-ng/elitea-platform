@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,8 +24,11 @@ const insertSQL = `
 INSERT INTO centry.audit_events
     (timestamp, user_id, user_email, project_id, event_type, action,
      http_method, http_route, status_code, duration_ms, is_error,
-     entity_type, entity_id, entity_name, trace_id, span_id, parent_span_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`
+     entity_type, entity_id, entity_name, trace_id, span_id, parent_span_id,
+     acting_roles, elevation_id, credential_kind, central_override,
+     reason_code, reason, reason_missing)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+        $18, $19::text::uuid, $20, $21, $22, $23, $24)`
 
 // Column widths from the same migration. A value longer than its column makes
 // PostgreSQL refuse the INSERT with 22001, which would lose the row — and,
@@ -41,6 +45,10 @@ const (
 	maxTraceID      = 32
 	maxSpanID       = 16
 	maxParentSpanID = 16
+	// reason_code and reason are text columns; the bounds keep one caller's
+	// reason from growing a row without limit (R3.8 validates its own).
+	maxReasonCode = 128
+	maxReason     = 2048
 )
 
 // Tuning. These are the shape of the back pressure, so they are named.
@@ -260,7 +268,9 @@ func (r *PostgresRecorder) write(events []Event) {
 			e.EventType, e.Action, nullable(e.HTTPMethod), nullable(e.HTTPRoute),
 			e.StatusCode, e.DurationMS, e.IsError,
 			nullable(e.EntityType), e.EntityID, nullable(e.EntityName),
-			nullable(e.TraceID), nullable(e.SpanID), nullable(e.ParentSpanID))
+			nullable(e.TraceID), nullable(e.SpanID), nullable(e.ParentSpanID),
+			nullableRoles(e.ActingRoles), nullable(e.ElevationID), nullable(e.CredentialKind),
+			e.CentralOverride, nullable(e.ReasonCode), nullable(e.Reason), e.ReasonMissing)
 	}
 
 	results := r.pool.SendBatch(ctx, batch)
@@ -327,7 +337,30 @@ func normalize(e Event) Event {
 	e.TraceID = clamp(e.TraceID, maxTraceID)
 	e.SpanID = clamp(e.SpanID, maxSpanID)
 	e.ParentSpanID = clamp(e.ParentSpanID, maxParentSpanID)
+	// A kind outside the vocabulary is not written: NULL, never a guess.
+	if !KnownCredentialKind(e.CredentialKind) {
+		e.CredentialKind = ""
+	}
+	// An elevation id that is not a UUID would fail the ::uuid cast and lose
+	// the row and its batch; it is not recorded instead.
+	if !uuidPattern.MatchString(e.ElevationID) {
+		e.ElevationID = ""
+	}
+	e.ReasonCode = clamp(e.ReasonCode, maxReasonCode)
+	e.Reason = clamp(e.Reason, maxReason)
 	return e
+}
+
+// uuidPattern is the text form of a UUID PostgreSQL's uuid input accepts in
+// the hyphenated form.
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// nullableRoles maps nil to NULL and keeps an empty set as {}.
+func nullableRoles(roles []string) any {
+	if roles == nil {
+		return nil
+	}
+	return roles
 }
 
 // clamp truncates by RUNE, not by byte: cutting a multi-byte character in half

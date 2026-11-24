@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -149,13 +150,22 @@ func (r *PostgresResolver) administrationResolution(
 	ctx context.Context,
 	principal auth.User,
 	userID int64,
-) (auth.PermissionResolution, error) {
+) (_ auth.PermissionResolution, failure error) {
 	credential := principal.Credential()
 	resolution := auth.PermissionResolution{
 		UserID:              userID,
 		Permissions:         []string{},
 		ElevationSessionRef: credential.ElevationSessionRef(),
+		Roles:               []string{},
 	}
+	// The admin audit row of the request records the roles the caller acted
+	// with (ADR-0059 R1.4a), from this resolution: no second query. A failed
+	// resolution records nothing.
+	defer func() {
+		if failure == nil {
+			audit.RecordAdministration(ctx, audit.Administration{ActingRoles: resolution.Roles})
+		}
+	}()
 	if !credentialShapeCoherent(credential) {
 		resolution.ElevationSessionRef = 0
 		return resolution, nil
@@ -169,6 +179,7 @@ func (r *PostgresResolver) administrationResolution(
 		if err != nil {
 			return auth.PermissionResolution{}, err
 		}
+		resolution.TokenAdminAccess = access.Access
 		if access.Access != TokenAdminAccessScoped && access.Access != TokenAdminAccessInherit {
 			return resolution, nil
 		}
@@ -176,12 +187,50 @@ func (r *PostgresResolver) administrationResolution(
 		// run, system, sealed and the zero kind: no query, nothing held.
 		return resolution, nil
 	}
-	owner, err := r.centralPermissions(ctx, userID, auth.PermissionModeAdministration)
+	roles, owner, err := r.administrationRoles(ctx, userID)
 	if err != nil {
 		return auth.PermissionResolution{}, err
 	}
+	resolution.Roles = roles
 	resolution.Permissions = AdministrationSet(credential.Kind, access, owner)
 	return resolution, nil
+}
+
+// administrationRoles answers the user's administration-mode roles and the
+// permissions they grant, in one query: what centralPermissions answers for
+// the administration mode, plus the role names the admin audit row records.
+// Both are sorted and de-duplicated, and never nil. A role with no grant is a
+// role the user holds and is named.
+func (r *PostgresResolver) administrationRoles(ctx context.Context, userID int64) ([]string, []string, error) {
+	rows, err := r.store.Query(ctx, `
+SELECT role.name, role_grant.permission
+FROM public.auth_core__user_role AS assignment
+JOIN public.auth_core__role AS role ON role.id = assignment.role_id
+LEFT JOIN public.auth_core__role_permission AS role_grant ON role_grant.role_id = role.id
+WHERE assignment.user_id = $1
+  AND role.mode = $2`, userID, auth.PermissionModeAdministration)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve legacy administration roles: %w", err)
+	}
+	defer rows.Close()
+	roles, permissions := []string{}, []string{}
+	for rows.Next() {
+		var role string
+		var permission *string
+		if err := rows.Scan(&role, &permission); err != nil {
+			return nil, nil, fmt.Errorf("scan legacy administration roles: %w", err)
+		}
+		roles = append(roles, role)
+		if permission != nil {
+			permissions = append(permissions, *permission)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read legacy administration roles: %w", err)
+	}
+	slices.Sort(roles)
+	slices.Sort(permissions)
+	return slices.Compact(roles), slices.Compact(permissions), nil
 }
 
 // credentialShapeCoherent refuses a kind the principal's other fields

@@ -52,14 +52,19 @@ import { FlowEditorProvider } from './FlowEditorProvider';
 import { flowEditorFitViewOptions } from './flowEditorFitView';
 import { FlowEditorStateToggle } from './FlowEditorStateToggle';
 import { FlowEmptyState } from './empty-state';
+import { FlowNodeConfigDrawer } from './node-config-drawer/FlowNodeConfigDrawer';
 import { RunStateNodeGroup } from './nodes/RunStateNodeGroup';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
 import { ConnectionDropdown } from './settings/ConnectionDropdown';
 import { StateDrawer } from './state/StateDrawer';
 import {
   extractSxDisplay,
+  getCanvasInteractionFlags,
+  getVisibleFlowNodes,
+  isEmptyPipelineDocument,
   useFlowEditorInitialFitView,
   useFlowEditorLayoutVersionSync,
+  useFlowEditorNodeSelection,
   useFlowEditorPersistence,
   useFlowEditorReset,
   useFlowEditorResizeObserver,
@@ -111,19 +116,6 @@ export interface FlowEditorHandle {
   ) => void;
   readonly stopCurrentRun: () => void;
   readonly hasRunsInProgress: () => boolean;
-}
-
-function isEmptyPipelineDocument(yamlJsonObject: YamlPipelineDocument): boolean {
-  const nodes = (yamlJsonObject as { readonly nodes?: readonly unknown[] }).nodes;
-  return !nodes?.filter(Boolean).length;
-}
-
-function getVisibleFlowNodes(flowNodes: FlowNode[], isEmpty: boolean): FlowNode[] {
-  return isEmpty ? flowNodes.filter(node => node.type !== FlowEditorConstants.PipelineNodeTypes.End) : flowNodes;
-}
-
-function getCanvasInteractionFlags(disabled: boolean, isLocked: boolean, isRunning: boolean, isEmpty: boolean) {
-  return { canEditCanvas: !disabled && !isLocked, canArrange: !disabled && !isRunning && !isEmpty };
 }
 
 const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function FlowEditor(props, ref): ReactNode {
@@ -205,7 +197,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
   });
 
   const versionToolNames = useMemo(
-    () => (versionTools ?? []).map(entry => entry.name).filter((name): name is string => Boolean(name)),
+    () => (versionTools ?? []).map(tool => tool.toolkit_name || tool.name || '').filter(Boolean),
     [versionTools],
   );
 
@@ -283,6 +275,8 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
   );
 
   const { nodeTypes, edgeTypes } = useFlowEditorNodeTypes({ versionTools, llmSettings });
+  const { selectedNodeId, isNodeDrawerOpen, handleSelectNode, handleCloseNodeDrawer } = useFlowEditorNodeSelection(visibleFlowNodes, setFlowNodes);
+  const drawerRightOffset = isNodeDrawerOpen ? 400 : 0;
 
   return (
     <Box
@@ -302,6 +296,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
       <FlowEditorStateToggle
         isOpen={isStateDrawerOpen}
         onToggle={onToggleStateDrawer}
+        rightOffset={drawerRightOffset}
       />
       <FlowEditorProvider
         setFlowEdges={setFlowEdges}
@@ -352,8 +347,17 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
             orientation={orientation}
             onArrange={onArrange}
             canArrange={canArrange}
+            rightOffsetPx={drawerRightOffset}
           />
         </ReactFlow>
+        <FlowNodeConfigDrawer
+          flowNodes={visibleFlowNodes}
+          nodeTypes={nodeTypes}
+          selectedNodeId={selectedNodeId}
+          onClose={handleCloseNodeDrawer}
+          onSelectNode={handleSelectNode}
+          toolNames={versionToolNames}
+        />
       </FlowEditorProvider>
       {isEmptyPipeline && (
         <FlowEmptyState
@@ -367,6 +371,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
         setYamlJsonObject={setYamlJsonObject}
         yamlJsonObject={yamlJsonObject}
         disabled={disabled}
+        rightOffset={drawerRightOffset}
       />
       <DeleteEntityModal
         open={showDeleteConfirmDlg}
