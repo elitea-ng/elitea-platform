@@ -1,0 +1,6 @@
+# seeded database
+configuration.governance deprecated
+runtime.plugins deprecated
+# clean database
+configuration.governance deprecated
+runtime.plugins deprecated

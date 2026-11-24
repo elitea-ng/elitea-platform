@@ -38,6 +38,8 @@ import { PermissionCellRow, PermissionGroupRow, humaniseRole } from './Permissio
 export interface PermissionMatrixProps {
   readonly rows: readonly PermissionMatrixRow[];
   readonly roles: readonly string[];
+  /** The permission names to mark deprecated (ADR-0059 R0.14a). */
+  readonly deprecated?: ReadonlySet<string>;
   readonly search: string;
   readonly readOnly: boolean;
   readonly onChange: (updater: (rows: readonly PermissionMatrixRow[]) => PermissionMatrixRow[]) => void;
@@ -95,6 +97,7 @@ function resolveExpanded(
 export const PermissionMatrix = memo(function PermissionMatrix({
   rows,
   roles,
+  deprecated,
   search,
   readOnly,
   onChange,
@@ -237,6 +240,7 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                       key={permission.name}
                       permission={permission}
                       roles={roles}
+                      deprecated={deprecated?.has(permission.name) ?? false}
                       onToggle={onToggle}
                       readOnly={readOnly}
                     />

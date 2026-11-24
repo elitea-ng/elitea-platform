@@ -19,6 +19,7 @@ import { memo, useMemo } from 'react';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import TableCell from '@mui/material/TableCell';
 import TableRow from '@mui/material/TableRow';
@@ -116,6 +117,12 @@ export const PermissionGroupRow = memo(function PermissionGroupRow({
 export interface PermissionCellRowProps {
   readonly permission: PermissionMatrixRow;
   readonly roles: readonly string[];
+  /**
+   * The server marks the name deprecated (ADR-0059 R0.14a): it keeps working
+   * where it is granted until its sunset date, and a save that adds it to a
+   * role is refused with `permission_deprecated`.
+   */
+  readonly deprecated: boolean;
   readonly onToggle: (permissionName: string, role: string, value: boolean) => void;
   readonly readOnly: boolean;
 }
@@ -123,15 +130,31 @@ export interface PermissionCellRowProps {
 export const PermissionCellRow = memo(function PermissionCellRow({
   permission,
   roles,
+  deprecated,
   onToggle,
   readOnly,
 }: PermissionCellRowProps) {
   return (
     <TableRow data-testid="admin-roles-permission-row" hover>
       <TableCell sx={{ paddingY: '0.125rem', paddingLeft: '2.5rem' }}>
-        <Typography variant="bodySmall" color="text.secondary">
-          {shortPermissionName(permission.name)}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <Typography variant="bodySmall" color="text.secondary">
+            {shortPermissionName(permission.name)}
+          </Typography>
+          {deprecated ? (
+            <Chip
+              size="small"
+              variant="outlined"
+              color="warning"
+              data-testid="admin-roles-deprecated-mark"
+              label={t('pages.admin.roles.deprecated', 'Deprecated')}
+              title={t(
+                'pages.admin.roles.deprecatedHint',
+                'Ends on a sunset date. Existing grants keep working; it can no longer be added to a role.',
+              )}
+            />
+          ) : null}
+        </Box>
       </TableCell>
       {roles.map((role) => (
         <TableCell key={role} align="center" sx={{ paddingY: '0.125rem' }}>

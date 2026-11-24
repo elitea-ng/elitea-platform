@@ -118,7 +118,7 @@ func TestSunsetConstantsAreUnset(t *testing.T) {
 // story changes them on purpose.
 func TestAttributesOfTheNamedRows(t *testing.T) {
 	t.Parallel()
-	var seededOnly, nativeClient, maintenance, token []string
+	var seededOnly, nativeClient, maintenance, token, legacy []string
 	for _, row := range adminaccess.Registry().Rows() {
 		if row.Grantable == adminaccess.GrantableSeededOnly {
 			seededOnly = append(seededOnly, row.Name)
@@ -133,7 +133,7 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 			token = append(token, row.Name)
 		}
 		if row.Legacy {
-			t.Errorf("%q is legacy; story R0.14a marks the legacy names", row.Name)
+			legacy = append(legacy, row.Name)
 		}
 	}
 	want := func(what string, got []string, names ...string) {
@@ -157,6 +157,42 @@ func TestAttributesOfTheNamedRows(t *testing.T) {
 	// No row is a token scope until the scoped token (R1.1, R1.2) opts rows
 	// in. Identity trust (admin.auth.users.super_admin) never is.
 	want("token", token)
+	// The two overloaded names of ADR-0059 decision 2, which end on the
+	// sunset date (R0.14a). R4.7 removes both rows.
+	want("legacy", legacy, adminaccess.ConfigurationGovernance, adminaccess.RuntimePlugins)
+	if got := adminaccess.LegacyNames(); strings.Join(got, ",") != strings.Join(legacy, ",") {
+		t.Errorf("LegacyNames() = %v, want %v", got, legacy)
+	}
+}
+
+// TestCheckDeprecatedRefusesOnlyANewLegacyGrant pins the refusal of R0.14a:
+// a legacy name among the new cells is a 400 permission_deprecated naming
+// every legacy name and role, and a write with none passes.
+func TestCheckDeprecatedRefusesOnlyANewLegacyGrant(t *testing.T) {
+	t.Parallel()
+	if refusal := adminaccess.CheckDeprecated([]adminaccess.Cell{
+		{Role: "custom", Permission: adminaccess.LLMPolicyManage},
+	}); refusal != nil {
+		t.Fatalf("a narrow grant was refused: %v", refusal)
+	}
+	if refusal := adminaccess.CheckDeprecated(nil); refusal != nil {
+		t.Fatalf("an empty write was refused: %v", refusal)
+	}
+	refusal := adminaccess.CheckDeprecated([]adminaccess.Cell{
+		{Role: "zeta", Permission: adminaccess.RuntimePlugins},
+		{Role: "alpha", Permission: adminaccess.ConfigurationGovernance},
+		{Role: "alpha", Permission: adminaccess.LLMUsageView},
+	})
+	if refusal == nil {
+		t.Fatal("a new legacy grant was not refused")
+	}
+	if refusal.Code != adminaccess.CodePermissionDeprecated || refusal.HTTPStatus() != 400 {
+		t.Errorf("refusal = %s %d, want %s 400", refusal.Code, refusal.HTTPStatus(), adminaccess.CodePermissionDeprecated)
+	}
+	if strings.Join(refusal.Permissions, ",") != "configuration.governance,runtime.plugins" ||
+		strings.Join(refusal.Roles, ",") != "alpha,zeta" || refusal.Role != "alpha" {
+		t.Errorf("refusal names %v on %v (%s)", refusal.Permissions, refusal.Roles, refusal.Role)
+	}
 }
 
 // TestSeededOnlyPermissionsAreSeeded fails when a permission is marked

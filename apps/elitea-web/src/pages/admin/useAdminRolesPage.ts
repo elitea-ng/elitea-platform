@@ -65,6 +65,8 @@ interface AdminRolesMatrixState {
   readonly search: string;
   readonly rows: readonly PermissionMatrixRow[] | undefined;
   readonly roles: readonly string[];
+  /** The permission names the server marks deprecated (ADR-0059 R0.14a). */
+  readonly deprecated: ReadonlySet<string>;
   readonly isFetching: boolean;
   readonly isDirty: boolean;
   readonly isSaving: boolean;
@@ -159,7 +161,9 @@ export function useAdminRolesPage(): AdminRolesPageState {
   const saveMatrix = useSavePermissionMatrix();
   const syncMatrix = useSyncPermissionMatrix();
 
-  const serverRows = matrixQuery.data;
+  const serverRows = matrixQuery.data?.rows;
+  const deprecatedList = matrixQuery.data?.deprecated;
+  const deprecated = useMemo(() => new Set(deprecatedList ?? []), [deprecatedList]);
 
   // Seed once per tab, and once more per role-definition write. See this
   // module's header: a background refetch must not discard an edit in progress,
@@ -248,6 +252,7 @@ export function useAdminRolesPage(): AdminRolesPageState {
     search,
     rows,
     roles: orderRoles(rows),
+    deprecated,
     isFetching: matrixQuery.isFetching,
     isDirty,
     isSaving: saveMatrix.isPending,

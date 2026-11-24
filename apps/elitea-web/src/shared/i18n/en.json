@@ -7331,5 +7331,8 @@
   "features.pipelines.yamlEditor.fullScreenTitle": "YAML",
   "features.pipelines.yamlEditor.fullScreenView": "Full screen view",
   "entities.webhook.table.secretNotSet": "Not set",
-  "entities.webhook.table.secretWriteOnly": "Shown once when created or rotated. Rotate to get a new one."
+  "entities.webhook.table.secretWriteOnly": "Shown once when created or rotated. Rotate to get a new one.",
+  "pages.admin.roles.deprecated": "Deprecated",
+  "pages.admin.roles.deprecatedHint": "Ends on a sunset date. Existing grants keep working; it can no longer be added to a role.",
+  "pages.admin.roles.refusal.deprecated": "This permission is being retired, so it can no longer be added to a role. Grant the narrower permission that replaces it."
 }

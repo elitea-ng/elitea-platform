@@ -107,8 +107,9 @@ const projectUserNameLikePattern = `project\_user\_%`
 
 // AdminPermissions serves `GET /admin/permissions/{scope}/{mode}`.
 //
-// Response body: {total, rows:[{name, <role>: bool, …}]} — one row per known
-// permission, one boolean column per role in the selected scope.
+// Response body: {total, rows:[{name, <role>: bool, …}], catalogue:[{name,
+// deprecated}]} — one row per known permission, one boolean column per role in
+// the selected scope, and one catalogue entry per row.
 func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	if !isKnownScope(scope) {
@@ -154,7 +155,26 @@ func (m permissionMatrix) response() map[string]any {
 	}
 	// `total` counts the CATALOGUE, matching the legacy `len(all_permissions)`.
 	// It is not a page count — this endpoint is never paginated.
-	return map[string]any{"total": len(rows), "rows": rows}
+	return map[string]any{"total": len(rows), "rows": rows, "catalogue": catalogueEntries(m.catalogue)}
+}
+
+// catalogueEntry describes one permission of the catalogue. It is served
+// beside `rows`, not in them: every key of a row other than `name` is a role
+// column, and the page sends the rows back on a save.
+type catalogueEntry struct {
+	Name string `json:"name"`
+	// Deprecated marks a legacy name (ADR-0059 decision 2, R0.14a): it keeps
+	// working where it is granted until the sunset date, and a save that adds
+	// it to a role answers 400 permission_deprecated.
+	Deprecated bool `json:"deprecated"`
+}
+
+func catalogueEntries(catalogue []string) []catalogueEntry {
+	entries := make([]catalogueEntry, 0, len(catalogue))
+	for _, name := range catalogue {
+		entries = append(entries, catalogueEntry{Name: name, Deprecated: adminaccess.IsLegacy(name)})
+	}
+	return entries
 }
 
 func (h *Handler) readMatrix(ctx context.Context, scope, mode string) (permissionMatrix, error) {
@@ -627,6 +647,13 @@ func (h *Handler) saveGrants(
 	if len(toGrant) == 0 && len(toRevoke) == 0 {
 		return 0, 0, nil
 	}
+	// A legacy name is added to no role (ADR-0059 decision 2, R0.14a). It is
+	// decided first, before the caller is read, so a global administrator
+	// gets the 400 too. The materialised cells of an inherited project matrix
+	// are cells the project already had, so they are not new grants.
+	if refusal := adminaccess.CheckDeprecated(policyCells(newCells(current, toGrant))); refusal != nil {
+		return 0, 0, refusal
+	}
 	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return 0, 0, refusal
@@ -663,16 +690,7 @@ func (h *Handler) checkMatrixEdit(
 	current permissionMatrix, toGrant, toRevoke []grant,
 ) error {
 	if !centralPlane {
-		added := toGrant
-		if current.inherited {
-			added = nil
-			for _, cell := range toGrant {
-				if !current.granted[cell.role][cell.permission] {
-					added = append(added, cell)
-				}
-			}
-		}
-		if refusal := adminaccess.CheckReserved("", policyCells(added)); refusal != nil {
+		if refusal := adminaccess.CheckReserved("", policyCells(newCells(current, toGrant))); refusal != nil {
 			return refusal
 		}
 		return nil
@@ -725,6 +743,21 @@ func (h *Handler) refuseSeededCells(ctx context.Context, q adminaccess.Querier, 
 		return adminaccess.SetLocked(seeded)
 	}
 	return nil
+}
+
+// newCells is toGrant without the materialised cells of an inherited project
+// matrix: those the project already had through the central fallback.
+func newCells(current permissionMatrix, toGrant []grant) []grant {
+	if !current.inherited {
+		return toGrant
+	}
+	var added []grant
+	for _, cell := range toGrant {
+		if !current.granted[cell.role][cell.permission] {
+			added = append(added, cell)
+		}
+	}
+	return added
 }
 
 func policyCells(cells []grant) []adminaccess.Cell {
