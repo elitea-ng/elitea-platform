@@ -46,31 +46,51 @@ type openBaoAdmin struct {
 	http  *http.Client
 }
 
+// kvUpgrading is OpenBao's answer to a call on a KV v2 mount that was just
+// created and is still upgrading its storage: a 400 that says nothing about
+// the call, and passes within a moment.
+const kvUpgrading = "Upgrading from non-versioned to versioned data"
+
 func (a openBaoAdmin) call(method, path string, body any) []byte {
 	a.t.Helper()
-	var reader io.Reader
+	var payload []byte
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			a.t.Fatal(err)
 		}
-		reader = bytes.NewReader(raw)
+		payload = raw
 	}
-	request, err := http.NewRequest(method, a.addr+path, reader)
-	if err != nil {
-		a.t.Fatal(err)
+	// A new KV v2 mount answers kvUpgrading until its upgrade finishes; the
+	// next call on it (its /config) raced that and failed the suite at
+	// random. Wait for the mount, never for any other answer.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var reader io.Reader
+		if payload != nil {
+			reader = bytes.NewReader(payload)
+		}
+		request, err := http.NewRequest(method, a.addr+path, reader)
+		if err != nil {
+			a.t.Fatal(err)
+		}
+		request.Header.Set("X-Vault-Token", a.token)
+		response, err := a.http.Do(request)
+		if err != nil {
+			a.t.Fatalf("%s %s: %v", method, path, err)
+		}
+		raw, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode == http.StatusBadRequest && bytes.Contains(raw, []byte(kvUpgrading)) &&
+			time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		if response.StatusCode >= 300 {
+			a.t.Fatalf("%s %s = %d %s", method, path, response.StatusCode, raw)
+		}
+		return raw
 	}
-	request.Header.Set("X-Vault-Token", a.token)
-	response, err := a.http.Do(request)
-	if err != nil {
-		a.t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	raw, _ := io.ReadAll(response.Body)
-	if response.StatusCode >= 300 {
-		a.t.Fatalf("%s %s = %d %s", method, path, response.StatusCode, raw)
-	}
-	return raw
 }
 
 func signJWT(t *testing.T, key *ecdsa.PrivateKey, claims map[string]any) string {
