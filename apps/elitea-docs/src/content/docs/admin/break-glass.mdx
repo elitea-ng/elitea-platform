@@ -1,0 +1,52 @@
+---
+title: "Break-glass access"
+description: "Time-boxed elevations of one browser session: the settings that bound them, how they run out, and how they move to review."
+---
+
+Break-glass access gives a person the administration permissions of the `admin` or `super_admin` role for a short time, in one browser session, with a stated reason. An elevation is not a role: it is bound to the session that asked for it, it ends by itself, and every elevation is reviewed after it ends.
+
+<Note>
+This release ships the policy, the ledger and its housekeeping. No route starts an elevation yet: the request, approve, start and end routes come in a later release. The settings below are stored now and become the policy of those routes when they ship.
+</Note>
+
+## Settings
+
+The **Break-glass** section of **Configuration** holds the policy. Only a holder of `access.breakglass.manage` sees it or changes it. Changing it is a `critical` action: it is refused under an elevation and refused to every personal access token.
+
+| Setting | Default | Range |
+|---|---|---|
+| Approval required | on | on or off (see below) |
+| Online default duration | 60 minutes | 1 to the online cap |
+| Online maximum duration (the cap) | 240 minutes | 1 to **480** (the ceiling in code) |
+| Sealed default duration | 60 minutes | 1 to the sealed cap |
+| Sealed maximum duration (the cap) | 120 minutes | 1 to **240** (the ceiling in code) |
+| Request lifetime | 30 minutes | 1 to 1440 |
+| Review time, online | 72 hours | 1 to 720 |
+| Review time after a sealed sign-in | 24 hours | 1 to 720 |
+| Re-authentication window for the start | 15 minutes | 1 to 15 |
+| Approval-off delay | 24 hours | 1 to 168 |
+
+A deployment can lower any value. It can raise a cap only up to the ceiling in code: 480 minutes online and 240 sealed. A save above a ceiling, or a default above its cap, is refused with `400` and names the setting.
+
+### Switching approval off
+
+Dual control is the default: a second person with `access.breakglass.approve` approves every request. Switching approval off:
+
+- needs `admin.auth.users.super_admin` from a standing role. A holder of the section without it gets `403`, and still edits the durations. An elevation never counts towards it;
+- takes effect after the **approval-off delay** that was in force before the save (24 hours by default), so a save that also lowers the delay does not shorten its own wait. Until then the section shows the state `off_scheduled`, and a request still needs an approver;
+- writes a security audit event at once: `admin.access.break_glass_approval` with the reason code `approval_off_requested` (see [the audit event schema](/reference/audit-event-schema)).
+
+Switching approval back on needs only the section, takes effect at once, cancels a pending switch-off, and writes the same event with `approval_on_restored`.
+
+## When an elevation or a request runs out
+
+Access stops by itself. An elevation grants nothing once its expiry passes, whether or not anything has run since: the permission check compares the expiry with the clock.
+
+The record catches up on its own. The `main.elevation_reconciler` routine runs every minute (see [Schedules and tasks](/admin/schedules-and-tasks)) and, for each row, in one transaction:
+
+- an elevation past its expiry that nobody ended is recorded as ended with the end reason `expired`, gets its `expired` security audit event, and moves to `review_pending`;
+- a request that nobody approved or denied within the **request lifetime** is recorded as `request_expired` and gets its `request_expired` event. An approval of it afterwards is refused.
+
+An elevation that ends early (by its holder, an approver or the operator command) moves to `review_pending` at the same moment, with its `ended` event. If the audit event cannot be written, the row is left as it was and the next pass completes it; access is not affected either way. One replica runs each pass, and two passes never record the same row twice.
+
+To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).

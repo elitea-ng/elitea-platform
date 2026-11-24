@@ -103,6 +103,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -168,6 +169,9 @@ func (h *Handler) AdministrationPluginConfigValues(w http.ResponseWriter, r *htt
 	response := configValuesResponse{
 		Values:     mergeSectionValues(section, stored),
 		FieldsMeta: sectionFieldsMeta(section),
+	}
+	if section.id == platformconfig.SectionBreakGlass {
+		response.Status = h.breakGlassStatus(stored)
 	}
 	if section.id == platformconfig.SectionDelegation && h.delegationReview != nil {
 		// A status that cannot be read leaves the section as it was: the
@@ -342,13 +346,28 @@ func (h *Handler) AdministrationPluginConfigValuesSave(w http.ResponseWriter, r 
 		return
 	}
 
+	// The break-glass caps, ceilings and approval switch (ADR-0059 R2.2a).
+	var beforeWrite storeHook
+	if section.id == platformconfig.SectionBreakGlass {
+		hook, status, reason := h.prepareBreakGlassSave(r, body.Values)
+		if status != 0 {
+			writeJSON(w, status, map[string]any{"error": reason})
+			return
+		}
+		beforeWrite = hook
+	}
+
 	principal, _ := auth.UserFromContext(r.Context())
 	author := principal.Email
 	if author == "" {
 		author = principal.ID
 	}
 
-	if err := h.storeSectionValues(r, section.id, body.Values, author); err != nil {
+	if err := h.storeSectionValues(r, section.id, body.Values, author, beforeWrite); err != nil {
+		if errors.Is(err, errBreakGlassApprovalOffForbidden) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "could not write the platform configuration store",
 		})
@@ -562,8 +581,12 @@ func (h *Handler) loadSectionValues(r *http.Request, section string) (map[string
 // All-or-nothing matters more here than it looks: the page saves a whole section
 // at once, so a partial apply would leave a card enabled with the links of the
 // card it replaced, and the operator would be looking at a success toast.
+//
+// beforeWrite, when not nil, runs first in the transaction and may add keys
+// to what is stored (the break-glass approval switch); its error rolls the
+// save back.
 func (h *Handler) storeSectionValues(
-	r *http.Request, section string, values map[string]any, author string,
+	r *http.Request, section string, values map[string]any, author string, beforeWrite storeHook,
 ) error {
 	if h.pool == nil {
 		return fmt.Errorf("no database pool")
@@ -574,6 +597,17 @@ func (h *Handler) storeSectionValues(
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if beforeWrite != nil {
+		extended := make(map[string]any, len(values)+1)
+		for key, value := range values {
+			extended[key] = value
+		}
+		if err := beforeWrite(ctx, tx, extended); err != nil {
+			return err
+		}
+		values = extended
+	}
 
 	// Sorted so the statement order is deterministic — two admins saving the
 	// same section concurrently take row locks in the same order and cannot

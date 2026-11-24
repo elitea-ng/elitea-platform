@@ -62,6 +62,7 @@ A change of who holds what on the administration surface is one `security_audit`
 | `project_membership` | `user`, partition the project | A membership is written through a central route: a bulk invite, or an invite, role change or removal on the central member routes (`/admin/users/administration/{projectID}`). `bulk` is set for a bulk invite and for a request that writes more than one membership. A removal's `after` is empty. |
 | `global_provider_route` | `global_provider` | A global provider is created or deleted, or its endpoint, credential or keyless identity changes. |
 | `identity_trust` | `identity_provider` or `scim_client` | An identity provider is created, deleted, turned on or off, or has a trust field or its secret changed; a SCIM client is created or its secret rotated. |
+| `break_glass_approval` | `configuration_section` (`break_glass`) | The approval switch of break-glass changed. `fields` is `["approval_required"]`; `before` and `after` hold `approval_required` while approval is requested on. `reason_code` is `approval_off_requested` (written at once; the switch-off takes effect after the delay) or `approval_on_restored` (at once; cancels a pending switch-off). See [Break-glass access](/admin/break-glass#switching-approval-off). |
 
 A change that changes nothing (assigning a role already held, a settings-only edit) appends no event.
 

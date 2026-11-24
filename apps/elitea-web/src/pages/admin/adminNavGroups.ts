@@ -174,6 +174,7 @@ export function navGroups(): readonly AdminNavGroup[] {
           // `./adminPermissionRegistry.json`.
           anyPermission: [
             'runtime.plugins',
+            'access.breakglass.manage',
             'configuration.branding',
             'configuration.microsoft_apps',
             'configuration.native_clients',

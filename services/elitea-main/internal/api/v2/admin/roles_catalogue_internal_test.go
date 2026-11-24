@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/credentialgrant"
 )
 
@@ -45,6 +46,12 @@ func TestDeclaredPermissionsHoldEveryConfigSectionGate(t *testing.T) {
 	for _, section := range configSections() {
 		permission, ok := section["required_permission"].(string)
 		if !ok || permission == "" {
+			continue
+		}
+		// A seeded-only name (access.breakglass.manage, R2.2a) is granted by
+		// its seeding migration and by nothing else, by design: the registry
+		// test holds that a migration grants it.
+		if row, ok := adminaccess.Lookup(permission); ok && row.Grantable == adminaccess.GrantableSeededOnly {
 			continue
 		}
 		if !declared[permission] {

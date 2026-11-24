@@ -314,6 +314,7 @@ func configSections() []map[string]any {
 		sessionPolicySection(),
 		agentLifecycleSection(),
 		credentialReviewSection(),
+		breakGlassSection(),
 		webSearchSection(),
 		resourcesSection(),
 		dedicatedBannerSection(),

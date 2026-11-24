@@ -24,6 +24,7 @@ export const adminTab: NavTab = {
         { kind: 'page', slug: 'admin/schedules-and-tasks', title: 'Schedules and tasks' },
         { kind: 'page', slug: 'admin/app-requests-and-toolkit-types', title: 'App requests and toolkit types' },
         { kind: 'page', slug: 'admin/audit-trail', title: 'Audit trail' },
+        { kind: 'page', slug: 'admin/break-glass', title: 'Break-glass access' },
       ],
     },
     {

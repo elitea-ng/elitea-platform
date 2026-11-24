@@ -83,6 +83,7 @@
     "toolkit_catalogue.type.manage"
   ],
   "configuration_route_permissions": [
+    "access.breakglass.manage",
     "configuration.branding",
     "configuration.microsoft_apps",
     "configuration.native_clients",

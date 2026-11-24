@@ -318,7 +318,7 @@ func (h *Handler) BrandingSave(w http.ResponseWriter, r *http.Request) {
 	if author == "" {
 		author = principal.ID
 	}
-	if err := h.storeSectionValues(r, section.id, body.Values, author); err != nil {
+	if err := h.storeSectionValues(r, section.id, body.Values, author, nil); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error": "could not write the platform configuration store",
 		})
@@ -881,7 +881,7 @@ func (h *Handler) importPackage(w http.ResponseWriter, r *http.Request, data []b
 	if author == "" {
 		author = principal.ID
 	}
-	if err := h.storeSectionValues(r, section.id, values, author); err != nil {
+	if err := h.storeSectionValues(r, section.id, values, author, nil); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not write the platform configuration store"})
 		return
 	}
