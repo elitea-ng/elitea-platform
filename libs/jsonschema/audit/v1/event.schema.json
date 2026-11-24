@@ -168,7 +168,28 @@
         "outbox_seq": { "type": "integer", "minimum": 1, "description": "The global outbox sequence, for tracing a record to its row." },
         "chain_head": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "On ai.elitea.security.v1.run.steps.anchored: the hex hash of the anchored run's last step." },
         "chain_length": { "type": "integer", "minimum": 1, "description": "On ai.elitea.security.v1.run.steps.anchored: the anchored run's step count." },
-        "access": { "$ref": "#/$defs/accessChange" }
+        "access": { "$ref": "#/$defs/accessChange" },
+        "elevation": { "$ref": "#/$defs/elevationStep" }
+      }
+    },
+    "elevationStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "source"],
+      "description": "On ai.elitea.security.v1.admin.elevation (ADR-0059 decisions 5 and 8): one step of a break-glass elevation. Ids, codes and numbers only. There is no reason text and no note text: the reason code is reason_code, a note is note_id and note_length, and the texts stay in the elevation ledger.",
+      "properties": {
+        "action": { "enum": ["requested", "approved", "denied", "request_expired", "started", "ended", "expired", "critical_change", "reviewed", "unreviewed", "note_added", "credential_issued", "credential_used", "credential_revoked", "local_admin_signin"] },
+        "source": { "enum": ["console", "api", "operator", "system"], "description": "How the step was taken; operator is a process command." },
+        "elevation_id": { "type": "string", "format": "uuid", "description": "The elevation. Present on every action except credential_issued, credential_revoked and local_admin_signin, and on credential_used when it started one." },
+        "user_id": { "type": "integer", "minimum": 1, "description": "The person elevated, or who signed in." },
+        "level": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "admin or super_admin." },
+        "path": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "approved, self or sealed." },
+        "reason_code": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "incident, identity_outage, recovery or other." },
+        "expires_at": { "type": "string", "format": "date-time", "description": "The elevation's expiry, once it has started." },
+        "end_reason": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "On ended and expired: why access stopped." },
+        "note_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "On note_added: the note." },
+        "note_length": { "type": "integer", "minimum": 1, "description": "On note_added: the note's length in characters." },
+        "credential_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_.:-]{0,127}$", "description": "On the credential actions: the sealed credential." }
       }
     },
     "accessChange": {
