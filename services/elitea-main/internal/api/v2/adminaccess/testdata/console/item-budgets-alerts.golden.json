@@ -1,0 +1,38 @@
+{
+  "id": "budgets-alerts",
+  "area": "models_spend",
+  "label_key": "pages.admin.console.item.budgets-alerts",
+  "area_label_key": "pages.admin.console.area.models_spend",
+  "available": true,
+  "granting_roles": [
+    {
+      "name": "super_admin",
+      "display_name": "Global administrator",
+      "built_in": true,
+      "level": "write"
+    },
+    {
+      "name": "admin",
+      "display_name": "Platform administrator",
+      "built_in": true,
+      "level": "write"
+    },
+    {
+      "name": "llm_manager",
+      "display_name": "LLM manager",
+      "built_in": true,
+      "level": "write"
+    },
+    {
+      "name": "project_administrator",
+      "display_name": "Project administrator (all projects)",
+      "built_in": true,
+      "level": "read"
+    },
+    {
+      "name": "budget_reader",
+      "built_in": false,
+      "level": "read"
+    }
+  ]
+}

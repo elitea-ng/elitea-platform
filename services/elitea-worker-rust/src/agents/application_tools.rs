@@ -3002,6 +3002,8 @@ pub(crate) struct ApplicationToolDependencies<'a> {
     caller_attachments_enabled: bool,
     /// FU-353 D2(a1): claim-bound agent memory authority (re-targeted per child).
     agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
+    /// SEC-5B2-03: parent run execution deadline lent to saved child pipelines.
+    execution_deadline: Option<tokio::time::Instant>,
     materialization: ApplicationMaterializationPath,
 }
 
@@ -3029,6 +3031,7 @@ impl<'a> ApplicationToolDependencies<'a> {
             attachment_library: None,
             caller_attachments_enabled: false,
             agent_memory: None,
+            execution_deadline: None,
             materialization: ApplicationMaterializationPath::default(),
         }
     }
@@ -3092,6 +3095,17 @@ impl<'a> ApplicationToolDependencies<'a> {
         self
     }
 
+    /// SEC-5B2-03: lend the parent run's execution deadline into saved pipeline
+    /// children and pipeline tools so per-node timeouts and retry waits clamp.
+    #[must_use]
+    pub(super) fn with_execution_deadline(
+        mut self,
+        execution_deadline: Option<tokio::time::Instant>,
+    ) -> Self {
+        self.execution_deadline = execution_deadline;
+        self
+    }
+
     fn pipeline_capabilities(&self) -> NestedPipelineCapabilities {
         NestedPipelineCapabilities {
             artifacts: self.artifacts.clone(),
@@ -3099,6 +3113,7 @@ impl<'a> ApplicationToolDependencies<'a> {
             attachment_library: self.attachment_library.clone(),
             caller_attachments_enabled: self.caller_attachments_enabled,
             agent_memory: self.agent_memory.clone(),
+            execution_deadline: self.execution_deadline,
         }
     }
 
@@ -3579,6 +3594,7 @@ pub(crate) async fn materialize_application_tools(
         attachment_library: dependencies.attachment_library,
         caller_attachments_enabled: dependencies.caller_attachments_enabled,
         agent_memory: dependencies.agent_memory,
+        execution_deadline: dependencies.execution_deadline,
         materialization: dependencies.materialization,
         skipped: Vec::new(),
     };
@@ -3658,6 +3674,7 @@ struct ApplicationAssemblyState<'a> {
     attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     caller_attachments_enabled: bool,
     agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
+    execution_deadline: Option<tokio::time::Instant>,
     materialization: ApplicationMaterializationPath,
     /// Nested pipeline attachments this Worker could not build, named on the
     /// root's skipped notice (#990).
@@ -3976,6 +3993,7 @@ impl ApplicationAssemblyState<'_> {
             },
             caller_attachments_enabled: self.caller_attachments_enabled,
             agent_memory: self.agent_memory.clone(),
+            execution_deadline: self.execution_deadline,
             materialization: self.materialization.clone(),
         };
         let built = materialize_pipeline_children(

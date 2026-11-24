@@ -310,7 +310,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 			continue
 		}
 
-		userID, alreadyMember, err := h.inviteOne(r, projectID, email, roleIDs)
+		userID, alreadyMember, err := h.inviteOne(r, projectID, email, roleIDs, mode, len(body.Emails) > 1)
 		switch {
 		case err != nil:
 			hasErrors = true
@@ -373,8 +373,13 @@ func (h *Handler) deliverProjectInvitation(r *http.Request, projectID int, email
 // inviteOne runs one address in its own transaction so a rejected address
 // never rolls back the ones that succeeded — the partial-success shape the
 // per-email result array reports.
+//
+// Through the administration route the membership it writes is a
+// project_membership security audit event in the same transaction
+// (users_write_events.go); bulk is whether the request names more than one
+// address.
 func (h *Handler) inviteOne(
-	r *http.Request, projectID int, email string, roleIDs []int,
+	r *http.Request, projectID int, email string, roleIDs []int, mode string, bulk bool,
 ) (userID int, alreadyMember bool, err error) {
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
@@ -406,6 +411,11 @@ func (h *Handler) inviteOne(
 		return 0, false, err
 	}
 
+	// Not a member until now: the person held no role in the project.
+	membership, err := beginCentralMembership(ctx, tx, mode, projectID, []int{userID}, bulk)
+	if err != nil {
+		return 0, false, err
+	}
 	for _, roleID := range roleIDs {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
@@ -413,6 +423,9 @@ func (h *Handler) inviteOne(
 			projectID, userID, roleID); err != nil {
 			return 0, false, err
 		}
+	}
+	if err := h.appendChanges(ctx, tx, r, membership, []int{userID}); err != nil {
+		return 0, false, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -561,6 +574,11 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		adminaccess.Write(w, r, refusal)
 		return
 	}
+	membership, err := beginCentralMembership(ctx, tx, mode, projectID, userIDs, len(userIDs) > 1)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
+		return
+	}
 
 	for _, userID := range userIDs {
 		if _, err := tx.Exec(ctx,
@@ -580,6 +598,12 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		}
 	}
 
+	if err := h.appendChanges(ctx, tx, r, membership, userIDs); err != nil {
+		slog.ErrorContext(ctx, "a central membership change failed on its security audit event",
+			"project_id", projectID, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 		return
@@ -714,6 +738,11 @@ func (h *Handler) usersDelete(w http.ResponseWriter, r *http.Request, mode strin
 		adminaccess.Write(w, r, refusal)
 		return
 	}
+	membership, err := beginCentralMembership(ctx, tx, mode, projectID, userIDs, len(userIDs) > 1)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
+		return
+	}
 
 	if _, err := tx.Exec(ctx, revokeTokenProjectBindingsSQL, projectID, userIDs); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
@@ -740,6 +769,12 @@ func (h *Handler) usersDelete(w http.ResponseWriter, r *http.Request, mode strin
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 			return
 		}
+	}
+	if err := h.appendChanges(ctx, tx, r, membership, userIDs); err != nil {
+		slog.ErrorContext(ctx, "a central membership removal failed on its security audit event",
+			"project_id", projectID, "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
+		return
 	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})

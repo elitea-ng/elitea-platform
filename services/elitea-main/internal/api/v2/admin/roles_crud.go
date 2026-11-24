@@ -506,6 +506,20 @@ func roleLifecycleChange(
 	return change
 }
 
+// roleRenameChange is the role_renamed event of a rename: the subject is the
+// role by its new name (the live role), before is the old name and after the
+// new one, so the events of the old subject join to it. projectsRenamed > 0
+// adds the project_role_copies field.
+func roleRenameChange(target roleTarget, name, newName string, projectsRenamed int64) securityaudit.AdminAccessChanged {
+	change := roleLifecycleChange(target, newName, securityaudit.AccessRoleRenamed, nil)
+	change.Change.Before = []string{name}
+	change.Change.After = []string{newName}
+	if projectsRenamed > 0 {
+		change.Change.Fields = []string{roleDeleteProjectCopiesField}
+	}
+	return change
+}
+
 /* ── rename ────────────────────────────────────────────────────────────── */
 
 // AdminRoleRename serves `PUT /admin/roles/{scope}/{mode}`.
@@ -580,7 +594,7 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 		}
 		caller = &resolved
 	}
-	renamed, err := h.renameRole(r.Context(), target, body.Name, body.NewName, caller)
+	renamed, err := h.renameRole(r, target, body.Name, body.NewName, caller)
 	if err != nil {
 		writeRoleWriteError(w, r, err)
 		return
@@ -589,8 +603,9 @@ func (h *Handler) AdminRoleRename(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) renameRole(
-	ctx context.Context, target roleTarget, name, newName string, caller *adminaccess.Caller,
+	r *http.Request, target roleTarget, name, newName string, caller *adminaccess.Caller,
 ) (projectsRenamed int64, err error) {
+	ctx := r.Context()
 	transaction, err := h.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin role rename: %w", err)
@@ -652,6 +667,15 @@ WHERE stale.name = $1
 
 	if err := guard.Check(ctx, transaction); err != nil {
 		return 0, err
+	}
+	// The role_renamed event (ADR-0059 R1.5, issue 2994), in this
+	// transaction: a failed append fails the rename. A rename to the same
+	// name changes nothing and appends none.
+	if name != newName {
+		if err := h.appendAccessChange(ctx, transaction, r,
+			roleRenameChange(target, name, newName, projectsRenamed)); err != nil {
+			return 0, fmt.Errorf("record role rename: %w", err)
+		}
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("commit role rename: %w", err)

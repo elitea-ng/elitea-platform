@@ -2680,7 +2680,7 @@ impl Write for CappedJsonWriter {
     }
 }
 
-fn graph_error_code(error: &GraphError) -> &'static str {
+pub(super) fn graph_error_code(error: &GraphError) -> &'static str {
     // A child refusal that names its own registered cause keeps it, also
     // when an inner node's failure wraps it.
     if let GraphError::NodeExecutionFailed { message, .. } = error {
@@ -2709,6 +2709,11 @@ fn graph_error_code(error: &GraphError) -> &'static str {
         // D1: a Code child that may have started and has no owner proof.
         if names(super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE) {
             return super::node_recovery_runtime::CHILD_EFFECT_UNKNOWN_CODE;
+        }
+        // FU-343: a fan-out member's typed model gateway failure keeps its
+        // registered code instead of collapsing into graph.node_execution_failed.
+        if let Some(code) = super::agent::model_gateway_code_in_message(inner) {
+            return code;
         }
     }
     match error {
@@ -2745,7 +2750,7 @@ pub(crate) fn is_parallel_resource_exhausted(message: &str) -> bool {
     .any(|code| inner.starts_with(code))
 }
 
-fn unwrap_node_failures(mut message: &str) -> &str {
+pub(super) fn unwrap_node_failures(mut message: &str) -> &str {
     while let Some(rest) = message.strip_prefix("Node '")
         && let Some((node, inner)) = rest.split_once("' execution failed: ")
         && !node.contains('\'')

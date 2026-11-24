@@ -52,8 +52,15 @@ describe('NodeSettings', () => {
   });
 
   it('renders nothing for a node type without settings yet', () => {
-    const { queryByRole } = renderSettings(undefined, 'llm');
+    const { queryByRole } = renderSettings(undefined, 'agent');
     expect(queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it.each(['llm', 'toolkit', 'mcp'])('shows Retry on fail and Timeout on %s nodes (5b-2 / 5b-3)', async (nodeType) => {
+    const { getByRole, getByLabelText } = renderSettings(undefined, nodeType);
+    await userEvent.click(getByRole('button', { name: 'Settings' }));
+    expect(getByRole('switch', { name: 'Retry on fail' })).toBeEnabled();
+    expect(getByLabelText('Timeout (ms)')).toBeEnabled();
   });
 });
 

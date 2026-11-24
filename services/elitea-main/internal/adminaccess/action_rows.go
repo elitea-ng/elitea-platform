@@ -20,6 +20,18 @@ const AuthUsersActionPattern = adminPrefix + "/auth_users/{mode}"
 // classifies the save and applies the token rule itself (TokenRuleInHandler).
 const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
 
+// The routes whose handler classifies the write and applies the token rule
+// itself (TokenRuleInHandler, issue 2993): the gateway governance rows
+// (GovernanceRowAction), the global provider update
+// (GlobalProviderUpdateAction) and the retention writes (RetentionAction).
+const (
+	GovernanceCreatePattern       = adminPrefix + "/gateway/governance"
+	GovernanceRowPattern          = adminPrefix + "/gateway/governance/{id}"
+	GlobalProviderUpdatePattern   = adminPrefix + "/gateway/providers/{configID}"
+	RetentionPolicyPattern        = adminPrefix + "/retention/policies/{dataClass}"
+	RetentionProjectPolicyPattern = adminPrefix + "/retention/policies/{dataClass}/projects/{projectID}"
+)
+
 // write is an entry with no danger: no reason, elevation `allow`, token
 // `allowed`.
 func write(method, pattern, permission string) Action {
@@ -218,9 +230,9 @@ func actionRows() []Action {
 		// Creating a global provider sets its endpoint, credential and keyless
 		// identity, so it is critical like changing them.
 		post(admin("/gateway/providers"), LLMCatalogueManage).critical(flag),
-		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
+		put(GlobalProviderUpdatePattern, LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeRoute).critical(flag),
-		put(admin("/gateway/providers/{configID}"), LLMCatalogueManage).
+		put(GlobalProviderUpdatePattern, LLMCatalogueManage).
 			outcome(ClassifyGlobalProvider, OutcomeSettings),
 		del(admin("/gateway/providers/{configID}"), LLMCatalogueManage).dangerous(),
 		// check, revalidate and the provider model listing call out with the
@@ -327,14 +339,14 @@ func actionRows() []Action {
 		post("/api/v2/secrets/hide/{mode}/{projectID}/{name}", ConfigurationSecretsSecretEdit),
 	}
 
-	rows = append(rows, retention(put(admin("/retention/policies/{dataClass}"), RetentionManage))...)
-	rows = append(rows, retention(put(admin("/retention/policies/{dataClass}/projects/{projectID}"), RetentionManage))...)
+	rows = append(rows, retention(put(RetentionPolicyPattern, RetentionManage))...)
+	rows = append(rows, retention(put(RetentionProjectPolicyPattern, RetentionManage))...)
 	// Deleting an override falls back to the platform maximum, which can be
 	// shorter.
-	rows = append(rows, retention(del(admin("/retention/policies/{dataClass}/projects/{projectID}"), RetentionManage))...)
-	rows = append(rows, governanceRow(http.MethodPost, admin("/gateway/governance"))...)
-	rows = append(rows, governanceRow(http.MethodPut, admin("/gateway/governance/{id}"))...)
-	rows = append(rows, governanceRow(http.MethodDelete, admin("/gateway/governance/{id}"))...)
+	rows = append(rows, retention(del(RetentionProjectPolicyPattern, RetentionManage))...)
+	rows = append(rows, governanceRow(http.MethodPost, GovernanceCreatePattern)...)
+	rows = append(rows, governanceRow(http.MethodPut, GovernanceRowPattern)...)
+	rows = append(rows, governanceRow(http.MethodDelete, GovernanceRowPattern)...)
 
 	// The Configuration sections.
 	maintenance := section("maintenance", RuntimePlugins)

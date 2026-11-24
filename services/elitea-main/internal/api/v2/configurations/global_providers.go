@@ -77,11 +77,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
@@ -638,20 +641,106 @@ func (h *Handler) rewriteGlobalProviderBody(
 	// the section) AND to the gateway's credential read (same predicate), so the
 	// operator got a 201, an empty list, and an orphan row holding a sealed key.
 	body["section"] = GlobalProviderSection
+	var guard *storedRowGuard
 	if creating {
 		completeGlobalRowLabel(body)
-	} else if !h.mergeStoredGlobalProviderData(w, r, body) {
-		return nil, false
+	} else {
+		stored, ok := h.readStoredGlobalProvider(w, r)
+		if !ok {
+			return nil, false
+		}
+		before := stored.dataCopy()
+		mergeStoredGlobalProviderData(body, stored)
+		// The token rule of the action table (ADR-0059 R1.2b, issue 2993):
+		// an update that changes the endpoint, the credential or the keyless
+		// identity is the critical `route` outcome, one that changes only
+		// the settings fields is not (adminaccess.GlobalProviderUpdateAction).
+		action := adminaccess.GlobalProviderUpdateAction(globalProviderChanges(body, stored, before))
+		if adminaccess.RefuseToken(w, r, http.MethodPut, adminaccess.GlobalProviderUpdatePattern, action) {
+			return nil, false
+		}
+		// A token that may not make the route change made a settings one
+		// against the row it read. The write holds it to that row, so a
+		// concurrent route change is not written back over by the merged data.
+		// A `type` in the body is written too, so it is held the same way: a
+		// type equal to the stored one counts as no change, and would write
+		// the type it read over a newer one. A body with neither leaves both
+		// columns alone, so it needs none.
+		_, merges := body["data"].(map[string]any)
+		_, typed := body["type"]
+		if (merges || typed) && stored.found && adminaccess.TokenRefused(r.Context(), http.MethodPut,
+			adminaccess.GlobalProviderUpdatePattern, adminaccess.OutcomeRoute) {
+			guard = &storedRowGuard{data: before, configType: stored.configType}
+		}
 	}
 	request, ok := encodeGlobalBody(w, r, body)
 	if !ok {
 		return nil, false
+	}
+	if guard != nil {
+		request = request.WithContext(withStoredRowGuard(request.Context(), *guard))
 	}
 	// The ONLY place that may arm the keyless `auth_mode`: this request is
 	// pinned to the public project and forced to shared, which is exactly the
 	// row the gateway accepts as a platform credential (keyless_credentials.go).
 	request = request.WithContext(withPlatformCredentialWrite(request.Context()))
 	return h.withGlobalProviderEvent(request, fields), true
+}
+
+// storedGlobalProvider is the stored row an update is merged with and
+// classified against. found is false only when there is no store to read
+// (a unit test that calls the rewrite directly).
+type storedGlobalProvider struct {
+	found      bool
+	configType string
+	data       map[string]any
+}
+
+// dataCopy is a copy of the stored data, one level deep: the merge writes
+// into the body's map, never into this one, and a nested value is compared,
+// never changed.
+func (s storedGlobalProvider) dataCopy() map[string]any {
+	out := make(map[string]any, len(s.data))
+	for key, value := range s.data {
+		out[key] = value
+	}
+	return out
+}
+
+// readStoredGlobalProvider reads the stored row's type and `data`. A missing
+// row is the 404 of the update.
+//
+// A nil pool is reachable only from a unit test that calls the rewrite
+// directly: every route reaches it through pinPublicProject, which answers
+// 503 for a missing store before this runs.
+func (h *Handler) readStoredGlobalProvider(w http.ResponseWriter, r *http.Request) (storedGlobalProvider, bool) {
+	if h.pool == nil {
+		return storedGlobalProvider{}, true
+	}
+	configID := chi.URLParam(r, "configID")
+	schema := pgx.Identifier{fmt.Sprintf("p_%d", h.publicProjectID)}.Sanitize()
+	var raw []byte
+	stored := storedGlobalProvider{found: true}
+	err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
+		`SELECT data, type FROM %s.configuration WHERE %s = $1`,
+		schema, configurationIDColumn(configID)), configID).Scan(&raw, &stored.configType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
+			return storedGlobalProvider{}, false
+		}
+		slog.ErrorContext(r.Context(), "global provider stored data read failed",
+			"schema", schema, "configuration_id", configID, "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "internal server error")
+		return storedGlobalProvider{}, false
+	}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &stored.data); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
+			return storedGlobalProvider{}, false
+		}
+	}
+	return stored, true
 }
 
 // mergeStoredGlobalProviderData lays the stored row's `data` UNDER the body's,
@@ -667,50 +756,61 @@ func (h *Handler) rewriteGlobalProviderBody(
 //
 // A body with no `data` object is left alone: the delegated handler then does
 // not touch the column, and a malformed `data` is its refusal to make.
-func (h *Handler) mergeStoredGlobalProviderData(
-	w http.ResponseWriter, r *http.Request, body map[string]any,
-) bool {
+func mergeStoredGlobalProviderData(body map[string]any, stored storedGlobalProvider) {
 	incoming, isObject := body["data"].(map[string]any)
-	// A nil pool is reachable only from a unit test that calls the rewrite
-	// directly: every route reaches it through pinPublicProject, which answers
-	// 503 for a missing store before this runs.
-	if !isObject || h.pool == nil {
-		return true
-	}
-	configID := chi.URLParam(r, "configID")
-	schema := pgx.Identifier{fmt.Sprintf("p_%d", h.publicProjectID)}.Sanitize()
-	var raw []byte
-	err := h.pool.QueryRow(r.Context(), fmt.Sprintf(
-		`SELECT data FROM %s.configuration WHERE %s = $1`,
-		schema, configurationIDColumn(configID)), configID).Scan(&raw)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			apierr.WriteStatus(w, http.StatusNotFound, "configuration not found")
-			return false
-		}
-		slog.ErrorContext(r.Context(), "global provider stored data read failed",
-			"schema", schema, "configuration_id", configID, "err", err)
-		apierr.WriteStatus(w, http.StatusInternalServerError, "internal server error")
-		return false
-	}
-	var stored map[string]any
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &stored); err != nil {
-			apierr.WriteStatus(w, http.StatusInternalServerError, "invalid stored configuration")
-			return false
-		}
+	if !isObject || !stored.found {
+		return
 	}
 	sent := make(map[string]struct{}, len(incoming))
 	for key := range incoming {
 		sent[key] = struct{}{}
 	}
-	for key, value := range stored {
+	for key, value := range stored.data {
 		if _, present := incoming[key]; !present {
 			incoming[key] = value
 		}
 	}
 	dropMergedModeFields(incoming, sent)
-	return true
+}
+
+// globalProviderForcedFields are the top-level fields this router sets itself
+// (rewriteGlobalProviderBody): they change nothing a caller chose.
+var globalProviderForcedFields = []string{"section", "shared"}
+
+// globalProviderChanges names what an update changes, one level deep, for
+// adminaccess.GlobalProviderUpdateAction: every top-level field of the body
+// but `data` and the forced ones (a `type` equal to the stored one excepted),
+// and every key of the merged `data` whose value differs from the stored
+// row's, a key the merge removed included. Without a stored row every key
+// the body names counts as changed.
+func globalProviderChanges(body map[string]any, stored storedGlobalProvider, before map[string]any) []string {
+	var changed []string
+	for field, value := range body {
+		switch {
+		case field == "data", slices.Contains(globalProviderForcedFields, field):
+		case field == "type" && stored.found && value == stored.configType:
+		default:
+			changed = append(changed, field)
+		}
+	}
+	merged, isObject := body["data"].(map[string]any)
+	if !isObject {
+		if _, present := body["data"]; present {
+			changed = append(changed, "data")
+		}
+		return changed
+	}
+	for key, value := range merged {
+		if previous, had := before[key]; !had || !stored.found || !reflect.DeepEqual(previous, value) {
+			changed = append(changed, key)
+		}
+	}
+	for key := range before {
+		if _, kept := merged[key]; !kept {
+			changed = append(changed, key)
+		}
+	}
+	return changed
 }
 
 // keyModeOnlyFields are the `data` keys that mean something only in the

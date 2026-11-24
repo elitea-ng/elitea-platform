@@ -293,6 +293,8 @@ func TestRetentionAction(t *testing.T) {
 		{"a maximum to forever", adminaccess.RetentionBounds{MaxAgeDays: days(30)}, adminaccess.RetentionBounds{}, adminaccess.OutcomeLengthen},
 		{"minimum raised", adminaccess.RetentionBounds{MinAgeDays: 7}, adminaccess.RetentionBounds{MinAgeDays: 30}, adminaccess.OutcomeLengthen},
 		{"unchanged", adminaccess.RetentionBounds{MinAgeDays: 7, MaxAgeDays: days(30)}, adminaccess.RetentionBounds{MinAgeDays: 7, MaxAgeDays: days(30)}, adminaccess.OutcomeLengthen},
+		{"overrides start to apply", adminaccess.RetentionBounds{MaxAgeDays: days(365)}, adminaccess.RetentionBounds{MaxAgeDays: days(365), OverridesApply: true}, adminaccess.OutcomeShorten},
+		{"overrides stop applying", adminaccess.RetentionBounds{MaxAgeDays: days(365), OverridesApply: true}, adminaccess.RetentionBounds{MaxAgeDays: days(365)}, adminaccess.OutcomeLengthen},
 	} {
 		if got := adminaccess.RetentionAction(c.old, c.new); got != c.want {
 			t.Errorf("%s: RetentionAction = %q, want %q", c.name, got, c.want)

@@ -262,6 +262,14 @@ adminTest('J31f: the activity drawer reads the audit trail scoped to one project
   const activity = page.waitForResponse((r) =>
     r.url().includes('/elitea_core/project_user_activity/administration'),
   );
+  // The member list the strip is drawn from. It is the project's members
+  // PLUS every holder of the central `super_admin` role (usersPageQuery in
+  // internal/api/v2/eliteacore/handler.go, legacy parity), so its length is
+  // read rather than written down: the seed's global-admin persona is one of
+  // those holders and a constant would count it or not by accident.
+  const members = page.waitForResponse(
+    (r) => r.url().includes('/admin/users/administration/90001') && r.request().method() === 'GET',
+  );
   await row.getByRole('button', { name: 'Project activity' }).click();
 
   const traceResponse = await traceListing;
@@ -279,10 +287,15 @@ adminTest('J31f: the activity drawer reads the audit trail scoped to one project
   // on the squares' own labels. Both seeded project admins must appear, which
   // is what shows the strip is fed by the project's REAL membership rather than
   // by whatever the last member query happened to return.
-  await expect(page.getByText(/\d+ \/ 2 active/)).toBeVisible({ timeout: 15_000 });
+  const memberRows = ((await (await members).json()) as { rows?: { email: string }[] }).rows ?? [];
+  const memberEmails = memberRows.map((member) => member.email);
+  expect(memberEmails, 'both seeded project admins are members').toEqual(
+    expect.arrayContaining(['e2e-project-admin@autotest.local', 'e2e-admin@autotest.local']),
+  );
+  await expect(page.getByText(new RegExp(`\\d+ / ${memberRows.length} active`))).toBeVisible({ timeout: 15_000 });
   const strip = page.getByTestId('project-user-activity');
   await expect(strip.getByLabel(new RegExp(`^${SEEDED_PROJECT_ADMIN}: `))).toBeVisible();
-  await expect(strip.locator('[aria-label]')).toHaveCount(2);
+  await expect(strip.locator('[aria-label]')).toHaveCount(memberRows.length);
 });
 
 /*

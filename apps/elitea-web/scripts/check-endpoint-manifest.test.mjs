@@ -977,9 +977,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 582 -> 583 (issue 2495, ADR-0059 R0.6a): administrationUserDelete, the Remove of the admin
 // console's Manage project member dialog. Like the other admin operations it is not in the manifest,
 // so MANIFEST_ENTRY_COUNT is unchanged.
-// 583 -> 588 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
+// 583 -> 585 (issue 2531, ADR-0059 R3.1a): getAdminConsoleDocument and getAdminConsoleItem, the
+// console capability document and its item route. The web consumer is R3.1b (issue 2611), so
+// MANIFEST_ENTRY_COUNT is unchanged.
+// 585 -> 590 (5d-1 HTTP actions): listHttpActionRules, createHttpActionRule, getHttpActionRule,
 // updateHttpActionRule, listHttpActionRuleNames.
-const GENERATED_OPERATION_COUNT = 588;
+const GENERATED_OPERATION_COUNT = 590;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

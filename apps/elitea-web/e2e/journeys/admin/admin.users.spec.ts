@@ -125,6 +125,18 @@ async function restoreSuspendFixture(page: Page, email: string): Promise<void> {
   expect(restored.status(), await restored.text()).toBe(200);
 }
 
+/**
+ * The grid row of one address, found the way an operator finds it: through
+ * the page's search box. The grid shows 20 rows sorted by name, and the seed
+ * has more `E2E …` users than that (the built-in role personas, ADR-0059
+ * R3.13a), so a row a journey did not search for may sit on page two. The
+ * search is component state, so it is typed again after every reload.
+ */
+async function searchedUserRow(page: Page, email: string) {
+  await page.getByPlaceholder('Search by name or email').fill(email);
+  return page.getByRole('row').filter({ hasText: email });
+}
+
 /** What the server said about one address in that listing. */
 function suspendedInListing(rows: ListedUser[], email: string): boolean {
   const row = rows.find((r) => r.email === email);
@@ -207,7 +219,7 @@ adminTest('J28: suspending a user is written to the database and survives a relo
   await restoreSuspendFixture(page, subject);
 
   await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
-  const subjectRow = page.getByRole('row').filter({ hasText: subject });
+  const subjectRow = await searchedUserRow(page, subject);
   await expect(subjectRow).toBeVisible({ timeout: 15_000 });
 
   // Precondition, asserted rather than assumed: the seed creates this user
@@ -245,7 +257,7 @@ adminTest('J28: suspending a user is written to the database and survives a relo
   // not paint a row the listing carries fails on the badge.
   expect(suspendedInListing(await serverUsers(page), subject)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  const afterReload = page.getByRole('row').filter({ hasText: subject });
+  const afterReload = await searchedUserRow(page, subject);
   await expect(afterReload.getByText('Suspended')).toBeVisible({ timeout: 15_000 });
 
   // Restore, so this journey leaves the stack as it found it and can be re-run.
@@ -256,9 +268,7 @@ adminTest('J28: suspending a user is written to the database and survives a relo
   expect(unsuspendResponse.status()).toBe(200);
   expect(suspendedInListing(await serverUsers(page), subject)).toBe(false);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(
-    page.getByRole('row').filter({ hasText: subject }).getByText('Active'),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect((await searchedUserRow(page, subject)).getByText('Active')).toBeVisible({ timeout: 15_000 });
 });
 
 adminTest('J34: the activity drawer reads the audit trail scoped to one user', async ({ page }) => {

@@ -117,6 +117,22 @@ They are separate files because they need different things, not for tidiness:
   `administration`-mode permissions only the admin persona holds, so
   `admin.visual.spec.ts` sets `test.use({ storageState: STORAGE_STATE.admin })`.
   Without it every admin shot would be a photograph of a 403.
+  The admin persona holds `admin` plus the custom role `e2e_admin_extras`.
+  A shot or journey about what ONE built-in administration role sees uses a
+  built-in role persona instead (ADR-0059 R3.13a): six users, one per
+  built-in role with a declared set (`e2e-global-admin` super_admin,
+  `e2e-platform-admin` admin, `e2e-llm-manager` llm_manager,
+  `e2e-project-administrator` project_administrator, `e2e-auditor`
+  security_auditor, `e2e-emergency` emergency_access, all `@autotest.local`),
+  each holding exactly that role and no project. The seed creates them and
+  stops when a built-in role is missing; `auth.setup.ts` saves one storage
+  state each, selected with
+  `test.use({ storageState: STORAGE_STATE.personas.llm_manager })`. The list
+  lives in `e2e/fixtures/adminPersonas.ts`, and `admin.personas.spec.ts` checks
+  every state reads its console document. A new persona goes in that file, the
+  seed's oidc-mock loop and its `e2e_admin_personas` rows together;
+  `scripts/e2e-journey-shape.test.mjs` and
+  `internal/api/e2e_seed_persona_parity_test.go` fail otherwise.
 - **A different shell guard.** `shellSettled()` exists because the main app's
   sidebar is permission-FILTERED and renders shorter while
   `GET /auth/permissions/...` is in flight. The admin nav has no query behind it

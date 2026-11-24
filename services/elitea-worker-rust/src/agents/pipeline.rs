@@ -108,6 +108,8 @@ pub(super) struct NestedPipelineCapabilities {
     pub(super) attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
     pub(super) caller_attachments_enabled: bool,
     pub(super) agent_memory: Option<super::agent_memory_tools::AgentMemoryAuthority>,
+    /// SEC-5B2-03: parent run execution deadline lent to saved child pipelines.
+    pub(super) execution_deadline: Option<tokio::time::Instant>,
 }
 
 impl Default for NestedPipelineCapabilities {
@@ -118,6 +120,7 @@ impl Default for NestedPipelineCapabilities {
             attachment_library: None,
             caller_attachments_enabled: false,
             agent_memory: None,
+            execution_deadline: None,
         }
     }
 }
@@ -158,6 +161,8 @@ struct PipelineApplicationRuntime<'a> {
     /// FU-323a: the root Agent-node re-entries this claim's inspect step
     /// proved; `None` outside a checkpoint recovery and below the root.
     root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
+    /// SEC-5B2-03: parent run execution deadline lent to saved child pipelines.
+    execution_deadline: Option<tokio::time::Instant>,
 }
 
 impl<'a> PipelineApplicationRuntime<'a> {
@@ -181,6 +186,7 @@ impl<'a> PipelineApplicationRuntime<'a> {
             self.caller_attachments_enabled,
         )
         .with_agent_memory(self.agent_memory.clone())
+        .with_execution_deadline(self.execution_deadline)
         .with_materialization(materialization)
     }
 }
@@ -678,6 +684,7 @@ impl PipelineNativeAgentAssembler {
         >,
         root_reentry: Option<Arc<scoped_runtime::RootAgentReentry>>,
         nested_attachment_library: Option<Arc<super::attachment_tools::AttachmentLibrary>>,
+        execution_deadline: Option<tokio::time::Instant>,
     ) -> Result<PipelineRuntimeBindings, NativeAgentAssemblyError> {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
@@ -945,6 +952,7 @@ impl PipelineNativeAgentAssembler {
                     node_recovery: node_recovery.clone(),
                     pipeline_tool_journals: pipeline_tool_journals.clone(),
                     root_reentry: root_reentry.clone(),
+                    execution_deadline,
                 },
             );
         let (application_resolver, application_runtime, application_scopes) = match continuation {
@@ -1681,6 +1689,7 @@ impl PipelineNativeAgentAssembler {
                     state.pipeline_tool_journals(),
                     root_reentry,
                     nested_attachment_library,
+                    Some(plan.execution_deadline()?),
                 )
                 .await?;
             node_runtimes.nodes = node_runtimes.nodes.with_context_view(context_view);
@@ -2452,6 +2461,7 @@ pub(super) async fn materialize_saved_pipeline_tool(
         node_recovery: None,
         pipeline_tool_journals,
         root_reentry: None,
+        execution_deadline: capabilities.execution_deadline,
     };
     let (definition, bound, definition_sha256) = match admit_saved_pipeline_child(
         platform,
@@ -3199,6 +3209,9 @@ async fn bind_saved_pipeline_runtimes(
         .with_delegated_servers(runtime.mcp_tokens)
         .with_events(runtime.node_events.clone())
         .with_execution_id(runtime.context.execution_id());
+    if let Some(deadline) = runtime.execution_deadline {
+        runtimes = runtimes.with_execution_deadline(deadline);
+    }
     if let Some(code) = &runtime.code {
         runtimes = runtimes.with_code(code.clone());
     }

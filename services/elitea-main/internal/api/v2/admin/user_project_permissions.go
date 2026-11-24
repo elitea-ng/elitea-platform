@@ -211,8 +211,12 @@ func (h *Handler) UserProjectPermissionsSave(w http.ResponseWriter, r *http.Requ
 		})
 		return
 	}
+	target := pushTargetPersonal
+	if forTeamProjects {
+		target = pushTargetTeam
+	}
 	result, err := h.applyRoleMap(
-		ctx, targets, roleMap, submittedRows, createMissingRoles, appendUserRole, caller)
+		r, target, targets, roleMap, submittedRows, createMissingRoles, appendUserRole, caller)
 	if err != nil {
 		writeRoleWriteError(w, r, err)
 		return
@@ -249,8 +253,13 @@ type roleMapResult struct {
 // mention. roles.go's diffGrants scopes the identically-shaped body the same
 // way, and two adjacent endpoints disagreeing about that would be a trap for
 // any client code shared between them.
+//
+// The push appends one project_permissions_pushed event per role it changed,
+// in this transaction (permission_push_events.go); target names the project
+// set.
 func (h *Handler) applyRoleMap(
-	ctx context.Context,
+	r *http.Request,
+	target string,
 	projects []int,
 	roleMap map[string][]string,
 	submittedRows []string,
@@ -258,6 +267,7 @@ func (h *Handler) applyRoleMap(
 	appendUserRole bool,
 	caller adminaccess.Caller,
 ) (roleMapResult, error) {
+	ctx := r.Context()
 	roleNames := make([]string, 0, len(roleMap))
 	for role := range roleMap {
 		roleNames = append(roleNames, role)
@@ -317,37 +327,40 @@ ON CONFLICT (project_id, name) DO NOTHING`, projects, roleNames)
 	// permission set, exactly as the reference's delete-then-insert intends.
 	// Unlike the reference, both halves commit together, so a role can never be
 	// observed with an empty permission set it was not given.
+	changes := pushChanges{}
 	for _, role := range roleNames {
 		permissions := roleMap[role]
-		removed, err := transaction.Exec(ctx, `
+		removed, err := changes.changedPermissionsByRole(ctx, transaction, false, `
 DELETE FROM public.auth_core__project_role_permission override
 USING public.auth_core__project_role role
 WHERE role.id = override.role_id
   AND role.project_id = ANY($1::int[])
   AND role.name = $2
   AND NOT (override.permission = ANY($3::text[]))
-  AND ($4::text[] IS NULL OR override.permission = ANY($4::text[]))`,
+  AND ($4::text[] IS NULL OR override.permission = ANY($4::text[]))
+RETURNING override.role_id, override.permission`,
 			projects, role, permissions, submittedRows)
 		if err != nil {
 			return roleMapResult{}, fmt.Errorf("revoke permissions for %s: %w", role, err)
 		}
-		result.revoked += removed.RowsAffected()
+		result.revoked += removed
 
 		if len(permissions) == 0 {
 			continue
 		}
-		added, err := transaction.Exec(ctx, `
+		added, err := changes.changedPermissionsByRole(ctx, transaction, true, `
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
 SELECT role.project_id, role.id, permission
 FROM public.auth_core__project_role role
 CROSS JOIN unnest($3::text[]) AS permission
 WHERE role.project_id = ANY($1::int[])
   AND role.name = $2
-ON CONFLICT (project_id, role_id, permission) DO NOTHING`, projects, role, permissions)
+ON CONFLICT (project_id, role_id, permission) DO NOTHING
+RETURNING role_id, permission`, projects, role, permissions)
 		if err != nil {
 			return roleMapResult{}, fmt.Errorf("grant permissions for %s: %w", role, err)
 		}
-		result.granted += added.RowsAffected()
+		result.granted += added
 	}
 
 	if appendUserRole {
@@ -355,7 +368,8 @@ ON CONFLICT (project_id, role_id, permission) DO NOTHING`, projects, role, permi
 		// they do not already hold — the reference's `append_user_role`, which
 		// walks `get_users_roles_in_project` and re-writes each user's role
 		// list. Set-based here, and it only ADDS: nobody loses a role.
-		tag, err := transaction.Exec(ctx, `
+		rows, err := transaction.Query(ctx, `
+WITH assigned AS (
 INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 SELECT role.project_id, member.user_id, role.id
 FROM public.auth_core__project_role role
@@ -366,15 +380,36 @@ JOIN (
 ) AS member ON member.project_id = role.project_id
 WHERE role.project_id = ANY($1::int[])
   AND role.name = ANY($2::text[])
-ON CONFLICT (project_id, user_id, role_id) DO NOTHING`, projects, roleNames)
+ON CONFLICT (project_id, user_id, role_id) DO NOTHING
+RETURNING role_id
+)
+SELECT role.name, count(*)
+FROM assigned JOIN public.auth_core__project_role role ON role.id = assigned.role_id
+GROUP BY role.name`, projects, roleNames)
 		if err != nil {
 			return roleMapResult{}, fmt.Errorf("append user roles: %w", err)
 		}
-		result.rolesAssigned = tag.RowsAffected()
+		for rows.Next() {
+			var role string
+			var assigned int64
+			if err := rows.Scan(&role, &assigned); err != nil {
+				rows.Close()
+				return roleMapResult{}, fmt.Errorf("append user roles: %w", err)
+			}
+			result.rolesAssigned += assigned
+			changes.role(role).assigned = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return roleMapResult{}, fmt.Errorf("append user roles: %w", err)
+		}
 	}
 
 	if err := guard.Check(ctx, transaction); err != nil {
 		return roleMapResult{}, err
+	}
+	if err := h.appendPushEvents(ctx, transaction, r, caller.UserID, target, "", changes); err != nil {
+		return roleMapResult{}, fmt.Errorf("record the permission push: %w", err)
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return roleMapResult{}, fmt.Errorf("commit user-project permission update: %w", err)

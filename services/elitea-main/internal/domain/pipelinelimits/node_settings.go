@@ -66,9 +66,12 @@ var NodeSettingsRefusalTexts = map[string]string{
 var settingsFamilies = map[string][]string{
 	"aggregate":      {"on_error", "error_transition", "always_output_data", "execute_once"},
 	"code":           {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
+	"llm":            {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
+	"mcp":            {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
 	"router":         {"on_error", "error_transition", "always_output_data", "execute_once"},
 	"split_out":      {"on_error", "error_transition", "always_output_data", "execute_once"},
 	"state_modifier": {"on_error", "error_transition", "always_output_data", "execute_once"},
+	"toolkit":        {"retry_on_fail", "max_tries", "wait_between_tries_ms", "on_error", "error_transition", "always_output_data", "execute_once", "timeout_ms"},
 }
 
 var pauseFamilies = map[string]struct{}{"hitl": {}, "printer": {}}

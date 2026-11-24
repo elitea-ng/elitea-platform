@@ -28,6 +28,7 @@ pub(crate) struct SqlToolsetError {
 }
 
 impl SqlToolsetError {
+    #[cfg(test)]
     #[must_use]
     pub(crate) const fn code(&self) -> SqlToolsetErrorCode {
         self.code
@@ -83,7 +84,7 @@ impl From<MaterializedToolsetError> for SqlToolsetError {
     }
 }
 
-/// Build the complete capability-disabled two-tool SQL family.
+/// Build the two-tool SQL family with egress-guarded database connections.
 #[allow(clippy::needless_pass_by_value)] // Consumes one invocation's credential authority.
 pub(crate) fn build_sql_toolset(
     toolkit_name: &str,
@@ -97,7 +98,11 @@ pub(crate) fn build_sql_toolset(
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     let dialect = config.dialect();
-    let client: Arc<dyn SqlApi> = Arc::new(SqlClient::new(config));
+    let client: Arc<dyn SqlApi> = Arc::new(SqlClient::new(
+        config,
+        Arc::clone(policy.db_egress_permits()),
+        Arc::clone(policy.egress()),
+    ));
     build_with_api(toolkit_name, &selected, dialect, policy, &client)
 }
 
@@ -153,6 +158,7 @@ impl SqlToolKind {
         }
     }
 
+    #[cfg(test)]
     const fn group(self) -> &'static str {
         match self {
             Self::ExecuteSql => "execute",

@@ -1587,6 +1587,54 @@ fn budget_error(scope: BudgetScope) -> AdkError {
     )
 }
 
+const MAX_RETRY_AFTER_HEADER_BYTES: usize = 64;
+const RETRY_AFTER_CAP_MS: u64 =
+    elitea_agent_runtime::graph::node_settings::MAX_WAIT_BETWEEN_TRIES_MS;
+
+/// Parse a bounded `retry-after-ms` or standard HTTP `Retry-After` header
+/// (delta-seconds or RFC 2822 / IMF-fixdate) into milliseconds (5b-2).
+///
+/// Values above `MAX_WAIT_BETWEEN_TRIES_MS` saturate to
+/// `MAX_WAIT_BETWEEN_TRIES_MS + 1` so callers distinguish "exceeds cap" (fail
+/// typed without waiting past cap) from "absent/malformed" (`None`).
+pub(super) fn parse_retry_after_ms(
+    headers: &HeaderMap,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<u64> {
+    let cap_sentinel = |ms: u64| ms.min(RETRY_AFTER_CAP_MS.saturating_add(1));
+    if let Some(raw) = single_optional_bounded_header(headers, "retry-after-ms") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() && trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+            let ms = trimmed.parse::<u64>().unwrap_or(u64::MAX);
+            return Some(cap_sentinel(ms));
+        }
+    }
+    let raw = single_optional_bounded_header(headers, http::header::RETRY_AFTER.as_str())?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+        let secs = trimmed.parse::<u64>().unwrap_or(u64::MAX);
+        return Some(cap_sentinel(secs.saturating_mul(1_000)));
+    }
+    let target = chrono::DateTime::parse_from_rfc2822(trimmed).ok()?;
+    let delta_ms = target
+        .with_timezone(&chrono::Utc)
+        .signed_duration_since(now)
+        .num_milliseconds();
+    Some(cap_sentinel(u64::try_from(delta_ms).unwrap_or(0)))
+}
+
+fn single_optional_bounded_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let value = values.next()?;
+    if values.next().is_some() || value.len() > MAX_RETRY_AFTER_HEADER_BYTES {
+        return None;
+    }
+    value.to_str().ok()
+}
+
 pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), AdkError> {
     if response.version() != Version::HTTP_2 {
         return Err(model_error(
@@ -1625,7 +1673,14 @@ pub(super) fn validate_response_head(response: &Response<Body>) -> Result<(), Ad
                 "the model gateway rejected the admitted request",
             ),
         };
-        return Err(model_error(category, refusal.code(), message));
+        let mut error = model_error(category, refusal.code(), message);
+        if matches!(refusal, Refusal::RateLimited | Refusal::Unavailable)
+            && let Some(retry_after_ms) =
+                parse_retry_after_ms(response.headers(), chrono::Utc::now())
+        {
+            error.retry.retry_after_ms = Some(retry_after_ms);
+        }
+        return Err(error);
     }
     let media_type = single_header(response.headers(), &CONTENT_TYPE)?;
     if !media_type

@@ -160,7 +160,7 @@ export function buildTtsProps(readAloud: {
   };
 }
 
-/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down (a pure boolean-combination has no reason to live inside a component body). A17: a run in flight no longer blocks the COMPOSER — what is typed during one is QUEUED (`ChatBoxQueuedMessages`), so `isComposerBusy` (the text area + the send control) omits `isStreaming`, while `isInputLoading` keeps it for the controls that must still go inert mid-run. */
+/** `ChatBox`'s input-disable/loading derivation — extracted to keep `ChatBox`'s own complexity down. A17: streaming leaves `isComposerBusy` false for message queuing; static read-only states (`isTestPlayback`, `isActiveParticipantWithdrawn`) close the composer via `isComposerBusy`/`isDraftInputBusy` without triggering `isComposerLoading`'s spinner. */
 export function deriveChatBoxInputState(flags: {
   readonly isLoadingConversation: boolean | undefined; readonly isEditorTest?: boolean; readonly activeConversation?: ChatBoxActiveConversation | undefined;
   readonly isFetchingParticipantDetails: boolean;
@@ -172,21 +172,24 @@ export function deriveChatBoxInputState(flags: {
   readonly hasPendingHitlInterrupt: boolean;
   readonly hasPendingNodeRecovery?: boolean;
   readonly isActiveParticipantBroken: boolean; readonly isActiveParticipantWithdrawn?: boolean; // #972
-}): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly isDraftInputBusy: boolean; readonly disabledSend: boolean } {
+}): { readonly isInputLoading: boolean; readonly isComposerBusy: boolean; readonly isComposerLoading: boolean; readonly isDraftInputBusy: boolean; readonly disabledSend: boolean } {
   const isTestPlayback = Boolean(flags.isEditorTest && flags.activeConversation?.isPlayback);
-  const isComposerBusy = [isTestPlayback, flags.isLoadingConversation, flags.isFetchingParticipantDetails,
-    flags.isUploadingAttachments, flags.isUpdatingInternalToolsConfig, flags.isActiveParticipantWithdrawn, flags.isConversationSending].some(Boolean);
-  const disabledSend =
-    !flags.hasChatInput ||
-    isComposerBusy ||
+  const isComposerLoading = [flags.isLoadingConversation, flags.isFetchingParticipantDetails,
+    flags.isUploadingAttachments, flags.isUpdatingInternalToolsConfig, flags.isConversationSending].some(Boolean);
+  const isComposerBusy = [isTestPlayback, isComposerLoading, flags.isActiveParticipantWithdrawn].some(Boolean);
+  const disabledSend = [
+    !flags.hasChatInput,
+    isComposerBusy,
     // An open "#" agent/pipeline picker does NOT disable Send (#6774). It
     // did, and with no picker on screen a "#" froze the composer for good.
-    flags.hasPendingHitlInterrupt || flags.hasPendingNodeRecovery ||
-    flags.isActiveParticipantBroken || Boolean(flags.isActiveParticipantWithdrawn);
+    flags.hasPendingHitlInterrupt,
+    flags.hasPendingNodeRecovery,
+    flags.isActiveParticipantBroken,
+  ].some(Boolean);
   const isDraftInputBusy = flags.isEditorTest
     ? [isTestPlayback, flags.isUploadingAttachments, flags.isUpdatingInternalToolsConfig, flags.isActiveParticipantWithdrawn, flags.isConversationSending].some(Boolean)
     : isComposerBusy;
-  return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, isDraftInputBusy, disabledSend };
+  return { isInputLoading: isComposerBusy || flags.isStreaming, isComposerBusy, isComposerLoading, isDraftInputBusy, disabledSend };
 }
 
 /** Flattens `ChatBox`'s grouped `user`/`llm`/`onDelete` props back to individual values — extracted to keep `ChatBox`'s own complexity down (each `?.` below is one fewer branch counted against the component). */

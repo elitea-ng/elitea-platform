@@ -1,0 +1,64 @@
+{
+  "areas": [
+    {
+      "id": "projects",
+      "label_key": "pages.admin.console.area.projects",
+      "items": [
+        {
+          "id": "projects",
+          "label_key": "pages.admin.console.item.projects",
+          "level": "read"
+        }
+      ]
+    },
+    {
+      "id": "models_spend",
+      "label_key": "pages.admin.console.area.models_spend",
+      "items": [
+        {
+          "id": "providers-models",
+          "label_key": "pages.admin.console.item.providers-models",
+          "level": "write"
+        },
+        {
+          "id": "models-pricing",
+          "label_key": "pages.admin.console.item.models-pricing",
+          "level": "write"
+        },
+        {
+          "id": "tool-prices",
+          "label_key": "pages.admin.console.item.tool-prices",
+          "level": "write"
+        },
+        {
+          "id": "usage",
+          "label_key": "pages.admin.console.item.usage",
+          "level": "read"
+        },
+        {
+          "id": "logs",
+          "label_key": "pages.admin.console.item.logs",
+          "level": "read"
+        },
+        {
+          "id": "llm-governance",
+          "label_key": "pages.admin.console.item.llm-governance",
+          "level": "write"
+        },
+        {
+          "id": "budgets-alerts",
+          "label_key": "pages.admin.console.item.budgets-alerts",
+          "level": "write"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "llm_manager",
+      "display_name": "LLM manager",
+      "built_in": true
+    }
+  ],
+  "elevation": null
+}

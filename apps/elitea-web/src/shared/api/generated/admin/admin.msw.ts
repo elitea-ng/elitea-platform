@@ -49,6 +49,8 @@ import { CredentialKind, PermissionTrimmingItemKind } from "../model";
 import type {
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
+  AdminConsoleDocument,
+  AdminConsoleItem,
   AdministrationRoleHistory,
   AdministrationRoleHolders,
   AgentIdentityBinding,
@@ -319,6 +321,236 @@ export const getAdminAuthUsersActionResponseMock =
     role_name: null,
     role_names: ["admin", "llm_manager"],
   });
+
+export const getGetAdminConsoleDocumentResponseMock =
+  (): AdminConsoleDocument => ({
+    areas: [
+      {
+        id: "people_access",
+        label_key: "pages.admin.console.area.people_access",
+        items: [
+          {
+            id: "users",
+            label_key: "pages.admin.console.item.users",
+            level: "write",
+          },
+          {
+            id: "identity-providers",
+            label_key: "pages.admin.console.item.identity-providers",
+            level: "write",
+          },
+          {
+            id: "scim",
+            label_key: "pages.admin.console.item.scim",
+            level: "write",
+          },
+        ],
+      },
+      {
+        id: "projects",
+        label_key: "pages.admin.console.area.projects",
+        items: [
+          {
+            id: "projects",
+            label_key: "pages.admin.console.item.projects",
+            level: "write",
+          },
+          {
+            id: "app-requests",
+            label_key: "pages.admin.console.item.app-requests",
+            level: "write",
+          },
+        ],
+      },
+      {
+        id: "models_spend",
+        label_key: "pages.admin.console.area.models_spend",
+        items: [
+          {
+            id: "providers-models",
+            label_key: "pages.admin.console.item.providers-models",
+            level: "write",
+          },
+          {
+            id: "models-pricing",
+            label_key: "pages.admin.console.item.models-pricing",
+            level: "write",
+          },
+          {
+            id: "tool-prices",
+            label_key: "pages.admin.console.item.tool-prices",
+            level: "write",
+          },
+          {
+            id: "usage",
+            label_key: "pages.admin.console.item.usage",
+            level: "write",
+          },
+          {
+            id: "logs",
+            label_key: "pages.admin.console.item.logs",
+            level: "write",
+          },
+          {
+            id: "llm-governance",
+            label_key: "pages.admin.console.item.llm-governance",
+            level: "write",
+          },
+          {
+            id: "budgets-alerts",
+            label_key: "pages.admin.console.item.budgets-alerts",
+            level: "write",
+          },
+        ],
+      },
+      {
+        id: "agents_governance",
+        label_key: "pages.admin.console.area.agents_governance",
+        items: [
+          {
+            id: "agent-registry",
+            label_key: "pages.admin.console.item.agent-registry",
+            level: "write",
+          },
+          {
+            id: "connector-requests",
+            label_key: "pages.admin.console.item.connector-requests",
+            level: "write",
+          },
+          {
+            id: "delegation-review",
+            label_key: "pages.admin.console.item.delegation-review",
+            level: "write",
+          },
+          {
+            id: "toolkits",
+            label_key: "pages.admin.console.item.toolkits",
+            level: "write",
+          },
+          {
+            id: "credential-inventory",
+            label_key: "pages.admin.console.item.credential-inventory",
+            level: "write",
+          },
+          {
+            id: "permission-trimming",
+            label_key: "pages.admin.console.item.permission-trimming",
+            level: "write",
+          },
+          {
+            id: "kill-switch",
+            label_key: "pages.admin.console.item.kill-switch",
+            level: "write",
+          },
+        ],
+      },
+      {
+        id: "security",
+        label_key: "pages.admin.console.area.security",
+        items: [
+          {
+            id: "audit-trail",
+            label_key: "pages.admin.console.item.audit-trail",
+            level: "read",
+          },
+          {
+            id: "data-retention",
+            label_key: "pages.admin.console.item.data-retention",
+            level: "write",
+          },
+        ],
+      },
+      {
+        id: "platform",
+        label_key: "pages.admin.console.area.platform",
+        items: [
+          {
+            id: "configuration",
+            label_key: "pages.admin.console.item.configuration",
+            level: "write",
+          },
+          {
+            id: "features",
+            label_key: "pages.admin.console.item.features",
+            level: "write",
+          },
+          {
+            id: "branding",
+            label_key: "pages.admin.console.item.branding",
+            level: "write",
+          },
+          {
+            id: "email",
+            label_key: "pages.admin.console.item.email",
+            level: "write",
+          },
+          {
+            id: "schedules-tasks",
+            label_key: "pages.admin.console.item.schedules-tasks",
+            level: "write",
+          },
+          {
+            id: "service-descriptors",
+            label_key: "pages.admin.console.item.service-descriptors",
+            level: "write",
+          },
+          {
+            id: "secrets",
+            label_key: "pages.admin.console.item.secrets",
+            level: "write",
+          },
+          {
+            id: "client-applications",
+            label_key: "pages.admin.console.item.client-applications",
+            level: "write",
+          },
+        ],
+      },
+    ],
+    roles: [
+      {
+        name: "super_admin",
+        display_name: "Global administrator",
+        built_in: true,
+      },
+    ],
+    elevation: null,
+  });
+
+export const getGetAdminConsoleItemResponseMock = (): AdminConsoleItem => ({
+  id: "budgets-alerts",
+  area: "models_spend",
+  label_key: "pages.admin.console.item.budgets-alerts",
+  area_label_key: "pages.admin.console.area.models_spend",
+  available: true,
+  granting_roles: [
+    {
+      name: "super_admin",
+      display_name: "Global administrator",
+      built_in: true,
+      level: "write",
+    },
+    {
+      name: "admin",
+      display_name: "Platform administrator",
+      built_in: true,
+      level: "write",
+    },
+    {
+      name: "llm_manager",
+      display_name: "LLM manager",
+      built_in: true,
+      level: "write",
+    },
+    {
+      name: "project_administrator",
+      display_name: "Project administrator (all projects)",
+      built_in: true,
+      level: "read",
+    },
+    { name: "budget_reader", built_in: false, level: "read" },
+  ],
+});
 
 export const getListAdministrationRoleHoldersResponseMock =
   (): AdministrationRoleHolders => ({
@@ -4477,6 +4709,58 @@ export const getAdminAuthUsersActionMockHandler = (
   );
 };
 
+export const getGetAdminConsoleDocumentMockHandler = (
+  overrideResponse?:
+    | AdminConsoleDocument
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AdminConsoleDocument> | AdminConsoleDocument),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/console",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminConsoleDocumentResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetAdminConsoleItemMockHandler = (
+  overrideResponse?:
+    | AdminConsoleItem
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AdminConsoleItem> | AdminConsoleItem),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/console/items/:itemId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAdminConsoleItemResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListAdministrationRoleHoldersMockHandler = (
   overrideResponse?:
     | AdministrationRoleHolders
@@ -7326,6 +7610,8 @@ export const getAdminMock = () => [
   getAdministrationUserDeleteMockHandler(),
   getListAdminAuthUsersMockHandler(),
   getAdminAuthUsersActionMockHandler(),
+  getGetAdminConsoleDocumentMockHandler(),
+  getGetAdminConsoleItemMockHandler(),
   getListAdministrationRoleHoldersMockHandler(),
   getListAdministrationRoleHistoryMockHandler(),
   getListUserModeRolesMockHandler(),

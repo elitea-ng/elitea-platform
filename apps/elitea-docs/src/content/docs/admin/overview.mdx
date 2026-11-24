@@ -55,3 +55,13 @@ There is no LiteLLM section. LiteLLM has been replaced by a standalone gateway s
 ## What each page can and cannot decide
 
 `window`-injected permission flags in the console are presentation only: they decide what the sidebar shows, never what a request is allowed to do. Every read and write is re-authorized on the server against the actual permission that route requires. A typed URL to a page your account cannot use still reaches it — and still gets refused there.
+
+## What the console shows follows your roles
+
+The server states what the console may show in one capability document, `GET /api/v2/admin/console`. It lists the six areas of the console (People and access, Projects, Models and spend, Agents and governance, Security and Platform), the items of each area that your roles open, and for each item whether you can change it (`write`) or only look at it (`read`). It also lists your administration roles. An item that none of your roles opens is not in the document, and an area with no such item is not either.
+
+The document is computed from the same permission table that the server's checks use, so the console and the server cannot disagree about what a role may do. It names roles, never permissions and never people. If you hold no administration role, the document is empty rather than refused, so the console can tell "you have no access" apart from "the request failed".
+
+`GET /api/v2/admin/console/items/{item_id}` names the roles, built-in and custom, that open one item, so a page you cannot open can tell you which role to ask for. It names no administrator.
+
+The console's navigation moves to the document in a later release. Until then the sidebar reads the permission list described above. Like that list, the document only decides what to show: the server still checks every request.
