@@ -436,9 +436,10 @@ func mappingReferencesVariable(node *yaml.Node, target string) bool {
 			if !ok {
 				continue
 			}
-			if k == "type" {
+			switch k {
+			case "type":
 				kind = v
-			} else if k == "value" {
+			case "value":
 				val = v
 			}
 		}

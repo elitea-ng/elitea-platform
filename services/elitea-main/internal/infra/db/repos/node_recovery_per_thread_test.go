@@ -354,8 +354,8 @@ func TestNodeRecoveryFanoutChildVisitRefusesForeignActorAndForeignProject(t *tes
 						t.Fatalf("lockPublicRecoveryScope missing predicate %q: %s", pred, q.sql)
 					}
 				}
-				if len(q.args) != 3 || q.args[0] != sub.Selector.ResponseMessageID || q.args[1] != sub.Selector.ProjectID || q.args[2] != sub.Selector.ActorUserID {
-					t.Fatalf("lockPublicRecoveryScope args=%v want=[%v %v %v]", q.args, sub.Selector.ResponseMessageID, sub.Selector.ProjectID, sub.Selector.ActorUserID)
+				if len(q.args) != 3 || q.args[0] != sub.ResponseMessageID || q.args[1] != sub.ProjectID || q.args[2] != sub.ActorUserID {
+					t.Fatalf("lockPublicRecoveryScope args=%v want=[%v %v %v]", q.args, sub.ResponseMessageID, sub.ProjectID, sub.ActorUserID)
 				}
 			}
 		})

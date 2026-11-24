@@ -13,18 +13,6 @@ type currentNodeRecoveryVisit struct {
 	revision   uint64
 }
 
-// Caller must hold the exact job lock. All statuses participate in current visit
-// selection; historical eligible actions may not supersede a newer stopped visit.
-func lockLatestNodeRecoveryVisit(ctx context.Context, tx sqlExecutor, executionID string, generation uint64) (currentNodeRecoveryVisit, error) {
-	var current currentNodeRecoveryVisit
-	err := tx.QueryRow(ctx, `SELECT activation_id,journal_revision FROM elitea_runtime.node_recovery_visits
-WHERE execution_id=$1 AND generation=$2 ORDER BY created_at DESC,journal_revision DESC,graph_thread ASC,activation_id DESC LIMIT 1 FOR UPDATE`, executionID, int64(generation)).Scan(&current.activation, &current.revision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return currentNodeRecoveryVisit{}, storage.ErrContentRejected
-	}
-	return current, err
-}
-
 // Caller must hold the exact job lock. Selects and locks the latest visit on the
 // target activation's own graph_thread (FU-071) across all statuses so sibling
 // fan-out threads do not block each other while historical visits on the same

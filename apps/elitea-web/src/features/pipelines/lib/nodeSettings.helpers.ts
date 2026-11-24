@@ -234,11 +234,33 @@ const reducerIn = (document: YamlPipelineDocument) => (key: string): string | un
   return reducer === 'overwrite' ? undefined : reducer;
 };
 
+function mappingHasKey(mapping: unknown, key: string): boolean {
+  return isRecord(mapping) && Object.hasOwn(mapping, key);
+}
+
 function mappingReferencesVariable(mapping: unknown, target: string): boolean {
   if (!isRecord(mapping)) return false;
   return Object.values(mapping).some(
     (entry) => isRecord(entry) && entry['type'] === 'variable' && entry['value'] === target,
   );
+}
+
+function ownedFanoutCrossesNodeErrors(node: YamlPipelineNode): boolean {
+  if (strings(node.input).includes(NODE_ERRORS_KEY) || strings(node.output).includes(NODE_ERRORS_KEY)) {
+    return true;
+  }
+  return node.type === 'llm'
+    && (mappingHasKey(node['input_mapping'], NODE_ERRORS_KEY) || mappingReferencesVariable(node['input_mapping'], NODE_ERRORS_KEY));
+}
+
+function nodeCrossesNodeErrorsBoundary(node: YamlPipelineNode, owned: ReadonlySet<string>): boolean {
+  if (node.type === 'agent' && (mappingHasKey(node['input_mapping'], NODE_ERRORS_KEY) || strings(node.output).includes(NODE_ERRORS_KEY))) {
+    return true;
+  }
+  if (node.type === 'map' && (strings(node['broadcast']).includes(NODE_ERRORS_KEY) || strings(node['outputs']).includes(NODE_ERRORS_KEY))) {
+    return true;
+  }
+  return owned.has(node.id) && ownedFanoutCrossesNodeErrors(node);
 }
 
 /** C3 and C4: only a document whose nodes continue on error owns `node_errors`. */
@@ -248,22 +270,7 @@ function nodeErrorsIssue(document: YamlPipelineDocument, owned: ReadonlySet<stri
   if (declared !== undefined && (declared.type !== 'list' || reducerIn(document)(NODE_ERRORS_KEY) !== 'append')) {
     return issue(undefined, 'node_errors_type', `state.${NODE_ERRORS_KEY}`);
   }
-  const mapping = (document.nodes ?? []).find((node) => {
-    let crosses = false;
-    if (node.type === 'agent') {
-      crosses = (isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY))
-        || strings(node.output).includes(NODE_ERRORS_KEY);
-    } else if (node.type === 'map') {
-      crosses = strings(node['broadcast']).includes(NODE_ERRORS_KEY)
-        || strings(node['outputs']).includes(NODE_ERRORS_KEY);
-    }
-    if (!crosses && owned.has(node.id)) {
-      crosses = strings(node.input).includes(NODE_ERRORS_KEY)
-        || strings(node.output).includes(NODE_ERRORS_KEY)
-        || (node.type === 'llm' && ((isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY)) || mappingReferencesVariable(node['input_mapping'], NODE_ERRORS_KEY)));
-    }
-    return crosses;
-  });
+  const mapping = (document.nodes ?? []).find((node) => nodeCrossesNodeErrorsBoundary(node, owned));
   return mapping === undefined ? undefined : issue(mapping.id, 'node_errors_nested_mapping', 'input_mapping');
 }
 
