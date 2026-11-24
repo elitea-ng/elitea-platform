@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "یہ آپ کی رسائی کے بارے میں جواب نہیں ہے۔ تھوڑی دیر بعد دوبارہ کوشش کریں۔",
   "pages.admin.console.error.retry": "دوبارہ کوشش کریں",
   "pages.admin.console.error.title": "کنسول لوڈ نہیں ہو سکا",
-  "pages.admin.console.loading": "کنسول لوڈ ہو رہا ہے…"
+  "pages.admin.console.loading": "کنسول لوڈ ہو رہا ہے…",
+  "pages.admin.console.refused": "آپ کو انتظامی کنسول تک رسائی حاصل نہیں ہے۔"
 }

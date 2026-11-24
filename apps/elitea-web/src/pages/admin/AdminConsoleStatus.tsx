@@ -19,8 +19,19 @@ import { t } from '@/shared/i18n';
 import { SIDE_BAR_WIDTH_REM } from '@/shared/ui/layout/sidebarWidth';
 
 export interface AdminConsoleStatusProps {
-  readonly status: 'pending' | 'error';
+  readonly status: 'pending' | 'error' | 'refused';
   readonly onRetry: () => void;
+}
+
+/** The server refused the document itself: an answer about access, so no retry is offered. */
+function ConsoleRefused(): ReactNode {
+  return (
+    <Box role="alert" data-testid="admin-console-refused">
+      <Typography component="p" variant="labelMedium" sx={{ margin: 0 }}>
+        {t('pages.admin.console.refused', 'You do not have access to the administration console.')}
+      </Typography>
+    </Box>
+  );
 }
 
 function ConsoleError({ onRetry }: { readonly onRetry: () => void }): ReactNode {
@@ -46,6 +57,19 @@ function ConsoleError({ onRetry }: { readonly onRetry: () => void }): ReactNode 
   );
 }
 
+function StatusBody({ status, onRetry }: AdminConsoleStatusProps): ReactNode {
+  if (status === 'refused') return <ConsoleRefused />;
+  if (status === 'error') return <ConsoleError onRetry={onRetry} />;
+  return (
+    <Box component="output" data-testid="admin-console-loading" sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <CircularProgress size="1rem" aria-hidden />
+      <Typography component="span" variant="bodySmall">
+        {t('pages.admin.console.loading', 'Loading the console…')}
+      </Typography>
+    </Box>
+  );
+}
+
 export function AdminConsoleStatus({ status, onRetry }: AdminConsoleStatusProps): ReactNode {
   return (
     <Box
@@ -62,20 +86,7 @@ export function AdminConsoleStatus({ status, onRetry }: AdminConsoleStatusProps)
         background: theme.vars.palette.background.sideBar,
       })}
     >
-      {status === 'pending' ? (
-        <Box
-          component="output"
-          data-testid="admin-console-loading"
-          sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-        >
-          <CircularProgress size="1rem" aria-hidden />
-          <Typography component="span" variant="bodySmall">
-            {t('pages.admin.console.loading', 'Loading the console…')}
-          </Typography>
-        </Box>
-      ) : (
-        <ConsoleError onRetry={onRetry} />
-      )}
+      <StatusBody status={status} onRetry={onRetry} />
     </Box>
   );
 }

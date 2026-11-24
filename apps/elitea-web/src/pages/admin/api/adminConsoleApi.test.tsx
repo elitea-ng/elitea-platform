@@ -15,7 +15,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, renderHook, waitFor } from '@testing-library/react';
 import { HttpResponse, http } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getGetAdminConsoleDocumentMockHandler,
@@ -98,6 +98,32 @@ describe('useAdminConsole', () => {
     expect(result.current.console.itemLevel('users')).toBeUndefined();
     expect(result.current.console.roles).toBeUndefined();
   });
+
+  it('reports a read refused with 403 as refused, which a retry cannot change', async () => {
+    server.use(http.get('*/admin/console', () => new HttpResponse(null, { status: 403 })));
+    const { result } = renderConsole();
+
+    await waitFor(() => expect(result.current.console.status).toBe('refused'));
+    await settle(400);
+    expect(result.current.console.status).toBe('refused');
+  });
+
+  it('turns a read that never answers into the error state after the timeout', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      server.use(getGetAdminConsoleDocumentMockHandler(() => new Promise(() => {})));
+      const { result } = renderConsole();
+      expect(result.current.console.status).toBe('pending');
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      await waitFor(() => expect(result.current.console.status).toBe('error'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('useAdminConsoleRefresh', () => {
@@ -139,5 +165,16 @@ describe('useAdminConsoleRefresh', () => {
     fireEvent(window, new Event('focus'));
 
     await waitFor(() => expect(consoleReads).toBe(2));
+  });
+
+  it('leaves a failed read to the retry control on focus, so the error panel does not flash', async () => {
+    server.use(http.get('*/admin/console', () => new HttpResponse(null, { status: 503 })));
+    const { result } = renderConsole();
+    await waitFor(() => expect(result.current.console.status).toBe('error'));
+
+    fireEvent(window, new Event('focus'));
+
+    await settle(100);
+    expect(result.current.console.status).toBe('error');
   });
 });

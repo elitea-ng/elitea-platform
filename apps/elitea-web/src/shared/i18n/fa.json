@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "این پاسخی درباره دسترسی شما نیست. چند لحظه دیگر دوباره تلاش کنید.",
   "pages.admin.console.error.retry": "تلاش دوباره",
   "pages.admin.console.error.title": "بارگیری کنسول ممکن نشد",
-  "pages.admin.console.loading": "در حال بارگیری کنسول…"
+  "pages.admin.console.loading": "در حال بارگیری کنسول…",
+  "pages.admin.console.refused": "شما به کنسول مدیریت دسترسی ندارید."
 }

@@ -50,8 +50,12 @@ const FORBIDDEN_BURST_MS = 250;
 type AccessLevel = 'read' | 'write';
 
 export interface AdminConsole {
-  /** `pending` until the first answer, `error` when the read failed or timed out. */
-  readonly status: 'pending' | 'error' | 'success';
+  /**
+   * `pending` until the first answer; `error` when the read failed or timed
+   * out (a retry may answer); `refused` when the server refused the read
+   * itself with 403, which IS an answer about access and no retry changes.
+   */
+  readonly status: 'pending' | 'error' | 'refused' | 'success';
   /** Reads the document again; the error state's retry control calls it. */
   readonly retry: () => void;
   /** The highest level of any item of the area; `null` when none opens; `undefined` while unknown. */
@@ -96,14 +100,21 @@ function levelOfItem(known: AdminConsoleDocument, itemId: string): AccessLevel |
   return null;
 }
 
+function isForbidden(error: unknown): boolean {
+  if (!(error instanceof EliteaApiError)) return false;
+  const { failure } = error;
+  return (failure.kind === 'http' || failure.kind === 'auth') && failure.status === 403;
+}
+
 /**
  * A refetch that fails after a success keeps the last document: the console
  * shows what it last knew, not an error over a working page. A retry after a
  * failure shows the loading state again until it answers.
  */
-function consoleStatus(known: boolean, failed: boolean, fetching: boolean): AdminConsole['status'] {
+function consoleStatus(known: boolean, error: unknown, fetching: boolean): AdminConsole['status'] {
   if (known) return 'success';
-  return failed && !fetching ? 'error' : 'pending';
+  if (fetching || error === null) return 'pending';
+  return isForbidden(error) ? 'refused' : 'error';
 }
 
 /** The capability document and its selectors. */
@@ -111,10 +122,16 @@ export function useAdminConsole(): AdminConsole {
   const query = useQuery({
     queryKey: CONSOLE_KEY,
     queryFn: ({ signal }) => readConsoleDocument(signal),
+    // The 10 s abort is THE bound before the error state: no automatic retry
+    // doubles it (the retry control and the refetch triggers are the retry),
+    // and the read runs even offline, where a paused query would show the
+    // loading state forever instead of failing.
+    retry: false,
+    networkMode: 'always',
   });
   const known = query.data;
   return {
-    status: consoleStatus(known !== undefined, query.isError, query.isFetching),
+    status: consoleStatus(known !== undefined, query.error, query.isFetching),
     retry: () => {
       void query.refetch();
     },
@@ -123,12 +140,6 @@ export function useAdminConsole(): AdminConsole {
     roles: known?.roles,
     elevation: known === undefined ? undefined : known.elevation,
   };
-}
-
-function isForbidden(error: unknown): boolean {
-  if (!(error instanceof EliteaApiError)) return false;
-  const { failure } = error;
-  return (failure.kind === 'http' || failure.kind === 'auth') && failure.status === 403;
 }
 
 /** Refetches the document, joining a read already in flight instead of restarting it. */
@@ -168,7 +179,12 @@ export function useAdminConsoleRefresh(): void {
     const unsubscribeMutations = queryClient.getMutationCache().subscribe((event) => {
       if (event.type === 'updated' && event.action.type === 'error' && isForbidden(event.action.error)) onForbidden();
     });
-    const onFocus = (): void => refetchConsole(queryClient);
+    // Focus refreshes a KNOWN document. Without one the error panel owns the
+    // retry: a focus refetch would swap it for the loading state under the
+    // click the user came back to make.
+    const onFocus = (): void => {
+      if (queryClient.getQueryData(CONSOLE_KEY) !== undefined) refetchConsole(queryClient);
+    };
     window.addEventListener('focus', onFocus);
     return () => {
       unsubscribeQueries();

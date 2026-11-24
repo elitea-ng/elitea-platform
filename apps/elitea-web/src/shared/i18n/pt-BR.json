@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "Isto não é uma resposta sobre o seu acesso. Tente novamente em instantes.",
   "pages.admin.console.error.retry": "Tentar novamente",
   "pages.admin.console.error.title": "Não foi possível carregar o console",
-  "pages.admin.console.loading": "Carregando o console…"
+  "pages.admin.console.loading": "Carregando o console…",
+  "pages.admin.console.refused": "Você não tem acesso ao console de administração."
 }

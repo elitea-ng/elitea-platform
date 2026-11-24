@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "Це не відповідь щодо вашого доступу. Спробуйте ще раз за мить.",
   "pages.admin.console.error.retry": "Спробувати ще раз",
   "pages.admin.console.error.title": "Не вдалося завантажити консоль",
-  "pages.admin.console.loading": "Завантаження консолі…"
+  "pages.admin.console.loading": "Завантаження консолі…",
+  "pages.admin.console.refused": "У вас немає доступу до консолі адміністрування."
 }

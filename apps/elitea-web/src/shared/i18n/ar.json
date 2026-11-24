@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "هذا ليس ردًا بشأن صلاحياتك. حاول مرة أخرى بعد قليل.",
   "pages.admin.console.error.retry": "حاول مرة أخرى",
   "pages.admin.console.error.title": "تعذّر تحميل وحدة التحكم",
-  "pages.admin.console.loading": "جارٍ تحميل وحدة التحكم…"
+  "pages.admin.console.loading": "جارٍ تحميل وحدة التحكم…",
+  "pages.admin.console.refused": "ليست لديك صلاحية الوصول إلى وحدة تحكم الإدارة."
 }

@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "Dit is geen antwoord over uw toegang. Probeer het zo meteen opnieuw.",
   "pages.admin.console.error.retry": "Opnieuw proberen",
   "pages.admin.console.error.title": "De console kon niet worden geladen",
-  "pages.admin.console.loading": "Console laden…"
+  "pages.admin.console.loading": "Console laden…",
+  "pages.admin.console.refused": "U hebt geen toegang tot de beheerconsole."
 }

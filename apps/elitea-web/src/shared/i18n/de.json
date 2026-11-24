@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "Dies ist keine Aussage über Ihren Zugriff. Versuchen Sie es gleich noch einmal.",
   "pages.admin.console.error.retry": "Erneut versuchen",
   "pages.admin.console.error.title": "Die Konsole konnte nicht geladen werden",
-  "pages.admin.console.loading": "Konsole wird geladen…"
+  "pages.admin.console.loading": "Konsole wird geladen…",
+  "pages.admin.console.refused": "Sie haben keinen Zugriff auf die Verwaltungskonsole."
 }

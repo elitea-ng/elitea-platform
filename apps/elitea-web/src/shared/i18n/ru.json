@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "Это не ответ о ваших правах доступа. Повторите попытку через минуту.",
   "pages.admin.console.error.retry": "Повторить",
   "pages.admin.console.error.title": "Не удалось загрузить консоль",
-  "pages.admin.console.loading": "Загрузка консоли…"
+  "pages.admin.console.loading": "Загрузка консоли…",
+  "pages.admin.console.refused": "У вас нет доступа к консоли администрирования."
 }

@@ -4984,5 +4984,6 @@
   "pages.admin.console.error.explanation": "これはアクセス権に関する回答ではありません。しばらくしてからもう一度お試しください。",
   "pages.admin.console.error.retry": "再試行",
   "pages.admin.console.error.title": "コンソールを読み込めませんでした",
-  "pages.admin.console.loading": "コンソールを読み込んでいます…"
+  "pages.admin.console.loading": "コンソールを読み込んでいます…",
+  "pages.admin.console.refused": "管理コンソールへのアクセス権がありません。"
 }

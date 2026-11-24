@@ -113,6 +113,17 @@ describe('AdminLayout with the document-driven navigation', () => {
   });
 });
 
+describe('AdminLayout when the server refuses the document itself', () => {
+  it('says so, offers no retry and shows no navigation item', async () => {
+    server.use(http.get('*/admin/console', () => new HttpResponse(null, { status: 403 })));
+    await mountLayout(true);
+
+    expect(await screen.findByTestId('admin-console-refused')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-console-retry')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^admin-nav-item-/)).toHaveLength(0);
+  });
+});
+
 describe('AdminLayout with the document-driven navigation off (until R3.2)', () => {
   it('keeps the existing navigation when the read fails', async () => {
     failConsoleRead();
