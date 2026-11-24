@@ -1,0 +1,19 @@
+{
+  "about": "The reviewed client checks by role name (ADR-0059 decision 7, story R0.13), read by roleNameLiterals.test.ts. Decisions: kept (tests the name on purpose), compat (kept for compatibility; none left since R0.8c, issue 2586, removed the single admin_role field, its AdminRole type and the single-role picker), project (a project role name, which ADR-0059 does not change), unrelated (not a role name). The server never trusts any of these: it tests admin.auth.users.super_admin.",
+  "sites": [
+    {
+      "file": "elitea-web/src/pages/admin/ProjectMemberDialog.tsx",
+      "comparison": "return roles.some((option) => option.name === 'admin') ? 'admin' : (roles[0]?.name ?? '');",
+      "count": 1,
+      "decision": "project",
+      "why": "The default project role offered when adding a project member: the project role admin, not an administration role."
+    },
+    {
+      "file": "elitea-web/src/shared/lib/nativeDevices.ts",
+      "comparison": "case 'admin':",
+      "count": 1,
+      "decision": "unrelated",
+      "why": "The revocation reason of a device session (revoke_reason admin), not a role."
+    }
+  ]
+}

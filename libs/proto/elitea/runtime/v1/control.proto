@@ -85,6 +85,14 @@ message ClaimCommandRequestV1 {
   // retry-later, so an older worker cannot run it as a fresh turn with an
   // empty question. Recovery claims keep it.
   bool idle_compaction = 21;
+  // Bounded, domain-named capabilities the claiming worker supports
+  // (for example "runtime.idle_compaction.v1"). Additive with legacy boolean
+  // fields 16 to 21 so rolling upgrades need no deployment order. At most 64
+  // unique entries, each 1 to 128 bytes of lowercase dot-separated ASCII
+  // labels. Main refuses malformed, duplicate, or oversized lists with
+  // PROTOCOL_VIOLATION and missing required capabilities with
+  // UNSUPPORTED_CAPABILITY.
+  repeated string worker_capabilities = 22;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must
@@ -140,6 +148,13 @@ message ClaimReceiptV1 {
   // it (an older Main) keeps the earlier behaviour: a continuation lost
   // before its first root save ends typed. An older worker ignores it.
   PausedWriterV1 paused_writer = 19;
+  // Bounded, domain-named capabilities Main supports for this claim
+  // (for example "runtime.toolkit_typed_refusals.v1"). Additive with legacy
+  // fields 18 and 19 so rolling upgrades need no deployment order. Set only on
+  // executable receipts (ACCEPTED, RECOVER_AGENT_MODEL_CHECKPOINT,
+  // RECOVER_NODE_VISIT). At most 64 unique entries, each 1 to 128 bytes of
+  // lowercase dot-separated ASCII labels.
+  repeated string server_capabilities = 20;
 }
 
 // PausedWriterV1 names one execution generation by its exact ids.

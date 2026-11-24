@@ -41,15 +41,29 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { PermissionCatalogueEntry } from "./permissionCatalogueEntry.zod";
+import { PermissionMatrixRoleColumn } from "./permissionMatrixRoleColumn.zod";
 import { PermissionMatrixRow } from "./permissionMatrixRow.zod";
 
 export const PermissionMatrix = zod
   .object({
     total: zod.int(),
     rows: zod.array(PermissionMatrixRow),
+    roles: zod
+      .array(PermissionMatrixRoleColumn)
+      .optional()
+      .describe(
+        "The central (administration-scope) matrix only: one entry per role column, describing it by its seed record (ADR-0059 R0.8c). Absent on a project matrix.\n",
+      ),
+    catalogue: zod
+      .array(PermissionCatalogueEntry)
+      .optional()
+      .describe(
+        "One entry per row, beside the rows rather than in them: every key of a row other than `name` is a role column, and a client sends the rows back on a save.\n",
+      ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/admin/roles.go:148-152. `total` counts the permission CATALOGUE; this endpoint is never paginated.\n",
+    "NOTE(W2): internal/api/v2/admin/roles.go:147-180. `total` counts the permission CATALOGUE; this endpoint is never paginated.\n",
   );
 
 export type PermissionMatrix = zod.input<typeof PermissionMatrix>;

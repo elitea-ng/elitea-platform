@@ -342,6 +342,22 @@ WHERE email IN (
     'e2e-suspend-webkit@autotest.local'
 );
 
+-- ── administration role fixtures (ADR-0059 R0.8c, R0.16) ─────────────────
+-- admin.users-roles.spec.ts gives one of the first two a set of roles from
+-- the Users page, one row per browser project for the reason the suspension
+-- fixtures above give. admin.llm-manager-nav.spec.ts gives one of the other
+-- two the llm_manager role and signs in as it in a context of its own (the mock takes
+-- any subject; auth.setup.ts never signs it in, so no other journey holds its
+-- session). Each journey sets the roles it needs
+-- and takes them back, so the seed gives none.
+INSERT INTO auth_core__user (email, name)
+VALUES
+    ('e2e-roles-chromium@autotest.local', 'E2E Roles Fixture chromium'),
+    ('e2e-roles-webkit@autotest.local', 'E2E Roles Fixture webkit'),
+    ('e2e-llm-manager-chromium@autotest.local', 'E2E LLM Manager chromium'),
+    ('e2e-llm-manager-webkit@autotest.local', 'E2E LLM Manager webkit')
+ON CONFLICT (email) DO NOTHING;
+
 -- ── administration-mode RBAC (unit A14) ──────────────────────────────────
 -- The ROLES are not created here any more. When A14 wrote this block,
 -- 001_initial.sql seeded `default`-mode roles only, so no persona held a single
