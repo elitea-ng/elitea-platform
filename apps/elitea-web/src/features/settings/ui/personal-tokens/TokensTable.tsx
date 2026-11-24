@@ -80,7 +80,7 @@ function selectPersonalProjectId(context: unknown): string | undefined {
 /* ── column definitions ────────────────────────────────────────────────── */
 
 interface ColumnDef {
-  id: 'name' | 'token' | 'project' | 'admin' | 'expires' | 'actions';
+  id: 'name' | 'token' | 'project' | 'administration' | 'expires' | 'actions';
   label: string;
   sortable: boolean;
 }
@@ -97,7 +97,7 @@ const COLUMNS: ColumnDef[] = [
  * The administration column (ADR-0059 R1.3b) appears only when a token has
  * administration access: for everyone else the table stays as it was.
  */
-const ADMIN_COLUMN: ColumnDef = { id: 'admin', label: t('entities.token.table.adminAccess', 'Administration'), sortable: false };
+const ADMIN_COLUMN: ColumnDef = { id: 'administration', label: t('entities.token.table.adminAccess', 'Administration'), sortable: false };
 const COLUMNS_WITH_ADMIN: ColumnDef[] = [...COLUMNS.slice(0, 3), ADMIN_COLUMN, ...COLUMNS.slice(3)];
 
 function columnsFor(tokens: readonly PersonalAccessToken[]): ColumnDef[] {
@@ -248,7 +248,7 @@ export const TokensTable = memo(function TokensTable({
         return <ExpiryCell expires={row.expires} />;
       }
 
-      if (column.id === 'admin') return <TokenAdminAccessCell token={row} />;
+      if (column.id === 'administration') return <TokenAdminAccessCell token={row} />;
 
       return '-';
     },
