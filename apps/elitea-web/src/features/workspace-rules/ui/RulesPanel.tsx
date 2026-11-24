@@ -78,7 +78,17 @@ function patternError(text: string): string | null {
   }
 }
 
-function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; busy: boolean; error: RuleLoadError | null; onSave: (draft: Draft) => void; onCancel: () => void }): React.JSX.Element {
+interface RuleFormProps {
+  initial: Draft;
+  /** The rule came from a repository: it never grants a login or hosts. */
+  fromRepository: boolean;
+  busy: boolean;
+  error: RuleLoadError | null;
+  onSave: (draft: Draft) => void;
+  onCancel: () => void;
+}
+
+function RuleForm({ initial, fromRepository, busy, error, onSave, onCancel }: RuleFormProps): React.JSX.Element {
   const [draft, setDraft] = useState(initial);
   const field = (key: Exclude<keyof Draft, 'grant'>) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
   const syntax = patternError(draft.pattern);
@@ -103,7 +113,7 @@ function RuleForm({ initial, busy, error, onSave, onCancel }: { initial: Draft; 
       <TextField size="small" label={t('workspace.rules.justification', 'Justification')} helperText={t('workspace.rules.justificationHelp', 'Shown to you and to the agent; for Forbidden, name what to do instead.')} value={draft.justification} onChange={field('justification')} />
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.match', 'Examples it must match (one per line)')} value={draft.match} onChange={field('match')} />
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.notMatch', 'Examples it must not match (one per line)')} value={draft.notMatch} onChange={field('notMatch')} />
-      {draft.decision === 'allow' && <GrantFields value={draft.grant} onChange={(grant) => setDraft((current) => ({ ...current, grant }))} />}
+      {draft.decision === 'allow' && <GrantFields value={draft.grant} fromRepository={fromRepository} onChange={(grant) => setDraft((current) => ({ ...current, grant }))} />}
       {error !== null && <LoadErrorAlert error={error} />}
       <Stack direction="row" spacing={1}>
         <Button type="submit" variant="contained" disabled={busy || draft.pattern.trim() === '' || syntax !== null}>
@@ -200,7 +210,7 @@ function RuleRow({ scope, rule, index, busy, onEdit, onDelete }: { scope: RuleSc
 function ScopeFooter({ state, editing, busy, formError, onEdit, onSave, onCancel }: ScopeSectionProps): React.JSX.Element | null {
   if (editing !== null) {
     const rule = editing.index === undefined ? undefined : state.file?.rules[editing.index];
-    return <RuleForm key={`${state.scope}-${editing.index ?? 'new'}`} initial={rule === undefined ? EMPTY_DRAFT : draftOf(rule)} busy={busy} error={formError} onSave={onSave} onCancel={onCancel} />;
+    return <RuleForm key={`${state.scope}-${editing.index ?? 'new'}`} initial={rule === undefined ? EMPTY_DRAFT : draftOf(rule)} fromRepository={rule?.origin !== undefined} busy={busy} error={formError} onSave={onSave} onCancel={onCancel} />;
   }
   if (state.file === null) return null;
   return (

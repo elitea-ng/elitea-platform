@@ -302,7 +302,9 @@ can find, not what a script starts; the sandbox is the boundary.
 `hosts` runs the command it matches with the network on, but only through a
 per-command filtering proxy on `127.0.0.1` that admits `CONNECT host:443` to
 the listed hosts (the Seatbelt profile allows outbound to that one port, and
-no DNS). With `credential: "gh"` the host itself runs
+no DNS). The proxy connects only to a listed name's public addresses: a
+name that resolves to loopback, private, link-local or other non-public
+addresses is refused (403) like an unlisted one. With `credential: "gh"` the host itself runs
 `gh auth token --hostname github.com` (outside the sandbox, scrubbed
 environment, cached 5 minutes in memory) and gives the command `GH_TOKEN`,
 an empty read-only `GH_CONFIG_DIR` and the notifier/prompt switches off; the
@@ -317,13 +319,21 @@ falls to the next layer (asked):
 - its conditions hold, and the credential profile admits it
   (`gh auth|alias|config|extension …` never);
 - the sandbox enforces the list: macOS Seatbelt only. On Linux and Windows
-  the rule grants nothing and is an ordinary offline allow.
+  the rule grants nothing and is an ordinary offline allow;
+- the host runs grants (the desktop's sessions and `rules_explain` do; a
+  host that does not gets no grant, and the network call is asked);
+- every other layer allows the call too: a path rule that asks, or a
+  sandbox that would leave the command unconfined, keeps the grant out
+  (the call is asked and runs without one).
 
 A load refuses `credential`, `hosts` or `conditions` on a
 `prompt`/`forbidden` rule, `network: true` beside a grant, an IP or a port in
 `hosts`, more than 32 hosts, an unknown profile, and a `credential` whose
 pattern does not start with exactly the profile's program word. An import
-drops `credential` and `hosts` (with a warning) and keeps `conditions`. A
+drops `credential` and `hosts` (with a warning) and keeps `conditions`; the
+rules panel offers no login or hosts on a rule with `origin`. When a hook
+still asks about a granted command, the question names the grant ("run a
+command with the gh login, network limited to …"). A
 granted command's tool result carries `grant` ("the gh login, network
 limited to …") and `network: {allowed_hosts, refused_hosts}`. When the
 rules change while such a command waits for an answer, it does not run

@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "سندباکس {{sandbox}} را بدون دسترسی شبکه پوشش می‌دهد",
   "workspace.rules.grantTitle": "ورود و شبکه (macOS)",
   "workspace.rules.grantHelp": "برنامه با ورود ذخیره‌شده‌اش اجرا می‌شود و فقط به میزبان‌های فهرست‌شده دسترسی دارد، همچنان درون سندباکس. فقط قوانین خود شما می‌توانند این کار را بکنند، هرگز قوانین مخزن. در جاهای دیگر این فرمان‌ها مثل قبل پرسیده می‌شوند.",
+  "workspace.rules.grantRepository": "این قانون از مخزن آمده است، پس هرگز ورود یا میزبانی نمی‌دهد. برای دادن آن‌ها، قانون خودتان را اضافه کنید.",
   "workspace.rules.credential": "ورود",
   "workspace.rules.credentialNone": "هیچ",
   "workspace.rules.credentialGh": "ورود GitHub CLI (gh)",

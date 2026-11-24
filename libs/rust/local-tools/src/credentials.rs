@@ -37,6 +37,9 @@ pub const TOKEN_TTL: Duration = Duration::from_mins(5);
 /// How long the host waits for the program to print its login.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The most a login fetch may print: a token is far shorter.
+const MAX_TOKEN_OUTPUT: usize = 8 * 1024;
+
 /// What replaces a secret in a command's output.
 pub const REDACTED: &str = "[REDACTED]";
 
@@ -244,16 +247,26 @@ impl CredentialCache {
             let mut chunk = [0u8; 1024];
             loop {
                 let count = stdout.read(&mut chunk).await?;
-                if count == 0 || bytes.len() > 8192 {
+                if count == 0 {
                     break;
                 }
                 bytes.extend_from_slice(&chunk[..count]);
+                if bytes.len() > MAX_TOKEN_OUTPUT {
+                    // Far more than a login: stop it rather than wait on
+                    // a pipe nobody reads.
+                    drop(stdout);
+                    let _ = child.kill().await;
+                    return Ok::<_, std::io::Error>((None, bytes));
+                }
             }
             let status = child.wait().await?;
-            Ok::<_, std::io::Error>((status, bytes))
+            Ok((Some(status), bytes))
         };
         let Ok(Ok((status, bytes))) = tokio::time::timeout(FETCH_TIMEOUT, read).await else {
             return Err(refused("it did not print a login in time"));
+        };
+        let Some(status) = status else {
+            return Err(refused("it printed more than a login"));
         };
         let value = String::from_utf8(bytes).unwrap_or_default();
         let value = value.trim();
@@ -525,5 +538,16 @@ mod tests {
         assert!(cache.fetch(&GH, &odd, &[]).await.is_err());
         let missing = dir.path().join("absent");
         assert!(cache.fetch(&GH, &missing, &[]).await.is_err());
+        // A program that prints far more than a login (and would block on
+        // a full pipe) is stopped at once, not waited for.
+        let chatty = write("gh-chatty", "yes gho_banner | head -c 1000000; sleep 30");
+        let started = std::time::Instant::now();
+        let error = cache.fetch(&GH, &chatty, &[]).await.expect_err("refused");
+        assert!(
+            error.message().contains("more than a login"),
+            "{}",
+            error.message()
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }

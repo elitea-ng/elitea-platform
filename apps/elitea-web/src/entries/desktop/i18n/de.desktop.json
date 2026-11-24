@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Deckt die {{sandbox}}-Sandbox ab, ohne Netzwerkzugriff",
   "workspace.rules.grantTitle": "Anmeldung und Netzwerk (macOS)",
   "workspace.rules.grantHelp": "Das Programm läuft mit seiner gespeicherten Anmeldung und erreicht nur die aufgeführten Hosts, weiterhin in der Sandbox. Das können nur Ihre eigenen Regeln, nie die eines Repositorys. Anderswo werden solche Befehle wie bisher erfragt.",
+  "workspace.rules.grantRepository": "Diese Regel stammt aus dem Repository und gibt daher nie eine Anmeldung oder Hosts frei. Legen Sie dafür eine eigene Regel an.",
   "workspace.rules.credential": "Anmeldung",
   "workspace.rules.credentialNone": "Keine",
   "workspace.rules.credentialGh": "Die Anmeldung der GitHub CLI (gh)",

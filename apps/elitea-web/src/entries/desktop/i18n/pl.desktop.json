@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Obejmuje piaskownicę {{sandbox}}, bez dostępu do sieci",
   "workspace.rules.grantTitle": "Logowanie i sieć (macOS)",
   "workspace.rules.grantHelp": "Program działa z zapisanym logowaniem i łączy się tylko z wymienionymi hostami, nadal w piaskownicy. Mogą to tylko Twoje własne reguły, nigdy reguły repozytorium. Gdzie indziej takie polecenia są pytane jak dotąd.",
+  "workspace.rules.grantRepository": "Ta reguła pochodzi z repozytorium, więc nigdy nie udostępnia logowania ani hostów. Aby je przyznać, dodaj własną regułę.",
   "workspace.rules.credential": "Logowanie",
   "workspace.rules.credentialNone": "Brak",
   "workspace.rules.credentialGh": "Logowanie GitHub CLI (gh)",

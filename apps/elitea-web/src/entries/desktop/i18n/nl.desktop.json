@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Dekt de {{sandbox}}-sandbox, zonder netwerktoegang",
   "workspace.rules.grantTitle": "Aanmelding en netwerk (macOS)",
   "workspace.rules.grantHelp": "Laat het programma draaien met zijn opgeslagen aanmelding en alleen de genoemde hosts bereiken, nog steeds in de sandbox. Alleen je eigen regels kunnen dit, die van een repository nooit. Elders worden zulke opdrachten zoals voorheen gevraagd.",
+  "workspace.rules.grantRepository": "Deze regel komt uit de repository en geeft dus nooit een aanmelding of hosts. Voeg daarvoor een eigen regel toe.",
   "workspace.rules.credential": "Aanmelding",
   "workspace.rules.credentialNone": "Geen",
   "workspace.rules.credentialGh": "De aanmelding van GitHub CLI (gh)",

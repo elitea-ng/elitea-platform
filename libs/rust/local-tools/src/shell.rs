@@ -130,8 +130,10 @@ pub struct ShellConfig {
     /// Run a command with what a rule grants it ([`CommandSpec::grant`]:
     /// a credential profile's login and a network limited to named hosts,
     /// #3005/#3006). Off by default: only the desktop host turns it on; the
-    /// cloud executor's runner never does. Off, a granted command is
-    /// refused (nothing runs).
+    /// cloud executor's runner never does. A session tells its rules engine
+    /// ([`crate::approvals::RulesEngine::set_credential_grants`]): off, no
+    /// rule grants anything, so a network call is asked; and a spec that
+    /// still carries a grant is refused here (nothing runs).
     pub credential_grants: bool,
     /// The logins fetched for grants in this session (in memory only).
     pub credentials: CredentialCache,

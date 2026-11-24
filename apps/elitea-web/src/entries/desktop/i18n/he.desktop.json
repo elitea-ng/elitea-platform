@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "מכסה את ארגז החול {{sandbox}}, ללא גישה לרשת",
   "workspace.rules.grantTitle": "התחברות ורשת (macOS)",
   "workspace.rules.grantHelp": "התוכנית רצה עם ההתחברות השמורה שלה ומגיעה רק למארחים שברשימה, עדיין בתוך ארגז החול. רק הכללים שלך יכולים לעשות זאת, לעולם לא כללים של מאגר. במקומות אחרים פקודות כאלה נשאלות כמו קודם.",
+  "workspace.rules.grantRepository": "הכלל הזה הגיע מהמאגר, ולכן הוא אף פעם לא מעניק התחברות או מארחים. כדי להעניק אותם, הוסף כלל משלך.",
   "workspace.rules.credential": "התחברות",
   "workspace.rules.credentialNone": "ללא",
   "workspace.rules.credentialGh": "ההתחברות של GitHub CLI (gh)",

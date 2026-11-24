@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "تغطي صندوق الحماية {{sandbox}}، دون وصول إلى الشبكة",
   "workspace.rules.grantTitle": "تسجيل الدخول والشبكة (macOS)",
   "workspace.rules.grantHelp": "يتيح للبرنامج العمل بتسجيل دخوله المحفوظ والوصول إلى المضيفين المذكورين فقط، داخل وضع الحماية دائمًا. قواعدك أنت فقط يمكنها ذلك، ولا يمكن لقواعد المستودع أبدًا. في الأنظمة الأخرى تُطلب الموافقة على هذه الأوامر كما في السابق.",
+  "workspace.rules.grantRepository": "جاءت هذه القاعدة من المستودع، لذا لا تمنح أبدًا تسجيل دخول أو مضيفين. لمنحها، أضف قاعدة خاصة بك.",
   "workspace.rules.credential": "تسجيل الدخول",
   "workspace.rules.credentialNone": "لا شيء",
   "workspace.rules.credentialGh": "تسجيل دخول GitHub CLI (gh)",

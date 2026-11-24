@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "بغیر نیٹ ورک رسائی کے {{sandbox}} سینڈ باکس کا احاطہ کرتا ہے",
   "workspace.rules.grantTitle": "لاگ اِن اور نیٹ ورک (macOS)",
   "workspace.rules.grantHelp": "پروگرام اپنے محفوظ لاگ اِن کے ساتھ چلتا ہے اور سینڈ باکس کے اندر رہتے ہوئے صرف درج شدہ ہوسٹس تک پہنچتا ہے۔ یہ صرف آپ کے اپنے قواعد کر سکتے ہیں، ریپوزیٹری کے قواعد کبھی نہیں۔ دوسری جگہوں پر ایسی کمانڈز پہلے کی طرح پوچھی جاتی ہیں۔",
+  "workspace.rules.grantRepository": "یہ قاعدہ ریپوزیٹری سے آیا ہے، اس لیے یہ کبھی لاگ اِن یا ہوسٹس نہیں دیتا۔ انہیں دینے کے لیے اپنا قاعدہ شامل کریں۔",
   "workspace.rules.credential": "لاگ اِن",
   "workspace.rules.credentialNone": "کوئی نہیں",
   "workspace.rules.credentialGh": "GitHub CLI (gh) کا لاگ اِن",

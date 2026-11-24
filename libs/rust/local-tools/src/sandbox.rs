@@ -502,6 +502,13 @@ pub fn prepare(
     }
     match platform_prepare(request, argv, config)? {
         Some(prepared) => Ok(prepared),
+        // No sandbox here after all (no `sandbox-exec`): a command limited
+        // to named hosts is refused even where unenforced commands run.
+        None if request.network_proxy.is_some() => Err(ToolError::new(
+            ErrorCode::SandboxUnavailable,
+            "the sandbox that limits a command's network to named hosts is not available \
+             on this machine; nothing ran",
+        )),
         None if config.allow_unenforced => unwrapped(argv, Enforcement::None),
         None => Err(ToolError::new(
             ErrorCode::SandboxUnavailable,

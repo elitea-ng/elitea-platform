@@ -27,7 +27,14 @@ export interface GrantDraft {
   graphqlQueryOnly: boolean;
 }
 
-export const EMPTY_GRANT: GrantDraft = { credential: '', hosts: '', forbidFlags: '', requireFlags: '', flagValues: '', graphqlQueryOnly: false };
+export const EMPTY_GRANT: GrantDraft = {
+  credential: '',
+  hosts: '',
+  forbidFlags: '',
+  requireFlags: '',
+  flagValues: '',
+  graphqlQueryOnly: false,
+};
 
 const words = (text: string): string[] => text.split(/[\s,]+/u).filter((word) => word !== '');
 
@@ -66,7 +73,7 @@ function conditionsOf(draft: GrantDraft): RuleConditions | undefined {
   return Object.keys(conditions).length > 0 ? conditions : undefined;
 }
 
-/** `rule` with the draft's grant and conditions (none on a rule that is not an Allow). */
+/** `rule` with the draft's grant and conditions (none on a rule that is not an Allow; no login or hosts on a repository's rule). */
 export function withGrant(rule: PrefixRule, draft: GrantDraft): PrefixRule {
   const out: PrefixRule = { ...rule };
   delete out.credential;
@@ -75,8 +82,9 @@ export function withGrant(rule: PrefixRule, draft: GrantDraft): PrefixRule {
   if ((rule.decision ?? 'allow') !== 'allow') return out;
   const hosts = words(draft.hosts);
   const conditions = conditionsOf(draft);
-  if (draft.credential !== '') out.credential = draft.credential;
-  if (hosts.length > 0) out.hosts = hosts;
+  // A repository's rule never grants (the host ignores it): keep only its conditions.
+  if (rule.origin === undefined && draft.credential !== '') out.credential = draft.credential;
+  if (rule.origin === undefined && hosts.length > 0) out.hosts = hosts;
   if (conditions !== undefined) out.conditions = conditions;
   // The network a grant gives is its hosts' only: never the whole network too.
   if (out.credential !== undefined || out.hosts !== undefined) delete out.network;
@@ -84,7 +92,12 @@ export function withGrant(rule: PrefixRule, draft: GrantDraft): PrefixRule {
 }
 
 /** The conditions, in parts the list shows (`values`: `-X GET|HEAD`). */
-export function conditionParts(conditions: RuleConditions | undefined): { forbid: string[]; require: string[]; values: string[]; graphql: boolean } {
+export function conditionParts(conditions: RuleConditions | undefined): {
+  forbid: string[];
+  require: string[];
+  values: string[];
+  graphql: boolean;
+} {
   return {
     forbid: conditions?.forbid_flags ?? [],
     require: conditions?.require_flags ?? [],

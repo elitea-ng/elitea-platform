@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Couvre le bac à sable {{sandbox}}, sans accès au réseau",
   "workspace.rules.grantTitle": "Connexion et réseau (macOS)",
   "workspace.rules.grantHelp": "Le programme s’exécute avec sa connexion enregistrée et n’atteint que les hôtes listés, toujours dans le bac à sable. Seules vos propres règles le permettent, jamais celles d’un dépôt. Ailleurs, ces commandes sont demandées comme avant.",
+  "workspace.rules.grantRepository": "Cette règle vient du dépôt : elle n’accorde donc jamais de connexion ni d’hôtes. Pour les accorder, ajoutez une règle à vous.",
   "workspace.rules.credential": "Connexion",
   "workspace.rules.credentialNone": "Aucune",
   "workspace.rules.credentialGh": "La connexion de GitHub CLI (gh)",

@@ -1252,6 +1252,9 @@ pub struct RulesEngine {
     computer_threads: Mutex<HashMap<String, ThreadComputer>>,
     /// The thread the running turn belongs to ([`Self::set_thread`]).
     thread: RwLock<Option<String>>,
+    /// Whether the host runs a granted command with its grant
+    /// ([`Self::set_credential_grants`]); off, no rule grants anything.
+    grants: AtomicBool,
 }
 
 fn path_glob(glob: &str) -> Option<GlobMatcher> {
@@ -1356,6 +1359,7 @@ impl RulesEngine {
             unattended: RwLock::new(None),
             answers: RwLock::new(None),
             host_intel_session: AtomicBool::new(false),
+            grants: AtomicBool::new(false),
             computer_threads: Mutex::default(),
             thread: RwLock::new(None),
             confined: true,
@@ -1437,6 +1441,14 @@ impl RulesEngine {
             .into_iter()
             .filter(|choice| choice.tool.is_computer())
             .collect()
+    }
+
+    /// Whether the host runs a granted command with its hosts and login
+    /// ([`crate::shell::ShellConfig::credential_grants`]). Off (the
+    /// default), a rule's `hosts` and `credential` grant nothing: the rule
+    /// covers only what its own bounds say, so a network call is asked.
+    pub fn set_credential_grants(&self, on: bool) {
+        self.grants.store(on, Ordering::Relaxed);
     }
 
     /// Switch the permission profile (a turn's start, or the person
@@ -2139,6 +2151,7 @@ impl RulesEngine {
         rule: &PrefixRule,
     ) -> bool {
         call.tool == ToolKind::RunCommand
+            && self.grants.load(Ordering::Relaxed)
             && !call.background
             && !call.loopback
             && !call.keep_alive
@@ -2180,6 +2193,10 @@ impl RulesEngine {
                 hosts: rule.effective_hosts(),
             })
             .filter(|grant| !grant.hosts.is_empty())
+            // Only for a call the layers allow outright: a path rule, an
+            // unconfined sandbox or any other layer that asks keeps the
+            // grant out of the question (and the answer).
+            .filter(|_| self.decide_by_layers(call).verdict == Verdict::Allow)
     }
 
     /// The command prefix rules' decision (workspace file, then the

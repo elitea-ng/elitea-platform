@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Охватывает песочницу {{sandbox}} без доступа к сети",
   "workspace.rules.grantTitle": "Вход и сеть (macOS)",
   "workspace.rules.grantHelp": "Программа запускается с сохранённым входом и обращается только к указанным хостам, по-прежнему в песочнице. Это могут только ваши собственные правила, но никогда правила репозитория. В других системах такие команды запрашиваются, как и раньше.",
+  "workspace.rules.grantRepository": "Это правило пришло из репозитория, поэтому оно никогда не выдаёт вход или хосты. Чтобы выдать их, добавьте своё правило.",
   "workspace.rules.credential": "Вход",
   "workspace.rules.credentialNone": "Нет",
   "workspace.rules.credentialGh": "Вход GitHub CLI (gh)",

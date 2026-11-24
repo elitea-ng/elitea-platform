@@ -847,6 +847,9 @@ impl LocalSession {
             config.settings,
             config.choices,
         )?);
+        // A rule's hosts and login answer a network call only where the
+        // shell runs it with them (#3005-#3008).
+        engine.set_credential_grants(shell.credential_grants);
         let approvals: Arc<dyn ApprovalChannel> =
             Arc::new(RuleApprovals::new(engine.clone(), config.prompt));
         let checkpoints = Checkpoints::open_with(
@@ -1819,6 +1822,27 @@ impl LocalSession {
         ))
     }
 
+    /// What a rule the person wrote grants `spec` (a login, the network
+    /// limited to named hosts), and whether it then runs unconfined.
+    ///
+    /// The sandbox this command gets decides whether it is confined: one
+    /// that cannot hide what it denies (no sandbox, Landlock alone, a
+    /// bubblewrap walk cut short), or that cannot keep a loopback command
+    /// to the loopback, makes it the person's call, every time. A sandbox
+    /// that cannot run at all is refused after the rules, as before. A
+    /// grant is kept only while the rules still allow the call as judged
+    /// with that sandbox: an unconfined call is asked, and runs without one.
+    fn resolve_grant(&self, call: &mut ToolCall, spec: &mut CommandSpec) {
+        if self.shell.credential_grants {
+            spec.grant = self.engine.command_grant(call);
+        }
+        call.unconfined = shell::runs_unconfined(&self.workspace, &self.shell, spec);
+        if spec.grant.is_some() && self.engine.command_grant(call).is_none() {
+            spec.grant = None;
+            call.unconfined = shell::runs_unconfined(&self.workspace, &self.shell, spec);
+        }
+    }
+
     /// The rules may have changed while the person decided: a command runs
     /// with what they grant it now, or not at all.
     fn unchanged_grant(&self, call: &ToolCall, spec: &CommandSpec) -> ToolResult<()> {
@@ -1884,25 +1908,18 @@ impl LocalSession {
             computer: None,
             browser: None,
         };
-        // What a rule the person wrote grants it (a login, the network
-        // limited to named hosts): the sandbox below is judged with it.
-        if self.shell.credential_grants {
-            spec.grant = self.engine.command_grant(&call);
-        }
-        // The sandbox this command gets now decides whether it is
-        // confined: one that cannot hide what it denies (no sandbox,
-        // Landlock alone, a bubblewrap walk cut short), or that cannot keep
-        // a loopback command to the loopback, makes it the person's call,
-        // every time. A sandbox that cannot run at all is refused after the
-        // rules, as before.
-        let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
-        call.unconfined = unconfined;
+        self.resolve_grant(&mut call, &mut spec);
+        let unconfined = call.unconfined;
         let message = match (background, args.tty) {
-            (_, true) => "run a command on a terminal",
-            (true, false) => "run a command in the background",
-            (false, false) => "run a command",
+            (_, true) => "run a command on a terminal".to_owned(),
+            (true, false) => "run a command in the background".to_owned(),
+            (false, false) => match &spec.grant {
+                // Disclosed if anything (a hook) still asks.
+                Some(grant) => format!("run a command with {}", grant.describe()),
+                None => "run a command".to_owned(),
+            },
         };
-        self.authorize(call_id, call.clone(), message).await?;
+        self.authorize(call_id, call.clone(), &message).await?;
         self.unchanged_grant(&call, &spec)?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;

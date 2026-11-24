@@ -2248,6 +2248,8 @@ impl AgentHost {
             Arc::new(choices),
         )
         .map_err(unavailable)?;
+        // As a turn's session would decide it: rule grants on.
+        engine.set_credential_grants(true);
         engine.set_command_rules(self.rules.load(workspace_id).rules);
         Ok(engine.decide(&call))
     }

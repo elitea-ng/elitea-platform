@@ -76,7 +76,8 @@ A rule can also list **hosts** without a login, for example a `curl` rule limite
 - A rule from a repository never grants a login or hosts, imported or not. **Always allow** never writes one either.
 - A Forbidden or Ask rule, your organization's denied commands, plan mode and a policy that turns the network off all still win.
 - A command with pipes or lists, a background or terminal command, and `gh auth`, `gh config`, `gh alias` and `gh extension` never get the login.
-- Hosts are names, never IP addresses or ports, and at most 32 per rule.
+- Hosts are names, never IP addresses or ports, and at most 32 per rule. A listed name that resolves to this computer or your local network is refused: the command reaches public addresses only.
+- A command that is asked for another reason (a path rule, or a sandbox that cannot confine it here) gets no login; it runs as before if you allow it.
 
 <Note>
 The host list is enforced on **macOS** only. On **Linux** the sandbox gives a command its own network, which cannot reach the app's proxy; on **Windows** commands have no sandbox yet. There a rule with a login or hosts grants nothing: it is an ordinary Allow rule without the network, and a command that asks for the network is asked as before.

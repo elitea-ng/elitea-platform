@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "ネットワークアクセスなしの {{sandbox}} サンドボックスが対象",
   "workspace.rules.grantTitle": "ログインとネットワーク (macOS)",
   "workspace.rules.grantHelp": "プログラムを保存済みのログインで実行し、サンドボックス内のまま、記載したホストにのみ接続させます。これができるのはあなた自身のルールだけで、リポジトリのルールにはできません。他の環境では、これまでどおり確認されます。",
+  "workspace.rules.grantRepository": "このルールはリポジトリから来たため、ログインやホストを付与することはありません。付与するには、自分のルールを追加してください。",
   "workspace.rules.credential": "ログイン",
   "workspace.rules.credentialNone": "なし",
   "workspace.rules.credentialGh": "GitHub CLI (gh) のログイン",

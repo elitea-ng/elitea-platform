@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Cubre el sandbox {{sandbox}}, sin acceso a la red",
   "workspace.rules.grantTitle": "Inicio de sesión y red (macOS)",
   "workspace.rules.grantHelp": "Permite que el programa se ejecute con su inicio de sesión guardado y llegue solo a los hosts indicados, siempre dentro del sandbox. Solo tus propias reglas pueden hacerlo; las de un repositorio nunca. En otros sistemas estos comandos se preguntan como antes.",
+  "workspace.rules.grantRepository": "Esta regla viene del repositorio, así que nunca concede un inicio de sesión ni hosts. Para concederlos, añade una regla propia.",
   "workspace.rules.credential": "Inicio de sesión",
   "workspace.rules.credentialNone": "Ninguno",
   "workspace.rules.credentialGh": "El inicio de sesión de GitHub CLI (gh)",

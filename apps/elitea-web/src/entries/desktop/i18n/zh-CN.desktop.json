@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "涵盖 {{sandbox}} 沙盒，无网络访问",
   "workspace.rules.grantTitle": "登录与网络 (macOS)",
   "workspace.rules.grantHelp": "让程序使用其已保存的登录运行，并且仍在沙盒中，只能访问列出的主机。只有你自己的规则可以这样做，仓库的规则永远不行。在其他系统上，此类命令仍会像以前一样询问。",
+  "workspace.rules.grantRepository": "此规则来自仓库，因此永远不会授予登录或主机。如需授予，请添加你自己的规则。",
   "workspace.rules.credential": "登录",
   "workspace.rules.credentialNone": "无",
   "workspace.rules.credentialGh": "GitHub CLI (gh) 登录",

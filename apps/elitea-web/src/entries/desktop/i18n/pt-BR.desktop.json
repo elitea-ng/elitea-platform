@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "Cobre o sandbox {{sandbox}}, sem acesso à rede",
   "workspace.rules.grantTitle": "Login e rede (macOS)",
   "workspace.rules.grantHelp": "Permite que o programa rode com o login salvo e acesse só os hosts listados, ainda dentro do sandbox. Só as suas próprias regras podem fazer isso; as de um repositório nunca. Em outros sistemas esses comandos são perguntados como antes.",
+  "workspace.rules.grantRepository": "Esta regra veio do repositório, então nunca concede login nem hosts. Para concedê-los, adicione uma regra sua.",
   "workspace.rules.credential": "Login",
   "workspace.rules.credentialNone": "Nenhum",
   "workspace.rules.credentialGh": "O login do GitHub CLI (gh)",

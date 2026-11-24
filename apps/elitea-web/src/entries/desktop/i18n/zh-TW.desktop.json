@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "涵蓋 {{sandbox}} 沙箱，無網路存取",
   "workspace.rules.grantTitle": "登入與網路 (macOS)",
   "workspace.rules.grantHelp": "讓程式使用其已儲存的登入執行，並且仍在沙箱中，只能連線到列出的主機。只有你自己的規則可以這樣做，儲存庫的規則永遠不行。在其他系統上，這類指令仍會像以前一樣詢問。",
+  "workspace.rules.grantRepository": "此規則來自儲存庫，因此永遠不會授予登入或主機。如需授予，請新增你自己的規則。",
   "workspace.rules.credential": "登入",
   "workspace.rules.credentialNone": "無",
   "workspace.rules.credentialGh": "GitHub CLI (gh) 登入",

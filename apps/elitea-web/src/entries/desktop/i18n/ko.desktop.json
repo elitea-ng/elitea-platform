@@ -642,6 +642,7 @@
   "workspace.rules.bounds": "네트워크 액세스 없이 {{sandbox}} 샌드박스 적용",
   "workspace.rules.grantTitle": "로그인 및 네트워크 (macOS)",
   "workspace.rules.grantHelp": "프로그램이 저장된 로그인으로 실행되고, 샌드박스 안에서 나열된 호스트에만 접속합니다. 이 작업은 내 규칙만 할 수 있으며 저장소의 규칙은 절대 할 수 없습니다. 다른 환경에서는 이전처럼 확인합니다.",
+  "workspace.rules.grantRepository": "이 규칙은 저장소에서 왔으므로 로그인이나 호스트를 부여하지 않습니다. 부여하려면 직접 규칙을 추가하세요.",
   "workspace.rules.credential": "로그인",
   "workspace.rules.credentialNone": "없음",
   "workspace.rules.credentialGh": "GitHub CLI (gh) 로그인",

@@ -190,6 +190,20 @@ describe('RulesPanel', { timeout: testTimeout(20_000) }, () => {
     expect(within(saved).getByTestId('rule-conditions')).toHaveTextContent('Only when: never -f --input; only -X GET; GraphQL queries only');
   });
 
+  it('never offers a login or hosts on a rule imported from the repository', async () => {
+    const ipc = createFakeRulesIpc(VIEW);
+    const user = userEvent.setup({ delay: null });
+    renderWithTheme(<RulesPanel ipc={ipc} workspaceId="w1" />);
+    await screen.findByTestId('rule-workspace-1');
+    await user.click(screen.getByRole('button', { name: 'Import these rules' }));
+    const imported = await screen.findByTestId('rule-workspace-2');
+    await user.click(within(imported).getByRole('button', { name: 'Edit' }));
+    const scope = screen.getByTestId('rules-scope-workspace');
+    expect(within(scope).getByTestId('rule-grant-repository')).toBeInTheDocument();
+    expect(within(scope).queryByRole('combobox', { name: 'Login' })).toBeNull();
+    expect(within(scope).getByLabelText(/Flags it must not have/)).toBeInTheDocument();
+  });
+
   it('offers the login and hosts on Allow rules only', async () => {
     const user = userEvent.setup({ delay: null });
     renderWithTheme(<RulesPanel ipc={createFakeRulesIpc(VIEW)} workspaceId="w1" />);

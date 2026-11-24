@@ -8,7 +8,11 @@ const READ_ONLY_API: PrefixRule = {
   pattern: ['gh', 'api'],
   credential: 'gh',
   hosts: ['api.github.com', 'github.com'],
-  conditions: { forbid_flags: ['-f', '--input'], flag_values: { '-X': ['GET'], '--method': ['GET', 'HEAD'] }, graphql: 'query' },
+  conditions: {
+    forbid_flags: ['-f', '--input'],
+    flag_values: { '-X': ['GET'], '--method': ['GET', 'HEAD'] },
+    graphql: 'query',
+  },
 };
 
 describe('grant fields', () => {
@@ -26,24 +30,59 @@ describe('grant fields', () => {
   });
 
   it('reads words separated by spaces, commas and lines', () => {
-    const rule = withGrant({ pattern: ['gh', 'pr', 'create'] }, { ...EMPTY_GRANT, credential: 'gh', hosts: 'api.github.com,\n uploads.github.com', requireFlags: '--draft', flagValues: '-X GET\n\n-X HEAD' });
+    const rule = withGrant(
+      { pattern: ['gh', 'pr', 'create'] },
+      {
+        ...EMPTY_GRANT,
+        credential: 'gh',
+        hosts: 'api.github.com,\n uploads.github.com',
+        requireFlags: '--draft',
+        flagValues: '-X GET\n\n-X HEAD',
+      },
+    );
     expect(rule.hosts).toEqual(['api.github.com', 'uploads.github.com']);
     expect(rule.conditions).toEqual({ require_flags: ['--draft'], flag_values: { '-X': ['GET', 'HEAD'] } });
   });
 
   it('drops an empty grant and never keeps the whole network beside one', () => {
-    expect(withGrant({ pattern: ['cargo'], network: true }, EMPTY_GRANT)).toEqual({ pattern: ['cargo'], network: true });
-    expect(withGrant({ pattern: ['gh'], network: true }, { ...EMPTY_GRANT, credential: 'gh' })).toEqual({ pattern: ['gh'], credential: 'gh' });
+    expect(withGrant({ pattern: ['cargo'], network: true }, EMPTY_GRANT)).toEqual({
+      pattern: ['cargo'],
+      network: true,
+    });
+    expect(withGrant({ pattern: ['gh'], network: true }, { ...EMPTY_GRANT, credential: 'gh' })).toEqual({
+      pattern: ['gh'],
+      credential: 'gh',
+    });
+  });
+
+  it('keeps only the conditions on a repository’s rule', () => {
+    const draft = grantDraftOf(READ_ONLY_API);
+    expect(withGrant({ pattern: ['gh', 'api'], origin: 'repository' }, draft)).toEqual({
+      pattern: ['gh', 'api'],
+      origin: 'repository',
+      conditions: READ_ONLY_API.conditions,
+    });
   });
 
   it('grants nothing on a rule that is not an Allow', () => {
     const draft = grantDraftOf(READ_ONLY_API);
-    expect(withGrant({ pattern: ['gh', 'api'], decision: 'prompt' }, draft)).toEqual({ pattern: ['gh', 'api'], decision: 'prompt' });
-    expect(withGrant({ ...READ_ONLY_API, decision: 'forbidden' }, draft)).toEqual({ pattern: ['gh', 'api'], decision: 'forbidden' });
+    expect(withGrant({ pattern: ['gh', 'api'], decision: 'prompt' }, draft)).toEqual({
+      pattern: ['gh', 'api'],
+      decision: 'prompt',
+    });
+    expect(withGrant({ ...READ_ONLY_API, decision: 'forbidden' }, draft)).toEqual({
+      pattern: ['gh', 'api'],
+      decision: 'forbidden',
+    });
   });
 
   it('lists the conditions', () => {
-    expect(conditionParts(READ_ONLY_API.conditions)).toEqual({ forbid: ['-f', '--input'], require: [], values: ['-X GET', '--method GET|HEAD'], graphql: true });
+    expect(conditionParts(READ_ONLY_API.conditions)).toEqual({
+      forbid: ['-f', '--input'],
+      require: [],
+      values: ['-X GET', '--method GET|HEAD'],
+      graphql: true,
+    });
     expect(conditionParts(undefined)).toEqual({ forbid: [], require: [], values: [], graphql: false });
   });
 });

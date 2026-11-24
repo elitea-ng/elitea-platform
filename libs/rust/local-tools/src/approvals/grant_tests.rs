@@ -76,7 +76,26 @@ fn fixture(policy: LocalWorkPolicy, workspace: &str, user: &str) -> Fixture {
         workspace: RuleSet::parse("workspace", workspace.as_bytes()).expect("workspace rules"),
         user: RuleSet::parse("user", user.as_bytes()).expect("user rules"),
     });
+    engine.set_credential_grants(true);
     Fixture { _dir: dir, engine }
+}
+
+/// A host that does not run grants (the default) gets none, and the rule's
+/// hosts do not cover a network call: it is asked, never run with the
+/// whole network.
+#[test]
+fn a_host_without_grants_grants_nothing() {
+    let fixture = fixture(policy(true), NONE, USER_RULES);
+    fixture.engine.set_credential_grants(false);
+    for command in ["gh pr list", "curl https://api.example.com/x"] {
+        let call = run(command, true);
+        assert_eq!(fixture.engine.command_grant(&call), None, "{command}");
+        assert_eq!(
+            fixture.engine.decide(&call).verdict,
+            Verdict::Ask,
+            "{command}"
+        );
+    }
 }
 
 const NONE: &str = r#"{"version":1}"#;
@@ -252,7 +271,10 @@ fn only_a_plain_foreground_command_is_granted() {
     let mut tests = run("gh pr list", true);
     tests.tool = ToolKind::RunTests;
     tests.runner = Some("cargo".to_owned());
-    asked.extend([background, loopback, kept, full, tests]);
+    // A sandbox that cannot hide what it denies: asked, so no grant.
+    let mut unconfined = run("gh pr list", true);
+    unconfined.unconfined = true;
+    asked.extend([background, loopback, kept, full, tests, unconfined]);
     for call in asked {
         assert_eq!(engine.command_grant(&call), None, "{call:?}");
         assert_ne!(engine.decide(&call).verdict, Verdict::Allow, "{call:?}");

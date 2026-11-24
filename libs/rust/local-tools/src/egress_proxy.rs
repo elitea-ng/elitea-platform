@@ -20,7 +20,7 @@
 //! tunnel stop when the [`EgressProxy`] is dropped (the command ended).
 
 use std::collections::BTreeSet;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -47,6 +47,13 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// The one port a tunnel may reach.
 const HTTPS_PORT: u16 = 443;
+
+/// How long the accept loop waits after an accept error.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+/// The longest refused target kept for the report (a DNS name's length,
+/// plus the port).
+const MAX_SHOWN: usize = 253 + 6;
 
 /// The proxy user name in the command's proxy URL.
 const PROXY_USER: &str = "elitea";
@@ -241,7 +248,12 @@ async fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
     loop {
         tokio::select! {
             accepted = listener.accept() => {
-                let Ok((stream, _)) = accepted else { continue };
+                let Ok((stream, _)) = accepted else {
+                    // A persistent error (no file descriptors left) would
+                    // spin: back off before the next accept.
+                    tokio::time::sleep(ACCEPT_BACKOFF).await;
+                    continue;
+                };
                 if tunnels.len() >= MAX_TUNNELS {
                     drop(stream);
                     continue;
@@ -319,6 +331,97 @@ fn same(left: &str, right: &str) -> bool {
             == 0
 }
 
+/// Record a refused target for the report: bounded in count and length,
+/// printable ASCII only (it reaches the model in the tool result).
+fn refuse(shared: &Shared, host: &str, port: &str) {
+    let shown: String = format!("{host}:{port}")
+        .chars()
+        .map(|c| if c.is_ascii_graphic() { c } else { '?' })
+        .take(MAX_SHOWN)
+        .collect();
+    if let Ok(mut refused) = shared.refused.lock()
+        && refused.len() < MAX_HOSTS * 4
+    {
+        refused.insert(shown);
+    }
+}
+
+/// Why the proxy did not reach a listed host.
+enum Connect {
+    /// It resolves only to loopback, private, link-local or other
+    /// non-public addresses: never reached from outside the sandbox.
+    Private,
+    Failed,
+}
+
+/// Whether `ip` is a public unicast address. The proxy runs outside the
+/// sandbox, so a listed name that resolves to this machine or the local
+/// network (a wildcard entry, a rebinding resolver) must not open a path
+/// there.
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || a == 0
+                || (a == 100 && (64..128).contains(&b)) // shared address space
+                || (a == 192 && b == 0 && v4.octets()[2] == 0)
+                || a >= 240)
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public(IpAddr::V4(v4));
+            }
+            let first = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (first & 0xfe00) == 0xfc00 // unique local
+                || (first & 0xffc0) == 0xfe80 // link-local
+                || (first == 0x2001 && v6.segments()[1] == 0x0db8)) // documentation
+        }
+    }
+}
+
+/// Connect to a listed host: through the resolver, to its public
+/// addresses only; or to the fixed test upstream.
+async fn connect(upstream: &Upstream, name: &str) -> Result<TcpStream, Connect> {
+    let addrs: Vec<SocketAddr> = match upstream {
+        Upstream::Fixed(addr) => vec![*addr],
+        Upstream::System => {
+            let resolved = tokio::net::lookup_host((name, HTTPS_PORT))
+                .await
+                .map_err(|_| Connect::Failed)?;
+            let all: Vec<SocketAddr> = resolved.collect();
+            let public: Vec<SocketAddr> = all
+                .iter()
+                .copied()
+                .filter(|addr| is_public(addr.ip()))
+                .collect();
+            if public.is_empty() {
+                return Err(if all.is_empty() {
+                    Connect::Failed
+                } else {
+                    Connect::Private
+                });
+            }
+            public
+        }
+    };
+    for addr in addrs {
+        if let Ok(stream) = TcpStream::connect(addr).await {
+            return Ok(stream);
+        }
+    }
+    Err(Connect::Failed)
+}
+
 async fn serve(mut stream: TcpStream, shared: Arc<Shared>) {
     let head = tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut stream)).await;
     let Ok(Some(head)) = head else {
@@ -341,25 +444,23 @@ async fn serve(mut stream: TcpStream, shared: Arc<Shared>) {
         .trim_end_matches(']')
         .to_ascii_lowercase();
     if port.parse::<u16>().ok() != Some(HTTPS_PORT) || !host_allowed(&shared.hosts, &shown) {
-        if let Ok(mut refused) = shared.refused.lock()
-            && refused.len() < MAX_HOSTS * 4
-        {
-            refused.insert(format!("{shown}:{port}"));
-        }
+        refuse(&shared, &shown, &port);
         reply(&mut stream, "403 Forbidden").await;
         return;
     }
     let name = shown.strip_suffix('.').unwrap_or(&shown).to_owned();
-    let upstream = tokio::time::timeout(CONNECT_TIMEOUT, async {
-        match &shared.upstream {
-            Upstream::System => TcpStream::connect((name.as_str(), HTTPS_PORT)).await,
-            Upstream::Fixed(addr) => TcpStream::connect(addr).await,
+    let upstream = tokio::time::timeout(CONNECT_TIMEOUT, connect(&shared.upstream, &name)).await;
+    let mut upstream = match upstream {
+        Ok(Ok(upstream)) => upstream,
+        Ok(Err(Connect::Private)) => {
+            refuse(&shared, &shown, &port);
+            reply(&mut stream, "403 Forbidden").await;
+            return;
         }
-    })
-    .await;
-    let Ok(Ok(mut upstream)) = upstream else {
-        reply(&mut stream, "502 Bad Gateway").await;
-        return;
+        Ok(Err(Connect::Failed)) | Err(_) => {
+            reply(&mut stream, "502 Bad Gateway").await;
+            return;
+        }
     };
     if stream
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -540,6 +641,54 @@ mod tests {
                 "evil.example.com:443".to_owned()
             ]
         );
+    }
+
+    /// A listed name that resolves to this machine or the local network is
+    /// never reached: the proxy runs outside the sandbox.
+    #[tokio::test]
+    async fn non_public_addresses_are_never_reached() {
+        for private in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(!super::is_public(private.parse().expect("ip")), "{private}");
+        }
+        for public in ["140.82.112.6", "1.1.1.1", "2606:4700::1111"] {
+            assert!(super::is_public(public.parse().expect("ip")), "{public}");
+        }
+        assert!(matches!(
+            super::connect(&Upstream::System, "localhost").await,
+            Err(super::Connect::Private)
+        ));
+    }
+
+    /// A refused target is kept short and printable: it reaches the model.
+    #[tokio::test]
+    async fn a_refused_target_is_bounded() {
+        let proxy = EgressProxy::start(vec!["api.github.com".to_owned()])
+            .await
+            .expect("proxy");
+        let auth = auth(&proxy);
+        let long = "a".repeat(4_000);
+        let (status, _) = ask(
+            &proxy,
+            &format!("CONNECT {long}\u{1b}[2J.example.com:443 HTTP/1.1\r\nProxy-Authorization: {auth}\r\n\r\n"),
+        )
+        .await;
+        assert!(status.contains("403"), "{status}");
+        let refused = proxy.report().refused_hosts;
+        assert_eq!(refused.len(), 1);
+        assert!(refused[0].len() <= 259, "{}", refused[0].len());
+        assert!(refused[0].chars().all(|c| c.is_ascii_graphic()));
     }
 
     #[tokio::test]
