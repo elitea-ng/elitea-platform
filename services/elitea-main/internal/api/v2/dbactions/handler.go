@@ -136,7 +136,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, _, actorID, target, ok := h.admit(w, r, projectID)
+	rule, _, actorID, target, ok := h.admit(w, r, projectID, 0)
 	if !ok {
 		return
 	}
@@ -158,12 +158,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, revision, actorID, target, ok := h.admit(w, r, projectID)
+	rule, revision, actorID, target, ok := h.admit(w, r, projectID, ruleID)
 	if !ok {
-		return
-	}
-	if revision == nil || *revision <= 0 {
-		apierr.Write(w, apierr.BadRequest("DB action rule revision is required: send the revision you read"))
 		return
 	}
 	updated, err := h.repo.Update(r.Context(), projectID, ruleID, actorID, rule, *revision, target)
@@ -189,10 +185,11 @@ type writeRequest struct {
 	Revision        *int64  `json:"revision"`
 }
 
-// admit decodes, validates, checks configuration access, and egress-checks the
-// referenced SQL configuration's host/port. Returns the validated target so
-// Create/Update can verify inside the FOR SHARE lock that no drift occurred.
-func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64) (dbaction.Rule, *int64, int64, repos.DBActionConfigurationTarget, bool) {
+// admit decodes, validates, checks configuration access, verifies project-scoped
+// rule existence for updates, and egress-checks the referenced SQL configuration's
+// host/port. Returns the validated target so Create/Update can verify inside the
+// FOR SHARE lock that no drift occurred.
+func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID, updateRuleID int64) (dbaction.Rule, *int64, int64, repos.DBActionConfigurationTarget, bool) {
 	var zeroTarget repos.DBActionConfigurationTarget
 	user, _ := auth.UserFromContext(r.Context())
 	actorID, ok := user.OwningUserID()
@@ -245,6 +242,10 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64)
 		apierr.Write(w, ruleRefusal(err))
 		return dbaction.Rule{}, nil, 0, zeroTarget, false
 	}
+	if updateRuleID > 0 && (body.Revision == nil || *body.Revision <= 0) {
+		apierr.Write(w, apierr.BadRequest("DB action rule revision is required: send the revision you read"))
+		return dbaction.Rule{}, nil, 0, zeroTarget, false
+	}
 	if rule.ConfigurationID > 0 {
 		if h.resolver == nil {
 			apierr.Write(w, apierr.Forbidden("insufficient permissions"))
@@ -253,6 +254,15 @@ func (h *Handler) admit(w http.ResponseWriter, r *http.Request, projectID int64)
 		resolution, err := h.resolver.ResolvePermissions(r.Context(), user, auth.PermissionModeDefault, strconv.FormatInt(projectID, 10))
 		if err != nil || !slices.Contains(resolution.Permissions, permissionConfigurationDetails) {
 			apierr.Write(w, apierr.Forbidden("a DB action rule referencing a configuration requires configuration access"))
+			return dbaction.Rule{}, nil, 0, zeroTarget, false
+		}
+	}
+	if updateRuleID > 0 {
+		// Verify rule existence in this project before touching configuration
+		// lookup or egress DNS so cross-project and nonexistent rule updates
+		// answer the same 404 without probing external destinations.
+		if _, err := h.repo.Get(r.Context(), projectID, updateRuleID); err != nil {
+			h.fail(w, r, "update", err)
 			return dbaction.Rule{}, nil, 0, zeroTarget, false
 		}
 	}

@@ -219,16 +219,17 @@ INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data
 	// Other user's private, non-sql type, mismatched dialect, secret placeholder in username,
 	// missing, and foreign project all refused.
 	for _, tc := range []struct {
-		label string
-		cfgID int32
+		label    string
+		ruleName string
+		cfgID    int32
 	}{
-		{"other user private", 731},
-		{"non-sql type", 732},
-		{"dialect mismatch", 733},
-		{"secret placeholder in username", 734},
-		{"missing config", 999},
+		{"other user private", "bad.other_user_private", 731},
+		{"non-sql type", "bad.non_sql_type", 732},
+		{"dialect mismatch", "bad.dialect_mismatch", 733},
+		{"secret placeholder in username", "bad.secret_username", 734},
+		{"missing config", "bad.missing_config", 999},
 	} {
-		rule := testDBActionRule("bad." + strings.ReplaceAll(tc.label, " ", "_"))
+		rule := testDBActionRule(tc.ruleName)
 		rule.ConfigurationID = tc.cfgID
 		if _, err := repo.Create(ctx, 1, 7, rule, testDBActionRuleTarget); !errors.Is(err, ErrDBActionRuleConfigurationInvalid) {
 			t.Errorf("%s: err = %v, want ErrDBActionRuleConfigurationInvalid", tc.label, err)
@@ -312,15 +313,23 @@ func TestDBActionCredentialsPostgres_FreezeAndMaterialize(t *testing.T) {
 	repo, pool := newDBActionRulesTestRepo(t)
 	ctx := dbActionRuleContext(t)
 
+	seedAuthCoreTables(t, pool)
 	if _, err := pool.Exec(ctx, `
-INSERT INTO public.auth_core__user (id, email, name) VALUES
- (7, 'db-admin@test.local', 'db-admin'),
- (8, 'db-outsider@test.local', 'db-outsider')
-ON CONFLICT (id) DO NOTHING;
-INSERT INTO public.auth_core__project_role (project_id, name) VALUES (1, 'admin') ON CONFLICT (project_id, name) DO NOTHING;
-INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
-SELECT 1, 7, id FROM public.auth_core__project_role WHERE project_id = 1 AND name = 'admin'
-ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS public.auth_core__role (
+    id serial PRIMARY KEY, name varchar(64) NOT NULL, mode varchar(64) NOT NULL, UNIQUE (name, mode));
+CREATE TABLE IF NOT EXISTS public.auth_core__role_permission (
+    id serial PRIMARY KEY, role_id integer NOT NULL REFERENCES public.auth_core__role (id) ON DELETE CASCADE,
+    permission varchar(64), UNIQUE (role_id, permission));
+CREATE TABLE IF NOT EXISTS public.auth_core__project_role_permission (
+    id serial PRIMARY KEY, project_id integer NOT NULL,
+    role_id integer REFERENCES public.auth_core__project_role (id) ON UPDATE CASCADE ON DELETE CASCADE,
+    permission text NOT NULL, UNIQUE (project_id, role_id, permission));
+INSERT INTO public.auth_core__user (id, email, name, suspended) VALUES
+ (7, 'db-admin@test.local', 'db-admin', false),
+ (8, 'db-outsider@test.local', 'db-outsider', false);
+INSERT INTO public.auth_core__project_role (id, project_id, name) VALUES (9301, 1, 'admin');
+INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission) VALUES (1, 9301, 'configurations.configuration.details');
+INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id) VALUES (1, 7, 9301);
 INSERT INTO p_1.configuration (id,uuid,project_id,elitea_title,type,section,data,meta,shared,status_ok,source,author_id,created_at)
 VALUES (739,'60000000-0000-4000-8000-000000000739',1,'unsealed_sql','sql','credentials',
  '{"host":"warehouse.example.com","port":5432,"username":"etl_ro","password":"legacy-plaintext-password"}'::jsonb,

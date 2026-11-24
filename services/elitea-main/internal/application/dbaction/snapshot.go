@@ -347,13 +347,25 @@ func parseSQLHost(raw any) (string, error) {
 			return "", ErrInvalid
 		}
 		for i := 0; i < len(label); i++ {
-			c := label[i]
-			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+			if !isDNSLabelByte(label[i]) {
 				return "", ErrInvalid
 			}
 		}
 	}
 	return host, nil
+}
+
+func isDNSLabelByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z':
+		return true
+	case b >= 'A' && b <= 'Z':
+		return true
+	case b >= '0' && b <= '9':
+		return true
+	default:
+		return b == '-'
+	}
 }
 
 func parseSQLRequiredText(raw any, maxBytes int) (string, error) {
@@ -386,10 +398,13 @@ func validHexDigest(value string) bool {
 		return false
 	}
 	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if !isLowerHexByte(value[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func isLowerHexByte(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')
 }

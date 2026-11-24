@@ -26,7 +26,9 @@ type fakeRepo struct {
 	expected       int64
 	expectedTarget repos.DBActionConfigurationTarget
 	target         repos.DBActionConfigurationTarget
+	getErr         error
 	lookupErr      error
+	lookupCalls    int
 	err            error
 	names          []repos.DBActionRuleName
 }
@@ -35,6 +37,9 @@ func (f *fakeRepo) List(context.Context, int64) ([]repos.DBActionRuleRecord, err
 	return []repos.DBActionRuleRecord{}, f.err
 }
 func (f *fakeRepo) Get(_ context.Context, projectID, ruleID int64) (repos.DBActionRuleRecord, error) {
+	if f.getErr != nil {
+		return repos.DBActionRuleRecord{}, f.getErr
+	}
 	if f.err != nil {
 		return repos.DBActionRuleRecord{}, f.err
 	}
@@ -50,6 +55,7 @@ func (f *fakeRepo) ListNames(context.Context, int64) ([]repos.DBActionRuleName, 
 	return []repos.DBActionRuleName{}, nil
 }
 func (f *fakeRepo) LookupConfigurationTarget(context.Context, int64, int64, int32, string) (repos.DBActionConfigurationTarget, error) {
+	f.lookupCalls++
 	if f.lookupErr != nil {
 		return repos.DBActionConfigurationTarget{}, f.lookupErr
 	}
@@ -351,5 +357,22 @@ func TestMalformedIDsAuditAndConfigurationPermission(t *testing.T) {
 	hManageOnly := NewHandler(repo, testGuard(t, ""), grantManageOnly{})
 	if resp := serve(t, hManageOnly, http.MethodPost, rulesPath, validBody()); resp.Code != http.StatusForbidden || len(repo.created) != 0 {
 		t.Fatalf("manage-only admin bound configuration_id: %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestUpdateMissingRuleReturnsNotFoundBeforeConfigOrEgressCheck(t *testing.T) {
+	repo := &fakeRepo{
+		getErr:    repos.ErrDBActionRuleNotFound,
+		lookupErr: repos.ErrDBActionRuleConfigurationInvalid,
+	}
+	h := NewHandler(repo, testGuard(t, ""), grantAll{})
+	body := validBody()
+	body["revision"] = 1
+	resp := serve(t, h, http.MethodPut, rulesPath+"/999999", body)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("PUT missing rule = %d, want 404: %s", resp.Code, resp.Body.String())
+	}
+	if repo.lookupCalls != 0 {
+		t.Fatalf("LookupConfigurationTarget called %d times for missing rule, want 0", repo.lookupCalls)
 	}
 }

@@ -222,8 +222,10 @@ SELECT $1, $2, id FROM public.auth_core__project_role WHERE project_id = $1 AND 
 	if statusCross != http.StatusNotFound || statusCross != statusMissing || responseCross != responseMissing {
 		t.Fatalf("cross-project rule id answered %d %s; missing %d %s", statusCross, responseCross, statusMissing, responseMissing)
 	}
-	if status, _ := serve("token-17304", http.MethodPut, crossProject, body(revision())); status != http.StatusNotFound {
-		t.Fatalf("cross-project update answered %d, want 404", status)
+	putCrossStatus, putCrossBody := serve("token-17304", http.MethodPut, crossProject, body(revision()))
+	putMissingStatus, putMissingBody := serve("token-17304", http.MethodPut, "/api/v2/dbactions/prompt_lib/2/rules/999999", body(revision()))
+	if putCrossStatus != http.StatusNotFound || putCrossStatus != putMissingStatus || putCrossBody != putMissingBody {
+		t.Fatalf("cross-project update answered %d %s; missing %d %s", putCrossStatus, putCrossBody, putMissingStatus, putMissingBody)
 	}
 	t.Logf("%d authenticated route x principal x shape cases", checked)
 }
