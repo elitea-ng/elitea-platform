@@ -176,6 +176,23 @@ Nothing enforces the table yet. The token refusal, the elevation restriction, th
 
 The two sunset date constants of ADR-0059 decision 2, `adminaccess.ReplacementShippedOn` and `adminaccess.SunsetAfter`, are in the same package. They stay empty until the last replacement of the legacy names ships.
 
+### Add a separation matrix row
+
+`internal/api/testdata/separation_matrix.txt` pins the answer of every route of the administration surface for every built-in role (ADR-0059 R0.9a). It has one line per method, route and action (the variant that drove the route; `-` for the default request), with one class per role (`allowed` or `refused`) and the route's class (`read`, or the class of the permission its action entry names). Each role is sent with its standing set from `internal/adminaccess/builtin_roles.go` through the recording resolver, so the test needs no database. The tests in `internal/api/separation_matrix_test.go` fail when:
+
+- a route of the surface has no line, or a line names a route the surface no longer has (`TestSeparationMatrixCoversTheAdministrationSurface`);
+- a role's class differs from the line, or the file is not in its generated form (`TestSeparationMatrixMatchesTheRouter`);
+- a `pending #N` line names an issue other than #2587, which owns the role write paths (`TestSeparationMatrixPendingRowsNameAnOwningIssue`);
+- a narrow role is admitted where ADR-0059 decision 3 says it cannot be (the `llm_manager`, `project_administrator` and `security_auditor` assertion tests).
+
+When you add or change a route of the surface, regenerate the file and review the lines that changed:
+
+```bash
+go test ./internal/api/ -run TestSeparationMatrixMatchesTheRouter -update
+```
+
+`UPDATE_GOLDEN=1` does the same. The regeneration keeps `pending` markers. An open pull request that adds an administration route fails this test after a rebase until it adds its line. That is intended: the line is the review of who can reach the new route.
+
 ### The sunset check
 
 The legacy administration items end on a date, not at a version: the names `runtime.plugins` and `configuration.governance`, `inherit` token administration access, and the period in which a request without a reason is still served. `scripts/ci/check-sunset.mjs` holds the code to that date. It reads two constants in `services/elitea-main/internal/adminaccess/registry.go`:
