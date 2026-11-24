@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
+import { ViewMode } from '@/shared/lib/enums';
 import { ThemeProvider } from '@mui/material/styles';
 import { SocketClientContext } from '@/shared/api/socket/client';
 import { createTestSocketClient } from '@/shared/api/socket/testing';
@@ -152,7 +153,9 @@ describe('ConfigurationTab', () => {
     await screen.findByTestId('chat-slot');
     expect(screen.queryByTestId('run-history')).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    // Visible Run History button in EditorPanel toolbar while TestPanel is closed
+    const historyButtons = screen.getAllByTestId('pipeline-history-tab');
+    await user.click(historyButtons[0] as HTMLElement);
 
     expect(await screen.findByTestId('run-history')).toBeInTheDocument();
     expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
@@ -176,13 +179,13 @@ describe('ConfigurationTab', () => {
     });
 
     await screen.findByTestId('chat-slot');
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    await user.click(screen.getAllByTestId('pipeline-history-tab')[0] as HTMLElement);
     await user.click(await screen.findByRole('button', { name: 'close-history' }));
 
     expect(await screen.findByTestId('configuration-form')).toBeInTheDocument();
   });
 
-  it('restoring History mounts the test pane with the original conversation target', async () => {
+  it('restoring History mounts the test pane with the original conversation target and opens TestPanel', async () => {
     const user = userEvent.setup();
     renderConfigurationTab({
       slots: {
@@ -200,9 +203,10 @@ describe('ConfigurationTab', () => {
     });
 
     await screen.findByTestId('chat-slot');
-    await user.click(screen.getByTestId('pipeline-history-tab'));
+    await user.click(screen.getAllByTestId('pipeline-history-tab')[0] as HTMLElement);
     await user.click(await screen.findByRole('button', { name: 'restore-conversation' }));
     expect(await screen.findByTestId('chat-slot')).toHaveTextContent('42');
+    expect(screen.getByTestId('pipeline-test-panel')).toHaveAttribute('aria-hidden', 'false');
     expect(screen.queryByRole('button', { name: 'restore-conversation' })).not.toBeInTheDocument();
   });
 
@@ -367,5 +371,31 @@ describe('ConfigurationTab', () => {
     expect(getComputedStyle(editorBox).minWidth).toBe('100%');
     expect(getComputedStyle(chatBox).height).toBe('auto');
     expect(getComputedStyle(screen.getByTestId('pipeline-chat-content')).overflowY).toBe('visible');
+  });
+
+  it('withholds Test Pipeline, ChatPanel, Run History, and disables Add node in Public read-only viewMode', async () => {
+    renderConfigurationTab({ viewMode: ViewMode.Public });
+    expect(await screen.findByRole('button', { name: 'Add node' })).toBeDisabled();
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-test-panel')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-history-tab')).not.toBeInTheDocument();
+  });
+
+  it('allows expanding GeneralFormPanel even when room.foldGeneral auto-folds it on narrow desktop widths', async () => {
+    const user = userEvent.setup();
+    const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 800 });
+    try {
+      renderConfigurationTab();
+      const configTab = await screen.findByTestId('pipeline-config-tab');
+      // Folded automatically because 800 - CHAT_FOLDED_PX < 480
+      expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
+
+      await user.click(within(configTab).getByTestId('pipeline-config-collapse-button'));
+      expect(await screen.findByTestId('configuration-form')).toBeInTheDocument();
+    } finally {
+      if (originalClientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalClientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: unknown }).clientWidth;
+    }
   });
 });

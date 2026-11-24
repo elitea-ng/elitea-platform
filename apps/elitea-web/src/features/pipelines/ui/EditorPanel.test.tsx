@@ -419,28 +419,52 @@ describe('EditorPanel', () => {
     expect(usePipelineYamlStore.getState().stateKeyOrder).toEqual(['2', '10']);
   });
 
-  it('renders the Test Pipeline button with disabled-reason tooltip when empty, enables when connected to End, and hides while TestPanel is open', async () => {
+  it('renders the Test Pipeline button with disabled-reason tooltips for empty, unsaved, and unconfigured nodes, enables when valid, and toggles toolbar Run History', async () => {
     const user = userEvent.setup();
     const onTestPipeline = vi.fn();
-    const { unmount } = renderEditorPanel({ onTestPipeline, isTestPanelOpen: false });
+    const onShowHistory = vi.fn();
 
-    const disabledBtn = await screen.findByTestId('pipeline-test-button');
-    expect(disabledBtn).toBeDisabled();
-    unmount();
+    const { unmount: unmountEmpty } = renderEditorPanel({ onTestPipeline, onShowHistory, isTestPanelOpen: false });
+    const emptyBtn = await screen.findByTestId('pipeline-test-button');
+    expect(emptyBtn).toBeDisabled();
+    expect(emptyBtn.parentElement).toHaveAttribute('aria-label', 'Add and configure at least one node connected to End.');
+    expect(screen.getByTestId('pipeline-history-tab')).toBeInTheDocument();
+    unmountEmpty();
+
+    const { unmount: unmountUnsaved } = renderEditorPanel({
+      onTestPipeline,
+      testDisabledReason: 'Save the pipeline to test it',
+      isTestPanelOpen: false,
+    });
+    const unsavedBtn = await screen.findByTestId('pipeline-test-button');
+    expect(unsavedBtn).toBeDisabled();
+    expect(unsavedBtn.parentElement).toHaveAttribute('aria-label', 'Save the pipeline to test it');
+    unmountUnsaved();
+
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Tool_1\nnodes:\n  - id: Tool_1\n    type: toolkit\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Tool_1', nodes: [{ id: 'Tool_1', type: 'toolkit', transition: 'END' }] },
+    });
+    const { unmount: unmountUnconfigured } = renderEditorPanel({ onTestPipeline, isTestPanelOpen: false });
+    const unconfiguredBtn = await screen.findByTestId('pipeline-test-button');
+    expect(unconfiguredBtn).toBeDisabled();
+    expect(unconfiguredBtn.parentElement?.getAttribute('aria-label')).toMatch(/^Configure node "Tool_1":/);
+    unmountUnconfigured();
 
     usePipelineYamlStore.setState({
       yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
       yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
     });
-    const { unmount: unmountOpen } = renderEditorPanel({ onTestPipeline, isTestPanelOpen: false });
+    const { unmount: unmountValid } = renderEditorPanel({ onTestPipeline, onShowHistory, isTestPanelOpen: false });
     const enabledBtn = await screen.findByTestId('pipeline-test-button');
     expect(enabledBtn).toBeEnabled();
     await user.click(enabledBtn);
     expect(onTestPipeline).toHaveBeenCalledTimes(1);
-    unmountOpen();
+    unmountValid();
 
-    renderEditorPanel({ onTestPipeline, isTestPanelOpen: true });
+    renderEditorPanel({ onTestPipeline, onShowHistory, isTestPanelOpen: true });
     await screen.findByRole('button', { name: 'Add node' });
     expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-history-tab')).not.toBeInTheDocument();
   });
 });

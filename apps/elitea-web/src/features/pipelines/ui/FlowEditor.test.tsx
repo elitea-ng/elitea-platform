@@ -370,6 +370,17 @@ describe('FlowEditor', () => {
     expect(minimap.style.right).toBe('44.375rem');
   });
 
+  it('refuses ref.onAddNode when disabled (read-only guard)', () => {
+    const ref = createRef<FlowEditorHandle>();
+    const setYamlJsonObject = vi.fn();
+    const onCanvasNodeInteraction = vi.fn();
+    renderFlowEditor(baseProps({ disabled: true, setYamlJsonObject, onCanvasNodeInteraction }), ref);
+
+    expect(ref.current?.onAddNode('printer')).toBeUndefined();
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
+    expect(onCanvasNodeInteraction).not.toHaveBeenCalled();
+  });
+
   // NOT COVERABLE HERE: `useFlowEditorLayoutVersionSync`'s `onReLayout` callback (the
   // `layoutVersion` mismatch -> re-layout path) only fires once xyflow's own
   // `useNodesInitialized()` reports every node measured. jsdom has no real layout engine

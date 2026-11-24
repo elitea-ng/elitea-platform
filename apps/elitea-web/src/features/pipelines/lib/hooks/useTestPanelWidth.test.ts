@@ -1,5 +1,5 @@
-import { renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createStorage } from '@/shared/lib/storage';
 
@@ -37,10 +37,37 @@ describe('useTestPanelWidth', () => {
     expect(result.current.width).toBe(520);
   });
 
-  it('clamps an oversized stored width to 50% of window width', () => {
+  it('clamps an oversized stored width to 50% of window width synchronously on initial render', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 900 });
-    createStorage('local').set('pipeline.testPanel.width', '700');
+    createStorage('local').set('pipeline.testPanel.width', '1e20');
     const { result } = renderHook(() => useTestPanelWidth());
     expect(result.current.width).toBe(450);
+  });
+
+  it.each(['NaN', 'Infinity', '-50', '100', 'abc'])('falls back to default width for malformed/out-of-range storage value %s', (bad) => {
+    createStorage('local').set('pipeline.testPanel.width', bad);
+    const { result } = renderHook(() => useTestPanelWidth());
+    expect(result.current.width).toBe(TEST_PANEL_DEFAULT_WIDTH);
+  });
+
+  it('persists clamped width, clears inline style.width, and calls onResized when drag ends', () => {
+    const onResized = vi.fn();
+    const el = document.createElement('div');
+    const { result } = renderHook(() => useTestPanelWidth({ onResized }));
+    (result.current.containerRef as { current: HTMLDivElement | null }).current = el;
+
+    act(() => {
+      result.current.handleResizeStart({ preventDefault: vi.fn(), clientX: 600 } as never);
+    });
+    act(() => {
+      document.dispatchEvent(new MouseEvent('mousemove', { clientX: 500 }));
+    });
+    act(() => {
+      document.dispatchEvent(new MouseEvent('mouseup'));
+    });
+
+    expect(onResized).toHaveBeenCalledTimes(1);
+    expect(el.style.width).toBe('');
+    expect(createStorage('local').get('pipeline.testPanel.width')).toBe('473');
   });
 });

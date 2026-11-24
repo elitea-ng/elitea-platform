@@ -103,8 +103,8 @@ export function GeneralFormPanel({
   const onClickCollapsed = useCallback(() => {
     if (isControlled) {
       const next = !collapsed;
-      onCollapsedChange?.(next);
-      onCollapsed(next);
+      if (onCollapsedChange) onCollapsedChange(next);
+      else onCollapsed(next);
       return;
     }
     toggleUncontrolled();

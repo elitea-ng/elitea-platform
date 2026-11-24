@@ -233,9 +233,8 @@ export function computeDockingOffsets(
   isNodeDrawerOpen: boolean,
   isStateDrawerOpen: boolean,
   stateDrawerWidth: number,
-  extraRightOffsetPx = 0,
 ): { readonly drawerRightOffset: number; readonly minimapRightOffset: number } {
-  const drawerRightOffset = (isNodeDrawerOpen ? 400 : 0) + extraRightOffsetPx;
+  const drawerRightOffset = isNodeDrawerOpen ? 400 : 0;
   const minimapRightOffset = drawerRightOffset + (isStateDrawerOpen ? stateDrawerWidth : 0);
   return { drawerRightOffset, minimapRightOffset };
 }

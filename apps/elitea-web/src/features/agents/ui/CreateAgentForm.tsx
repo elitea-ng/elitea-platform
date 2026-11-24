@@ -234,6 +234,13 @@ function InstructionsAiEditRow({ slot }: { readonly slot?: ReactNode | undefined
   return <Box data-testid="agent-instructions-ai-edit-slot" sx={instructionsAiEditSlotSx}>{slot}</Box>;
 }
 
+const sectionSlotSx: SxProps<Theme> = { marginTop: '1rem' };
+
+function SectionSlot({ slot }: { readonly slot: ReactNode }): ReactNode {
+  if (!slot) return null;
+  return <Box sx={sectionSlotSx}>{slot}</Box>;
+}
+
 function readSectionSlots(generalSlots: CreateAgentFormProps['generalSlots']): {
   readonly afterGeneral: ReactNode;
   readonly beforeAdvanced: ReactNode;
@@ -343,7 +350,7 @@ export function CreateAgentForm({
         variables={state.variables}
         onChangeVariable={state.onChangeVariable}
       />
-      {sectionSlots.afterGeneral}
+      <SectionSlot slot={sectionSlots.afterGeneral} />
       <Box sx={welcomeMessageInputSx}>
         <WelcomeMessageInput
           welcomeMessage={versionDetails?.welcome_message}
@@ -358,7 +365,7 @@ export function CreateAgentForm({
         disabled={lockDefinition}
         sx={conversationStartersSx}
       />
-      {sectionSlots.beforeAdvanced}
+      <SectionSlot slot={sectionSlots.beforeAdvanced} />
       <Box sx={advanceSettingsSx}>
         <ApplicationAdvanceSettings
           stepLimit={versionDetails?.meta?.step_limit}

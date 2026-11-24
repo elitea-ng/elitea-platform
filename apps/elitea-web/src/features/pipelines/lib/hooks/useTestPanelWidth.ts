@@ -15,19 +15,25 @@ export const TEST_PANEL_DEFAULT_WIDTH = 373;
 const TEST_PANEL_MAX_RATIO = 0.5;
 const TEST_PANEL_WIDTH_STORAGE_KEY = 'pipeline.testPanel.width';
 
-function readStoredWidth(defaultWidth: number): number {
+function clampWidth(width: number, maxWidth: number): number {
+  const safeMax = Math.max(TEST_PANEL_MIN_WIDTH, maxWidth);
+  return Math.min(safeMax, Math.max(TEST_PANEL_MIN_WIDTH, Math.round(width)));
+}
+
+function readStoredWidth(defaultWidth: number, maxWidth: number): number {
+  const fallback = clampWidth(defaultWidth, maxWidth);
   try {
     const raw = createStorage('local').get(TEST_PANEL_WIDTH_STORAGE_KEY);
     const stored = raw === null ? Number.NaN : Number(raw);
-    return Number.isFinite(stored) && stored >= TEST_PANEL_MIN_WIDTH ? stored : defaultWidth;
+    return Number.isFinite(stored) && stored >= TEST_PANEL_MIN_WIDTH ? clampWidth(stored, maxWidth) : fallback;
   } catch {
-    return defaultWidth;
+    return fallback;
   }
 }
 
-function writeStoredWidth(width: number): void {
+function writeStoredWidth(width: number, maxWidth: number): void {
   try {
-    createStorage('local').set(TEST_PANEL_WIDTH_STORAGE_KEY, String(Math.round(width)));
+    createStorage('local').set(TEST_PANEL_WIDTH_STORAGE_KEY, String(clampWidth(width, maxWidth)));
   } catch {
     // Storage may be unavailable in restricted contexts; keep in-memory width.
   }
@@ -55,8 +61,8 @@ export function useTestPanelWidth({
   onResized,
   defaultWidth = TEST_PANEL_DEFAULT_WIDTH,
 }: UseTestPanelWidthOptions = {}): UseTestPanelWidthResult {
-  const [initialWidth] = useState(() => readStoredWidth(defaultWidth));
   const [maxWidth, setMaxWidth] = useState(() => getTestPanelMaxWidth(window.innerWidth));
+  const [initialWidth] = useState(() => readStoredWidth(defaultWidth, getTestPanelMaxWidth(window.innerWidth)));
 
   const { containerRef, drawerWidth, setDrawerWidth, isResizing, handleResizeStart } = useResizableDrawer(
     TEST_PANEL_MIN_WIDTH,
@@ -91,10 +97,10 @@ export function useTestPanelWidth({
     if (wasResizingRef.current) {
       wasResizingRef.current = false;
       if (containerRef.current) containerRef.current.style.width = '';
-      writeStoredWidth(drawerWidth);
+      writeStoredWidth(drawerWidth, maxWidth);
       onResized?.();
     }
-  }, [isResizing, drawerWidth, onResized, containerRef]);
+  }, [isResizing, drawerWidth, maxWidth, onResized, containerRef]);
 
   return {
     containerRef,

@@ -3,7 +3,9 @@
  * Computes the disabled-reason tooltip for the `"Test Pipeline"` toolbar button.
  */
 import { t } from '@/shared/i18n';
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
 
+import { blockingIssues, collectGraphAdmissionIssues } from '../../graphAdmission.helpers';
 import { FlowEditorConstants } from '../constants';
 import { parseYaml } from './parsePipeline.helpers';
 import type { YamlPipelineDocument } from './pipelineFlow.types';
@@ -83,7 +85,7 @@ function getBranchingConfig(node: YamlNodeLike): Readonly<Record<string, unknown
 function getImplicitEndEdges(yamlNodes: readonly YamlNodeLike[]): readonly EdgeLike[] {
   const edges: EdgeLike[] = [];
   for (const node of yamlNodes) {
-    if (!node.id) continue;
+    if (typeof node.id !== 'string' || node.id.length === 0) continue;
     const branchingConfig = getBranchingConfig(node);
     if (branchingConfig && !Object.hasOwn(branchingConfig, 'default_output')) {
       edges.push({ source: node.id, target: PipelineNodeTypes.End });
@@ -105,11 +107,27 @@ function findFirstNodeIssue(
   nodeIssuesById: Readonly<Record<string, readonly string[]>>,
 ): string {
   for (const node of yamlNodes) {
-    if (!node.id) continue;
+    if (typeof node.id !== 'string' || node.id.length === 0) continue;
+    if (!Object.hasOwn(nodeIssuesById, node.id)) continue;
     const firstIssue = nodeIssuesById[node.id]?.[0];
     if (firstIssue) return getNodeNotConfiguredReason(node.id, firstIssue);
   }
   return '';
+}
+
+/** Collects blocking graph-admission issues grouped by node ID into a null-prototype lookup map. */
+export function collectBlockingNodeIssuesById(
+  yamlJsonObject: YamlPipelineDocument | null | undefined,
+): Readonly<Record<string, readonly string[]>> {
+  const grouped = Object.create(null) as Record<string, string[]>;
+  if (!yamlJsonObject) return grouped;
+  for (const issue of blockingIssues(collectGraphAdmissionIssues(yamlJsonObject))) {
+    if (!issue.nodeId) continue;
+    const list = grouped[issue.nodeId];
+    if (list) list.push(issue.message);
+    else grouped[issue.nodeId] = [issue.message];
+  }
+  return grouped;
 }
 
 /**
@@ -121,16 +139,17 @@ export function getTestBlockReason(
   nodeIssuesById: Readonly<Record<string, readonly string[]>> = {},
 ): string {
   if (!yamlJsonObject) return getNoNodesTestReason();
-  const rawNodes = (yamlJsonObject as { readonly nodes?: readonly (YamlNodeLike | null | undefined)[] }).nodes ?? [];
+  const normalized = normalizePipelineNodeIdentifiers(yamlJsonObject);
+  const rawNodes = (normalized as { readonly nodes?: readonly (YamlNodeLike | null | undefined)[] }).nodes ?? [];
   const yamlNodes = rawNodes.filter((node): node is YamlNodeLike => Boolean(node));
-  const entryPoint = (yamlJsonObject as { readonly entry_point?: unknown }).entry_point;
+  const entryPoint = (normalized as { readonly entry_point?: unknown }).entry_point;
 
   if (yamlNodes.length === 0) return getNoNodesTestReason();
   if (typeof entryPoint !== 'string' || !yamlNodes.some((node) => node.id === entryPoint)) {
     return getNoEntryPointTestReason();
   }
 
-  const edges = parseEdgesSafely(yamlJsonObject);
+  const edges = parseEdgesSafely(normalized);
   if (edges === null || !isEndReachable([...edges, ...getImplicitEndEdges(yamlNodes)], entryPoint)) {
     return getNoPathToEndTestReason();
   }

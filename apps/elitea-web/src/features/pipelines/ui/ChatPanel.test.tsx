@@ -257,9 +257,22 @@ describe('ChatPanel', () => {
     expect(screen.getByTestId('chat-slot')).toBeInTheDocument();
     unmount();
 
-    renderChatPanel({ panel: { isOpen: true, onClose } });
+    renderChatPanel({
+      panel: { isOpen: true, onClose },
+      onShowHistory: vi.fn(),
+      renderClearChatButton: ({ onClear }) => (
+        <button type="button" data-testid="pipeline-test-clear-slot" onClick={onClear}>
+          Clear
+        </button>
+      ),
+    });
     expect(await screen.findByTestId('pipeline-test-panel-resize-handle')).toBeInTheDocument();
-    await user.click(screen.getByTestId('pipeline-test-panel-close'));
+    const historyBtn = screen.getByTestId('pipeline-history-tab');
+    const clearBtn = screen.getByTestId('pipeline-test-clear-slot');
+    const closeBtn = screen.getByTestId('pipeline-test-panel-close');
+    expect(historyBtn.compareDocumentPosition(clearBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(clearBtn.compareDocumentPosition(closeBtn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(closeBtn);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

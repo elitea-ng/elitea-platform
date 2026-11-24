@@ -7,6 +7,7 @@ import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
+import { ViewMode } from '@/shared/lib/enums';
 
 import { useEditorPaneRoom } from '../lib/hooks/useEditorPaneRoom';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
@@ -64,16 +65,7 @@ function useConfigurationTabSettings(args: UseConfigurationTabSettingsArgs): Rea
   const conversationStarters = conversation_starters ?? EMPTY_ARRAY;
   const existingToolkitIds = useMemo(() => extractExistingToolkitIds(tools), [tools]);
 
-  // A plain object literal, NOT wrapped in `useMemo` — this codebase's own `hook-deps` budget
-  // (§3.5, enforced by `scripts/check-budgets.mjs`) caps a `useMemo`'s dependency array at 8
-  // entries; this object has 13 real, independently-reactive inputs (matching the baseline's own
-  // `ConfigurationTab.jsx` 25-entry `settings` `useMemo` deps array, lines 190-226 — the ORIGINAL
-  // was already past what a hand-audited dependency array can track correctly). `chat`/
-  // `memoizedLlmSettings`/`existingToolkitIds` are already independently memoised above (and
-  // `usePipelineChat`'s own return, `ConfigurationTab`'s own `useCallback`s) — this object is
-  // cheap to rebuild (no work beyond the property list itself), so recomputing it every render
-  // trades a negligible allocation for a genuinely correct, budget-compliant dependency story
-  // instead of a hand-maintained 13-entry array that would immediately breach the same budget.
+  // Plain object literal (kept unmemoized to stay within the §3.5 8-entry hook-deps budget; sub-values above are already memoized).
   return {
     ...chat,
     llmSettings: memoizedLlmSettings,
@@ -137,30 +129,42 @@ export interface ConfigurationTabProps {
  * `EditorPanel` (Flow/YAML + `"Test Pipeline"` toolbar button) + on-demand resizable `ChatPanel`.
  */
 function useGeneralAutoCollapse(isSmallWindow: boolean, foldGeneral: boolean, onFitView: () => void) {
-  const [isGeneralPaneCollapsed, setIsGeneralPaneCollapsed] = useState(false);
+  const [userChoice, setUserChoice] = useState<boolean | null>(null);
   const hasAutoCollapsedRef = useRef(false);
+  const effectiveCollapsed = isSmallWindow ? false : (userChoice ?? foldGeneral);
+
+  useEffect(() => {
+    if (isSmallWindow) setUserChoice(null);
+  }, [isSmallWindow]);
 
   const handleCollapsedGeneralPane = useCallback(
     (collapsed: boolean) => {
-      setIsGeneralPaneCollapsed(collapsed);
+      setUserChoice(collapsed);
       onFitView();
     },
     [onFitView],
   );
 
   const handleCanvasNodeInteraction = useCallback(() => {
-    if (hasAutoCollapsedRef.current || isSmallWindow || isGeneralPaneCollapsed) return;
+    if (hasAutoCollapsedRef.current || isSmallWindow || effectiveCollapsed) return;
     hasAutoCollapsedRef.current = true;
-    setIsGeneralPaneCollapsed(true);
+    setUserChoice(true);
     onFitView();
-  }, [isGeneralPaneCollapsed, isSmallWindow, onFitView]);
+  }, [effectiveCollapsed, isSmallWindow, onFitView]);
 
-  const effectiveCollapsed = isSmallWindow ? false : (isGeneralPaneCollapsed || foldGeneral);
-  return { effectiveCollapsed, setIsGeneralPaneCollapsed, handleCollapsedGeneralPane, handleCanvasNodeInteraction };
+  return { effectiveCollapsed, handleCollapsedGeneralPane, handleCanvasNodeInteraction };
 }
 
 function resolveUnsavedTestReason(applicationId: string | number | undefined): string {
   return applicationId === undefined ? getUnsavedTestReason() : '';
+}
+
+function resolveShowHistoryHandler(
+  isReadOnly: boolean,
+  applicationId: string | number | undefined,
+  onShowHistory: () => void,
+): (() => void) | undefined {
+  return !isReadOnly && applicationId !== undefined ? onShowHistory : undefined;
 }
 
 function buildRestoreProp(restoredConversationID: string | number | null, onComplete: () => void) {
@@ -267,8 +271,10 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   }, []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);
 
+  const isReadOnly = viewMode === ViewMode.Public;
   const styles = useMemo(() => configurationTabStyles(isSmallWindow, generalPane.effectiveCollapsed), [isSmallWindow, generalPane.effectiveCollapsed]);
   const testDisabledReason = resolveUnsavedTestReason(applicationId);
+  const showHistoryHandler = resolveShowHistoryHandler(isReadOnly, applicationId, handleShowHistory);
   const testPanelOptions = useMemo(
     () => ({ isOpen: isTestPanelOpen, onClose: handleCloseTestPanel, workspaceRef: splitContainerRef, onResized: handleFitView }),
     [isTestPanelOpen, handleCloseTestPanel, handleFitView],
@@ -315,7 +321,6 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
         applicationId={applicationId}
         onCollapsed={generalPane.handleCollapsedGeneralPane}
         collapsed={generalPane.effectiveCollapsed}
-        onCollapsedChange={generalPane.setIsGeneralPaneCollapsed}
         autoFolded={room.foldGeneral}
         viewMode={viewMode}
         renderConfigurationForm={slots.renderConfigurationForm}
@@ -328,26 +333,30 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
             setYamlDirty={setYamlDirty}
             stopRun={() => chatPanelRef.current?.stopRun()}
             sx={styles.editorPanel}
+            disabled={isReadOnly}
             versionTools={versionTools}
             llmSettings={flowEditorLlmSettings}
-            onTestPipeline={handleOpenTestPanel}
+            onTestPipeline={isReadOnly ? undefined : handleOpenTestPanel}
+            onShowHistory={showHistoryHandler}
             testDisabledReason={testDisabledReason}
             isTestPanelOpen={isTestPanelOpen}
             onCanvasNodeInteraction={generalPane.handleCanvasNodeInteraction}
           />
         </PipelineTriggerScopeContext.Provider>
-        <ChatPanel
-          ref={chatPanelRef}
-          settings={settings}
-          restore={buildRestoreProp(restoredConversationID, onRestoreConversationComplete)}
-          panel={testPanelOptions}
-          setActiveConversation={chat.setActiveConversation}
-          hasRunsInProgress={handleHasRunsInProgress}
-          onShowHistory={applicationId !== undefined ? handleShowHistory : undefined}
-          renderChat={slots.renderChat}
-          renderClearChatButton={slots.renderClearChatButton}
-          renderContextBudget={slots.renderContextBudget}
-        />
+        {!isReadOnly && (
+          <ChatPanel
+            ref={chatPanelRef}
+            settings={settings}
+            restore={buildRestoreProp(restoredConversationID, onRestoreConversationComplete)}
+            panel={testPanelOptions}
+            setActiveConversation={chat.setActiveConversation}
+            hasRunsInProgress={handleHasRunsInProgress}
+            onShowHistory={showHistoryHandler}
+            renderChat={slots.renderChat}
+            renderClearChatButton={slots.renderClearChatButton}
+            renderContextBudget={slots.renderContextBudget}
+          />
+        )}
       </Box>
     </Box>
   );
@@ -363,18 +372,11 @@ interface ConfigurationTabStyles {
 
 function editorPanelStyles(isSmallWindow: boolean): SxProps<Theme> {
   if (isSmallWindow) return { minWidth: '100%', minHeight: '32rem', flex: '0 0 auto', maxWidth: '100%', marginRight: '0rem' };
-  return {
-    flex: 1,
-    minWidth: 0,
-    minHeight: '100%',
-    maxWidth: '100%',
-  };
+  return { flex: 1, minWidth: 0, minHeight: '100%', maxWidth: '100%' };
 }
 
 function splitContainerStyles(isSmallWindow: boolean, isGeneralPaneCollapsed: boolean): SxProps<Theme> {
-  if (isSmallWindow) {
-    return { flex: '0 0 auto', height: 'auto', width: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', gap: '0.75rem' };
-  }
+  if (isSmallWindow) return { flex: '0 0 auto', height: 'auto', width: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', gap: '0.75rem' };
   const maxWidth = isGeneralPaneCollapsed ? 'calc(100% - 3.75rem)' : 'calc(100% - 21.875rem)';
   return { flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'row', maxWidth, gap: '0.75rem' };
 }
@@ -383,16 +385,7 @@ function configurationTabStyles(isSmallWindow: boolean, isGeneralPaneCollapsed: 
   return {
     errorContainer: { display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', width: '100%' },
     spinnerContainer: { height: '100%', width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center' },
-    mainContainer: {
-      height: '100%',
-      overflow: mainOverflow(isSmallWindow),
-      padding: '0.75rem 1.5rem 1.5rem',
-      gap: '2rem',
-      display: 'flex',
-      boxSizing: 'border-box',
-      width: '100%',
-      flexDirection: isSmallWindow ? 'column' : 'row',
-    },
+    mainContainer: { height: '100%', overflow: mainOverflow(isSmallWindow), padding: '0.75rem 1.5rem 1.5rem', gap: '2rem', display: 'flex', boxSizing: 'border-box', width: '100%', flexDirection: isSmallWindow ? 'column' : 'row' },
     splitContainer: splitContainerStyles(isSmallWindow, isGeneralPaneCollapsed),
     editorPanel: editorPanelStyles(isSmallWindow),
   };

@@ -202,9 +202,18 @@ function ChatPanelHeader({
         data-testid="pipeline-test-panel-controls"
         sx={controlsContainerSx(isSmallWindow, hasActiveConversationId)}
       >
-        {clearButtonNode}
-        {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
-        {onClose && <TestPanelCloseButton onClose={onClose} />}
+        {isOnDemand ? (
+          <>
+            {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
+            {clearButtonNode}
+            {onClose && <TestPanelCloseButton onClose={onClose} />}
+          </>
+        ) : (
+          <>
+            {clearButtonNode}
+            {onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
+          </>
+        )}
       </Box>
     </Box>
   );

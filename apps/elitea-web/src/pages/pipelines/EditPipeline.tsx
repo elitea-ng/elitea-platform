@@ -9,6 +9,7 @@ import { FormProvider } from 'react-hook-form';
 import { ConfigurationTab, resetPipelineDraft, usePipelineVersionSync } from '@/features/pipelines';
 import type { AgentLlmSettings } from '@/shared/api/agentLlmSettings';
 import { t } from '@/shared/i18n';
+import { ViewMode } from '@/shared/lib/enums';
 import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { disarmUnsavedChangesNavBlocker, useUnsavedChangesNavBlocker } from '@/widgets/app-shell';
 import { PageToolbar, pageSx } from '@/widgets/page-header';
@@ -69,6 +70,10 @@ function useEditPipelineNavBlocker(isFormDirty: boolean, isYamlDirty: boolean): 
  */
 function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
+}
+
+function resolvePipelineViewMode(isReadOnly: boolean) {
+  return isReadOnly ? ViewMode.Public : ViewMode.Owner;
 }
 
 /** The editor's controls (versions, save/cancel, actions) in the page toolbar. */
@@ -376,6 +381,7 @@ export function EditPipeline(): ReactNode {
               setFieldValue={setFieldValue}
               setYamlDirty={setIsYamlDirty}
               adapter={chatAdapter}
+              viewMode={resolvePipelineViewMode(isReadOnlyView)}
               slots={configurationTabSlots}
             />
           </PipelineConfigurationTabBoundary>

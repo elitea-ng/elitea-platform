@@ -25,6 +25,7 @@ import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
 import { RefreshIcon } from '@/shared/ui/icons/refresh-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
 import type { TabGroupButtonItem } from '@/shared/ui/TabGroupButton';
+import { ViewRunHistoryButton } from '@/shared/ui/ViewRunHistoryButton';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
@@ -32,7 +33,7 @@ import { useIsPipelineYamlCodeDirty, isChatPath } from '../lib/hooks/useIsPipeli
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { usePipelineYamlSerialization } from '../lib/hooks/usePipelineYamlSerialization';
 import { parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
-import { getTestBlockReason } from '../lib/flow-editor/helpers/pipelineReadiness.helpers';
+import { collectBlockingNodeIssuesById, getTestBlockReason } from '../lib/flow-editor/helpers/pipelineReadiness.helpers';
 import type { RunSocketEvent } from '../lib/flow-editor/helpers/parseRunsByEvent.support';
 import type { FlowEdge, FlowNode, SetYamlJsonObject } from '../lib/flow-editor/reactFlowTypes';
 import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
@@ -66,6 +67,7 @@ export interface EditorPanelProps {
   readonly versionTools?: readonly PipelineToolEntry[] | undefined;
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
   readonly onTestPipeline?: (() => void) | undefined;
+  readonly onShowHistory?: (() => void) | undefined;
   readonly testDisabledReason?: string | undefined;
   readonly isTestPanelOpen?: boolean | undefined;
   readonly onCanvasNodeInteraction?: (() => void) | undefined;
@@ -180,6 +182,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
     versionTools,
     llmSettings,
     onTestPipeline,
+    onShowHistory,
     testDisabledReason,
     isTestPanelOpen = false,
     onCanvasNodeInteraction,
@@ -312,7 +315,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
 
   const flowTestDisabledReason = useMemo(
-    () => (onTestPipeline ? getTestBlockReason(yamlJsonObject) : ''),
+    () => (onTestPipeline ? getTestBlockReason(yamlJsonObject, collectBlockingNodeIssuesById(yamlJsonObject)) : ''),
     [onTestPipeline, yamlJsonObject],
   );
   const effectiveTestDisabledReason = testDisabledReason || flowTestDisabledReason;
@@ -335,6 +338,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
               disabled={disabled}
             />
           )}
+          {!isTestPanelOpen && onShowHistory && <ViewRunHistoryButton onShowHistory={onShowHistory} />}
           {onTestPipeline && !isTestPanelOpen && (
             <TestPipelineButton
               onClick={onTestPipeline}

@@ -1359,6 +1359,28 @@ describe('the pipeline configuration form', () => {
     expect(bodies.version[0]).not.toHaveProperty('notes');
   }, testTimeout(30_000));
 
+  it('orders header controls as VersionBar -> SaveBar -> Actions', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
+
+    const saveAsVersion = await screen.findByRole('button', { name: /save as version/i });
+    const saveButton = await screen.findByTestId('pipeline-save-button');
+    const lifecycleMenu = await screen.findByTestId('pipeline-lifecycle-menu-button');
+
+    expect(saveAsVersion.compareDocumentPosition(saveButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(saveButton.compareDocumentPosition(lifecycleMenu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('disables Add node and withholds Test Pipeline / TestPanel for a public-project read-only viewer', async () => {
+    setPublicProjectId('9');
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(withShell(<EditPipeline />), '/pipelines/all/42', { projectId: '9' });
+
+    expect(await screen.findByRole('button', { name: 'Add node' })).toBeDisabled();
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pipeline-test-panel')).not.toBeInTheDocument();
+  });
+
   /*
    * "typing a version-level field arms the app-wide unsaved-changes guard"
    * is NOT asserted here, deliberately. The page's guard input is

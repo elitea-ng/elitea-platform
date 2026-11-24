@@ -87,7 +87,6 @@ export interface FlowEditorProps {
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
   readonly disabled?: boolean | undefined;
   readonly onCanvasNodeInteraction?: (() => void) | undefined;
-  readonly extraRightOffsetPx?: number | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -113,7 +112,7 @@ export interface FlowEditorHandle {
 }
 
 const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function FlowEditor(props, ref): ReactNode {
-  const { yamlJsonObject, setYamlJsonObject, initialNodes, initialEdges, layoutVersion, resetFlag, onResetHandled, onLayoutVersionChange, stopRun, versionTools, llmSettings, disabled, onCanvasNodeInteraction, extraRightOffsetPx, sx } = props;
+  const { yamlJsonObject, setYamlJsonObject, initialNodes, initialEdges, layoutVersion, resetFlag, onResetHandled, onLayoutVersionChange, stopRun, versionTools, llmSettings, disabled, onCanvasNodeInteraction, sx } = props;
 
   const { colorScheme } = useColorScheme();
   const [expandAll] = useState(true);
@@ -198,10 +197,11 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
 
   const handleAddNode = useCallback(
     (type: string) => {
+      if (safeDisabled) return undefined;
       onCanvasNodeInteraction?.();
       return onAddNode(type);
     },
-    [onAddNode, onCanvasNodeInteraction],
+    [onAddNode, onCanvasNodeInteraction, safeDisabled],
   );
 
   const handleDuplicateNode = useCallback(
@@ -280,7 +280,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
 
   const { nodeTypes, edgeTypes } = useFlowEditorNodeTypes({ versionTools, llmSettings });
   const { selectedNodeId, isNodeDrawerOpen, handleSelectNode, handleCloseNodeDrawer } = useFlowEditorNodeSelection(visibleFlowNodes, setFlowNodes, onCanvasNodeInteraction);
-  const { drawerRightOffset, minimapRightOffset } = computeDockingOffsets(isNodeDrawerOpen, isStateDrawerOpen, stateDrawerWidth, extraRightOffsetPx);
+  const { drawerRightOffset, minimapRightOffset } = computeDockingOffsets(isNodeDrawerOpen, isStateDrawerOpen, stateDrawerWidth);
 
   return (
     <Box

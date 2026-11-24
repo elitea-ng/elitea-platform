@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  collectBlockingNodeIssuesById,
   getNoEntryPointTestReason,
   getNoNodesTestReason,
   getNoPathToEndTestReason,
@@ -86,5 +87,39 @@ describe('pipelineReadiness.helpers', () => {
         'A',
       ),
     ).toBe(false);
+  });
+
+  it('normalizes numeric YAML node identifiers and ignores prototype keys safely', () => {
+    expect(
+      getTestBlockReason({
+        entry_point: 1 as unknown as string,
+        nodes: [{ id: 1 as unknown as string, type: 'printer', transition: 'END' }],
+      }),
+    ).toBe('');
+
+    expect(
+      getTestBlockReason(
+        {
+          entry_point: 'constructor',
+          nodes: [
+            { id: 'constructor', type: 'printer', transition: 'toString' },
+            { id: 'toString', type: 'printer', transition: 'END' },
+          ],
+        },
+        {},
+      ),
+    ).toBe('');
+  });
+
+  it('collectBlockingNodeIssuesById groups blocking admission issues by nodeId', () => {
+    const issues = collectBlockingNodeIssuesById({
+      entry_point: 'Tool_1',
+      nodes: [{ id: 'Tool_1', type: 'toolkit', transition: 'END' }],
+    });
+    expect(Object.getPrototypeOf(issues)).toBeNull();
+    expect(issues['Tool_1']?.length ?? 0).toBeGreaterThan(0);
+    expect(getTestBlockReason({ entry_point: 'Tool_1', nodes: [{ id: 'Tool_1', type: 'toolkit', transition: 'END' }] }, issues)).toMatch(
+      /^Configure node "Tool_1":/,
+    );
   });
 });
