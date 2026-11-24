@@ -129,6 +129,7 @@ Executed on rebased branch (`feat/http-action-main-foundation` over `origin/main
   - `npx vitest run --maxWorkers=2 src/pages/settings/HttpActions.test.tsx src/routes/_shell/settings/settingsSections.test.ts src/shared/i18n/`: **7 files, 45 tests PASS** (8 `HttpActions`, 12 `settingsSections`, 25 `i18n`)
   - `node scripts/theme-gate.mjs`: **PASS** (all 9 checks + 5 `brandPack.contract.test.ts` tests)
   - Static checks (`check-endpoint-manifest`, `check-testid-namespace`, `check-budgets`, `check-layer-cycle`, `check-handlers`, `check-parity-manifest`, `scripts/ci/check-upgrading-notes.mjs`): **ALL PASS**
+- Linux visual baselines (`apps/elitea-web/e2e/snapshots/visual/routes.visual.spec.ts-snapshots/settings-*-visual-linux.png`): Refreshed all **10** `settings-*` baselines from Linux CI (`ci-web-e2e / Visual regression`, run `45391699663`, artifact `14923416731`) after verifying the diffs reflect only the new `HTTP actions` navigation item in the Settings sidebar.
 - **Scanners**:
   - `govulncheck ./...`: **0 called vulnerabilities** (1 pre-existing uncalled module advisory)
   - `npm audit`: **21 pre-existing moderate dev-dep advisories** (`glob`/`minimatch` via `@storybook/react-vite` and `orval`); 0 new
