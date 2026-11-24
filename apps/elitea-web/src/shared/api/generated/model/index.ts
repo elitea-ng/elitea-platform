@@ -1189,6 +1189,7 @@ export * from "./versionWriteRequest.zod";
 export * from "./viewBrowserSessionHeaders.zod";
 export * from "./webhook.zod";
 export * from "./webhookDelivery.zod";
+export * from "./webhookWithSecret.zod";
 export * from "./webhookWriteRequest.zod";
 export * from "./workerEgressHostsResponse.zod";
 export * from "./workerEgressReachedHost.zod";

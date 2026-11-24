@@ -3225,7 +3225,7 @@
       "path": "/webhooks/prompt_lib/{projectID}",
       "operationId": "createWebhook",
       "source": "generated",
-      "responseSchema": "Webhook",
+      "responseSchema": "WebhookWithSecret",
       "fixture": null,
       "usedBy": [
         "pages/settings/Webhooks.tsx"
@@ -3260,6 +3260,18 @@
       "operationId": "deleteWebhook",
       "source": "generated",
       "responseSchema": null,
+      "fixture": null,
+      "usedBy": [
+        "pages/settings/Webhooks.tsx"
+      ]
+    },
+    {
+      "id": "webhooks.rotateWebhookSecret",
+      "method": "POST",
+      "path": "/webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret",
+      "operationId": "rotateWebhookSecret",
+      "source": "generated",
+      "responseSchema": "WebhookWithSecret",
       "fixture": null,
       "usedBy": [
         "pages/settings/Webhooks.tsx"

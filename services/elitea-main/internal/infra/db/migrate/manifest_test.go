@@ -1225,7 +1225,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 266: shared/0266_form_session_ref.sql, elitea_auth.form_sessions.ref
 	// from the browser_sessions.ref sequence, so a Form session reaches the
 	// resolver with a reference (issue 2506, ADR-0059 R1.2a). No permission.
-	require.EqualValues(t, 266, Head(shared))
+	//
+	// 267: shared/0267_webhook_secret_reference.sql, webhooks.secret_ref, the
+	// vault reference that replaces the plaintext signing secret (issue
+	// 2963). No permission.
+	require.EqualValues(t, 267, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

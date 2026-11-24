@@ -22561,9 +22561,10 @@ components:
       type: object
       description: >
         NOTE(issue 876): internal/api/webhook/handler.go's `Webhook` — one row
-        of the outbound webhook registry. `secret` carries the live value on
-        every read; there is no separate reveal endpoint (see the /webhooks
-        path block's own note on why).
+        of the outbound webhook registry. The signing secret is write-only
+        (issue 2963): it is stored in the project vault, and no read returns
+        it. `has_secret` says whether deliveries are signed. Create and
+        rotate_secret return the value once (WebhookWithSecret).
       properties:
         id: { type: string }
         project_id: { type: string }
@@ -22577,25 +22578,49 @@ components:
             The event types this webhook fires on. Free-text — the server
             enforces no fixed vocabulary — matched against `ListByEvent`'s
             `$2 = ANY(events)`.
-        secret:
-          type: string
+        has_secret:
+          type: boolean
           description: >
-            HMAC-SHA256 signs the delivered body into the
-            `X-Webhook-Signature` header. Always present on a read (omitted
-            only when stored empty).
+            True when a signing secret is set, so every delivery carries an
+            `X-Webhook-Signature` header. The value itself is never returned
+            by a read.
         active:
           type: boolean
           description: An inactive webhook is registered but never dispatched to.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
-      required: [id, project_id, url, events, active, created_at, updated_at]
+      required: [id, project_id, url, events, has_secret, active, created_at, updated_at]
+
+    WebhookWithSecret:
+      type: object
+      description: >
+        The answer to createWebhook and rotateWebhookSecret: the webhook plus
+        its signing secret, returned this once. No other route returns the
+        secret; a lost value is replaced with rotate_secret, never read back.
+      properties:
+        id: { type: string }
+        project_id: { type: string }
+        url: { type: string }
+        events:
+          type: array
+          items: { type: string }
+        has_secret: { type: boolean }
+        secret:
+          type: string
+          description: >
+            The signing secret. HMAC-SHA256 of the delivered body keyed by
+            this value is the `X-Webhook-Signature` header. Absent when the
+            webhook was created without one.
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+      required: [id, project_id, url, events, has_secret, active, created_at, updated_at]
 
     WebhookWriteRequest:
       type: object
       description: >
-        The create/update body (handler.go's Create/Update decode `Webhook`
-        directly; `id`/`project_id`/timestamps are server-assigned and
-        ignored if sent).
+        The create/update body. `id`/`project_id`/timestamps are
+        server-assigned and ignored if sent.
       properties:
         url:
           type: string
@@ -22609,7 +22634,13 @@ components:
         events:
           type: array
           items: { type: string }
-        secret: { type: string }
+        secret:
+          type: string
+          description: >
+            Write-only signing secret, sealed into the project vault. On
+            create it is returned once in the response. On update, omit it
+            (or send an empty string) to keep the stored secret, or send a
+            value to replace it; the value is not echoed.
         active: { type: boolean }
       required: [url, events, active]
 
@@ -50780,10 +50811,9 @@ paths:
   #
   # Every route gates on a `configurations.configuration*` permission string,
   # reused rather than invented — see handler.go's file header for why. The
-  # response body always includes the live `secret` (redaction is tracked
-  # separately, issue #496): there is no server-side "reveal" endpoint, so the
-  # UI's reveal/hide control is purely a client-side toggle over data the read
-  # already carries.
+  # signing secret is write-only (issue 2963): it is sealed into the project
+  # vault, the read routes return only `has_secret`, and createWebhook and
+  # rotateWebhookSecret return the value once. There is no reveal route.
   /webhooks/prompt_lib/{projectID}:
     parameters:
       - name: projectID
@@ -50818,11 +50848,11 @@ paths:
       operationId: createWebhook
       summary: Register a new outbound webhook
       description: >
-        handler.go's Create. The secret is whatever the caller sends —
-        there is no server-side generation — so the UI generates one
-        client-side (the same `crypto.getRandomValues` shape
-        `PipelineWebhookModal.tsx`'s `generateSecretToken` uses) before
-        calling this.
+        handler.go's Create. A `secret` in the body is sealed into the
+        project vault and returned in this response only; the web UI
+        generates one client-side (256 random bits, base64url). Answers 503
+        when the deployment has no usable project vault, rather than storing
+        the secret in plain text.
       tags: [webhooks]
       requestBody:
         required: true
@@ -50831,14 +50861,29 @@ paths:
             schema: { $ref: '#/components/schemas/WebhookWriteRequest' }
       responses:
         '201':
-          description: Created
+          description: Created. The only response that carries the submitted secret.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Webhook' }
+              schema: { $ref: '#/components/schemas/WebhookWithSecret' }
+              example:
+                id: 6f1c1d2e-7a1b-4c39-9d0e-2b6a5c4d3e21
+                project_id: '1'
+                url: https://hooks.example.com/elitea
+                events: [conversation.created]
+                has_secret: true
+                secret: 3q2-7wAAAAAexampleexampleexampleexampleexa
+                active: true
+                created_at: '2026-11-23T10:00:00Z'
+                updated_at: '2026-11-23T10:00:00Z'
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The project vault is not available, so the secret was not stored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /webhooks/prompt_lib/{projectID}/{webhookID}:
     parameters:
@@ -50853,8 +50898,8 @@ paths:
 
     get:
       operationId: getWebhook
-      summary: Read one webhook, including its live secret
-      description: handler.go's Get.
+      summary: Read one webhook (never its secret)
+      description: handler.go's Get. Reports `has_secret`, never the value.
       tags: [webhooks]
       responses:
         '200':
@@ -50868,12 +50913,13 @@ paths:
 
     put:
       operationId: updateWebhook
-      summary: Replace a webhook's URL, events, secret or active flag
+      summary: Replace a webhook's URL, events or active flag
       description: >
-        handler.go's Update. Every field is replaced with what the body
-        sends — this is how the UI both "rotates" the secret (new random
-        value, same url/events/active) and toggles enable/disable (same
-        url/events/secret, flipped active).
+        handler.go's Update. `url`, `events` and `active` are replaced with
+        what the body sends. `secret` is optional: omitted keeps the stored
+        secret, which is how the UI edits and toggles a webhook without
+        knowing its secret. The response never carries the secret; use
+        rotateWebhookSecret for a new value shown once.
       tags: [webhooks]
       requestBody:
         required: true
@@ -50902,6 +50948,52 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404': { $ref: '#/components/responses/404' }
+
+  /webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret:
+    parameters:
+      - name: projectID
+        in: path
+        required: true
+        schema: { type: string }
+      - name: webhookID
+        in: path
+        required: true
+        schema: { type: string }
+
+    post:
+      operationId: rotateWebhookSecret
+      summary: Replace a webhook's signing secret and return the new value once
+      description: >
+        handler.go's RotateSecret (issue 2963). The server generates a new
+        256-bit secret, seals it into the project vault, removes the previous
+        value, and returns the new one in this response only. Deliveries sign
+        with the new value from the next event on. Gated on the same update
+        permission as updateWebhook. Takes no body.
+      tags: [webhooks]
+      responses:
+        '200':
+          description: The webhook and its new secret, shown this once.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookWithSecret' }
+              example:
+                id: 6f1c1d2e-7a1b-4c39-9d0e-2b6a5c4d3e21
+                project_id: '1'
+                url: https://hooks.example.com/elitea
+                events: [conversation.created]
+                has_secret: true
+                secret: rotated-example-secret-value-0000000000000
+                active: true
+                created_at: '2026-11-23T10:00:00Z'
+                updated_at: '2026-11-23T11:00:00Z'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '503':
+          description: The project vault is not available, so the secret was not changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ── The delivery log (issue #876's second half) ─────────────────────────
   #
