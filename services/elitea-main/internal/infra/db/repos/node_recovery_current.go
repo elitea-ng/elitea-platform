@@ -64,8 +64,8 @@ JOIN LATERAL (
   ORDER BY created_at DESC,journal_revision DESC,activation_id DESC LIMIT 1 FOR UPDATE
 ) latest ON TRUE
 WHERE target.execution_id=$1 AND target.generation=$2
- AND (action.action_json->'owner_proof'->'result_ref'->>'content_id'=$3 OR action.action_json->'owner_proof'->'owner_receipt_ref'->>'content_id'=$3)
- AND (action.action_json->'owner_proof'->'result_ref'->>'immutable_version'=$4 OR action.action_json->'owner_proof'->'owner_receipt_ref'->>'immutable_version'=$4)
+ AND ((action.action_json->'owner_proof'->'result_ref'->>'content_id'=$3 AND action.action_json->'owner_proof'->'result_ref'->>'immutable_version'=$4)
+  OR (action.action_json->'owner_proof'->'owner_receipt_ref'->>'content_id'=$3 AND action.action_json->'owner_proof'->'owner_receipt_ref'->>'immutable_version'=$4))
 ORDER BY target.created_at DESC,target.journal_revision DESC,target.graph_thread ASC,target.activation_id DESC LIMIT 1`, executionID, int64(generation), contentID, version).Scan(&current.activation, &current.revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return currentNodeRecoveryVisit{}, storage.ErrContentRejected

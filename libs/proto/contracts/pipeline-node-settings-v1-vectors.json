@@ -487,6 +487,12 @@
       "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: str\n  b_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: ask_a}\n      - {id: b, node: ask_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: ask_a\n    type: llm\n    input: [topic, node_errors]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [a_out]\n    settings: {on_error: continue}\n  - id: ask_b\n    type: llm\n    input: [topic]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [b_out]\n",
       "refusal": "node_errors_nested_mapping",
       "node": "ask_a"
+    },
+    {
+      "name": "Parallel Agent branch cannot declare input node_errors across fan-out boundary (SEC-5B5-02b)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: str\n  b_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: agent_a}\n      - {id: b, node: ask_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: agent_a\n    type: agent\n    tool: child_pipeline\n    input: [topic, node_errors]\n    input_mapping: {task: {type: variable, value: topic}}\n    output: [a_out]\n  - id: ask_b\n    type: llm\n    input: [topic]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [b_out]\n    settings: {on_error: continue}\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "agent_a"
     }
   ]
 }

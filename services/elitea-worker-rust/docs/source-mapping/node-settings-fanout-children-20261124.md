@@ -18,7 +18,7 @@
      - An owned fan-out child may only target `END` with `settings.error_transition`; any target naming a root node, a sibling branch/worker, or a non-existent node is refused with `error_transition_target`. Root nodes likewise remain unable to target fan-out-owned nodes or dedicated `failure_handler` nodes.
      - Extended C4 (`node_errors_nested_mapping`) across all three layers so `Map` `broadcast`/`outputs` and fan-out-owned child `input`/`output`/`input_mapping` cannot pass `node_errors` across the parent/child fan-out boundary (`SEC-5B5-02`).
    - Kept the `"fanout_owned"` refusal key in `libs/proto/contracts/pipeline-node-settings-v1.json` (and corresponding Rust/Go/Web refusal enums/tables) for backwards wire and contract compatibility.
-   - Updated shared contract vectors in `libs/proto/contracts/pipeline-node-settings-v1-vectors.json` (`84` Web contract tests + Worker/Go vector parity suites) to cover admitted `Map` worker `settings:`, refused escaping `error_transition`, admitted `Parallel` `llm`/`code` branches, refused `Parallel` `agent` branch (`family_not_yet`), and refused cross-boundary `node_errors` mappings (`Map` `broadcast`, `Parallel` `code` and `llm` `input`).
+   - Updated shared contract vectors in `libs/proto/contracts/pipeline-node-settings-v1-vectors.json` (`85` Web contract tests + Worker/Go vector parity suites) to cover admitted `Map` worker `settings:`, refused escaping `error_transition`, admitted `Parallel` `llm`/`code` branches, refused `Parallel` `agent` branch (`family_not_yet`), and refused cross-boundary `node_errors` mappings (`Map` `broadcast`, `Parallel` `code`, `llm`, and `agent` `input`).
 
 2. **Isolated per-child-thread runtime execution (`Parallel` & `Map`):**
    - `CompilerParallelBranches` (`parallel_compiler.rs`) compiles admitted `settings:` on owned `StateModifier` (`compile_item`), `Llm` (`compile_llm_branch`), and `Code` (`compile_code_branch`) fan-out children, binding `execution_id`, clamped `execution_deadline` (`min(runtimes.execution_deadline, binding.deadline)`), and per-child `node_errors` (`Append` reducer) + `EXECUTED_ONCE_KEY` state channels inside each child's private `StateSchema`.
@@ -89,16 +89,16 @@
 | Go vet | `go vet` on all 7 touched Go package trees | PASS (`0` diagnostics) |
 | Go vulnerability audit | `govulncheck ./...` | PASS (`0` vulnerabilities affecting called code; 1 pre-existing uncalled module entry) |
 | Web typecheck | `npm run typecheck` (`tsc --noEmit`) | PASS |
-| Web contract & helper tests | `npx vitest run src/features/pipelines/lib/nodeSettings.helpers.test.ts src/features/pipelines/lib/flow-editor/constants/runtimeContract.nodeSettings.test.ts src/features/pipelines/ui/settings/NodeSettings.test.tsx` | PASS (`3/3` files, `103/103` tests) |
+| Web contract & helper tests | `npx vitest run src/features/pipelines/lib/nodeSettings.helpers.test.ts src/features/pipelines/lib/flow-editor/constants/runtimeContract.nodeSettings.test.ts src/features/pipelines/ui/settings/NodeSettings.test.tsx` | PASS (`3/3` files, `104/104` tests) |
 | Upgrading notes CI check | `node scripts/ci/check-upgrading-notes.mjs` | PASS (`173` notes in `docs/upgrading/`) |
 | Secret scan | Regex scan over `git diff origin/main` | PASS (`0` hits) |
 
 ### Review hardening closed (neutral summary)
 
 - `SEC-5B5-01`: Stamped deterministic `APPLICATION_VISIT_STATE_KEY` on inline fan-out LLM branches, restored unconditional `in_child != activation.visit.is_some()` enforcement with canonical 32-byte base64url validation in `node_attempts.rs`, hardened `LlmNode::execute_journaled` restore path, and added crash/restore proving test.
-- `SEC-5B5-02`: Extended C4 `node_errors_nested_mapping` across Worker/Main/Web + shared vectors for `Map` and fan-out-owned children, stripped `NODE_ERRORS_KEY` at fan-out input projection, and added proving tests for Code `UnknownExternalEffect`, parent/child `node_errors` isolation, 64/65 cap, 512 B error-object bound, and sentinel redaction.
+- `SEC-5B5-02`: Extended C4 `node_errors_nested_mapping` across Worker/Main/Web + shared vectors for `Map` and fan-out-owned children (including owned `agent` branches via `SEC-5B5-02b`), stripped `NODE_ERRORS_KEY` at fan-out input projection, and added proving tests for Code `UnknownExternalEffect`, parent/child `node_errors` isolation, 64/65 cap, 512 B error-object bound, and synthetic sentinel redaction (`SEC-5B5-02c`).
 - `SEC-5B5-03`: Pre-bounded raw query length (`2048` B) and rejected `&`/`;` delimiters in `parseNodeRecoveryReadThread`; completed §3a Authorization Matrix and SQL scope-predicate/argument assertions.
-- `CR-5B5-01`: Updated `code_sandbox_recovery.go` and `node_recovery_result.go` to per-thread visit locking and multi-thread `desired_state` handling with proving tests.
+- `CR-5B5-01`: Updated `code_sandbox_recovery.go` and `node_recovery_result.go` to per-thread visit locking (paired `result_ref` / `owner_receipt_ref` predicates in `lockLatestNodeRecoveryVisitForResult` via `CR-5B5-01b`) and multi-thread `desired_state` handling with proving tests.
 - `CR-5B5-02`: Excluded `parallel_owned_nodes` and `map_owned_nodes` from `compiler.rs::result_policy()` with unit test.
 - `CR-5B5-03`: Added deterministic tie-breakers (`graph_thread ASC, activation_id DESC`) and consistent `STOPPED` > `RESUMED` precedence across multi-thread Main queries with unit tests.
 - `CR-5B5-04`: Corrected table name (`elitea_runtime.node_recovery_visits`), contract bounds, family scope, 12 `rules/security.md` category titles, and removed unused test import.

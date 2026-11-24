@@ -438,8 +438,10 @@ func TestNodeRecoveryConcurrentSiblingCodeVerifyResultAndDeterministicOrdering(t
 		lockSQL := e.rowCalls[2].sql
 		if !strings.Contains(lockSQL, "JOIN LATERAL") ||
 			!strings.Contains(lockSQL, "graph_thread=target.graph_thread") ||
+			!strings.Contains(lockSQL, "(action.action_json->'owner_proof'->'result_ref'->>'content_id'=$3 AND action.action_json->'owner_proof'->'result_ref'->>'immutable_version'=$4)") ||
+			!strings.Contains(lockSQL, "(action.action_json->'owner_proof'->'owner_receipt_ref'->>'content_id'=$3 AND action.action_json->'owner_proof'->'owner_receipt_ref'->>'immutable_version'=$4)") ||
 			!strings.Contains(lockSQL, "ORDER BY created_at DESC,journal_revision DESC,activation_id DESC LIMIT 1 FOR UPDATE") {
-			t.Fatalf("ReadNodeRecoveryResult did not lock per-thread by result proof: %s", lockSQL)
+			t.Fatalf("ReadNodeRecoveryResult did not lock per-thread by paired result proof: %s", lockSQL)
 		}
 		siblingSQL := e.rowCalls[4]
 		if !strings.Contains(siblingSQL.sql, "graph_thread<>$3") || siblingSQL.args[2] != r.GraphThread {

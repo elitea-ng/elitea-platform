@@ -249,20 +249,20 @@ function nodeErrorsIssue(document: YamlPipelineDocument, owned: ReadonlySet<stri
     return issue(undefined, 'node_errors_type', `state.${NODE_ERRORS_KEY}`);
   }
   const mapping = (document.nodes ?? []).find((node) => {
+    let crosses = false;
     if (node.type === 'agent') {
-      return (isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY))
+      crosses = (isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY))
         || strings(node.output).includes(NODE_ERRORS_KEY);
-    }
-    if (node.type === 'map') {
-      return strings(node['broadcast']).includes(NODE_ERRORS_KEY)
+    } else if (node.type === 'map') {
+      crosses = strings(node['broadcast']).includes(NODE_ERRORS_KEY)
         || strings(node['outputs']).includes(NODE_ERRORS_KEY);
     }
-    if (owned.has(node.id)) {
-      return strings(node.input).includes(NODE_ERRORS_KEY)
+    if (!crosses && owned.has(node.id)) {
+      crosses = strings(node.input).includes(NODE_ERRORS_KEY)
         || strings(node.output).includes(NODE_ERRORS_KEY)
         || (node.type === 'llm' && ((isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY)) || mappingReferencesVariable(node['input_mapping'], NODE_ERRORS_KEY)));
     }
-    return false;
+    return crosses;
   });
   return mapping === undefined ? undefined : issue(mapping.id, 'node_errors_nested_mapping', 'input_mapping');
 }

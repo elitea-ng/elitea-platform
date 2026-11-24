@@ -1650,8 +1650,8 @@ async fn fanout_child_node_errors_enforces_64_65_cap_truncation_and_secret_redac
         MAX_NODE_ERROR_ENTRY_BYTES, MAX_NODE_ERROR_OBJECT_BYTES, MAX_NODE_ERRORS,
     };
 
-    let sentinel_api_key = "sk-live-secret-99887766554433221100";
-    let sentinel_bearer = "Bearer topsecret-token-xyz";
+    let sentinel_api_key = "SENTINEL_CREDENTIAL_ALPHA_99887766";
+    let sentinel_bearer = "SENTINEL_BEARER_TOKEN_XYZ";
     let child_yaml_for = |seed_count: usize| {
         let entries: Vec<Value> = (0..seed_count).map(|i| json!({"seed": i})).collect();
         format!(
@@ -1665,7 +1665,7 @@ entry_point: fail_step
 nodes:
   - id: fail_step
     type: state_modifier
-    template: "{{{{ ('sk-live-secret-99887766554433221100 Bearer topsecret-token-xyz ' ~ (1 / 0)) }}}}"
+    template: "{{{{ ('{sentinel_api_key} {sentinel_bearer} ' ~ (1 / 0)) }}}}"
     input: [input]
     output: [step_out]
     settings: {{on_error: continue, always_output_data: true}}
