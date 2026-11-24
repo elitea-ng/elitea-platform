@@ -1,0 +1,98 @@
+package middleware
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
+	"github.com/go-chi/chi/v5"
+)
+
+// CentralFallback is the second way through a project route gate: it runs
+// only when the caller does not hold the route's permission in the project,
+// and answers the request to continue with, or admitted false. An error is a
+// failed read; the gate answers it as a resolver error.
+type CentralFallback func(r *http.Request) (next *http.Request, admitted bool, err error)
+
+// RequireResolvedPermissionsOrCentral is RequireResolvedPermissions with a
+// central fallback (ADR-0059 R0.6b): a caller who holds `required` in the
+// `{projectID}` of the path passes as before, with the resolved set on the
+// context, and the fallback is never asked. A caller who does not is
+// admitted only when the fallback admits it; otherwise the answer is the
+// gate's own 403.
+//
+// The fallback decides on its own terms (the central override's reviewed
+// allowlist); the member path is not widened by it.
+func RequireResolvedPermissionsOrCentral(
+	resolver auth.PermissionResolver,
+	mode string,
+	fallback CentralFallback,
+	required ...string,
+) func(http.Handler) http.Handler {
+	requiredSet := permissionSet(required)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := auth.UserFromContext(r.Context())
+			if !ok {
+				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			projectID := chi.URLParam(r, "projectID")
+			if resolver == nil || projectID == "" {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+			resolution, err := resolver.ResolvePermissions(r.Context(), user, mode, projectID)
+			if err != nil && !errors.Is(err, auth.ErrPermissionDenied) {
+				writeResolverError(w, r, err)
+				return
+			}
+			if err == nil && hasIntersection(requiredSet, permissionSet(resolution.Permissions)) {
+				user.UserID = strconv.FormatInt(resolution.UserID, 10)
+				ctx := auth.ContextWithUser(r.Context(), user)
+				ctx = context.WithValue(ctx, resolvedProjectPermissionsKey{}, resolvedProjectPermissions{
+					mode: mode, projectID: projectID, permissions: append([]string(nil), resolution.Permissions...),
+				})
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if fallback != nil {
+				admittedRequest, admitted, fallbackErr := fallback(r)
+				if fallbackErr != nil {
+					writeResolverError(w, r, fallbackErr)
+					return
+				}
+				if admitted {
+					next.ServeHTTP(w, admittedRequest)
+					return
+				}
+			}
+			apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+		})
+	}
+}
+
+// HoldsCentralPermission answers whether the caller holds any of `permissions`
+// in the administration mode. A native device session holds none at any
+// administration check that stands in for a route gate (ADR-0059 decision 7),
+// and a denied resolution is false, not an error.
+func HoldsCentralPermission(ctx context.Context, resolver auth.PermissionResolver, permissions ...string) (bool, error) {
+	user, ok := auth.UserFromContext(ctx)
+	if !ok || resolver == nil || len(permissions) == 0 {
+		return false, nil
+	}
+	if nativeAtAdministrationGate(user, auth.PermissionModeAdministration) {
+		return false, nil
+	}
+	resolution, err := resolver.ResolvePermissions(ctx, user, auth.PermissionModeAdministration, "")
+	if errors.Is(err, auth.ErrPermissionDenied) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return hasIntersection(permissionSet(permissions), permissionSet(resolution.Permissions)), nil
+}

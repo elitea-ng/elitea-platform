@@ -15,3 +15,9 @@ func SetOpenAPITokenSchemeForTest(scheme string) func() {
 	openAPITokenScheme = scheme
 	return func() { openAPITokenScheme = previous }
 }
+
+// GuardedProjectSettingTypes returns the five guarded settings of the project
+// settings guard, for the test that compares them with the central allowlist.
+func GuardedProjectSettingTypes() []string {
+	return append([]string(nil), guardedProjectSettingTypes...)
+}
