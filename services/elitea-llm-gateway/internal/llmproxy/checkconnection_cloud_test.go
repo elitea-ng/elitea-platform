@@ -703,7 +703,7 @@ func TestCheckConnection_CloudNilPolicyFailsClosed(t *testing.T) {
 		{Type: "vertex_ai", VertexProject: "p", VertexLocation: "us-central1",
 			VertexCredentials: jsonTextField(`{"type":"service_account"}`)},
 	} {
-		h := NewHandler(nil, nil, nil) // no WithEgressPolicy
+		h := newTestHandler(nil, nil, nil) // no WithEgressPolicy
 		rec := doCheckConnection(t, h, req)
 		resp := decodeCheckConnectionResponse(t, rec)
 		if resp.Success {

@@ -271,18 +271,27 @@ func TestPipelineRunFailedCarriesTheErrorSummaryToTheReceiver(t *testing.T) {
 	}))
 	defer server.Close()
 
-	webhooksRepo := repos.NewWebhooksRepo(pool)
+	// Every delivery is signed (#2959), so the registry and the dispatcher
+	// are composed with the project vault, as cmd/elitea-main composes them.
+	secrets := v2secrets.NewHandler(pool)
+	vault, err := repos.NewCurrentSecretVaultRepository(pool, nil, repos.WithProjectVaultCreator(secrets))
+	if err != nil {
+		t.Fatalf("vault repository: %v", err)
+	}
+	webhooksRepo := repos.NewWebhooksRepo(pool, repos.WithWebhookSecretVault(vault))
 	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
-	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(secrets))
 	domainEvents := events.NewPublisher(events.NoopBus{}, dispatcher)
 
 	pipelineRunsRepo := repos.NewPipelineRunsRepo(pool)
 	hook := pipelineruns.NewSettlementHook(pipelineRunsRepo, domainEvents)
 
-	const projectID = "proj-pipeline-failed"
+	// A numeric id: the project vault is keyed by one.
+	const projectID = "9202"
 	registered, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    server.URL,
 		Events: []string{"pipeline.run.failed"},
+		Secret: "pipeline-failed-secret",
 		Active: true,
 	})
 	if err != nil {
@@ -337,17 +346,24 @@ func TestPipelineRunOutcomeIsNotEmittedTwiceForAReplayedSettlement(t *testing.T)
 	}))
 	defer server.Close()
 
-	webhooksRepo := repos.NewWebhooksRepo(pool)
+	// Every delivery is signed (#2959), so the registry and the dispatcher
+	// are composed with the project vault, as cmd/elitea-main composes them.
+	secrets := v2secrets.NewHandler(pool)
+	vault, err := repos.NewCurrentSecretVaultRepository(pool, nil, repos.WithProjectVaultCreator(secrets))
+	if err != nil {
+		t.Fatalf("vault repository: %v", err)
+	}
+	webhooksRepo := repos.NewWebhooksRepo(pool, repos.WithWebhookSecretVault(vault))
 	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
-	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(secrets))
 	domainEvents := events.NewPublisher(events.NoopBus{}, dispatcher)
 
 	pipelineRunsRepo := repos.NewPipelineRunsRepo(pool)
 	hook := pipelineruns.NewSettlementHook(pipelineRunsRepo, domainEvents)
 
-	const projectID = "proj-pipeline-replay"
+	const projectID = "9203"
 	registered, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
-		URL: server.URL, Events: []string{"pipeline.run.succeeded"}, Active: true,
+		URL: server.URL, Events: []string{"pipeline.run.succeeded"}, Secret: "pipeline-replay-secret", Active: true,
 	})
 	if err != nil {
 		t.Fatalf("create webhook: %v", err)

@@ -120,17 +120,20 @@ func (id identity) signVersion(secret []byte, version string) string {
 }
 
 // verifySignature reports whether the identity headers on h carry a valid
-// signature under secret. An empty secret disables verification (the mTLS
-// transport still authenticates the hop); this matches the edge, which only
-// signs when a secret is configured. Returns false when a secret is configured
-// but the signature header is absent or does not match.
+// signature under secret. It fails closed: an EMPTY secret refuses every
+// request, because there is nothing to verify against and the identity
+// headers select a tenant's provider credentials and budget. There is no
+// "verification disabled" mode; startupIdentityCheck refuses to start the
+// gateway without a strong secret, so this branch only guards a Handler built
+// without one. Returns false, too, when the signature header is absent or
+// does not match.
 //
 // It accepts BOTH schemes during a rolling deploy, with the asymmetry the
 // version block above states: v2 always, v1 only when the request carries no
 // execution-id header.
 func verifySignature(h http.Header, secret []byte) bool {
 	if len(secret) == 0 {
-		return true
+		return false
 	}
 	got := h.Get(headerSignature)
 	if got == "" {
@@ -152,8 +155,8 @@ func verifySignature(h http.Header, secret []byte) bool {
 // SignIdentityHeaders sets the identity headers and HMAC signature on h so
 // verifySignature will accept the request. Non-empty projectID, userID,
 // tenantID and executionID are set on their respective headers; an empty value
-// omits the header. An empty secret skips the signature header (matching the
-// gateway's own behaviour when no secret is configured).
+// omits the header. An empty secret sets no signature header, and the
+// gateway then refuses the request.
 //
 // Exported for test-support packages that must forge a signed request without
 // going through the real edge (e.g. internal/preflight).

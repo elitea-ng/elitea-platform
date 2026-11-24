@@ -455,17 +455,38 @@ func TestCreateReturnsTheSecretOnce(t *testing.T) {
 	assertNoSecretMaterial(t, "GET after create", detail.Body.Bytes(), "caller-chosen-value")
 }
 
-// A create without a secret returns no `secret` member and has_secret false.
-func TestCreateWithoutASecretReportsNone(t *testing.T) {
-	r := webhookRouter(&mockWebhookRepo{}, entitledResolver())
-	created := serve(r, http.MethodPost, "/api/v2/projects/proj-1/webhooks/",
-		`{"url":"https://example.com/hook","events":[],"active":true}`)
-	object := decodeObject(t, created.Body.Bytes())
-	if _, present := object["secret"]; present {
-		t.Errorf("create without a secret returned one: %s", created.Body.String())
+// A create without a secret gets a generated one (#2959): every webhook is
+// signed. The response carries it once, has_secret is true, and the value is
+// a fresh 32-byte random string, different for each create.
+func TestCreateWithoutASecretGeneratesOne(t *testing.T) {
+	repo := &mockWebhookRepo{}
+	r := webhookRouter(repo, entitledResolver())
+	seen := map[string]bool{}
+	for _, body := range []string{
+		`{"url":"https://example.com/hook","events":[],"active":true}`,
+		`{"url":"https://example.com/hook","events":[],"secret":"","active":true}`,
+	} {
+		created := serve(r, http.MethodPost, "/api/v2/projects/proj-1/webhooks/", body)
+		if created.Code != http.StatusCreated {
+			t.Fatalf("create: %d %s", created.Code, created.Body.String())
+		}
+		object := decodeObject(t, created.Body.Bytes())
+		var secret string
+		if err := json.Unmarshal(object["secret"], &secret); err != nil || len(secret) < 43 {
+			t.Fatalf("create without a secret returned no generated secret: %s", created.Body.String())
+		}
+		if seen[secret] {
+			t.Fatal("two creates returned the same generated secret")
+		}
+		seen[secret] = true
+		if string(object["has_secret"]) != "true" {
+			t.Errorf("has_secret = %s, want true", object["has_secret"])
+		}
 	}
-	if string(object["has_secret"]) != "false" {
-		t.Errorf("has_secret = %s, want false", object["has_secret"])
+	for _, wh := range repo.webhooks {
+		if wh.Secret == "" && wh.SecretRef == "" {
+			t.Fatalf("a created webhook was stored with no secret: %+v", wh.redacted())
+		}
 	}
 }
 

@@ -54,7 +54,7 @@ export const WebhookWriteRequest = zod
       .string()
       .optional()
       .describe(
-        "Write-only signing secret, sealed into the project vault. On create it is returned once in the response. On update, omit it (or send an empty string) to keep the stored secret, or send a value to replace it; the value is not echoed.\n",
+        "Write-only signing secret, sealed into the project vault. On create it is returned once in the response; omitted or empty, the server generates one. On update, omit it (or send an empty string) to keep the stored secret, or send a value to replace it; the value is not echoed. A secret cannot be removed.\n",
       ),
     active: zod.boolean(),
   })

@@ -75,7 +75,7 @@ func elapsedMs(t *testing.T, rec *httptest.ResponseRecorder) float64 {
 func TestChat_ElapsedHeaderCountsCredentialResolution(t *testing.T) {
 	router := &credentialRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))
@@ -100,7 +100,7 @@ func TestChat_ElapsedHeaderCountsCredentialResolution(t *testing.T) {
 func TestChatStream_ElapsedHeaderCountsCredentialResolution(t *testing.T) {
 	router := &credentialRouter{}
 	router.streamChan = newChunkChan()
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", true /* stream */))
@@ -124,7 +124,7 @@ func TestChatStream_ElapsedHeaderCountsCredentialResolution(t *testing.T) {
 func TestChat_ElapsedHeaderExcludesProviderWhenNoCredentialResolves(t *testing.T) {
 	router := &credentialRouter{skipMark: true}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))

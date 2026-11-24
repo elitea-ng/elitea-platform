@@ -608,6 +608,15 @@ jobs:
           set -euo pipefail
           node --test scripts/ci/check-e2e-paths.test.mjs
           node scripts/ci/check-e2e-paths.mjs
+      # #2958: no deploy/**/*.yml gives a signing secret, the vault master
+      # key or the unwrapped opt-out a literal value; the stack scripts
+      # generate them (deploy/scripts/lib/stack-secrets.sh).
+      - name: No deploy file carries a literal signing secret
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          node --test scripts/ci/check-deploy-signing-secrets.test.mjs
+          node scripts/ci/check-deploy-signing-secrets.mjs
       # The pool runs the E2E stack as processes from a hand-kept table
       # (deploy/native/). Every compose environment key, depends_on edge,
       # healthcheck and one-shot must have its counterpart there, and every

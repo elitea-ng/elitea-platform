@@ -30,7 +30,7 @@ func hopHandlerUnderTest(t *testing.T) (http.Handler, *trackingRouter, string) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
 	marker := hopmarker.New(hopTestSecret)
-	h := NewHandler(router, nil, nil, WithHopMarker(marker))
+	h := newTestHandler(router, nil, nil, WithHopMarker(marker))
 	// The guard is middleware, exactly as internal/api mounts it.
 	return h.HopGuard(http.HandlerFunc(h.Chat)), router, marker.Value()
 }
@@ -169,7 +169,7 @@ func TestHopGuard_ForeignMarkerIsNotOurs(t *testing.T) {
 func TestHopGuard_UnarmedAdmitsEverything(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil) // no WithHopMarker
+	h := newTestHandler(router, nil, nil) // no WithHopMarker
 	guarded := h.HopGuard(http.HandlerFunc(h.Chat))
 
 	req := chatReqWithProject(t, "42", false)
@@ -200,7 +200,7 @@ func TestHopGuard_RunsBeforeIdentityVerification(t *testing.T) {
 	marker := hopmarker.New(hopTestSecret)
 	// A non-empty identity secret with NO signature on the request: buildContext
 	// would answer 403 permission_error.
-	h := NewHandler(router, nil, []byte("identity-secret"), WithHopMarker(marker))
+	h := newTestHandler(router, nil, []byte("identity-secret"), WithHopMarker(marker))
 	guarded := h.HopGuard(http.HandlerFunc(h.Chat))
 
 	req := chatReqWithProject(t, "42", false)
@@ -231,7 +231,7 @@ func TestHopGuard_LoopBreakerIsNotConsulted(t *testing.T) {
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
 	marker := hopmarker.New(hopTestSecret)
 	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithHopMarker(marker),
 		WithLoopBreakerClock(testLoopParams(), clk.now),
 	)

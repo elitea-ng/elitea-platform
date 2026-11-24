@@ -86,7 +86,7 @@ func TestDegraded_UnaryReleasesAfterBilling(t *testing.T) {
 	gs, degraded := buildDegradedStore(t, 1, failmode.NanoUSD)
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "c", Model: "gpt-4o", Usage: degradedUsage}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
 	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))
@@ -107,7 +107,7 @@ func TestDegraded_UnbilledRequestReleasesWhenTheHandlerReturns(t *testing.T) {
 	gs, degraded := buildDegradedStore(t, 1, failmode.NanoUSD)
 	router := &trackingRouter{}
 	router.chatErr = &schemas.BifrostError{Error: &schemas.ErrorField{Message: "upstream down"}}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
 	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, false))
@@ -129,7 +129,7 @@ func TestDegraded_StreamReleasesAfterBilling(t *testing.T) {
 		&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c1", Object: "chat.completion.chunk"}},
 		usageChunk(1000, 500),
 	)
-	h := NewHandler(&fakeRouter{streamChan: chunks}, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
+	h := newTestHandler(&fakeRouter{streamChan: chunks}, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	rec := httptest.NewRecorder()
 	serveScoped(h, h.Chat, rec, chatReqWithProject(t, integProjectIDStr, true))
@@ -166,7 +166,7 @@ func TestDegraded_ConcurrentRequestsAreBoundedByTheShare(t *testing.T) {
 	const reservation = failmode.NanoUSD // share 10 USD / 2 replicas = 5 USD → 5 in flight
 	gs, degraded := buildDegradedStore(t, 2, reservation)
 	router := &blockingRouter{release: make(chan struct{})}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gs, cost.New(cost.Config{})))
 
 	const n = 60
 	codes := make([]int, n)

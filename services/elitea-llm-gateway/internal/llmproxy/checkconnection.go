@@ -367,7 +367,7 @@ var checkConnectionProviders = map[string]checkConnectionProvider{
 // allowlist forbids (issue #13), and it never returns the provider's raw
 // response body to the caller — see the package doc above.
 func (h *Handler) CheckConnection(w http.ResponseWriter, r *http.Request) {
-	if !verifySignature(r.Header, h.identitySecret) {
+	if !h.verifyIdentity(r.Header) {
 		writeError(w, http.StatusForbidden, "permission_error", "invalid identity signature", "")
 		return
 	}

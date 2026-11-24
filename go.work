@@ -12,6 +12,7 @@ use (
 	./libs/go/observability
 	./libs/go/routines
 	./libs/go/rpclib
+	./libs/go/secretstrength
 	./libs/proto/gen/go
 	./services/elitea-egress-proxy
 	./services/elitea-main

@@ -119,8 +119,8 @@ func openRealtime(t *testing.T, client gatewayv1.GatewayServiceClient, ctx conte
 func TestRealtimeEchoThroughTheRealHandler(t *testing.T) {
 	pki := newTestPKI(t)
 	provider := newEchoProvider()
-	h := llmproxy.NewHandler(nil, nil, nil, llmproxy.WithRealtimeDialer(echoDialer{provider}))
-	srv := startTestServer(t, pki, api.NewRouter(h), nil)
+	h := llmproxy.NewHandler(nil, nil, realtimeTestSecret, llmproxy.WithRealtimeDialer(echoDialer{provider}))
+	srv := startTestServer(t, pki, signingHandler(realtimeTestSecret, api.NewRouter(h)), nil)
 	client := dialTestClient(t, srv, pki.clientTLS(t, "elitea-main"))
 
 	ctx := metadata.AppendToOutgoingContext(testContext(t), "x-elitea-project-id", "42")
@@ -169,8 +169,8 @@ func TestRealtimeEchoThroughTheRealHandler(t *testing.T) {
 // handler's status and body, as over HTTP.
 func TestRealtimeRefusalIsAnHTTPResponse(t *testing.T) {
 	pki := newTestPKI(t)
-	h := llmproxy.NewHandler(nil, nil, nil, llmproxy.WithRealtimeDialer(echoDialer{newEchoProvider()}))
-	srv := startTestServer(t, pki, api.NewRouter(h), nil)
+	h := llmproxy.NewHandler(nil, nil, realtimeTestSecret, llmproxy.WithRealtimeDialer(echoDialer{newEchoProvider()}))
+	srv := startTestServer(t, pki, signingHandler(realtimeTestSecret, api.NewRouter(h)), nil)
 	client := dialTestClient(t, srv, pki.clientTLS(t, "elitea-main"))
 
 	stream, gotHead := openRealtime(t, client, testContext(t), handshake(""))
@@ -283,4 +283,18 @@ func TestRealtimeRouteIsGetOnly(t *testing.T) {
 	if routeRealtime.admits(head(http.MethodPost, "/llm/v1/realtime")) {
 		t.Fatal("POST /llm/v1/realtime was admitted; the legacy alias is gone")
 	}
+}
+
+// realtimeTestSecret is the identity secret the realtime tests give the
+// Handler. The gateway refuses an unsigned identity, so signingHandler plays
+// the edge's part and signs the identity headers the test sent.
+var realtimeTestSecret = []byte("realtime-tests-identity-secret-0123456789")
+
+func signingHandler(secret []byte, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmproxy.SignIdentityHeaders(r.Header, secret,
+			r.Header.Get("X-Elitea-Project-Id"), r.Header.Get("X-Elitea-User-Id"),
+			r.Header.Get("X-Elitea-Tenant-Id"), r.Header.Get("X-Elitea-Execution-Id"))
+		next.ServeHTTP(w, r)
+	})
 }

@@ -45,7 +45,7 @@ func throttledHandler(t *testing.T, counter policy.RateCounter, agents policy.Ag
 		Subject: func(kind, key string, window int64) string { return kind + key },
 		Agents:  agents,
 	})
-	return NewHandler(router, nil, nil,
+	return newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snapshotOf(t, rows...)}, limiter, nil))
 }

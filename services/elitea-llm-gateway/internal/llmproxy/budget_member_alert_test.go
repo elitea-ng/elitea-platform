@@ -122,7 +122,7 @@ func runMemberAlertRequest(t *testing.T, gate BudgetChecker, pub *recordingAlert
 		ID:    "served",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 	}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 500_000}),
 		WithAlertEventPublisher(pub))
 
@@ -289,7 +289,7 @@ var (
 // nobody instead of naming the wrong person.
 func TestMemberSoftAlert_MalformedScopeIDOmitsUserID(t *testing.T) {
 	pub := &recordingAlertPublisher{}
-	h := NewHandler(&trackingRouter{}, nil, nil, WithAlertEventPublisher(pub))
+	h := newTestHandler(&trackingRouter{}, nil, nil, WithAlertEventPublisher(pub))
 
 	h.publishSoftAlertEvent(context.Background(), h.budget().alerts, 42,
 		budgetScopeUser, "not-a-member-key", 500_000, 1_750_000_000)

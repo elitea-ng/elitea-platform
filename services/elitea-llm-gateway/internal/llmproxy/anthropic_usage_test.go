@@ -43,7 +43,7 @@ func TestMessagesCacheUsageDoesNotDoubleCountInput(t *testing.T) {
 			if streaming {
 				body += `,"stream":true`
 			}
-			rec := postJSON(t, NewHandler(fake, nil, nil).route(), "/llm/v1/messages", body+"}")
+			rec := postJSON(t, newTestHandler(fake, nil, nil).route(), "/llm/v1/messages", body+"}")
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d; body = %s", rec.Code, rec.Body.String())
 			}

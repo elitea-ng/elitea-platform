@@ -62,9 +62,10 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 
 | Variable | Default in this stack | What it does |
 |---|---|---|
-| `SECRETS_MASTER_KEY` | unset | Optional here: seeded credentials carry a literal `api_key` rather than a vault reference. See [the three states](#secrets_master_key-states) below if you set one. |
+| `SECRETS_MASTER_KEY` | generated | `standalone-stack.sh` generates one per stack, with the signing secrets below, and keeps them in `deploy/.stack-secrets/<project>.env` (ignored by git). The seed wraps the vault keys it writes with it. A value in your environment wins. See [the three states](#secrets_master_key-states) below. |
+| `APPLICATION_SECRET_KEY`, `ELITEA_DEEPWIKI_IDENTITY_SECRET`, `ELITEA_INVENTORY_IDENTITY_SECRET` | generated | The token signing key and the provider identity secrets, generated the same way. The services refuse a value shorter than 32 bytes or a placeholder. Delete the file together with `down -v` to make new ones. |
 | `ELITEA_INITIAL_GLOBAL_ADMINS` | unset | Comma-separated `oidc:<sub>` / `saml:<nameid>` / `email:<address>` entries that become global administrators on first login — see [Install Elitea](/getting-started/install#first-login-and-setup). |
-| `GATEWAY_IDENTITY_SECRET` | `standalone-dev-identity-secret` | HMAC key elitea-main and the gateway share to sign/verify the project/user/tenant identity headers. |
+| `GATEWAY_IDENTITY_SECRET` | generated | HMAC key elitea-main and the gateway share to sign/verify the project/user/tenant identity headers. The gateway refuses to start without a strong value. |
 | `GATEWAY_EGRESS_ALLOWLIST` | `llm-mock:8090,llm-real:8090,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | `host:port` allowlist the gateway checks a saved credential's base URL against. Add your own model host before saving a credential that points there. |
 | `GATEWAY_SELF_LLM_ORIGINS` | `http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1` | The origins the gateway advertises to itself, for the self-referential-origin guard. |
 | `GATEWAY_NATS_URL` | unset | Optional. The stack's NATS serves only elitea-main's live updates (`ELITEA_EVENTS_NATS_URL`: the project SSE stream and canvas presence); the gateway is not pointed at it, so budget enforcement stays disabled with a startup warning — set `GATEWAY_NATS_URL=nats://nats:4222` (and `LLM_BUDGET_REQUIRE_ENFORCEMENT` if you need the cluster's stricter posture) to enforce budgets locally. |
@@ -137,7 +138,7 @@ Sign in through the browser at `http://localhost:${STANDALONE_PORT:-8084}/app/`.
 `up` checks for the gateway client certificate, the runtime CA, and the DeepWiki/Inventory provider certificates before starting anything, so a missing one fails fast with this message rather than leaving elitea-main in a restart loop.
 </Accordion>
 <Accordion title="SECRETS_MASTER_KEY states">
-The variable has three states, and they are not equivalent: **set and valid** — elitea-main wraps each project's vault key with it, stored as a Fernet token; **not set** — elitea-main starts and logs a warning, storing the project key in the clear (anyone who can read the database can open every project secret); **set but malformed** — elitea-main **refuses to start**, naming the variable in its error. A trailing newline is not malformed (both Go and Python ignore it on decode); a stray space or tab is. This stack does not require the variable at all, unlike `deploy/docker-compose.yml` and the staging overlay, which fail to start without it.
+The variable has three states, and they are not equivalent: **set and valid** — elitea-main wraps each project's vault key with it, stored as a Fernet token; **not set** — elitea-main starts and logs a warning, storing the project key in the clear (anyone who can read the database can open every project secret); **set but malformed** — elitea-main **refuses to start**, naming the variable in its error. A trailing newline is not malformed (both Go and Python ignore it on decode); a stray space or tab is. This stack sets the variable itself (a generated key), like `deploy/docker-compose.yml` and the staging overlay, which fail to start without it. `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is refused next to a sign-in configuration, so no stack in this repository uses it.
 </Accordion>
 </AccordionGroup>
 

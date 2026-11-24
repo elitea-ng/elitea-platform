@@ -41,7 +41,7 @@ func newSharedMapHandler(t *testing.T, bySchema map[string][]fakeModelRow) (http
 		DB:              &fakeModelDB{bySchema: bySchema},
 		PublicProjectID: modelPublic,
 	})
-	return NewHandler(spy, nil, nil, WithModelResolver(resolver)).route(), spy
+	return newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route(), spy
 }
 
 // chatBody is a minimal valid chat request naming model.

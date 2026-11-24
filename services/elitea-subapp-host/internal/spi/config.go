@@ -74,6 +74,11 @@ type Settings struct {
 	CallbackCertFile string
 	CallbackKeyFile  string
 	IdentitySecret   string
+	// InsecureIdentity is the development flag ELITEA_DEV_INSECURE_IDENTITY
+	// (unprefixed). Only under it may the host run without IdentitySecret,
+	// and then every call carries an EMPTY identity. cmd/elitea-subapp-host
+	// refuses the flag next to a production authentication configuration.
+	InsecureIdentity bool
 	// PlatformClients are the certificate identities (common name or DNS
 	// SAN) allowed to call the host's gRPC listener — the provider service
 	// and the platform operations — from <PREFIX>PLATFORM_CLIENTS. The host
@@ -109,6 +114,10 @@ type Settings struct {
 	// H2). Empty when the application has no such engine.
 	EngineSocket string
 }
+
+// InsecureIdentityEnvVar is the development flag that lets the host start
+// without an identity secret (see Settings.InsecureIdentity).
+const InsecureIdentityEnvVar = "ELITEA_DEV_INSECURE_IDENTITY"
 
 // DefaultDrainTimeoutSeconds is <PREFIX>DRAIN_TIMEOUT_SECONDS when unset:
 // with the 10 s gRPC stop it fits the chart's 60 s grace period.
@@ -201,6 +210,15 @@ func SettingsFromEnv(prefix string, lookup Lookup) (Settings, error) {
 	}
 	if s.PlatformGRPCAddr == "" {
 		s.PlatformGRPCAddr = DefaultPlatformGRPCAddr
+	}
+	if raw, set := lookup(InsecureIdentityEnvVar); set {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "", "0", "false", "no", "off":
+		case "1", "true", "yes", "on":
+			s.InsecureIdentity = true
+		default:
+			return Settings{}, fmt.Errorf("%w: %s must be a boolean, got %q", ErrConfig, InsecureIdentityEnvVar, raw)
+		}
 	}
 	if s.AdminAddr == "" {
 		s.AdminAddr = DefaultAdminAddr

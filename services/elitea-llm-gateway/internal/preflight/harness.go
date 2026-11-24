@@ -716,7 +716,7 @@ func itoa(n int) string {
 //   - the given router as the LLMRouter,
 //   - the given GovernanceStore as the BudgetChecker,
 //   - a real cost.Calculator (no DB → default price table),
-//   - the given identitySecret for HMAC verification (nil/empty disables it).
+//   - the given identitySecret for HMAC verification (nil/empty refuses every identity-bearing request, #2959; sign with the same secret).
 //
 // The returned http.Handler is ready for httptest.NewServer / httptest.NewRecorder.
 // Additional llmproxy.HandlerOption values (e.g. llmproxy.WithLoopBreaker()

@@ -575,6 +575,55 @@ func TestTheSecretIsResolvedOncePerDispatch(t *testing.T) {
 	}
 }
 
+// A webhook with no signing secret at all is not delivered (#2959): nothing
+// goes out, and the delivery is logged FAILED with the reason, both on the
+// event path and on Redeliver.
+func TestAWebhookWithoutASecretIsNotDelivered(t *testing.T) {
+	var received int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&received, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "7", URL: server.URL,
+		Events: []string{"conversation.created"}, Active: true,
+	}}}
+	d := NewDispatcher(repo, deliveries, WithSecretResolver(&fakeSecretResolver{values: map[string]string{}}))
+
+	d.HandleDomainEvent(context.Background(), "7", "conversation.created", map[string]any{})
+	waitFor(t, func() bool { return deliveries.count() == 1 })
+
+	if got := atomic.LoadInt32(&received); got != 0 {
+		t.Fatalf("receiver saw %d requests, want none: an unsigned delivery went out", got)
+	}
+	logged := deliveries.snapshotCreated()[0]
+	if logged.Status != DeliveryStatusFailed || logged.LastError != errNoSigningSecret.Error() {
+		t.Fatalf("logged %s %q, want failed with the no-secret reason", logged.Status, logged.LastError)
+	}
+	if logged.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1 (the refusal is not retried)", logged.Attempts)
+	}
+}
+
+// send never builds an unsigned request, even if a caller skips attempt().
+func TestSendRefusesAnEmptySecret(t *testing.T) {
+	var received int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&received, 1)
+	}))
+	defer server.Close()
+	d := NewDispatcher(&mockWebhookRepo{}, nil)
+	if _, err := d.send(context.Background(), Webhook{ID: "wh-1", URL: server.URL}, "", "conversation.created", []byte(`{}`)); err == nil {
+		t.Fatal("send accepted an empty secret")
+	}
+	if atomic.LoadInt32(&received) != 0 {
+		t.Fatal("an unsigned request reached the receiver")
+	}
+}
+
 // A webhook whose secret cannot be read is never sent unsigned: nothing goes
 // out, and the delivery is logged FAILED with a reason that names no secret.
 func TestAnUnreadableSecretSendsNothing(t *testing.T) {

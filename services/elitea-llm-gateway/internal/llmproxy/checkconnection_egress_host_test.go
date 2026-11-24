@@ -43,7 +43,7 @@ func TestCheckConnection_CloudEgressRefusalNamesTheDerivedHost(t *testing.T) {
 // TestCheckConnection_EgressFailClosedNamesNoHost proves the fail-closed case
 // (no policy wired) names no host: no host was refused.
 func TestCheckConnection_EgressFailClosedNamesNoHost(t *testing.T) {
-	h := NewHandler(nil, nil, nil)
+	h := newTestHandler(nil, nil, nil)
 	rec := doCheckConnection(t, h, checkConnectionRequest{Type: "open_ai", APIBase: "https://llm.example.com", APIKey: "k"})
 	resp := decodeCheckConnectionResponse(t, rec)
 	if resp.Reason != checkConnectionReasonEgress || resp.Detail != "" {
