@@ -132,6 +132,33 @@ export async function exportMarkdown(params: ExportMarkdownParams, fallbackName:
   return { ok: true, filename };
 }
 
+export type FetchMarkdownResult =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly error: ExportFailure };
+
+/**
+ * The markdown export as text, not a download: a team export (issue 3010)
+ * reads each member's `.agent.md` and zips them with the team's `team.yaml`.
+ */
+export async function fetchMarkdownExport(params: ExportMarkdownParams): Promise<FetchMarkdownResult> {
+  const url = buildMarkdownExportUrl(params.baseUrl, params.projectId, params.applicationId, params.followVersionIds);
+  const headers = new Headers();
+  if (import.meta.env.DEV && params.devToken !== undefined && params.devToken !== '') {
+    headers.set('Authorization', `Bearer ${params.devToken}`);
+  }
+  const credentials = resolveCredentialsMode(params.baseUrl, window.location.origin);
+  let response: Response;
+  try {
+    response = await sendRaw(fetch, url, { headers, credentials, signal: params.signal ?? null });
+  } catch (cause) {
+    return { ok: false, error: toExportFailure(cause) };
+  }
+  if (!response.ok) {
+    return { ok: false, error: { kind: 'http', status: response.status } };
+  }
+  return { ok: true, text: await response.text() };
+}
+
 /* ── row 4c: a generic API GET → blob → download (ADR-0024 WP9) ─────────── */
 
 export interface ApiDownloadParams {

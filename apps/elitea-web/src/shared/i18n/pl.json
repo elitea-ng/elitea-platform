@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "Administracja",
   "entities.token.table.adminInherit": "Wszystkie Twoje uprawnienia administracyjne",
   "entities.token.table.adminInheritEnds": "Wszystkie Twoje uprawnienia administracyjne, do {{date}}",
-  "entities.token.table.adminNone": "Brak"
+  "entities.token.table.adminNone": "Brak",
+  "agents.deleteApplicationButton.failed": "Nie udało się usunąć agenta.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "Nie udało się usunąć: {{count}} {{noun}}.",
+  "features.agentLifecycle.import.failed": "Import nie powiódł się. Nic nie zostało zaimportowane.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} musi zawierać kind: team.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} nie jest prawidłowym plikiem YAML.",
+  "features.agentLifecycle.import.team.leadNotMember": "Lider {{lead}} nie należy do członków {{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} wskazuje pliki, których nie ma w archiwum zip: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} musi wymieniać członków jako ścieżki ich plików .agent.md.",
+  "features.agentLifecycle.import.team.noName": "{{file}} nie ma nazwy zespołu.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} wymienia członka dwukrotnie.",
+  "features.agentLifecycle.import.team.tooManyMembers": "Zespół może mieć najwyżej {{limit}} agentów.",
+  "features.agentLifecycle.import.teamLead": "Lider: {{name}}",
+  "features.agentLifecycle.import.teamName": "Zespół: {{name}}",
+  "features.agentTeams.exportAction": "Eksportuj",
+  "features.agentTeams.exportMemberFailed": "Nie udało się wyeksportować zespołu: nie można odczytać agenta {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "To archiwum zip to zespół. Zaimportuj je z listy agentów."
 }

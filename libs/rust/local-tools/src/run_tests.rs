@@ -604,6 +604,8 @@ mod tests {
             enforcement: Enforcement::Full,
             enforcement_note: None,
             shell: false,
+            grant: None,
+            network: None,
         }
     }
 

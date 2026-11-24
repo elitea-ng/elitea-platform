@@ -199,6 +199,10 @@ var ocsfClasses = map[EventType]int{
 	TypeAgentWorkforceChanged:   OCSFClassEntityManagement,
 	// A change of who holds what: User Access Management, like a grant.
 	TypeAdminAccessChanged: OCSFClassUserAccessManagement,
+	// A step of a break-glass elevation changes who holds administrative
+	// access, and for how long: User Access Management, like its sibling
+	// admin.access.changed (ADR-0059 R2.3).
+	TypeAdminElevation: OCSFClassUserAccessManagement,
 }
 
 // OCSFClassUID returns the OCSF class of t and whether t is known.
@@ -340,6 +344,11 @@ type SecurityEvent struct {
 	// event, and then absent from the canonical form, so the events chained
 	// before this field existed still verify.
 	Access *AccessChange
+
+	// Elevation is the payload of TypeAdminElevation (elevation.go): one
+	// step of a break-glass elevation. Nil on every other event, and then
+	// absent from the canonical form.
+	Elevation *ElevationChange
 }
 
 // PartitionKey is the chain partition of the event.
@@ -438,7 +447,10 @@ func (e SecurityEvent) Validate() error {
 			return err
 		}
 	}
-	return e.Access.validate(e)
+	if err := e.Access.validate(e); err != nil {
+		return err
+	}
+	return e.Elevation.validate(e)
 }
 
 func (e SecurityEvent) stringFields() map[string]string {
@@ -553,6 +565,8 @@ type eventData struct {
 	// Access is TypeAdminAccessChanged's payload; omitted on every other
 	// type, so their canonical bytes are unchanged.
 	Access *accessData `json:"access,omitempty"`
+	// Elevation is TypeAdminElevation's payload; omitted on every other type.
+	Elevation *elevationData `json:"elevation,omitempty"`
 }
 
 // FormatSequence renders a partition sequence as the CloudEvents `sequence`
@@ -620,6 +634,7 @@ func (e SecurityEvent) Canonical(partitionSeq int64) ([]byte, error) {
 			ToolkitName:          e.ToolkitName,
 			ArgumentsDigest:      e.ArgumentsDigest,
 			Access:               e.Access.data(),
+			Elevation:            e.Elevation.data(),
 		},
 	}
 	return marshalEnvelope(env)

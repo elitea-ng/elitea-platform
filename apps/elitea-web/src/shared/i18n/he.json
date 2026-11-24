@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "ניהול",
   "entities.token.table.adminInherit": "כל הרשאות הניהול שלכם",
   "entities.token.table.adminInheritEnds": "כל הרשאות הניהול שלכם, עד {{date}}",
-  "entities.token.table.adminNone": "ללא"
+  "entities.token.table.adminNone": "ללא",
+  "agents.deleteApplicationButton.failed": "לא ניתן היה למחוק את הסוכן.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "לא ניתן היה למחוק {{count}} {{noun}}.",
+  "features.agentLifecycle.import.failed": "הייבוא נכשל. שום דבר לא יובא.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} חייב לכלול kind: team.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} אינו YAML תקין.",
+  "features.agentLifecycle.import.team.leadNotMember": "המוביל {{lead}} אינו אחד מהחברים ב-{{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} מציין קבצים שאינם בקובץ ה-zip: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} חייב לפרט את חבריו לפי הנתיבים של קובצי ה-.agent.md שלהם.",
+  "features.agentLifecycle.import.team.noName": "ל-{{file}} אין שם צוות.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} מפרט חבר פעמיים.",
+  "features.agentLifecycle.import.team.tooManyMembers": "בצוות יש לכל היותר {{limit}} סוכנים.",
+  "features.agentLifecycle.import.teamLead": "מוביל: {{name}}",
+  "features.agentLifecycle.import.teamName": "צוות: {{name}}",
+  "features.agentTeams.exportAction": "ייצוא",
+  "features.agentTeams.exportMemberFailed": "לא ניתן היה לייצא את הצוות: לא ניתן היה לקרוא את הסוכן {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "קובץ ה-zip הזה הוא צוות. ייבאו אותו מרשימת הסוכנים."
 }

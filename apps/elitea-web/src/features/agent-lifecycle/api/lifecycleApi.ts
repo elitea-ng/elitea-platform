@@ -350,12 +350,11 @@ export interface ImportOutcome {
  * Posts a whole export document to the import wizard.
  *
  * The document goes through unchanged, including its `toolkits` and `skills`
- * arrays. The generated `ImportWizardRequest` type describes only the two
- * shapes the SPEC lists (a bare entity array, or `{applications: [...]}`),
- * while the handler reads `toolkits` and `skills` from the same envelope
- * (`handler.go` ExportImportPost). Narrowing the body to the spec's two shapes
- * would silently drop the toolkits and skills half of every imported agent, so
- * the document is sent whole and the type is asserted at this one boundary.
+ * arrays, which the handler imports beside the applications
+ * (`team_import.go` importEntitiesFrom). It used to ignore them, so every
+ * imported agent with a toolkit answered 207 "unable to link tools" (issue
+ * 3010). The type is asserted at this one boundary because the document's
+ * entries are the export's loose records.
  */
 export async function importEntities(projectId: string, document: EntityExportDocument): Promise<ImportOutcome> {
   const envelope = (await importWizard(

@@ -478,6 +478,18 @@
       ]
     },
     {
+      "id": "applications.importTeam",
+      "method": "POST",
+      "path": "/elitea_core/team_import/prompt_lib/{project_id}",
+      "operationId": "importTeam",
+      "source": "generated",
+      "responseSchema": "TeamImportResponse",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-lifecycle"
+      ]
+    },
+    {
       "id": "applications.listApplications",
       "method": "GET",
       "path": "/elitea_core/applications/prompt_lib/{project_id}",

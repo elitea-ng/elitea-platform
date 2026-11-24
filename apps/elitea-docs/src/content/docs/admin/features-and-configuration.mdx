@@ -90,7 +90,7 @@ The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `a
 | `local_work_allowed` | Off | Local work at all. When off, the server refuses every local turn. |
 | `local_work_shell` | On | Local turns may run shell commands. |
 | `local_work_max_sandbox_mode` | `workspace-write` | The least confined sandbox a command may use: `read-only`, `workspace-write` or `full-access`. |
-| `local_work_network` | Off | Sandboxed commands may reach the network. |
+| `local_work_network` | Off | Sandboxed commands may reach the network. A desktop approval rule that grants a login or named hosts also needs it ([approval rules](/how-tos/chat-conversations/desktop-approval-rules/)). |
 | `local_work_command_allow`, `local_work_command_deny`, `local_work_path_deny` | Empty | Command and path patterns, at most 200 of 512 bytes each. A deny wins. |
 | `local_work_local_mcp` | Off | People may add MCP servers that run on their machine. |
 | `local_work_local_index` | On | The app may index a workspace folder on the device. |

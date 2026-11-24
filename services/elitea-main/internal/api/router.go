@@ -5855,6 +5855,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// Import wizard
 				r.With(projectPermission("models.applications.export_import.import")).
 					Post("/import_wizard/prompt_lib/{projectID}", coreHandler.ExportImportPost)
+				// A set of agents imported as one saved team, in one transaction
+				// (issue 3010): it creates agents AND a team, so it takes both
+				// rights.
+				r.With(projectPermission("models.applications.export_import.import"), projectPermission(agentteamsdomain.CreatePermission)).
+					Post("/team_import/prompt_lib/{projectID}", coreHandler.TeamImportPost)
 
 				// Users / Roles (served under /admin/ for UI compat, registered
 				// here as fallback). elitea_core has no users.py or roles.py;

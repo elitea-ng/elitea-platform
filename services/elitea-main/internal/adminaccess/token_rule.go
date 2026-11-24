@@ -88,11 +88,11 @@ func TokenRefusal(entry Action, caller TokenCaller) *Refusal {
 	return nil
 }
 
-// StandingGlobalAdmin answers whether a resolved administration set makes its
-// owner a global administrator. Until R2.1 adds the standing-set call, the
-// owner's resolved set IS the standing set (no elevation exists); R2.1
-// replaces this variable's value with the standing-set call, and the rule
-// does not change.
+// StandingGlobalAdmin answers whether a STANDING administration set makes its
+// owner a global administrator. The caller passes the standing set: the
+// resolution's StandingPermissions, which leaves out what an elevation adds
+// (ADR-0059 R2.1b), so an elevation never satisfies the check. A personal
+// access token never holds an elevation in the first place.
 var StandingGlobalAdmin = func(_ context.Context, ownerSet []string) bool {
 	return slices.Contains(ownerSet, SuperAdminPermission)
 }
