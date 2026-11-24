@@ -313,12 +313,13 @@ jobs:
       # one-chart PR found them): the default-deny NetworkPolicies, the
       # elitea-main platform listener, the sandbox image references, and the
       # worker drain script (a kubectl stub; no cluster).
-      - name: NetworkPolicies, platform listener, sandbox images, worker drain
+      - name: NetworkPolicies, service-account tokens, platform listener, sandbox images, worker drain
         if: ${{ !cancelled() }}
         run: |
           python3 -c "import yaml" 2>/dev/null \
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-network-policies.sh
+          bash deploy/helm/tests/render-service-account-tokens.sh
           bash deploy/helm/tests/render-platform-listener.sh
           bash deploy/helm/tests/render-sandbox-images.sh
           bash deploy/tests/drain-workers-test.sh

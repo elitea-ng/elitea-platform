@@ -59,6 +59,8 @@ spec:
         {{- include "elitea-worker.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: runtime-session
     spec:
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.worker.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       securityContext:

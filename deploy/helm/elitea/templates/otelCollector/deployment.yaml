@@ -28,6 +28,8 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "otel-collector.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.otelCollector.serviceAccount }}
       {{- with .Values.otelCollector.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}

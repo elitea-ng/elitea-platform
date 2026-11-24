@@ -24,6 +24,8 @@ spec:
         app.kubernetes.io/name: {{ include "elitea-main.name" . }}-agentstate-migrate
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: false
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.main.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       {{- with .Values.main.podSecurityContext }}
       securityContext:

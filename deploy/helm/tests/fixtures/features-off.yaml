@@ -18,3 +18,15 @@ deepwiki:
   enabled: false
 inventory:
   enabled: false
+
+# Not a feature switch: the two network facts every render with the worker's
+# or the LLM gateway's egress policy needs (#2951, #2952), so render tests
+# about something else are not refused for them. render-network-policies.sh
+# asserts the refusal without them.
+networkPolicies:
+  clusterCIDRs: [10.244.0.0/16, 10.96.0.0/12]
+  egressPeers:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.20.0.5/32

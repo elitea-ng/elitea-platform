@@ -4,7 +4,7 @@ cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-base=(-f "$chart/values-standalone.yaml" --namespace platform
+base=(-f "$chart/values-standalone.yaml" -f deploy/helm/tests/fixtures/network-peers.yaml --namespace platform
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 helm template sandbox "$chart" "${base[@]}" > "$work/default.yaml"
