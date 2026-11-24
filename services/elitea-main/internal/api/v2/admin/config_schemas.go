@@ -838,8 +838,15 @@ const llmProxyUnavailable = "the LLM proxy is not configured as plugin values on
 // rejectUnavailableField exists to prevent.
 func llmProxySection() map[string]any {
 	return map[string]any{
-		"id":     "llm_proxy",
-		"access": platformConfigAccess(adminaccess.AreaModelsSpend),
+		"id": "llm_proxy",
+		// The section is a fieldless pointer to the gateway editor, whose
+		// routes (/admin/gateway) open on llm.catalogue.view and the other
+		// llm.* names (R0.3). With platform.config.view as the read half an
+		// LLM manager, who holds the catalogue pair and not
+		// platform.config.view, never saw the editor in the schema list
+		// (ADR-0059 R0.16). The write half stays platform.config.manage: the
+		// pointer has no value to save (its PUT answers 501).
+		"access": narrowAccess(adminaccess.AreaModelsSpend, adminaccess.LLMCatalogueView, adminaccess.PlatformConfigManage),
 		// The surface name, not the section id, is what the client keys its
 		// editor registry on — see mcpServersSection() for why that distinction
 		// is load-bearing.
