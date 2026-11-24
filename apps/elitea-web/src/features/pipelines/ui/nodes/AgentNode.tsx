@@ -1,47 +1,7 @@
 /**
- * Ported from `apps/elitea-ui/src/[fsd]/features/pipelines/flow-editor/ui/
- * nodes/AgentNode.jsx` (179 lines) — unit A2f. Despite the filename, this is
- * a pure pipeline-canvas node renderer keyed off the YAML node's `type:
- * agent` — verified it does NOT import anything from `features/agents` (A1),
- * so there is no `no-sideways-features` risk here.
- *
- * `NodeCard`/`CustomHandle` (A2e) and `ToolSelect`/`InputSelect`/
- * `OutputSelect`/`CommonInterruptSettings` (A2h) landed in this shared
- * worktree while this sub-unit was in progress — imported from their real,
- * verified paths/prop shapes (re-checked against each file's own source
- * immediately before writing this version, not assumed from the baseline).
- *
- * `InputMapping` (baseline: `flow-editor/ui/settings/InputMapping.jsx`, the
- * accordion that renders one `InputMappingItem` per required/optional
- * variable) is unit A2i's `../settings/InputMappings/InputMapping.tsx`
- * (plural directory — verified against that file's own real, landed path),
- * imported below with the baseline's own prop names preserved exactly.
- * `useFunctionInputMapping`'s (A2d) own `mappingInfo`/`inputMappings` are
- * typed as plain `Record<string, unknown>` (that file's own choice, not
- * this sub-unit's file to retype); `InputMapping.tsx`'s (A2i) own props
- * want the narrower `YamlInputMappingEntry`-keyed shape. Both describe the
- * exact same real `input_mapping[key]`/`{type,value,...}` runtime object
- * this hook itself builds from `getDefaultInputMappingOfTool` (A2c) — the
- * cast below at the two call sites just recovers the type A2d's own return
- * type erased, it does not paper over an actual shape mismatch.
- *
- * DISCLOSED REDESIGN (forced, matches this batch's established
- * "ambient context -> explicit prop" convention): the baseline reads
- * `values.version_details.tools` from ambient `useFormikContext()`
- * (`AgentNode.jsx:31-32`) to (a) filter "Agent" (Application-typed) tools
- * for `ToolSelect`, and (b) detect an orphaned tool binding. This app has
- * no Formik (react-hook-form + zod). A `versionTools` prop (typed
- * `PipelineToolEntry[]` — `ToolSelect.tsx`'s own established shared type
- * for this exact `version_details.tools[]` shape, unit A2h) replaces the
- * ambient read; the caller (the not-yet-built pipeline-editor form, out of
- * this pure-node-renderer sub-unit's scope) supplies its own
- * `version_details.tools` field value, e.g. via `useWatch`.
- * `useFunctionInputMapping`'s own `VersionTool` parameter type is a
- * narrower local type (A2d) describing the same real object from a
- * different sub-unit's read surface; `PipelineToolEntry` (A2h) structurally
- * satisfies it directly (every `VersionTool` field it reads is present and
- * compatibly typed), so the same runtime array is passed to both call sites
- * with no cast needed.
+ * Pipeline canvas & config-drawer renderer for `type: agent` nodes.
+ * Uses `ProjectAgentPicker`, read-only/callback-gated `AgentVersionSelect`, and
+ * Basic/Advanced `InputMappingFields` sections with Q6 interrupts and `NodeSettings`.
  */
 import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
@@ -73,7 +33,7 @@ import { NodeSettings } from '../settings/NodeSettings';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
-import { AgentVersionSelect } from '../tool-picker/AgentVersionSelect';
+import { AgentVersionSelect, type AgentVersionSelectProps } from '../tool-picker/AgentVersionSelect';
 import { ProjectAgentPicker } from '../tool-picker/ProjectAgentPicker';
 import { CustomHandle } from './CustomHandle';
 import { NodeCard } from './BaseNode/NodeCard';
@@ -88,6 +48,8 @@ const EMPTY_TOOLS: readonly PipelineToolEntry[] = [];
 export interface AgentNodeProps extends NodeProps<FlowNode> {
   /** Replaces the baseline's ambient `values.version_details.tools` read — see module doc comment. */
   readonly versionTools?: readonly PipelineToolEntry[] | undefined;
+  /** Optional version-change persistence callback; when omitted, `AgentVersionSelect` renders read-only. */
+  readonly onVersionChange?: AgentVersionSelectProps['onVersionChange'] | undefined;
 }
 
 interface AgentNodeHandlesProps {
@@ -172,16 +134,18 @@ function resolveVersionTooltip(): string | undefined {
 const TASK_KEY = 'task';
 const CHAT_HISTORY_KEY = 'chat_history';
 
-function partitionAgentMappingKeys(
+export function partitionAgentMappingKeys(
   inputMappings: Readonly<Record<string, unknown>> | undefined,
   requiredInputs: readonly string[],
 ): { readonly basicKeys: readonly string[]; readonly advancedKeys: readonly string[] } {
   const allKeys = Object.keys(inputMappings ?? {});
-  const basicKeys = [TASK_KEY, ...requiredInputs.filter((key) => key !== TASK_KEY)];
-  const advancedKeys = [
-    CHAT_HISTORY_KEY,
-    ...allKeys.filter((key) => key !== CHAT_HISTORY_KEY && !basicKeys.includes(key)),
+  const basicKeys = Array.from(new Set([TASK_KEY, ...requiredInputs]));
+  const basicSet = new Set(basicKeys);
+  const advancedCandidates = [
+    ...(basicSet.has(CHAT_HISTORY_KEY) ? [] : [CHAT_HISTORY_KEY]),
+    ...allKeys.filter((key) => !basicSet.has(key)),
   ];
+  const advancedKeys = Array.from(new Set(advancedCandidates));
   return { basicKeys, advancedKeys };
 }
 
@@ -198,6 +162,7 @@ function AgentNodeVersionAndBasicMappings({
   attachedTool,
   projectId,
   disabled,
+  onVersionChange,
   basicKeys,
   mappingFieldsProps,
 }: {
@@ -205,6 +170,7 @@ function AgentNodeVersionAndBasicMappings({
   readonly attachedTool: PickerToolEntry | undefined;
   readonly projectId: string | undefined;
   readonly disabled: boolean;
+  readonly onVersionChange: AgentVersionSelectProps['onVersionChange'] | undefined;
   readonly basicKeys: readonly string[];
   readonly mappingFieldsProps: Omit<InputMappingFieldsProps, 'keys'>;
 }): ReactNode {
@@ -216,7 +182,8 @@ function AgentNodeVersionAndBasicMappings({
           tool={attachedTool}
           tooltip={resolveVersionTooltip()}
           projectId={projectId}
-          disabled={disabled}
+          disabled={disabled || !onVersionChange}
+          {...(onVersionChange ? { onVersionChange } : {})}
           data-testid="pipeline-agent-node-version-select"
         />
       ) : null}
@@ -226,7 +193,7 @@ function AgentNodeVersionAndBasicMappings({
 }
 
 export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNode {
-  const { id, data, selected, type: nodeType = FlowEditorConstants.PipelineNodeTypes.Agent, versionTools } = props;
+  const { id, data, selected, type: nodeType = FlowEditorConstants.PipelineNodeTypes.Agent, versionTools, onVersionChange } = props;
 
   const edges = useEdges();
   const flowEditorContext = useContext(FlowEditorContext) ?? EMPTY_FLOW_EDITOR_CONTEXT;
@@ -338,6 +305,7 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
           attachedTool={attachedTool}
           projectId={projectId}
           disabled={isFieldsDisabled}
+          onVersionChange={onVersionChange}
           basicKeys={basicKeys}
           mappingFieldsProps={mappingFieldsProps}
         />

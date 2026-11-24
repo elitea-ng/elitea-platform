@@ -42,6 +42,9 @@ interface RawVersionTool {
   readonly toolkit_name?: unknown;
   readonly description?: unknown;
   readonly agent_type?: unknown;
+  readonly online?: unknown;
+  readonly application_id?: unknown;
+  readonly application_version_id?: unknown;
   readonly meta?: { readonly mcp?: unknown } | null;
   readonly tools?: unknown;
   readonly config?: unknown;
@@ -54,6 +57,10 @@ function asString(value: unknown): string | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function asPositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function asToolNameList(value: unknown): readonly (string | { readonly name?: string })[] | undefined {
@@ -86,7 +93,36 @@ interface ResolvedToolFields {
   readonly agentType: string | undefined;
   readonly toolNames: readonly (string | { readonly name?: string })[] | undefined;
   readonly mcp: boolean | undefined;
-  readonly selectedTools: readonly string[] | undefined;
+  readonly online: boolean | undefined;
+  readonly settings: PipelineToolEntry['settings'];
+}
+
+function resolveToolSettings(
+  tool: RawVersionTool,
+  configBlob: RawVersionTool,
+  settingsBlob: RawVersionTool,
+): PipelineToolEntry['settings'] {
+  const selectedTools = resolveSelectedTools(
+    asStringArray(tool.selected_tools),
+    asStringArray(configBlob.selected_tools) ?? asStringArray(settingsBlob.selected_tools),
+  );
+  const applicationId =
+    asPositiveNumber(settingsBlob.application_id) ??
+    asPositiveNumber(configBlob.application_id) ??
+    asPositiveNumber(tool.application_id);
+  const applicationVersionId =
+    asPositiveNumber(settingsBlob.application_version_id) ??
+    asPositiveNumber(configBlob.application_version_id) ??
+    asPositiveNumber(tool.application_version_id);
+
+  if (selectedTools === undefined && applicationId === undefined && applicationVersionId === undefined) {
+    return undefined;
+  }
+  return {
+    ...(selectedTools !== undefined ? { selected_tools: selectedTools } : {}),
+    ...(applicationId !== undefined ? { application_id: applicationId } : {}),
+    ...(applicationVersionId !== undefined ? { application_version_id: applicationVersionId } : {}),
+  };
 }
 
 /**
@@ -110,6 +146,8 @@ function resolveSelectedTools(mapping: readonly string[] | undefined, toolkit: r
 function resolveToolFields(raw: unknown): ResolvedToolFields {
   const tool = asRawVersionTool(raw);
   const blob = opaqueToolBlob(tool);
+  const configBlob = asRawVersionTool(tool.config);
+  const settingsBlob = asRawVersionTool(tool.settings);
   return {
     id: tool.id === undefined ? undefined : String(tool.id),
     type: tool.type,
@@ -119,23 +157,13 @@ function resolveToolFields(raw: unknown): ResolvedToolFields {
     agentType: asString(tool.agent_type) ?? asString(blob.agent_type) ?? tool.entity_type,
     toolNames: asToolNameList(tool.tools) ?? asToolNameList(blob.tools),
     mcp: asBoolean(tool.meta?.mcp) ?? asBoolean(blob.meta?.mcp),
-    selectedTools: resolveSelectedTools(asStringArray(tool.selected_tools), asStringArray(blob.selected_tools)),
+    online: asBoolean(tool.online) ?? asBoolean(blob.online),
+    settings: resolveToolSettings(tool, configBlob, settingsBlob),
   };
 }
 
-/**
- * `readonly field?: T` (no `| undefined`) on every `PipelineToolEntry`
- * field, PLUS `readonly` itself, means `exactOptionalPropertyTypes` rejects
- * both `{field: undefined}` and post-construction assignment -- built up
- * via one object literal with a conditional spread per optional field
- * (same idiom `aiContentGenerationStreaming.helpers.ts`'s own
- * `buildLlmSettings` already uses for `integration_uid`), not a generic
- * `assignDefined(obj, key, value)` helper (writing through a generic
- * `keyof T` index is exactly the pattern TypeScript's checker cannot
- * verify soundly under strict mode, `readonly` aside).
- */
 function toPipelineToolEntry(raw: unknown): PipelineToolEntry {
-  const { id, type, name, toolkitName, description, agentType, toolNames, mcp, selectedTools } = resolveToolFields(raw);
+  const { id, type, name, toolkitName, description, agentType, toolNames, mcp, online, settings } = resolveToolFields(raw);
   return {
     ...(id !== undefined ? { id } : {}),
     ...(type !== undefined ? { type } : {}),
@@ -145,7 +173,8 @@ function toPipelineToolEntry(raw: unknown): PipelineToolEntry {
     ...(agentType !== undefined ? { agent_type: agentType } : {}),
     ...(toolNames !== undefined ? { tools: toolNames } : {}),
     ...(mcp !== undefined ? { meta: { mcp } } : {}),
-    ...(selectedTools !== undefined ? { settings: { selected_tools: selectedTools } } : {}),
+    ...(online !== undefined ? { online } : {}),
+    ...(settings !== undefined ? { settings } : {}),
   };
 }
 

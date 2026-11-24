@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,5 +46,33 @@ describe('AddOptionalParameterButton', () => {
       />,
     );
     expect(screen.getByTestId('pipeline-mcp-node-add-optional-parameter')).toBeDisabled();
+  });
+
+  it('closes the open menu and blocks selection if disabled flips true while open', async () => {
+    const onAdd = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = renderWithTheme(
+      <AddOptionalParameterButton
+        options={[{ key: 'limit', label: 'Limit' }]}
+        onAdd={onAdd}
+        testIdPrefix="pipeline-mcp-node"
+      />,
+    );
+
+    await user.click(screen.getByTestId('pipeline-mcp-node-add-optional-parameter'));
+    expect(screen.getByTestId('pipeline-mcp-node-optional-parameter-limit')).toBeVisible();
+
+    rerender(
+      <AddOptionalParameterButton
+        options={[{ key: 'limit', label: 'Limit' }]}
+        onAdd={onAdd}
+        disabled
+        testIdPrefix="pipeline-mcp-node"
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId('pipeline-mcp-node-optional-parameter-limit')).not.toBeVisible(),
+    );
+    expect(onAdd).not.toHaveBeenCalled();
   });
 });

@@ -97,13 +97,17 @@ export function useToolNodeParameterPartition({
   }, [optionalKeys, revealedOptionalKeys, currentMappingValues]);
 
   const addableOptionalParameters = useMemo<readonly OptionalParameterOption[]>(() => {
-    const record = (inputMappings ?? {}) as Readonly<Record<string, { readonly title?: string } | undefined>>;
+    const record = (inputMappings ?? {}) as Readonly<Record<string, { readonly title?: unknown } | undefined>>;
     return optionalKeys
       .filter((key) => !shownOptionalKeys.includes(key))
-      .map((key) => ({
-        key,
-        label: record[key]?.title ?? capitalizeFirstChar(key.replaceAll('_', ' ')),
-      }));
+      .map((key) => {
+        const rawTitle = Object.hasOwn(record, key) ? record[key]?.title : undefined;
+        const label =
+          typeof rawTitle === 'string' && rawTitle.trim().length > 0
+            ? rawTitle
+            : capitalizeFirstChar(key.replaceAll('_', ' '));
+        return { key, label };
+      });
   }, [inputMappings, optionalKeys, shownOptionalKeys]);
 
   const onRevealOptionalParameter = useCallback((key: string) => {

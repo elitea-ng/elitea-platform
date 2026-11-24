@@ -78,7 +78,9 @@ export function SplitOutSettings(props: ExtensionSettingsProps): ReactNode {
   const mode = extensionText(split['mode']) || 'list';
   const source = extensionText(node['source']);
   const output = extensionStrings(node['output'])[0] ?? '';
-  const preview = pointerDefaultPreview(document?.state?.[source], split['path']);
+  const sourceState =
+    document?.state && Object.hasOwn(document.state, source) ? document.state[source] : undefined;
+  const preview = pointerDefaultPreview(sourceState, split['path']);
   const changeMode = (next: string) => {
     let updated = patchExtensionRecord(split, 'mode', next);
     if (next === 'list') updated = patchExtensionRecord(updated, 'path', null, true);

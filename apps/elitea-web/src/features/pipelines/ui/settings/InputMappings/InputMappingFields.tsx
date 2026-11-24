@@ -13,19 +13,32 @@ type InputMappingEntry = YamlInputMappingEntry & { readonly title?: string };
 
 const DEFAULT_DATA_TYPE = 'string';
 
+function readOwn<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
+function resolveDisplayLabel(title: unknown, key: string): string {
+  return typeof title === 'string' && title.trim().length > 0
+    ? title
+    : capitalizeFirstChar(key.replaceAll('_', ' '));
+}
+
 function getMappingValue(
   key: string,
   values: Readonly<Record<string, YamlInputMappingEntry>>,
   mappingInfo: Readonly<Record<string, YamlInputMappingEntry>>,
   dataType: string,
 ): unknown {
-  if (values[key]?.value !== undefined) return values[key].value;
-  if (mappingInfo[key]?.value !== undefined) return mappingInfo[key].value;
+  const valEntry = readOwn(values, key);
+  if (valEntry?.value !== undefined) return valEntry.value;
+  const infoEntry = readOwn(mappingInfo, key);
+  if (infoEntry?.value !== undefined) return infoEntry.value;
   return dataType === 'array' ? [] : '';
 }
 
-function resolveFieldTooltip(nodeType: string | undefined, key: string, infoTooltip: string | undefined): string | undefined {
-  return nodeType ? getInputMappingFieldInfo(nodeType, key, infoTooltip) : infoTooltip;
+function resolveFieldTooltip(nodeType: string | undefined, key: string, rawTooltip: unknown): string | undefined {
+  const safeTooltip = typeof rawTooltip === 'string' && rawTooltip.trim().length > 0 ? rawTooltip : undefined;
+  return nodeType ? getInputMappingFieldInfo(nodeType, key, safeTooltip) : safeTooltip;
 }
 
 function resolveFieldSpec(
@@ -36,13 +49,13 @@ function resolveFieldSpec(
   inputOptions: ReturnType<typeof useInputOptions>,
   nodeType: string | undefined,
 ) {
-  const mapping = inputMapping[key];
-  const info = mappingInfo[key];
-  const type = values[key]?.type ?? info?.type ?? mapping?.type;
+  const mapping = readOwn(inputMapping, key);
+  const info = readOwn(mappingInfo, key);
+  const valEntry = readOwn(values, key);
+  const type = valEntry?.type ?? info?.type ?? mapping?.type;
   const dataType = info?.data_type ?? DEFAULT_DATA_TYPE;
-  const variableName = mapping?.title ?? capitalizeFirstChar(key.replaceAll('_', ' '));
   return {
-    variableName,
+    variableName: resolveDisplayLabel(mapping?.title, key),
     type,
     dataType,
     value: getMappingValue(key, values, mappingInfo, dataType),

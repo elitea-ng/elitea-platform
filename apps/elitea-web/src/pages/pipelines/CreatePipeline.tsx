@@ -123,7 +123,9 @@ export function CreatePipeline(): ReactNode {
     versionId: CREATE_DRAFT_VERSION_ID,
   });
 
-  const admission = useLivePipelineGraphAdmission(pipelineInstructions(extraFields.instructions));
+  const admission = useLivePipelineGraphAdmission(
+    isCanvasYamlDirty ? undefined : pipelineInstructions(extraFields.instructions),
+  );
 
   const name = form.watch('name') ?? '';
   const description = form.watch('description') ?? '';

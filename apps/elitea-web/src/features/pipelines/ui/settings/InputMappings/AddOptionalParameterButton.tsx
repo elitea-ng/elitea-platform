@@ -45,9 +45,13 @@ export const AddOptionalParameterButton = memo(function AddOptionalParameterButt
 }: AddOptionalParameterButtonProps): ReactNode {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
-  const handleOpen = useCallback((event: MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget);
-  }, []);
+  const handleOpen = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      if (disabled) return;
+      setAnchorEl(event.currentTarget);
+    },
+    [disabled],
+  );
 
   const handleClose = useCallback(() => {
     setAnchorEl(null);
@@ -55,10 +59,11 @@ export const AddOptionalParameterButton = memo(function AddOptionalParameterButt
 
   const handleSelect = useCallback(
     (key: string) => () => {
+      if (disabled) return;
       onAdd(key);
       setAnchorEl(null);
     },
-    [onAdd],
+    [disabled, onAdd],
   );
 
   if (options.length === 0) return null;
@@ -77,7 +82,7 @@ export const AddOptionalParameterButton = memo(function AddOptionalParameterButt
         </BaseBtn>
         {tooltip ? <InfoTooltip title={tooltip} placement="top" /> : null}
       </Box>
-      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={handleClose}>
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl) && !disabled} onClose={handleClose}>
         {options.map(({ key, label }) => (
           <MenuItem
             key={key}

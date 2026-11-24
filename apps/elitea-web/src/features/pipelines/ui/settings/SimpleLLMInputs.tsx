@@ -30,6 +30,10 @@ export interface SimpleLLMInputsProps {
  * settings/SimpleLLMInputs.jsx` (unit A2h) -- a thin list wrapper over
  * `SimpleLLMInputItem`, one row per `inputMappings` key.
  */
+function readOwn<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 export function SimpleLLMInputs(props: SimpleLLMInputsProps): ReactNode {
   const { inputMappings, values, onChangeMapping, defaultValues, disabled = false, enableAIAssistant = false, modelConfig = null, gap, codeLanguage, keys, nodeType } = props;
 
@@ -43,15 +47,16 @@ export function SimpleLLMInputs(props: SimpleLLMInputsProps): ReactNode {
   return (
     <Box sx={containerSx}>
       {resolvedKeys.map(key => {
-        const current = values[key] ?? inputMappings[key];
+        const current = readOwn(values, key) ?? readOwn(inputMappings, key);
+        const defaultVal = readOwn(defaultValues, key);
         return (
           <SimpleLLMInputItem
             key={key}
             variableName={key}
             variable={key}
             type={current?.type ?? 'fixed'}
-            value={current?.value ?? defaultValues[key] ?? ''}
-            defaultValue={defaultValues[key] ?? ''}
+            value={current?.value ?? defaultVal ?? ''}
+            defaultValue={defaultVal ?? ''}
             onChangeMapping={onChangeMapping}
             disabled={disabled}
             enableAIAssistant={enableAIAssistant}

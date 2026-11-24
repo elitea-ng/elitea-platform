@@ -91,6 +91,24 @@ describe('toPipelineToolEntries', () => {
     expect(entry.settings).toEqual({ selected_tools: ['a', 'b'] });
     expect(entry.tools).toEqual(['x', { name: 'y' }]);
   });
+
+  it('preserves boolean online and positive numeric application_id / application_version_id, ignoring invalid values', () => {
+    const mcpEntry = only(toPipelineToolEntries([
+      { id: 10, type: 'mcp', name: 'OfflineMCP', online: false },
+    ]));
+    expect(mcpEntry.online).toBe(false);
+
+    const agentEntry = only(toPipelineToolEntries([
+      { id: 11, type: 'application', name: 'Researcher', settings: { application_id: 42, application_version_id: 7 } },
+    ]));
+    expect(agentEntry.settings).toEqual({ application_id: 42, application_version_id: 7 });
+
+    const invalidEntry = only(toPipelineToolEntries([
+      { id: 12, online: 'yes', settings: { application_id: -1, application_version_id: '7' } },
+    ]));
+    expect(invalidEntry.online).toBeUndefined();
+    expect(invalidEntry.settings).toBeUndefined();
+  });
 });
 
 describe('toAiAssistantLlmSettings', () => {
