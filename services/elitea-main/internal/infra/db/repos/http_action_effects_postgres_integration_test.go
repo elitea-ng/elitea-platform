@@ -3,7 +3,7 @@ package repos
 // Real-PostgreSQL evidence for HTTP action effects (T-5D 5d-1; design §13).
 //
 // Boundary crossed: service integration — real PostgreSQL 18, the full
-// ledgered migrations (incl. 0269), the real claim/lease SQL, the real legacy
+// ledgered migrations (incl. 0270), the real claim/lease SQL, the real legacy
 // RBAC resolver on the Begin transaction, and the real configuration row.
 // Requires ELITEA_TEST_DATABASE_URL.
 

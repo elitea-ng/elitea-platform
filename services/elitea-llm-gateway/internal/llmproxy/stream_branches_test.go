@@ -30,7 +30,7 @@ func TestStream_NilChannelNilError_502(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Zero-value fakeRouter: streamChan and streamErr are both nil, so the
 			// stream call returns exactly (nil, nil).
-			h := NewHandler(&fakeRouter{}, nil, nil)
+			h := newTestHandler(&fakeRouter{}, nil, nil)
 			rec := postJSON(t, h.route(), tc.path, tc.body)
 
 			if rec.Code != http.StatusBadGateway {
@@ -112,7 +112,7 @@ func TestStreamOpenAI_ClientDisconnect(t *testing.T) {
 		&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c2"}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	w := &disconnectWriter{}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions",
@@ -134,7 +134,7 @@ func TestStreamOpenAI_SkipsNilChunk(t *testing.T) {
 		&schemas.BifrostStreamChunk{BifrostChatResponse: &schemas.BifrostChatResponse{ID: "c2"}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/chat/completions",
 		`{"model":"gpt-4o","messages":[],"stream":true}`)
@@ -160,7 +160,7 @@ func TestStreamResponses_ClientDisconnect(t *testing.T) {
 		},
 	})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	w := &disconnectWriter{}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/responses",
@@ -186,7 +186,7 @@ func TestStreamResponses_SkipsNilAndEmptyChunks(t *testing.T) {
 		}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/responses",
 		`{"model":"gpt-4o","input":"hi","stream":true}`)
@@ -209,7 +209,7 @@ func TestStreamAnthropic_ClientDisconnect(t *testing.T) {
 		},
 	})
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	w := &disconnectWriter{}
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/messages",
@@ -240,7 +240,7 @@ func TestStreamAnthropic_SkipsNilAndNonEventChunks(t *testing.T) {
 		}},
 	)
 	fake := &fakeRouter{streamChan: chunks}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	rec := postJSON(t, h.route(), "/llm/v1/messages",
 		`{"model":"claude-3-5-sonnet","max_tokens":10,"messages":[],"stream":true}`)

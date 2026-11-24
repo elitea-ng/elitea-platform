@@ -131,6 +131,7 @@ updates:
       - /libs/go/observability
       - /libs/go/routines
       - /libs/go/rpclib
+      - /libs/go/secretstrength
       - /libs/proto/gen/go
       - /conformance/nativeclient
       - /conformance/governed

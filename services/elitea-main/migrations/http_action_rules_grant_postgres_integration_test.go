@@ -1,6 +1,6 @@
 package migrations_test
 
-// shared/0269's grants against a clean database and its per-project override
+// shared/0270's grants against a clean database and its per-project override
 // block (decision D4, pending confirmation): manage to project admins only,
 // list (rule names) to admin, editor and viewer. The strings are read from the
 // production constants, so a rename cannot leave this measuring a string
@@ -19,7 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/httpactions"
 )
 
-const httpActionRulesMigration = "0269_http_action_rules_and_effects_v3.sql"
+const httpActionRulesMigration = "0270_http_action_rules_and_effects_v3.sql"
 
 func TestCleanDatabaseGrantsHTTPActionRulePermissions(t *testing.T) {
 	pool := newMigratedPool(t)
@@ -38,7 +38,7 @@ func TestProjectRolesResolveHTTPActionRulePermissions(t *testing.T) {
 	for i, role := range []string{"admin", "editor", "viewer"} {
 		userID := 17001 + i
 		if _, err := pool.Exec(context.Background(), `INSERT INTO public.auth_core__user (id, email, name) VALUES ($1, $2, $2)
-ON CONFLICT (id) DO NOTHING`, userID, role+"-0269@test.local"); err != nil {
+ON CONFLICT (id) DO NOTHING`, userID, role+"-0270@test.local"); err != nil {
 			t.Fatal(err)
 		}
 		seedRoleMembership(t, pool, 17001+i, role, userID)
@@ -87,7 +87,7 @@ VALUES (1, $1, 'models.chat.messages.create'), (1, $2, 'models.chat.messages.cre
 	grants := grantBlock(t, string(body))
 	for range 2 { // idempotent
 		if _, err := pool.Exec(ctx, grants); err != nil {
-			t.Fatalf("re-run 0269's grant block: %v", err)
+			t.Fatalf("re-run 0270's grant block: %v", err)
 		}
 	}
 
@@ -118,17 +118,17 @@ WHERE project_id = 1 AND role_id = $1 AND permission = $2`, roleID, permission).
 		}
 	}
 	if resolution := resolveDefaultModeFor(t, pool, "1", "1"); !slices.Contains(resolution.Permissions, httpactions.PermissionList) {
-		t.Fatalf("a viewer with a saved matrix does not resolve %s after 0269 (resolved %v)", httpactions.PermissionList, resolution.Permissions)
+		t.Fatalf("a viewer with a saved matrix does not resolve %s after 0270 (resolved %v)", httpactions.PermissionList, resolution.Permissions)
 	}
 }
 
-// grantBlock is 0269's DO block. The rest of the file is DDL that ran once
+// grantBlock is 0270's DO block. The rest of the file is DDL that ran once
 // already; the grant block is the part written to be re-run.
 func grantBlock(t *testing.T, migration string) string {
 	t.Helper()
 	start := strings.Index(migration, "DO $$")
 	if start < 0 {
-		t.Fatal("0269 has no DO block")
+		t.Fatal("0270 has no DO block")
 	}
 	return migration[start:]
 }

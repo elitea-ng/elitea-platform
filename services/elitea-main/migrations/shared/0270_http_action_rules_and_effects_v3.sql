@@ -1,4 +1,4 @@
--- 0269_http_action_rules_and_effects_v3.sql — HTTP action rules (project
+-- 0270_http_action_rules_and_effects_v3.sql — HTTP action rules (project
 -- admins, inside the operator egress allowlist) and revision-2 effect identity
 -- (T-5D 5d-1; services/elitea-worker-rust/docs/http-action-node-design.md §5, §8).
 --
@@ -81,7 +81,7 @@ DO $$
 BEGIN
 IF to_regclass('public.auth_core__role') IS NULL
    OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-    RAISE NOTICE '0269: auth_core tables absent, nothing to grant';
+    RAISE NOTICE '0270: auth_core tables absent, nothing to grant';
     RETURN;
 END IF;
 
@@ -97,7 +97,7 @@ ON CONFLICT (role_id, permission) DO NOTHING;
 
 IF to_regclass('public.auth_core__project_role') IS NULL
    OR to_regclass('public.auth_core__project_role_permission') IS NULL THEN
-    RAISE NOTICE '0269: no per-project permission tables, the central grant is the whole story here';
+    RAISE NOTICE '0270: no per-project permission tables, the central grant is the whole story here';
     RETURN;
 END IF;
 

@@ -172,7 +172,7 @@ func newMapHandler(t *testing.T, rows []fakeModelRow) (http.Handler, *dispatchSp
 	t.Helper()
 	spy := newDispatchSpy()
 	resolver := NewModelResolver(ModelResolverConfig{DB: &fakeModelDB{rows: rows}})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver))
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver))
 	return h.route(), spy
 }
 
@@ -375,7 +375,7 @@ func TestModelMap_MissingModelIs404(t *testing.T) {
 // dispatch still agree — and every pre-existing embedder keeps working.
 func TestModelMap_NoResolverForwardsUnchanged(t *testing.T) {
 	spy := newDispatchSpy()
-	h := NewHandler(spy, nil, nil) // no WithModelResolver
+	h := newTestHandler(spy, nil, nil) // no WithModelResolver
 	rec := postAs(t, h.route(), "/llm/v1/chat/completions", mapProjectID,
 		`{"model":"openai/whatever-the-caller-wants","messages":[]}`)
 	if rec.Code != http.StatusOK {
@@ -457,7 +457,7 @@ func TestModelMap_NoProjectIsRefused(t *testing.T) {
 func TestModelMap_NoDatabaseIsRefused(t *testing.T) {
 	spy := newDispatchSpy()
 	resolver := NewModelResolver(ModelResolverConfig{DB: nil})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver))
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver))
 
 	var rec *httptest.ResponseRecorder
 	delta := counterDelta(t, modelMapRefusedNoDatabase, func() {
@@ -480,7 +480,7 @@ func TestModelMap_NoDatabaseIsRefused(t *testing.T) {
 func TestModelMap_LookupFailureIsRefused(t *testing.T) {
 	spy := newDispatchSpy()
 	resolver := NewModelResolver(ModelResolverConfig{DB: &fakeModelDB{err: errors.New("connection refused")}})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver))
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver))
 
 	var rec *httptest.ResponseRecorder
 	delta := counterDelta(t, modelMapRefusedLookupFailed, func() {
@@ -510,7 +510,7 @@ func TestModelMap_QueryFailureWithACachedListStillDispatches(t *testing.T) {
 		DB:  db,
 		Now: func() time.Time { return clock },
 	})
-	h := NewHandler(spy, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(spy, nil, nil, WithModelResolver(resolver)).route()
 
 	// First call: the query succeeds and fills the cache.
 	if rec := postAs(t, h, "/llm/v1/chat/completions", mapProjectID,

@@ -43,7 +43,7 @@ func belowThreshold() failmode.Decision {
 
 func TestSoftAlertSwitch_EnabledFires(t *testing.T) {
 	checker := &softAlertChecker{checkResult: crossedDecision(false), alertFired: true}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	h.trySoftAlert(ctx, h.budget(), 1, budgetScopeProject, "1", 0, 500_000, belowThreshold())
@@ -57,7 +57,7 @@ func TestSoftAlertSwitch_EnabledFires(t *testing.T) {
 func TestSoftAlertSwitch_DisabledSuppresses(t *testing.T) {
 	// Identical to the test above in every respect except the switch.
 	checker := &softAlertChecker{checkResult: crossedDecision(true), alertFired: true}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	h.trySoftAlert(ctx, h.budget(), 1, budgetScopeProject, "1", 0, 500_000, belowThreshold())
@@ -78,7 +78,7 @@ func TestSoftAlertSwitch_DisabledSuppresses(t *testing.T) {
 // failure whose message says what it broke.
 func TestSoftAlertSwitch_DisabledDoesNotClaimCooldown(t *testing.T) {
 	checker := &softAlertChecker{checkResult: crossedDecision(true), alertFired: true}
-	h := NewHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
+	h := newTestHandler(nil, nil, nil, WithBudgetGate(checker, &fakeCostEstimator{}))
 
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
 	h.trySoftAlert(ctx, h.budget(), 1, budgetScopeProject, "1", 0, 500_000, belowThreshold())

@@ -93,6 +93,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	app, settings := host.app, host.settings
+	// The identity secret, before anything is started (#2958, #2959).
+	if err := identityStartupCheck(settings, os.LookupEnv); err != nil {
+		return err
+	}
 	// The listener's configuration is checked before anything is started:
 	// a host that cannot serve must not reconcile rows or dial NATS first.
 	tlsConfig, err := listenerTLS(settings)

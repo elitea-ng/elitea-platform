@@ -33,7 +33,7 @@ func personalDataRequest(t *testing.T) *http.Request {
 // `warned` and the finding labels, and no value.
 func TestGuardrailWarnLetsTheRequestThroughUnchangedAndRecordsWarned(t *testing.T) {
 	router := &capturingRouter{}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snapshotOf(t, personalDataRow("input", "warn"))}, nil, nil))
 	resp, verdicts := serveLogged(t, h.Chat, personalDataRequest(t))
@@ -63,7 +63,7 @@ func TestGuardrailWarnLetsTheRequestThroughUnchangedAndRecordsWarned(t *testing.
 // mask send markers, and block refuses with the same typed error as a secret.
 func TestGuardrailPersonalDataMaskReachesTheProviderRedacted(t *testing.T) {
 	router := &capturingRouter{}
-	h := NewHandler(router, nil, nil,
+	h := newTestHandler(router, nil, nil,
 		WithBudgetGate(allowingGate(), &fakeCostEstimator{}),
 		WithGovernancePolicy(fixedPolicy{snapshotOf(t, personalDataRow("input", "mask"))}, nil, nil))
 	rec := httptest.NewRecorder()

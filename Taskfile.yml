@@ -245,6 +245,7 @@ tasks:
       - task: helm:compiled-snapshots
       - task: helm:code-consumers
       - task: helm:main-master-key
+      - task: helm:secret-strength
       - task: helm:worker-node-recovery
       - task: helm:gateway-master-key
       - task: helm:gateway-workload-identity
@@ -306,6 +307,12 @@ tasks:
       # decision, and no workflow or task ran it, so it failed four checks on
       # main with nothing reporting it. Needs yq.
       - bash deploy/helm/tests/render-main-master-key.sh
+
+  helm:secret-strength:
+    desc: Check that the chart refuses weak signing secrets in env maps and the vault-key opt-out next to a sign-in configuration (#2958)
+    deps: [helm:deps]
+    cmds:
+      - bash deploy/helm/tests/render-secret-strength.sh
 
   helm:gateway-master-key:
     desc: Check that elitea-llm-gateway is handed SECRETS_MASTER_KEY from a required Secret, and that the chart refuses a values set without one

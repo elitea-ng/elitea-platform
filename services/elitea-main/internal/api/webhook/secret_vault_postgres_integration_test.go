@@ -226,6 +226,68 @@ func TestTheMoveTakesAPlaintextSecretIntoTheVault(t *testing.T) {
 	}
 }
 
+// A webhook stored with no signing secret (created before #2959 made one
+// mandatory) is not delivered unsigned: the dispatcher logs the delivery
+// FAILED and sends nothing. The start-up pass then gives it a random secret in
+// the vault, and from then on every delivery verifies with that value. A
+// second pass generates nothing.
+func TestTheStartUpPassGivesAnUnsignedWebhookASecret(t *testing.T) {
+	pool := newWebhookPool(t)
+	ctx := context.Background()
+	receiver := newSignatureReceiver(t)
+
+	webhooksRepo, secrets := vaultedWebhooksRepo(t, pool)
+	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(secrets))
+
+	const projectID = "9107"
+	var id string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO webhooks (project_id, url, events, secret, active)
+		VALUES ($1, $2, $3, '', true) RETURNING id`,
+		projectID, receiver.server.URL, []string{"conversation.created"},
+	).Scan(&id); err != nil {
+		t.Fatalf("insert an unsigned row: %v", err)
+	}
+
+	dispatcher.HandleDomainEvent(ctx, projectID, "conversation.created", map[string]any{})
+	before := waitForDeliveries(t, deliveriesRepo, projectID, id, 1)
+	if before[0].Status != webhook.DeliveryStatusFailed || !strings.Contains(before[0].LastError, "no signing secret") {
+		t.Fatalf("delivery before the pass = %s %q, want failed for the missing secret", before[0].Status, before[0].LastError)
+	}
+	receiver.mu.Lock()
+	sent := len(receiver.requests)
+	receiver.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("an unsigned webhook reached the receiver %d time(s)", sent)
+	}
+
+	report, err := webhooksRepo.MoveLegacySecretsToVault(ctx)
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if report.Generated != 1 || report.Skipped != 0 {
+		t.Fatalf("pass report = %+v, want one generated", report)
+	}
+	column, ref := storedSecretColumns(t, pool, id)
+	if column != "" || ref == "" {
+		t.Fatalf("after the pass secret=%q secret_ref=%q, want an empty column and a reference", column, ref)
+	}
+	value, err := secrets.ResolveSecretValue(ctx, projectID, ref)
+	if err != nil || len(value) < 43 {
+		t.Fatalf("vault value: len %d, %v; want a generated 32-byte secret", len(value), err)
+	}
+
+	dispatcher.HandleDomainEvent(ctx, projectID, "conversation.created", map[string]any{})
+	waitForDeliveries(t, deliveriesRepo, projectID, id, 2)
+	receiver.assertVerifies(t, 0, value)
+
+	again, err := webhooksRepo.MoveLegacySecretsToVault(ctx)
+	if err != nil || again.Generated != 0 || again.Moved != 0 || again.Skipped != 0 {
+		t.Fatalf("second pass = %+v, %v; want nothing to do", again, err)
+	}
+}
+
 // A registry composed without a vault refuses to store a secret rather than
 // writing it in plain text.
 func TestASecretWriteWithoutAVaultIsRefused(t *testing.T) {

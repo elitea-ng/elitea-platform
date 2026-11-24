@@ -17,7 +17,7 @@ import (
 )
 
 // The authorization matrix of /httpactions (gate §3a) on a CLEAN database:
-// the real router, the real legacyrbac resolver, the 0269 grants and the real
+// the real router, the real legacyrbac resolver, the 0270 grants and the real
 // repository. Project 1 is Go-provisioned (no per-project rows), so the
 // central default-mode grants decide: manage is admin-only, list (rule names)
 // is admin, editor and viewer. Each principal is tried with a token and with a

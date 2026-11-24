@@ -149,7 +149,7 @@ func (l *budgetLoad) done() {
 //     is not the property that matters.
 func TestInstallBudgetEnforcement_UnderLoad(t *testing.T) {
 	// The NATS-less boot posture: no gate, no calculator, no publishers.
-	h := NewHandler(&concurrentRouter{}, nil, nil)
+	h := newTestHandler(&concurrentRouter{}, nil, nil)
 	if h.BudgetEnforcementInstalled() {
 		t.Fatal("a handler built with no budget options reports enforcement installed")
 	}
@@ -195,7 +195,7 @@ func TestInstallBudgetEnforcement_UnderLoad(t *testing.T) {
 // wrote the plane would be the same data race.
 func TestInstallBudgetEnforcement_RefusesUnderLoad(t *testing.T) {
 	first := &fakeBudgetChecker{checkVerdict: allowDecision(), updated: make(chan struct{})}
-	h := NewHandler(&concurrentRouter{}, nil, nil,
+	h := newTestHandler(&concurrentRouter{}, nil, nil,
 		WithBudgetGate(first, &fakeCostEstimator{totalNano: 500_000}))
 
 	load := startBudgetLoad(t, h, 4)
@@ -237,7 +237,7 @@ func TestInstallBudgetEnforcement_RefusesAfterInstall(t *testing.T) {
 		Model: "openai/gpt-4o",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 	}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	// Before the install the gateway meters nothing and the provider runs.
 	rec := httptest.NewRecorder()
@@ -271,7 +271,7 @@ func TestInstallBudgetEnforcement_RefusesAfterInstall(t *testing.T) {
 // "load the plane once per operation" would be a convention with nothing
 // enforcing it.
 func TestBudgetPlaneSnapshotIsImmutable(t *testing.T) {
-	h := NewHandler(&concurrentRouter{}, nil, nil)
+	h := newTestHandler(&concurrentRouter{}, nil, nil)
 	before := h.budget()
 
 	gate := &fakeBudgetChecker{checkVerdict: allowDecision(), updated: make(chan struct{})}

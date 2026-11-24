@@ -24,7 +24,9 @@ import (
 //   - a malformed key: refuse, whatever the opt-out says — a typo must never
 //     downgrade wrapped storage to plaintext (#412);
 //   - no key: refuse, unless v2secrets.AllowUnwrappedEnvVar is "true". That
-//     opt-out is for a developer machine and returns a warning the caller logs.
+//     opt-out is for a developer machine and returns a warning the caller logs;
+//   - the opt-out next to OIDC_ISSUER_URL or ELITEA_AUTH_CONFIG_FILE: refuse,
+//     with or without a key — that deployment is not a developer machine.
 //
 // No error here carries the key value: MasterKeyFromEnv reports only the
 // variable name, a decode position and a length.
@@ -40,6 +42,19 @@ func requireVaultMasterKey(getenv func(string) string) (warning string, err erro
 		optOut = true
 	default:
 		return "", fmt.Errorf("%s must be true or false", v2secrets.AllowUnwrappedEnvVar)
+	}
+	// The opt-out is for a developer machine. A deployment with a real
+	// authentication configuration is not one, whatever else it holds, so the
+	// opt-out is refused there even when a key is also set (#2958; the same
+	// rule developmentFlagsFromEnv applies to the legacy-schema bootstrap).
+	if optOut {
+		for _, configured := range []string{"OIDC_ISSUER_URL", "ELITEA_AUTH_CONFIG_FILE"} {
+			if getenv(configured) != "" {
+				return "", fmt.Errorf("%s=true is a local-development opt-out and must not be set when %s is configured. "+
+					"Supply %s (a base64url-encoded 32-byte Fernet key, the same value the LLM gateway uses) and remove %s",
+					v2secrets.AllowUnwrappedEnvVar, configured, v2secrets.MasterKeyEnvVar, v2secrets.AllowUnwrappedEnvVar)
+			}
+		}
 	}
 	if key != nil {
 		return "", nil

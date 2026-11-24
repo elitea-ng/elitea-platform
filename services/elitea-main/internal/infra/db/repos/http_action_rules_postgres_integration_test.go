@@ -1,6 +1,6 @@
 package repos
 
-// HTTP action rules (shared/0269) against the migrated corpus: the write
+// HTTP action rules (shared/0270) against the migrated corpus: the write
 // paths, the per-project limit under a concurrent burst, the revision fence,
 // the audit row of every write, and project scoping on every read and write.
 //

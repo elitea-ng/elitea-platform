@@ -348,7 +348,7 @@ func messagesStreamReqWithProject(t *testing.T, projectID string) *http.Request 
 // not about which tokens were counted.
 func newBudgetHandler(router *trackingRouter, gate *fakeBudgetChecker, costNano int64) *Handler {
 	calc := &fakeCostEstimator{totalNano: costNano}
-	return NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	return newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 }
 
 // newTokenAwareBudgetHandler builds a Handler whose cost estimator multiplies
@@ -357,7 +357,7 @@ func newBudgetHandler(router *trackingRouter, gate *fakeBudgetChecker, costNano 
 // tests can inspect lastInput/lastOutput after billing completes.
 func newTokenAwareBudgetHandler(router *trackingRouter, gate *fakeBudgetChecker, inputRate, outputRate int64) (*Handler, *fakeCostEstimator) {
 	calc := &fakeCostEstimator{inputRateNano: inputRate, outputRateNano: outputRate}
-	return NewHandler(router, nil, nil, WithBudgetGate(gate, calc)), calc
+	return newTestHandler(router, nil, nil, WithBudgetGate(gate, calc)), calc
 }
 
 // ── test cases ────────────────────────────────────────────────────────────────
@@ -481,7 +481,7 @@ func TestUpdateUsage_CheckBudgetOffCriticalPath(t *testing.T) {
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 	}
 	calc := &fakeCostEstimator{totalNano: 1_500_000}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	rec := httptest.NewRecorder()
 	handlerDone := make(chan struct{})
@@ -598,7 +598,7 @@ func TestUpdateUsage_PreSnapshotDoesNotShrinkUpdateUsageDeadline(t *testing.T) {
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 10, CompletionTokens: 20},
 	}
 	calc := &fakeCostEstimator{totalNano: 1_500_000}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))
@@ -699,7 +699,7 @@ func TestBudgetGate_Disabled_NoInterference(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
 	// No budget gate wired.
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h.Chat(rec, chatReqWithProject(t, "42", false))
@@ -1188,7 +1188,7 @@ func TestUserIDPropagatedToContext(t *testing.T) {
 		fakeRouter: fakeRouter{chatResp: &schemas.BifrostChatResponse{ID: "ok"}},
 	}
 	capture.chatResp.Model = "gpt-4o"
-	h := NewHandler(capture, nil, nil)
+	h := newTestHandler(capture, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/chat/completions",
 		strings.NewReader(`{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
@@ -1294,7 +1294,7 @@ func TestDrainBilling_WaitsForInFlightGoroutine(t *testing.T) {
 	}
 	// Build the handler pointing to the slow wrapper so UpdateUsage calls are
 	// intercepted by slowFakeBudgetChecker.UpdateUsage (blocking on proceed).
-	h := NewHandler(router, nil, nil, WithBudgetGate(slow, &fakeCostEstimator{totalNano: wantCostNano}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(slow, &fakeCostEstimator{totalNano: wantCostNano}))
 
 	// Fire the request. The response is written immediately; the billing
 	// goroutine is spawned and blocks inside slow.UpdateUsage.
@@ -1433,7 +1433,7 @@ func TestDrainBilling_NewRequestsRejectedAfterDrain(t *testing.T) {
 		Model: "openai/gpt-4o",
 		Usage: &schemas.BifrostLLMUsage{PromptTokens: 5, CompletionTokens: 5},
 	}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: costNano}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &fakeCostEstimator{totalNano: costNano}))
 
 	// Drain first (no in-flight billing goroutines yet).
 	h.DrainBilling()
@@ -1469,7 +1469,7 @@ func TestDrainBilling_NewRequestsRejectedAfterDrain(t *testing.T) {
 // a live session outside a control every other path obeys.
 func TestRecheckVerdict_ObservesTheBackstopWithoutFeedingIt(t *testing.T) {
 	const threshold = 3
-	h := NewHandler(newDispatchSpy(), nil, nil,
+	h := newTestHandler(newDispatchSpy(), nil, nil,
 		WithLoopBreakerParams(LoopBreakerParams{
 			Threshold: threshold,
 			Window:    time.Minute,

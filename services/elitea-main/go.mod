@@ -7,6 +7,7 @@ replace github.com/elitea-ng/elitea-platform/libs/proto/gen/go => ../../libs/pro
 replace github.com/elitea-ng/elitea-platform/libs/go/observability => ../../libs/go/observability
 
 require (
+	github.com/elitea-ng/elitea-platform/libs/go/secretstrength v0.0.0-00010101000000-000000000000
 	cel.dev/cel-go v0.33.2
 	cloud.google.com/go/storage v1.70.0
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
@@ -154,3 +155,5 @@ replace github.com/elitea-ng/elitea-platform/libs/go/faults => ../../libs/go/fau
 replace github.com/elitea-ng/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
 
 replace github.com/elitea-ng/elitea-platform/libs/go/routines => ../../libs/go/routines
+
+replace github.com/elitea-ng/elitea-platform/libs/go/secretstrength => ../../libs/go/secretstrength

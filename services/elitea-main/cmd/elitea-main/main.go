@@ -281,6 +281,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return err
 	}
+	// The signing secrets (#2958), before any key is derived from them and
+	// before any handler exists: a weak APPLICATION_SECRET_KEY would otherwise
+	// become the root of every run, vector and publish-validation token key.
+	if err := requireStrongSigningSecrets(os.Getenv); err != nil {
+		return err
+	}
 	if masterKeyWarning != "" {
 		// The development opt-out. Loud on purpose: the operator cannot tell
 		// this shape apart from a key that failed to arrive.
@@ -3614,8 +3620,13 @@ func webhookSecretVault(pool *pgxpool.Pool) dbrepos.WebhookSecretVault {
 // backfill runs, for the same reason: SQL cannot open the vault, so the move
 // is Go, and it must run after the migrations and before the listeners.
 //
+// It also gives every webhook that has no signing secret a new random one
+// (#2959): deliveries are always signed, and the dispatcher refuses a row
+// with no secret.
+//
 // It never stops the service. A row it cannot move keeps signing with its
-// plaintext, is logged, and is retried on the next start.
+// plaintext, is logged, and is retried on the next start; a row it cannot
+// give a secret is not delivered until then.
 func moveWebhookSecretsToVault(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
 	if pool == nil {
 		return
@@ -3623,14 +3634,14 @@ func moveWebhookSecretsToVault(ctx context.Context, pool *pgxpool.Pool, logger *
 	report, err := newWebhooksRepo(pool).MoveLegacySecretsToVault(ctx)
 	if err != nil {
 		logger.ErrorContext(ctx, "the webhook signing secret move into the project vault did not finish",
-			"moved", report.Moved, "skipped", report.Skipped, "error", err)
+			"moved", report.Moved, "generated", report.Generated, "skipped", report.Skipped, "error", err)
 		return
 	}
-	if report.Moved == 0 && report.Skipped == 0 {
+	if report.Moved == 0 && report.Generated == 0 && report.Skipped == 0 {
 		return
 	}
 	logger.InfoContext(ctx, "moved webhook signing secrets into the project vault",
-		"moved", report.Moved, "skipped", report.Skipped)
+		"moved", report.Moved, "generated", report.Generated, "skipped", report.Skipped)
 }
 
 // httpActionRulesRepository backs /httpactions; nil without a pool, never a

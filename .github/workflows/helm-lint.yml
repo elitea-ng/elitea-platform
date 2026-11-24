@@ -127,6 +127,13 @@ jobs:
       # RENDERED HTTPRoute and Ingress: both reach /healthz, and no ExtensionRef
       # stands in front of it. The Go half — the policy admits the path — is
       # tests/deployedge/edge_public_policy_test.go in the No Binaries workflow.
+      # #2958: the chart refuses a short, placeholder or burned signing
+      # secret in an env map, and the vault-key opt-out next to a sign-in
+      # configuration, the same rules the services apply at start-up.
+      - name: The chart refuses weak signing secrets
+        if: ${{ !cancelled() }}
+        run: bash deploy/helm/tests/render-secret-strength.sh
+
       - name: The chart edge publishes /healthz with no authenticating filter
         if: ${{ !cancelled() }}
         run: bash deploy/helm/tests/render-edge-healthz.sh

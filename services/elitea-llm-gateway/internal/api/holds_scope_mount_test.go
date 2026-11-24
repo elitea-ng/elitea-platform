@@ -45,7 +45,7 @@ func (r *holdsSeeingRouter) EmbeddingRequest(c *schemas.BifrostContext, q *schem
 
 func TestRouterMountsTheDegradedHoldsScope(t *testing.T) {
 	rr := &holdsSeeingRouter{}
-	r := NewRouter(llmproxy.NewHandler(rr, nil, nil))
+	r := NewRouter(llmproxy.NewHandler(rr, nil, testIdentitySecret))
 	for _, tc := range []struct{ path, body string }{
 		{"/llm/v1/chat/completions", `{"model":"openai/gpt-4o","messages":[]}`},
 		{"/llm/v1/embeddings", `{"model":"openai/text-embedding-3-small","input":"hi"}`},
@@ -53,7 +53,7 @@ func TestRouterMountsTheDegradedHoldsScope(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
+		r.ServeHTTP(rec, signedRequest(req))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: status = %d: %s", tc.path, rec.Code, rec.Body.String())
 		}

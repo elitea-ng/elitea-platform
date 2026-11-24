@@ -497,13 +497,14 @@ services:
   #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
   #            (issue #304): without it, the gateway refuses to start as soon as
   #            somebody authors a budget row in this database.
-  #   Vault  — SECRETS_MASTER_KEY is required, as for elitea-main, unless
-  #            ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true; this local stack sets
-  #            that opt-out below because its seed stores project keys unwrapped.
+  #   Vault  — SECRETS_MASTER_KEY is required, as for elitea-main.
+  #            deploy/scripts/standalone-stack.sh generates it once per stack
+  #            (deploy/scripts/lib/stack-secrets.sh) and the seed wraps the
+  #            project keys it writes with it (#2958).
   #   PG     — pgxpool.New only parses the DSN, never dials, so an unreachable
   #            database degrades (empty /v1/models) rather than failing boot.
   # GATEWAY_IDENTITY_SECRET is the one hard requirement: startupIdentityCheck
-  # exits 1 when it is empty and the credential Account is wired.
+  # exits 1 when it is empty, short or a placeholder (#2958, #2959).
   elitea-llm-gateway:
     image: ghcr.io/elitea-ng/elitea-llm-gateway:standalone
     # Build context is the repository ROOT: the module replaces
@@ -523,17 +524,14 @@ services:
       GATEWAY_GRPC_ADDR: ":8443"
       GATEWAY_GRPC_CLIENTS: "dns:elitea-main"
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-      # Keep the gateway and Main on one vault-key source. Empty preserves the
-      # unwrapped E2E seed; a restored deployment can supply its existing key.
-      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
-      # The gateway refuses to start without the key unless a local stack opts
-      # out explicitly, the same rule as elitea-main. A supplied key is used
-      # either way.
-      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
+      # Keep the gateway and Main on one vault-key source: the stack script
+      # generates one key per stack, and a restored deployment can supply its
+      # existing key. No literal value and no unwrapped opt-out (#2958).
+      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY:-}"
       # MUST match elitea-main's value below: it keys the HMAC over the
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.
-      GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
+      GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-}"
       # ISSUE #304 — the documented local-development opt-out. The gateway is
       # given no NATS on purpose (the `nats` service is elitea-main's
       # live-update plane only), so the budget gate is never wired and no ceiling in
@@ -915,15 +913,14 @@ services:
       # start burst so the materialize transaction stops queueing. The chart
       # keeps the default of 10 (see the note above).
       ELITEA_RUNTIME_DB_ADMISSION_MAX_CONNS: "16"
-      # Keep the gateway and Main on one vault-key source. Empty preserves the
-      # unwrapped E2E seed; a restored deployment can supply its existing key.
-      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
-      # Main refuses to start without the key unless a local stack opts out
-      # explicitly. A supplied key is used either way.
-      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
+      # Keep the gateway and Main on one vault-key source (see the gateway
+      # above). elitea-main refuses the unwrapped opt-out next to
+      # OIDC_ISSUER_URL and ELITEA_AUTH_CONFIG_FILE (#2958).
+      SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY:-}"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
-      APPLICATION_SECRET_KEY: "changeme-standalone"
+      # Generated per stack by deploy/scripts/standalone-stack.sh (#2958).
+      APPLICATION_SECRET_KEY: "${APPLICATION_SECRET_KEY:-}"
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
@@ -969,7 +966,7 @@ services:
       # mandatory once the URL is set — an empty path is a fatal boot error, not
       # a fallback to plaintext.
       LLM_GATEWAY_URL: "https://elitea-llm-gateway:8443"
-      GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
+      GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-}"
       LLM_GATEWAY_CLIENT_CERT: /run/certs/client.crt
       LLM_GATEWAY_CLIENT_KEY: /run/certs/client.key
       LLM_GATEWAY_CA_FILE: /run/certs/ca.crt
@@ -1025,7 +1022,7 @@ services:
       ELITEA_DEEPWIKI_CLIENT_CERT_FILE: /run/certs/client.crt
       ELITEA_DEEPWIKI_CLIENT_KEY_FILE: /run/certs/client.key
       ELITEA_DEEPWIKI_CA_FILE: /run/certs/ca.crt
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
 
       # (No ELITEA_DEEPWIKI_CALLBACK_BASE_URL, #1359 U5: the provider uploads
@@ -1058,7 +1055,7 @@ services:
       ELITEA_INVENTORY_CLIENT_KEY_FILE: /run/certs/client.key
       ELITEA_INVENTORY_CA_FILE: /run/certs/ca.crt
       # Must equal the provider's ELITEA_INVENTORY_IDENTITY_SECRET below.
-      ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
+      ELITEA_INVENTORY_IDENTITY_SECRET: "${ELITEA_INVENTORY_IDENTITY_SECRET:-}"
       # ONE ALLOWLIST PER PROVIDER, deliberately, not a value shared with
       # DeepWiki: the two clone from different things for different reasons,
       # and a deployment that wants one and not the other must be able to say
@@ -1475,7 +1472,7 @@ services:
       # Setting the CA turns mutual authentication ON (496 without a client cert).
       ELITEA_DEEPWIKI_TLS_CA_FILE: /certs/ca.crt
       # Must equal elitea-main's ELITEA_DEEPWIKI_IDENTITY_SECRET.
-      ELITEA_DEEPWIKI_IDENTITY_SECRET: "standalone-deepwiki-identity"
+      ELITEA_DEEPWIKI_IDENTITY_SECRET: "${ELITEA_DEEPWIKI_IDENTITY_SECRET:-}"
       ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
       ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
       ELITEA_DEEPWIKI_SERVICE_LOCATION_URL: "grpcs://elitea-deepwiki:9443"
@@ -1665,7 +1662,7 @@ services:
       # Setting the CA turns mutual authentication ON (496 without a client cert).
       ELITEA_INVENTORY_TLS_CA_FILE: /certs/ca.crt
       # Must equal elitea-main's ELITEA_INVENTORY_IDENTITY_SECRET.
-      ELITEA_INVENTORY_IDENTITY_SECRET: "standalone-inventory-identity"
+      ELITEA_INVENTORY_IDENTITY_SECRET: "${ELITEA_INVENTORY_IDENTITY_SECRET:-}"
       ELITEA_INVENTORY_SCRATCH_PATH: /tmp/inventory
       ELITEA_INVENTORY_SERVICE_LOCATION_URL: "grpcs://elitea-inventory:9443"
       # The provider service (elitea.subapp.v1.ProviderService, the SPI) and

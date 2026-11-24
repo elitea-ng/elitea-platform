@@ -193,7 +193,7 @@ export const PERMISSIONS = {
   /**
    * Project HTTP action rules (T-5D). `manage` (project admins) reads and
    * writes full rules; `list` (admin, editor, viewer) reads names and the
-   * enabled flag only. Granted by migrations/shared/0269.
+   * enabled flag only. Granted by migrations/shared/0270.
    */
   httpActionRules: {
     manage: 'models.http_action_rules.manage',

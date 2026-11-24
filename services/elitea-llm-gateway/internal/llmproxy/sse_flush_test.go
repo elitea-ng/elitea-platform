@@ -230,7 +230,7 @@ func TestSSEIncrementalFlush(t *testing.T) {
 		}
 		rec := newFlushRecorder()
 		l := &lockStepRouter{chunks: chunks, rec: rec, t: t}
-		h := NewHandler(l, nil, nil)
+		h := newTestHandler(l, nil, nil)
 
 		serveLockStep(t, h, l, h.Chat)
 
@@ -257,7 +257,7 @@ func TestSSEIncrementalFlush(t *testing.T) {
 		chunks := []*schemas.BifrostStreamChunk{mk("r0"), mk("r1"), mk("r2")}
 		rec := newFlushRecorder()
 		l := &lockStepRouter{chunks: chunks, rec: rec, t: t}
-		h := NewHandler(l, nil, nil)
+		h := newTestHandler(l, nil, nil)
 
 		serveLockStep(t, h, l, h.Messages)
 
