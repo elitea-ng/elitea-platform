@@ -689,6 +689,28 @@ impl PipelineApplicationNodeRuntime {
             // corrupt decision, or an exhausted budget): the node fails with a
             // registered reason, not as a broken scope.
             ChildFailure::Refused(code) => (code, node_refused(&self.node_name)),
+            // FU-343: typed model-gateway failures survive the graph path with
+            // their registered code instead of collapsing into agent.legacy.
+            ChildFailure::ModelGateway(code) => {
+                if let Some((category, static_code, message)) =
+                    crate::agents::graph::agent::model_gateway_error_spec(code)
+                {
+                    let adk = adk_rust::AdkError::new(
+                        adk_rust::ErrorComponent::Model,
+                        category,
+                        static_code,
+                        message,
+                    );
+                    let _ = self.events.send_model_failure(&adk).await;
+                    if let Some(error) = crate::agents::graph::agent::model_gateway_graph_error(
+                        &self.node_name,
+                        static_code,
+                    ) {
+                        return error;
+                    }
+                }
+                return failure();
+            }
             // Not a refusal of the decided card: unchanged scope failure.
             ChildFailure::Child => return failure(),
         };
@@ -755,7 +777,9 @@ impl PipelineApplicationNodeRuntime {
         let event =
             application_signal_event(signal).map_err(|error| {
                 match ChildFailure::from_child(error.code) {
-                    stop @ ChildFailure::ApprovedCallStop(_) => stop,
+                    stop @ (ChildFailure::ApprovedCallStop(_) | ChildFailure::ModelGateway(_)) => {
+                        stop
+                    }
                     _ => ChildFailure::Scope(failure()),
                 }
             })?;
@@ -947,13 +971,16 @@ enum ChildFailure {
     /// The nested Agent refused its decided card for another typed reason;
     /// the registered public code.
     Refused(&'static str),
+    /// A typed `model_gateway.*` / `anthropic_gateway.*` failure (`FU-343`).
+    ModelGateway(&'static str),
     /// The child failed for a reason that is not a direct-HITL refusal.
     Child,
 }
 
 impl ChildFailure {
     /// Classify a child tool error by its code. The nested Agent keeps each
-    /// direct-HITL refusal's typed code (FU-226).
+    /// direct-HITL refusal's typed code (FU-226) and typed model gateway codes
+    /// (FU-343).
     fn from_child(code: &str) -> Self {
         use crate::agents::direct_hitl::DirectHitlErrorCode;
         use crate::agents::dispatch_journal::DISPATCH_UNRECORDED_CODE;
@@ -973,6 +1000,10 @@ impl ChildFailure {
         } else if code == crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE {
             // FU-291: the node's call-lineage store is full: a typed limit.
             Self::Refused(crate::agents::application_tools::CALL_LINEAGE_LIMIT_CODE)
+        } else if let Some((_, static_code, _)) =
+            crate::agents::graph::agent::model_gateway_error_spec(code)
+        {
+            Self::ModelGateway(static_code)
         } else {
             Self::Child
         }
@@ -1092,7 +1123,7 @@ mod tests {
                 Some(RuntimeFailureKind::RecoveryRefused),
             ),
             (DISPATCH_UNRECORDED_CODE, Some(RuntimeFailureKind::Internal)),
-            ("model_gateway.provider_error", None),
+            ("untyped.child_error", None),
         ];
         for (child_code, expected) in cases {
             let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
@@ -1122,6 +1153,60 @@ mod tests {
                 "application_scope"
             };
             assert_eq!(node, expected_node, "{child_code}");
+        }
+    }
+
+    /// FU-343: typed `model_gateway.*` failures from a saved Agent node keep
+    /// their exact registered code on both the model-failure bridge and the
+    /// returned `GraphError` so `EliteaGraphAgent` and fan-out preserve them.
+    #[tokio::test]
+    async fn scoped_agent_propagates_typed_model_gateway_classes() {
+        use crate::agents::graph::agent::model_gateway_code_in_message;
+        use crate::protocol::output::{RuntimeFailureKind, model_failure};
+        let definition=PipelineDefinition::from_yaml("state: {answer: str}\nentry_point: child\nnodes:\n  - id: child\n    type: agent\n    tool: assistant\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [answer]\n    transition: END\n").unwrap();
+        let cases = [
+            (
+                "model_gateway.rate_limited",
+                RuntimeFailureKind::ModelRateLimited,
+            ),
+            (
+                "model_gateway.upstream_timeout",
+                RuntimeFailureKind::ModelTimeout,
+            ),
+            (
+                "model_gateway.unavailable",
+                RuntimeFailureKind::ModelUnavailable,
+            ),
+            (
+                "model_gateway.too_many_events",
+                RuntimeFailureKind::ModelResponseInvalid,
+            ),
+        ];
+        for (child_code, expected_kind) in cases {
+            let scope = PipelineApplicationScope::new(String::new(), &definition, None).unwrap();
+            let (events, receiver) = pipeline_node_event_channel();
+            let runtime = PipelineApplicationNodeRuntime::new(
+                scope,
+                "child".to_owned(),
+                Arc::new(ApplicationRuntimeProjection::default()),
+                events,
+                Arc::new(Mutex::new(())),
+            );
+            let error = runtime
+                .child_failure(ChildFailure::from_child(child_code))
+                .await;
+            let sent = receiver.try_model_failure_code().await;
+            assert_eq!(sent, Some(child_code), "{child_code}");
+            assert_eq!(model_failure(sent), expected_kind, "{child_code}");
+            let GraphError::NodeExecutionFailed { node, message } = error else {
+                panic!("{child_code}: expected NodeExecutionFailed");
+            };
+            assert_eq!(node, "child", "{child_code}");
+            assert_eq!(
+                model_gateway_code_in_message(&message),
+                Some(child_code),
+                "{child_code}"
+            );
         }
     }
 

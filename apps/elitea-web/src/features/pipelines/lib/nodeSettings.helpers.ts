@@ -39,9 +39,12 @@ const DETERMINISTIC_KEYS = ['on_error', 'error_transition', 'always_output_data'
 export const NodeSettingsFamilies: Readonly<Record<string, readonly string[]>> = {
   aggregate: DETERMINISTIC_KEYS,
   code: NODE_SETTINGS_KEYS,
+  llm: NODE_SETTINGS_KEYS,
+  mcp: NODE_SETTINGS_KEYS,
   router: DETERMINISTIC_KEYS,
   split_out: DETERMINISTIC_KEYS,
   state_modifier: DETERMINISTIC_KEYS,
+  toolkit: NODE_SETTINGS_KEYS,
 };
 
 /** Pauses never take settings. */
