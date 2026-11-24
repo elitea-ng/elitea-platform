@@ -251,6 +251,13 @@ func (r *PostgresResolver) administrationResolution(
 	}
 	resolution.Permissions, resolution.ElevatedPermissions = UnionElevation(resolution.Permissions, granted)
 	resolution.ElevationIDs = ids
+	if len(ids) > 0 {
+		// The resolver's elevation indicator (R1.3a reads it to refuse
+		// token scopes under an elevation): set whenever an active
+		// elevation is bound to the session, even one that adds nothing
+		// the standing set lacks.
+		resolution.ElevationID = ids[0]
+	}
 	return resolution, nil
 }
 

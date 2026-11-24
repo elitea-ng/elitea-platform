@@ -32,6 +32,7 @@ func elevatedResolution() auth.PermissionResolution {
 		Permissions:         []string{"a", "b", "super"},
 		ElevatedPermissions: []string{"super"},
 		ElevationIDs:        []string{"e1"},
+		ElevationID:         "e1",
 		Roles:               []string{"admin"},
 	}
 }
@@ -43,6 +44,9 @@ func TestTheStandingPartLeavesOutWhatOnlyTheElevationGives(t *testing.T) {
 	}
 	if !resolution.Elevated() {
 		t.Fatal("an elevated resolution says it is not")
+	}
+	if !(auth.PermissionResolution{ElevationID: "e1"}).Elevated() {
+		t.Fatal("the elevation indicator alone does not say elevated")
 	}
 	if got := (auth.PermissionResolution{}).StandingPermissions(); got == nil || len(got) != 0 {
 		t.Fatalf("an empty resolution's standing part is %#v", got)
@@ -58,7 +62,8 @@ func TestResolveStandingAdministrationNeverAnswersAnElevation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(fallback.Permissions, []string{"a", "b"}) || fallback.Elevated() || fallback.UserID != 7 {
+	if !slices.Equal(fallback.Permissions, []string{"a", "b"}) || fallback.Elevated() || fallback.UserID != 7 ||
+		fallback.ElevationID != "" {
 		t.Fatalf("the fallback answers %+v", fallback)
 	}
 

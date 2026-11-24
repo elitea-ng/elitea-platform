@@ -170,7 +170,8 @@ func (f elevationFixture) token(t *testing.T, access string, withUUID bool) stri
 // noElevation fails when a resolution carries anything from an elevation.
 func noElevation(t *testing.T, what string, resolution auth.PermissionResolution, want []string) {
 	t.Helper()
-	if resolution.Elevated() || resolution.ElevationIDs != nil || resolution.ElevatedPermissions != nil {
+	if resolution.Elevated() || resolution.ElevationIDs != nil || resolution.ElevatedPermissions != nil ||
+		resolution.ElevationID != "" {
 		t.Fatalf("%s carries an elevation: ids %v, elevated %v", what, resolution.ElevationIDs, resolution.ElevatedPermissions)
 	}
 	if !slices.Equal(resolution.Permissions, want) {
@@ -192,6 +193,11 @@ func TestTheBoundSessionResolvesTheLevelsSetAndNamesNoRole(t *testing.T) {
 	}
 	if !slices.Equal(got.ElevationIDs, []string{elevation.ID.String()}) {
 		t.Fatalf("the elevation ids are %v, want [%s]", got.ElevationIDs, elevation.ID)
+	}
+	// The resolver's elevation indicator, which the token-scopes rule
+	// (R1.3a, CodeScopesElevated) refuses on, is set by the union.
+	if got.ElevationID != elevation.ID.String() {
+		t.Fatalf("the elevation indicator is %q, want %s", got.ElevationID, elevation.ID)
 	}
 	if !slices.Equal(got.StandingPermissions(), f.adminSet) {
 		t.Fatalf("the standing part is %v, want the admin set", got.StandingPermissions())

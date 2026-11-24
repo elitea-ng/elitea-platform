@@ -91,7 +91,7 @@ func (r PermissionResolution) StandingPermissions() []string {
 
 // Elevated reports whether an elevation took part in the resolution.
 func (r PermissionResolution) Elevated() bool {
-	return len(r.ElevationIDs) > 0 || len(r.ElevatedPermissions) > 0
+	return r.ElevationID != "" || len(r.ElevationIDs) > 0 || len(r.ElevatedPermissions) > 0
 }
 
 // StandingAdministrationResolver is the standing-set call (ADR-0059 decision
@@ -130,6 +130,7 @@ func withoutElevation(resolution PermissionResolution) PermissionResolution {
 	resolution.Permissions = resolution.StandingPermissions()
 	resolution.ElevatedPermissions = nil
 	resolution.ElevationIDs = nil
+	resolution.ElevationID = ""
 	return resolution
 }
 
