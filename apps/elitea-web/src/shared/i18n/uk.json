@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "Провідний: {{name}}",
   "features.agentLifecycle.import.teamName": "Команда: {{name}}",
   "features.agentTeams.exportAction": "Експорт",
-  "features.agentTeams.exportMemberFailed": "Не вдалося експортувати команду: не вдалося прочитати агента {{name}}."
+  "features.agentTeams.exportMemberFailed": "Не вдалося експортувати команду: не вдалося прочитати агента {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "Цей zip — команда. Імпортуйте його зі списку агентів."
 }

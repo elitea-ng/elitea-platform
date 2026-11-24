@@ -3822,6 +3822,40 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 	}
 }
 
+// Fork copies one or more published applications into the caller's project.
+//
+// # It now has a route
+//
+// It had none. `POST /elitea_core/fork/prompt_lib/{projectID}` was registered
+// on `ExportImportPost`, so this function was code with no caller and the fork
+// button ran the import instead (#505). The two are not interchangeable. The
+// export the fork button reads is fetched with `?fork=true`, which adds
+// `owner_id`, `original_exported` and the shared-origin keys, and only this
+// function reads them. Serving the route with the import meant that a forked
+// agent:
+//
+//   - kept `llm_settings.model_project_id` pointing at the SOURCE project, so
+//     the model the copy runs on belongs to a project the caller may not be a
+//     member of. Only this function rewrites it to the destination;
+//   - carried no `meta.parent_entity_id`, so nothing recorded where it came
+//     from and the read path reported `is_forked: false` on a fork;
+//   - lost every tag and every variable. That one is no longer a difference:
+//     the import writes `application_variables`, and it writes the
+//     `tags` / `application_version_tag_association` pair as well, because
+//     those are the stores every reader of an agent looks in and an import
+//     that skipped them dropped both out of the round trip entirely. The two
+//     differences above remain, and are why the route needs this function.
+//
+// The registration is the repair. This function keeps the errors channel and
+// the status rule the import uses, because the same wizard reads both.
+//
+// # Why every error entry carries an index
+//
+// `getErrorImportUUID` in `apps/elitea-ui` reads `selectedData[item.index]`
+// with no guard. The entries this function used to build carried `name` and
+// `error` and no index, so the first fork failure would have thrown a
+// TypeError inside the wizard and stopped it. They now carry `index` and `msg`,
+// which is the shape the import already writes and the wizard already maps.
 func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -4651,14 +4685,23 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isFork := strings.EqualFold(r.URL.Query().Get("fork"), "true")
-	// An export that names its version keeps that one version, fork or not.
-	// Without fork the id used to be ignored, so Export of the open version
+	// An export that names versions keeps those versions, fork or not.
+	// Without fork the ids used to be ignored, so Export of the open version
 	// wrote every version, and a team's export could not pin each member to
-	// its team version (issue 3010).
-	followed := len(r.URL.Query()["follow_version_ids"]) > 0
-	if isFork || followed {
+	// its team version (issue 3010). A value that names no numeric id
+	// (`follow_version_ids=`) asks for nothing and keeps every version.
+	followed := followedVersionIDs(r.URL.Query()["follow_version_ids"])
+	switch {
+	case isFork:
 		// The version the caller named, else the newest (#1993).
-		kept, found := forkVersions(versions, r.URL.Query()["follow_version_ids"])
+		kept, found := forkVersions(versions, followed)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
+			return
+		}
+		versions = kept
+	case len(followed) > 0:
+		kept, found := namedVersions(versions, followed)
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 			return

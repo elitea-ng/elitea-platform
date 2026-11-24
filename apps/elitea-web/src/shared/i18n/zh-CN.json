@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "负责人：{{name}}",
   "features.agentLifecycle.import.teamName": "团队：{{name}}",
   "features.agentTeams.exportAction": "导出",
-  "features.agentTeams.exportMemberFailed": "无法导出团队：无法读取智能体 {{name}}。"
+  "features.agentTeams.exportMemberFailed": "无法导出团队：无法读取智能体 {{name}}。",
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一个团队，请从智能体列表导入。"
 }

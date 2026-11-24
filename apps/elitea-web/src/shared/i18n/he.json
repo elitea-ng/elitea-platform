@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "מוביל: {{name}}",
   "features.agentLifecycle.import.teamName": "צוות: {{name}}",
   "features.agentTeams.exportAction": "ייצוא",
-  "features.agentTeams.exportMemberFailed": "לא ניתן היה לייצא את הצוות: לא ניתן היה לקרוא את הסוכן {{name}}."
+  "features.agentTeams.exportMemberFailed": "לא ניתן היה לייצא את הצוות: לא ניתן היה לקרוא את הסוכן {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "קובץ ה-zip הזה הוא צוות. ייבאו אותו מרשימת הסוכנים."
 }

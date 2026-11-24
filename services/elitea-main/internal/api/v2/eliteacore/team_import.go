@@ -32,6 +32,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentteams"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/entitylimits"
 )
 
 // The refusal codes of the team import, beside the sentence in `error`.
@@ -199,20 +200,10 @@ func (h *Handler) TeamImportPost(w http.ResponseWriter, r *http.Request) {
 		writeTeamImportRefusal(w, http.StatusUnprocessableEntity, teamImportInvalid, refusalText, nil)
 		return
 	}
-	if missing := missingToolkitReferences(entities); len(missing) > 0 {
+	if missing := missingToolkitReferences(entities, agents); len(missing) > 0 {
 		writeTeamImportRefusal(w, http.StatusUnprocessableEntity, teamImportMissingTools,
-			"Some agents use toolkits the file does not carry: "+strings.Join(missing, "; ")+".",
+			"Some agents use toolkits or sub-agents the file does not carry: "+strings.Join(missing, "; ")+".",
 			map[string]any{"missing": missing})
-		return
-	}
-	if taken, err := h.takenAgentNames(ctx, s, agents); err != nil {
-		slog.ErrorContext(ctx, "team import: read the project's agent names", "schema", s, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": importWriteFailed})
-		return
-	} else if len(taken) > 0 {
-		writeTeamImportRefusal(w, http.StatusConflict, teamImportAgentTaken,
-			"These agents already exist in this project: "+strings.Join(taken, ", ")+". Rename them in the file, or delete the existing agents, and import again.",
-			map[string]any{"names": taken})
 		return
 	}
 
@@ -223,6 +214,32 @@ func (h *Handler) TeamImportPost(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has run
 
+	// Team imports of one project run one at a time, so two of them cannot
+	// both pass the name check below and write the same names. The lock ends
+	// with the transaction.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('elitea.team_import'), $1::int)`, project); err != nil {
+		slog.ErrorContext(ctx, "team import: take the project lock", "schema", s, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": importWriteFailed})
+		return
+	}
+	if taken, err := takenAgentNames(ctx, tx, s, agents); err != nil {
+		slog.ErrorContext(ctx, "team import: read the project's agent names", "schema", s, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": importWriteFailed})
+		return
+	} else if len(taken) > 0 {
+		writeTeamImportRefusal(w, http.StatusConflict, teamImportAgentTaken,
+			"These agents already exist in this project: "+strings.Join(taken, ", ")+". Rename them in the file, or delete the existing agents, and import again.",
+			map[string]any{"names": taken})
+		return
+	}
+
+	// The import writes rows through tx and nothing else, except avatar
+	// media: carried files go to the object store as they are read. A
+	// refused team leaves them unnamed, and the agent-media orphan sweep
+	// (runtimecomposition/agent_media_orphan_sweep.go) deletes a file nothing
+	// names once its grace period passes. They are not deleted here: the
+	// objects are content-addressed, so the same file may already be named by
+	// an agent the project has.
 	outcome := h.runImport(ctx, tx, s, projectID, userID, entities)
 	if outcome.failed() {
 		slog.WarnContext(ctx, "team import: refused, nothing kept", "schema", s, "team", team.Name)
@@ -345,21 +362,26 @@ func teamFromBody(body teamImportBody, agents map[string]map[string]any) (agentt
 	return team, body.Members, ""
 }
 
-// missingToolkitReferences names every version tool reference whose
-// import_uuid no toolkit entry of the document carries, as "agent: reference".
-func missingToolkitReferences(entities []any) []string {
-	carried := map[string]bool{}
+// missingToolkitReferences names, as "agent: reference", every version tool
+// reference the document cannot satisfy: a toolkit no entry of the document
+// carries, or a sub-agent (a toolkit of type `application`) whose agent is
+// not an agent of the document. runImport would refuse the second only in
+// its link phase, after writing the agents; a team import names both before
+// it writes anything. An agent's `.agent.md` carries no nested agents, so a
+// member that uses one needs that agent as a member of its own.
+func missingToolkitReferences(entities []any, agents map[string]map[string]any) []string {
+	carried := map[string]map[string]any{}
 	for _, raw := range entities {
 		if entry, ok := raw.(map[string]any); ok {
 			if entity, _ := entry["entity"].(string); entity == "toolkits" {
 				if uuid, _ := entry["import_uuid"].(string); uuid != "" {
-					carried[uuid] = true
+					carried[uuid] = entry
 				}
 			}
 		}
 	}
 	var missing []string
-	for _, entry := range agentEntriesByUUID(entities) {
+	for _, entry := range agents {
 		name, _ := entry["name"].(string)
 		versions, _ := entry["versions"].([]any)
 		for _, rawVersion := range versions {
@@ -368,11 +390,10 @@ func missingToolkitReferences(entities []any) []string {
 			for _, rawTool := range tools {
 				tool, _ := rawTool.(map[string]any)
 				uuid, _ := tool["import_uuid"].(string)
-				if uuid != "" && !carried[uuid] {
-					label := uuid
-					if toolName, _ := tool["name"].(string); toolName != "" {
-						label = toolName
-					}
+				if uuid == "" {
+					continue
+				}
+				if label, unmet := unmetToolReference(tool, carried[uuid], agents); unmet {
 					missing = append(missing, name+": "+label)
 				}
 			}
@@ -382,18 +403,49 @@ func missingToolkitReferences(entities []any) []string {
 	return missing
 }
 
-// takenAgentNames answers the names of the document's agents, as the file
-// spells them, that an agent of the project already has (compared without
-// case), and the names the file itself repeats.
-func (h *Handler) takenAgentNames(ctx context.Context, s string, agents map[string]map[string]any) ([]string, error) {
-	names := make([]string, 0, len(agents))
+// unmetToolReference answers the label of a reference the document cannot
+// satisfy, and whether it is one.
+func unmetToolReference(tool, toolkit map[string]any, agents map[string]map[string]any) (string, bool) {
+	label, _ := tool["import_uuid"].(string)
+	if toolName, _ := tool["name"].(string); toolName != "" {
+		label = toolName
+	}
+	if toolkit == nil {
+		return label, true
+	}
+	if kind, _ := toolkit["type"].(string); kind != "application" {
+		return "", false
+	}
+	if toolkitName, _ := toolkit["name"].(string); toolkitName != "" {
+		label = toolkitName
+	}
+	settings, _ := toolkit["settings"].(map[string]any)
+	agentUUID, _ := settings["import_uuid"].(string)
+	if _, inFile := agents[agentUUID]; agentUUID == "" || !inFile {
+		return "sub-agent " + label, true
+	}
+	return "", false
+}
+
+// importedName is an agent name as runImport stores it: cut to the entity
+// limit, then compared trimmed and without case.
+func importedName(entry map[string]any) (spelled, key string) {
+	name, _ := entry["name"].(string)
+	spelled = strings.TrimSpace(entitylimits.Truncate(name, entitylimits.MaxNameLength))
+	return spelled, strings.ToLower(spelled)
+}
+
+// takenAgentNames answers the names of the document's agents, as they will
+// be stored, that an agent of the project already has (compared without
+// case), and the names the file itself repeats. It reads through the team
+// import's transaction, under its project lock.
+func takenAgentNames(ctx context.Context, q relationQuerier, s string, agents map[string]map[string]any) ([]string, error) {
+	keys := make([]string, 0, len(agents))
 	spelled := map[string]string{}
 	count := map[string]int{}
 	for _, entry := range agents {
-		name, _ := entry["name"].(string)
-		name = strings.TrimSpace(name)
-		key := strings.ToLower(name)
-		names = append(names, key)
+		name, key := importedName(entry)
+		keys = append(keys, key)
 		spelled[key] = name
 		count[key]++
 	}
@@ -403,8 +455,8 @@ func (h *Handler) takenAgentNames(ctx context.Context, s string, agents map[stri
 			taken[spelled[key]] = true
 		}
 	}
-	rows, err := h.pool.Query(ctx, fmt.Sprintf(
-		`SELECT DISTINCT lower(btrim(name)) FROM %s.applications WHERE lower(btrim(name)) = ANY($1::text[])`, s), names)
+	rows, err := q.Query(ctx, fmt.Sprintf(
+		`SELECT DISTINCT lower(btrim(name)) FROM %s.applications WHERE lower(btrim(name)) = ANY($1::text[])`, s), keys)
 	if err != nil {
 		return nil, err
 	}

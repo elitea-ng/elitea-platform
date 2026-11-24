@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "لیڈ: {{name}}",
   "features.agentLifecycle.import.teamName": "ٹیم: {{name}}",
   "features.agentTeams.exportAction": "برآمد کریں",
-  "features.agentTeams.exportMemberFailed": "ٹیم برآمد نہیں کی جا سکی: ایجنٹ {{name}} پڑھا نہیں جا سکا۔"
+  "features.agentTeams.exportMemberFailed": "ٹیم برآمد نہیں کی جا سکی: ایجنٹ {{name}} پڑھا نہیں جا سکا۔",
+  "features.agentLifecycle.import.teamOnAgents": "یہ zip ایک ٹیم ہے۔ اسے ایجنٹس کی فہرست سے درآمد کریں۔"
 }

@@ -63,7 +63,7 @@ export const TeamImportTeam = zod
     members: zod.array(zod.string()).min(1).max(teamImportTeamMembersMax),
   })
   .describe(
-    "The team of a team import (issue 3010). `members` names the agent entries of the document by their `import_uuid`, in roster order; `lead`, when set, is one of them and makes the floor `lead`. NOTE(W2): internal/api/v2/eliteacore/team_import.go:146 (`teamImportBody`).\n",
+    "The team of a team import (issue 3010). `members` names the agent entries of the document by their `import_uuid`, in roster order; `lead`, when set, is one of them and makes the floor `lead`. NOTE(W2): internal/api/v2/eliteacore/team_import.go:147 (`teamImportBody`).\n",
   );
 
 export type TeamImportTeam = zod.input<typeof TeamImportTeam>;

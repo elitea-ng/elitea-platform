@@ -45,6 +45,8 @@ export interface EntityImportButtonProps {
   readonly onImport: (request: { readonly document: EntityExportDocument; readonly team?: TeamImportTeamBody | undefined }) => Promise<void>;
   /** Distinguishes the agents and pipelines copies in the DOM. */
   readonly testIdPrefix: string;
+  /** False on the Pipelines list: a team makes agents and a team, so it is imported from the Agents list. */
+  readonly acceptsTeams?: boolean;
 }
 
 interface PendingImport {
@@ -109,7 +111,7 @@ function ImportPreview({ summary, refusal, testIdPrefix }: { readonly summary: I
   );
 }
 
-export function EntityImportButton({ isImporting, onImport, testIdPrefix }: EntityImportButtonProps): ReactNode {
+export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true }: EntityImportButtonProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<PendingImport>();
   const [error, setError] = useState<string>();
@@ -127,6 +129,10 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix }: Enti
     }
     try {
       const { document, skipped, team } = await readImportFile(file);
+      if (team !== undefined && !acceptsTeams) {
+        setError(t('features.agentLifecycle.import.teamOnAgents', 'This zip is a team. Import it from the Agents list.'));
+        return;
+      }
       setRefusal(undefined);
       setPending({ document, team, summary: summarizeImportDocument(document, skipped, team) });
       setError(undefined);

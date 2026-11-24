@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "リーダー: {{name}}",
   "features.agentLifecycle.import.teamName": "チーム: {{name}}",
   "features.agentTeams.exportAction": "エクスポート",
-  "features.agentTeams.exportMemberFailed": "チームをエクスポートできませんでした: エージェント {{name}} を読み取れませんでした。"
+  "features.agentTeams.exportMemberFailed": "チームをエクスポートできませんでした: エージェント {{name}} を読み取れませんでした。",
+  "features.agentLifecycle.import.teamOnAgents": "この zip はチームです。エージェント一覧からインポートしてください。"
 }

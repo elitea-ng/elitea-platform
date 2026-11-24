@@ -166,8 +166,6 @@ export function parseMarkdownAgent(text: string): Record<string, unknown> {
 }
 
 /** What `readImportFile` hands the wizard: the document, plus what it could not carry. */
-export type { ImportTeam } from './teamManifest';
-
 export interface ReadImportResult {
   readonly document: EntityExportDocument;
   readonly skipped: readonly string[];

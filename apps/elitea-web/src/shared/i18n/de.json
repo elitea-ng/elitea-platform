@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "Leitung: {{name}}",
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentTeams.exportAction": "Exportieren",
-  "features.agentTeams.exportMemberFailed": "Das Team konnte nicht exportiert werden: Der Agent {{name}} konnte nicht gelesen werden."
+  "features.agentTeams.exportMemberFailed": "Das Team konnte nicht exportiert werden: Der Agent {{name}} konnte nicht gelesen werden.",
+  "features.agentLifecycle.import.teamOnAgents": "Diese ZIP-Datei ist ein Team. Importieren Sie sie über die Agentenliste."
 }

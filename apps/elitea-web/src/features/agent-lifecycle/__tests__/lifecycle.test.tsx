@@ -710,6 +710,22 @@ describe('import', () => {
     expect(screen.getByTestId('agents-import-dialog')).toBeInTheDocument();
   });
 
+  it('refuses a team zip on the Pipelines list and posts nothing', async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    renderWithProviders(
+      <EntityImportButton
+        testIdPrefix="pipelines"
+        acceptsTeams={false}
+        isImporting={false}
+        onImport={vi.fn()}
+      />,
+    );
+    await user.upload(screen.getByTestId('pipelines-import-input'), await teamZipFile());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Import it from the Agents list');
+    expect(screen.queryByTestId('pipelines-import-team')).toBeNull();
+    expect(recorded).toHaveLength(0);
+  });
+
   it('refuses a file that is not an export and posts nothing', async () => {
     const user = userEvent.setup({ applyAccept: false });
     renderWithProviders(

@@ -288,3 +288,45 @@ func TestExportKeepsTheNamedVersionWithoutFork(t *testing.T) {
 		t.Fatalf("export with a named version = %s, want only the version named second", exported.Body.String())
 	}
 }
+
+// A member whose sub-agent the file does not carry is refused before
+// anything is written, naming the sub-agent: the link phase would refuse it
+// only after the agents were written.
+func TestTeamImportRefusesASubAgentTheFileDoesNotCarry(t *testing.T) {
+	pool := newImportLinkPool(t)
+	router := teamImportRouter(eliteacore.NewHandler(pool))
+
+	subAgent := map[string]any{
+		"import_uuid": "nested-1", "name": "Dev Helper", "type": "application",
+		"settings": map[string]any{"import_uuid": "md-absent", "import_version_uuid": "md-absent-v"},
+	}
+	recorder := teamImportPost(t, router, "/elitea_core/team_import/prompt_lib/1", teamDocument(
+		map[string]any{"name": "Dev team", "members": []string{"md-lead"}},
+		[]map[string]any{teamAgent("md-lead", "Dev Coordinator", map[string]any{"import_uuid": "nested-1"})},
+		[]map[string]any{subAgent},
+	))
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "Dev Coordinator: sub-agent Dev Helper") {
+		t.Fatalf("a sub-agent not in the file: got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	assertNothingImported(t, pool)
+}
+
+// The name check compares the name as the import stores it: cut to the
+// entity limit. A name over the limit whose cut form is taken is refused.
+func TestTeamImportComparesTheStoredFormOfALongName(t *testing.T) {
+	pool := newImportLinkPool(t)
+	router := teamImportRouter(eliteacore.NewHandler(pool))
+	long := "Dev " + strings.Repeat("x", 400)
+	if recorder := teamImportPost(t, router, "/elitea_core/import_wizard/prompt_lib/1",
+		map[string]any{"applications": []map[string]any{teamAgent("old", long)}}); recorder.Code != http.StatusCreated {
+		t.Fatalf("seed the long-named agent: %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder := teamImportPost(t, router, "/elitea_core/team_import/prompt_lib/1", teamDocument(
+		map[string]any{"name": "Long team", "members": []string{"md-long"}},
+		[]map[string]any{teamAgent("md-long", long+" and more")},
+		nil,
+	))
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "agent_name_taken") {
+		t.Fatalf("a long name whose stored form is taken: got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}

@@ -52,6 +52,24 @@ async function eachId(ids: readonly string[], run: (id: string) => Promise<void>
   return reason === undefined ? { failed } : { failed, reason };
 }
 
+async function deleteOne(projectId: string, id: string): Promise<void> {
+  await deleteApplication(projectId, Number(id));
+}
+
+/**
+ * Deletes every selected application, then tries the refused ones once
+ * more. A sub-agent copy is refused while its parent holds it (issue 3009),
+ * and deleting the parent deletes the copy: selected together, the copy can
+ * come first, be refused, and be gone by the end. The delete of an agent
+ * that is gone answers 204, so the second pass counts it as deleted and the
+ * person is not told a deleted agent failed.
+ */
+async function deleteAll(projectId: string, ids: readonly string[]): Promise<ApplicationBulkResult> {
+  const first = await eachId(ids, (id) => deleteOne(projectId, id));
+  if (first.failed.length === 0 || first.failed.length === ids.length) return first;
+  return eachId(first.failed, (id) => deleteOne(projectId, id));
+}
+
 /** One entity's export document, handed to the browser as a JSON file. */
 function downloadJson(document: unknown, filename: string): void {
   const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' }));
@@ -119,10 +137,7 @@ export function useApplicationBulkActions(projectId: string | undefined, kind: '
       ),
     deleteMany: (ids) =>
       run(
-        () =>
-          eachId(ids, async (id) => {
-            await deleteApplication(projectId ?? '', Number(id));
-          }),
+        () => deleteAll(projectId ?? '', ids),
         (count) => t('features.agentLifecycle.bulk.deleteFailedCount', '{{count}} {{noun}} could not be deleted.', { count, noun }),
         true,
       ),

@@ -54,7 +54,7 @@ export const TeamImportCreated = zod
     members: zod.array(AgentTeamMember),
   })
   .describe(
-    "The saved team a team import created: its id, floor and members, each pinned to the first version of its imported agent. NOTE(W2): internal/api/v2/eliteacore/team_import.go:472 (`teamImportJSON`).\n",
+    "The saved team a team import created: its id, floor and members, each pinned to the first version of its imported agent. NOTE(W2): internal/api/v2/eliteacore/team_import.go:524 (`teamImportJSON`).\n",
   );
 
 export type TeamImportCreated = zod.input<typeof TeamImportCreated>;

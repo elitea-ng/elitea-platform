@@ -11,7 +11,12 @@
   writes, it refuses a taken agent name (`409 agent_name_taken`, compared
   without case), a taken team name (`409 team_name_taken`), a version tool
   reference to a toolkit the document does not carry (`422 toolkit_missing`)
-  and an invalid team (`422 team_invalid`). It needs both
+  and an invalid team (`422 team_invalid`). A version tool reference to a
+  sub-agent (a toolkit of type `application`) whose agent is not in the
+  document is refused as `toolkit_missing` too. Agent names are compared as
+  they will be stored (cut to the name limit). Team imports of one project
+  run one at a time (a transaction-scoped advisory lock), so two cannot both
+  pass the name check. It needs both
   `models.applications.export_import.import` and `models.teams.create`.
 - The import route (`import_wizard` and `export_import` POST) now imports the
   top-level `toolkits` and `skills` arrays of an `{applications, ...}` body,
@@ -19,10 +24,11 @@
   every imported agent with a toolkit answered `207` "unable to link tools".
   Such an import now answers `201` and links the toolkit. A bare entity array
   is read as before.
-- `GET .../export_import/prompt_lib/{project}/{id}?follow_version_ids=<id>`
-  now keeps only the named version without `fork=true` too. It used to be
+- `GET .../export_import/prompt_lib/{project}/{id}?follow_version_ids=<ids>`
+  now keeps only the named versions without `fork=true` too (every named
+  version, in version order; `404` when none matches). It used to be
   honoured only for a fork, so Export of the open version wrote every
-  version.
+  version. A value with no numeric id keeps every version, as before.
 - Web: Workshop › Agents › Import reads a zip with a `team.yaml` as a team,
   and the Teams list has **Export** on each row (the same zip). Desktop ships
   the web bundle, so it has both. Mobile has no Workshop import.

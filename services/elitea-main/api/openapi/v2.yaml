@@ -19878,7 +19878,7 @@ components:
       description: >
         NOTE(W2): the handler accepts a bare entity array (import_wizard) or a
         {"applications": [...]} envelope
-        (internal/api/v2/eliteacore/team_import.go:102, `importEntitiesFrom`).
+        (internal/api/v2/eliteacore/team_import.go:103, `importEntitiesFrom`).
         An envelope with no `applications` array is refused with 400. The
         envelope's top-level `toolkits` and `skills` arrays (the shape the
         export writes) are imported beside the applications; an entry without
@@ -20032,7 +20032,7 @@ components:
         The team of a team import (issue 3010). `members` names the agent
         entries of the document by their `import_uuid`, in roster order;
         `lead`, when set, is one of them and makes the floor `lead`.
-        NOTE(W2): internal/api/v2/eliteacore/team_import.go:146 (`teamImportBody`).
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:147 (`teamImportBody`).
       required: [name, members]
       properties:
         name: { type: string, maxLength: 128 }
@@ -20053,7 +20053,7 @@ components:
       type: object
       description: >
         An import document plus the team its agents form. NOTE(W2):
-        internal/api/v2/eliteacore/team_import.go:102 (`importEntitiesFrom`).
+        internal/api/v2/eliteacore/team_import.go:103 (`importEntitiesFrom`).
       required: [team, applications]
       properties:
         team: { $ref: '#/components/schemas/TeamImportTeam' }
@@ -20072,7 +20072,7 @@ components:
       description: >
         The saved team a team import created: its id, floor and members, each
         pinned to the first version of its imported agent. NOTE(W2):
-        internal/api/v2/eliteacore/team_import.go:472 (`teamImportJSON`).
+        internal/api/v2/eliteacore/team_import.go:524 (`teamImportJSON`).
       required: [id, project_id, name, description, floor_policy, lead_position, members]
       properties:
         id: { type: integer, format: int64 }
@@ -20090,7 +20090,7 @@ components:
     TeamImportResponse:
       description: >
         The import envelope of every entity written, plus the team.
-        NOTE(W2): internal/api/v2/eliteacore/team_import.go:261.
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:278.
       allOf:
         - $ref: '#/components/schemas/ImportWizardResponse'
         - type: object
@@ -20117,10 +20117,10 @@ components:
       type: object
       description: >
         A refused team import. Nothing of it was kept. `code` is
-        `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit"),
+        `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit" or "agent: sub-agent name"),
         `agent_name_taken` (with `names`), `team_name_taken` or
         `import_failed` (with `errors`, the import channels).
-        NOTE(W2): internal/api/v2/eliteacore/team_import.go:265 (`writeTeamImportRefusal`).
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:282 (`writeTeamImportRefusal`).
       required: [error, code]
       properties:
         error: { type: string }
@@ -44320,7 +44320,7 @@ paths:
       operationId: importTeam
       summary: Import a set of agents as one saved team, all or nothing
       description: |
-        NOTE(W2): internal/api/v2/eliteacore/team_import.go:155
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:156
         (`TeamImportPost`), issue 3010. One transaction creates every agent,
         version, toolkit, skill and link of the document, then the team
         (ADR-0050 decision 8); any failure keeps nothing. Each member is

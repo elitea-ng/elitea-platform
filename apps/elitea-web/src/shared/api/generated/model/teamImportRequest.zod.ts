@@ -52,7 +52,7 @@ export const TeamImportRequest = zod
     skills: zod.array(ImportEntity).optional(),
   })
   .describe(
-    "An import document plus the team its agents form. NOTE(W2): internal/api/v2/eliteacore/team_import.go:102 (`importEntitiesFrom`).\n",
+    "An import document plus the team its agents form. NOTE(W2): internal/api/v2/eliteacore/team_import.go:103 (`importEntitiesFrom`).\n",
   );
 
 export type TeamImportRequest = zod.input<typeof TeamImportRequest>;

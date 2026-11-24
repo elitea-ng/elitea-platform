@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "القائد: {{name}}",
   "features.agentLifecycle.import.teamName": "الفريق: {{name}}",
   "features.agentTeams.exportAction": "تصدير",
-  "features.agentTeams.exportMemberFailed": "تعذّر تصدير الفريق: تعذّرت قراءة الوكيل {{name}}."
+  "features.agentTeams.exportMemberFailed": "تعذّر تصدير الفريق: تعذّرت قراءة الوكيل {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "ملف zip هذا فريق. استورده من قائمة الوكلاء."
 }

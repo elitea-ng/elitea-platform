@@ -49,7 +49,7 @@ export const TeamImportResponse = ImportWizardResponse.and(
     team: TeamImportCreated,
   }),
 ).describe(
-  "The import envelope of every entity written, plus the team. NOTE(W2): internal/api/v2/eliteacore/team_import.go:261.\n",
+  "The import envelope of every entity written, plus the team. NOTE(W2): internal/api/v2/eliteacore/team_import.go:278.\n",
 );
 
 export type TeamImportResponse = zod.input<typeof TeamImportResponse>;

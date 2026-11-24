@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "Líder: {{name}}",
   "features.agentLifecycle.import.teamName": "Equipo: {{name}}",
   "features.agentTeams.exportAction": "Exportar",
-  "features.agentTeams.exportMemberFailed": "No se pudo exportar el equipo: no se pudo leer el agente {{name}}."
+  "features.agentTeams.exportMemberFailed": "No se pudo exportar el equipo: no se pudo leer el agente {{name}}.",
+  "features.agentLifecycle.import.teamOnAgents": "Este zip es un equipo. Impórtelo desde la lista de agentes."
 }

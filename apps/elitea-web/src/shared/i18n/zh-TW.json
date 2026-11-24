@@ -4969,5 +4969,6 @@
   "features.agentLifecycle.import.teamLead": "負責人：{{name}}",
   "features.agentLifecycle.import.teamName": "團隊：{{name}}",
   "features.agentTeams.exportAction": "匯出",
-  "features.agentTeams.exportMemberFailed": "無法匯出團隊：無法讀取代理 {{name}}。"
+  "features.agentTeams.exportMemberFailed": "無法匯出團隊：無法讀取代理 {{name}}。",
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一個團隊，請從代理清單匯入。"
 }

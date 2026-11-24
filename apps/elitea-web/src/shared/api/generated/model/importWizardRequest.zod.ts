@@ -53,7 +53,7 @@ export const ImportWizardRequest = zod
     }),
   ])
   .describe(
-    "NOTE(W2): the handler accepts a bare entity array (import_wizard) or a {\"applications\": [...]} envelope (internal/api/v2/eliteacore/team_import.go:102, `importEntitiesFrom`). An envelope with no `applications` array is refused with 400. The envelope's top-level `toolkits` and `skills` arrays (the shape the export writes) are imported beside the applications; an entry without `entity` takes its array's (issue 3010).\n",
+    "NOTE(W2): the handler accepts a bare entity array (import_wizard) or a {\"applications\": [...]} envelope (internal/api/v2/eliteacore/team_import.go:103, `importEntitiesFrom`). An envelope with no `applications` array is refused with 400. The envelope's top-level `toolkits` and `skills` arrays (the shape the export writes) are imported beside the applications; an entry without `entity` takes its array's (issue 3010).\n",
   );
 
 export type ImportWizardRequest = zod.input<typeof ImportWizardRequest>;
