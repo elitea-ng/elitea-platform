@@ -159,18 +159,26 @@ The console hides what a role cannot use. The server refuses it as well, and the
 - `project_administrator` is refused on every platform configuration route and on every LLM write route.
 - `security_auditor` is refused on every route that writes or approves.
 
-The file does not yet pin the routes that change who holds what. Those lines are marked `pending #2587`, and a later release pins them against a database:
+That file records only whether a route admits the role. Some writes decide after that check, from the database: the no-escalation rules, the rule against changing your own roles, the bound role of a SCIM group binding, and the configuration type of a central settings write. A second file pins those answers: `services/elitea-main/internal/api/testdata/separation_matrix_writes.txt`. A test sends each write through the production server, against a migrated database, as one holder of each built-in role. It also sends them as a holder of only `identity.sso.settings.manage`. For each write the file records `allowed` with the status, or `refused` with the refusal code. CI fails when an answer changes. It covers these writes:
 
-- role assignment on the Users page and under `/admin/modes`
-- saving the Roles matrix and syncing it to projects
+- role assignment on the Users page and under `/admin/modes`, to another account and to yourself
+- saving the Roles matrix (the administration roles and the default-mode template), and **Apply to Projects**
 - creating, renaming and deleting roles
-- adding, changing and removing project members, on both member routes
+- adding, changing and removing project members, on the central routes and the project routes
 - the bulk invite and the project matrix
-- writes to SCIM group bindings
-- writes to identity providers
-- every route of the central project settings under `/configurations`, reads included
+- creating, changing and deleting SCIM group bindings, and creating and rotating SCIM clients
+- each identity provider action on its own row: create, rename, turn off, change the issuer, replace the secret, delete and re-bind
+- the central project settings routes under `/configurations`, for a guarded setting type and for credential, model and toolkit types
 
-The narrow-role checks above still read the router's own answer for the pending routes where only the role's gate decides.
+Tests that read the second file hold these answers:
+
+- `project_administrator` is refused when it edits the Roles matrix or the project matrix, and on every SCIM group binding write.
+- `admin`, and a holder of only `identity.sso.settings.manage`, are refused on every identity provider trust action and on creating and rotating a SCIM client. Renaming a provider is a settings action, so it stays open to them.
+- A SCIM group binding write is refused with `role_permission_not_held` when the caller does not hold the bound role's permissions in that project. This holds for `admin` and for the `identity.sso.settings.manage` holder.
+- `project_administrator` cannot add itself to a project. The member create, the member update and the bulk invite refuse it with `role_self_escalation`. The project matrix route refuses it before that rule runs. Removing a member through the central route is allowed.
+- The central project settings routes admit a guarded setting type (for example `cloud_executor`) to `super_admin`, `admin` and `project_administrator` in a project they are not a member of. A credential, model or toolkit type is refused to every role there.
+
+The route-gate file has no `pending` lines.
 
 The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
 

@@ -211,13 +211,8 @@ func overrideBodyType(r *http.Request) (*http.Request, string, bool) {
 // models.project_settings.edit in the project may still write these types
 // through the central override: every named type is a guarded setting (the
 // types of the allowlist's write pairs) and the caller holds
-// projects.settings.manage centrally. It marks the request when it may.
-func (h *Handler) centralSettingsWrite(ctx context.Context, typeNames []string) bool {
-	return centralSettingsWrite(ctx, h.permissionResolver, typeNames)
-}
-
-// centralSettingsWrite is (*Handler).centralSettingsWrite for any
-// implementation of the routes.
+// projects.settings.manage centrally. It marks the request when it may. Both
+// the compatibility and the reviewed routes call it.
 func centralSettingsWrite(ctx context.Context, resolver auth.PermissionResolver, typeNames []string) bool {
 	named := 0
 	for _, name := range typeNames {

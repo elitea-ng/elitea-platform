@@ -27,7 +27,7 @@ func entitlementExportSection() map[string]any {
 		"id": section,
 		"access": narrowAccess(adminaccess.AreaSecurity,
 			adminaccess.EntitlementsExport, adminaccess.EntitlementsExportManage),
-		"title":  "Entitlement Export",
+		"title": "Entitlement Export",
 		"description": "Which SCIM clients may read the read-only entitlement tree at /api/v2/scim/v2/entitlements " +
 			"(who holds which role and what it allows, for access reviews). Empty (the default) refuses every " +
 			"client. The admin CSV download on the Users page is not affected.",
