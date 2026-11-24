@@ -305,12 +305,27 @@ test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-247
     try {
       const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
       const memberPage = await memberCtx.newPage();
-      await openArtifacts(memberPage);
-      await expect(memberPage.getByLabel(`Manage access to ${bucket}`)).toHaveCount(0, { timeout: 15_000 });
-
+      // ONE navigation, straight to the direct URL, settled on the bucket
+      // listing's own answer. This test used to open `/app/artifacts`, assert
+      // the bucket ABSENT from the sidebar (which an absence assertion grants
+      // at once, before the app has booted) and then navigate again: the
+      // twin of the ELITEA-2483/2484 race below. WebKit cancelled the first
+      // document's boot traffic, the second document lost `config.js`
+      // ("System env missing") and the context's next request went out with
+      // NO session cookie, so the blocked read answered 401 instead of 403
+      // (CI run 45478984064: `cookie_count: 0` in the server log).
+      const listed = memberPage.waitForResponse(
+        (response) =>
+          /\/api\/v2\/artifacts\/buckets\/\d+(\?|$)/.test(response.url()) && response.request().method() === 'GET',
+        { timeout: 15_000 },
+      );
       const direct = await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
       expect(direct?.status(), 'the shell route itself is still served').toBeLessThan(400);
       await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
+      const listing = await listed;
+      expect(listing.status(), 'the member must read the bucket listing').toBe(200);
+      expect(await listing.text(), 'a "No access" bucket must not be listed to the member').not.toContain(bucket);
+      await expect(memberPage.getByLabel(`Manage access to ${bucket}`)).toHaveCount(0);
       // No access: the file table for THIS bucket never renders — the row this
       // bucket's own seed created must stay invisible to the restricted member.
       await expect(memberPage.getByRole('row').filter({ hasText: fileName })).toHaveCount(0, { timeout: 10_000 });
