@@ -15,13 +15,21 @@ package eliteacore
 //   - Through the static `administration` routes (the admin Projects page), the
 //     gate is central. Managing the members of every project is the authority
 //     that central gate grants, and ADR-0059 keeps it a central-operator power
-//     (R0.9 splits it out with its own roles later). An operator usually holds
+//     (R0.6 gives it the narrow name projects.members.manage, which the
+//     built-in project_administrator role holds). An operator usually holds
 //     no role in the project at all, so a subset rule there would refuse every
 //     member write it is entitled to. The rule there is the effect on the
 //     caller: an operator cannot give its OWN account a role whose permissions
-//     it does not already hold in the project.
+//     it does not already hold in the project. Removing its own account
+//     (leaving a project) widens nothing and passes. A second account, or
+//     another project administrator, is NOT prevented: ADR-0059 owner decision
+//     8 accepts that gap and answers it with the signal
+//     access.admin_membership_granted (R1.6), which detects it.
 //
 // A holder of admin.auth.users.super_admin is exempt from both.
+//
+// A central write that passes, into a project the caller is not a member of,
+// marks its audit record central_override (ADR-0059 R0.6a).
 
 import (
 	"net/http"
@@ -60,6 +68,26 @@ func (h *Handler) checkMembershipChange(
 	if refusal != nil {
 		return refusal
 	}
+	if refusal := h.membershipRefusal(r, q, caller, change); refusal != nil {
+		return refusal
+	}
+	if change.asMember {
+		return nil
+	}
+	member, err := adminaccess.IsProjectMember(r.Context(), q, caller.UserID, int64(change.projectID))
+	if err != nil {
+		return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
+	}
+	if !member {
+		adminaccess.MarkCentralOverride(r.Context())
+	}
+	return nil
+}
+
+// membershipRefusal is the rule itself, for a resolved caller.
+func (h *Handler) membershipRefusal(
+	r *http.Request, q adminaccess.Querier, caller adminaccess.Caller, change membershipChange,
+) *adminaccess.Refusal {
 	if caller.SuperAdmin {
 		return nil
 	}
@@ -102,7 +130,7 @@ func (h *Handler) checkMembershipChange(
 			ProjectID: int64(change.projectID), Permissions: missing,
 		})
 	}
-	refusal = adminaccess.NotHeld(
+	refusal := adminaccess.NotHeld(
 		"you can give or take only project roles whose permissions you all hold in this project", "", missing)
 	refusal.ProjectID = int64(change.projectID)
 	return refusal

@@ -104,7 +104,10 @@ var administratorExclusions = map[string][]string{
 // gives it to a custom role. configuration.service_descriptors gates the
 // Service Descriptors section, which answers 501 on this platform
 // (internal/api/v2/admin/roles.go, declaredPermissions).
-var ungrantedByMigration = []string{ConfigurationServiceDescriptors}
+// configuration.users.users.delete is granted in the default mode only (shared
+// 0076); the central removal route of R0.6a accepts it beside
+// projects.members.manage, which both administrator roles hold.
+var ungrantedByMigration = []string{ConfigurationServiceDescriptors, ConfigurationUsersUsersDelete}
 
 func administratorSet(role string) func() []string {
 	return func() []string {

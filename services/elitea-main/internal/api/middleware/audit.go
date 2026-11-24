@@ -335,6 +335,7 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		if annotation.Actor != "" && event.UserID == nil && event.UserEmail == "" {
 			event.UserEmail = annotation.Actor
 		}
+		event.CentralOverride = annotation.CentralOverride
 	}
 	return event
 }

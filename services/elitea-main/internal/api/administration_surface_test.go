@@ -38,8 +38,6 @@ var declaredWithoutDecision = map[string]string{
 		"moderation request; admin.moderation.create in the DEFAULT mode against {projectID}",
 	"DELETE /api/v2/admin/moderation_status/{mode}/{projectID}/{entityID}": "a project member withdraws " +
 		"their own request (#544); admin.moderation.create in the DEFAULT mode, rows scoped to the caller",
-	"DELETE /api/v2/admin/users/{mode}/{projectID}": "removes a member from one project; " +
-		"configuration.users.users.delete in the DEFAULT mode against {projectID}",
 	"GET /api/v2/admin/system_info/prompt_lib": "the Help Center's version lookup; " +
 		"open to every signed-in user like the legacy PromptLibAPI (router.go, /admin block)",
 	"GET /api/v2/admin/plugin_config_values/prompt_lib/resources": "the Help Center's one public " +
@@ -65,6 +63,25 @@ var invisibleChecks = map[string]string{
 	): "guardBindingWrite compares the caller's set with the role of the STORED binding, which the " +
 		"unconnected pool cannot read, so no grant changes the answer; the rule reads role rows, not a " +
 		"literal, and its one literal (admin.auth.users.super_admin) is seen on the SCIM client routes",
+}
+
+// The central branch of the guarded project settings (ADR-0059 R0.6b) admits
+// only a request that names a guarded setting type: the `type` query of the
+// list, the `type` of the create's body. The driver's empty request names
+// none, so no grant changes the answer on these four. Its two permissions
+// come from adminaccess.OverrideRoutePermissions, and the same check is seen
+// on the detail, update and delete routes, where the type is the stored row's.
+func init() {
+	const settingsOverride = "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations.(*Handler).settingsOverride"
+	for _, route := range []adminsurface.Route{
+		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{projectID}"},
+		{Method: http.MethodGet, Pattern: "/api/v2/configurations/configurations/{mode}/{projectID}"},
+		{Method: http.MethodPost, Pattern: "/api/v2/configurations/configurations/{projectID}"},
+		{Method: http.MethodPost, Pattern: "/api/v2/configurations/configurations/{mode}/{projectID}"},
+	} {
+		invisibleChecks[adminsurface.InvisibleKey(route, settingsOverride)] = "the central settings branch " +
+			"decides on the configuration type the request names, and the driver's empty request names none"
+	}
 }
 
 type drivenSurface struct {
@@ -323,7 +340,14 @@ func TestAdministrationSurfaceFailsOnAnUnreachedRoute(t *testing.T) {
 // Drive sees on the route do not name, each with the reason. The entry names
 // the permission the action requires; the drive's empty body stops before the
 // check that names it.
-var actionPermissionExceptions = map[string]string{}
+var actionPermissionExceptions = map[string]string{
+	// ADR-0059 R0.6b: the central settings branch reads the type of the
+	// create's body, and the drive's empty body names none (invisibleChecks).
+	"POST /api/v2/configurations/configurations/{projectID}": "the central settings branch decides " +
+		"on the body's configuration type; the empty body names none",
+	"POST /api/v2/configurations/configurations/{mode}/{projectID}": "the central settings branch decides " +
+		"on the body's configuration type; the empty body names none",
+}
 
 // TestEveryWriteRouteOfTheSurfaceHasAnActionEntry is the ratchet of the action
 // table (ADR-0059 R0.1c): a write route of the surface with no entry fails, an

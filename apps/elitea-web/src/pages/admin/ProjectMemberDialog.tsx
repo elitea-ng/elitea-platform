@@ -25,9 +25,12 @@
  *
  * ## Authorisation
  *
- * Both writes are gated SERVER-side on `configuration.users.users.create` /
- * `.edit`, resolved from the database in administration mode on every request
- * (`internal/api/router.go`). This dialog is only rendered when the admin-panel
+ * The three writes (add, change role, remove) are gated SERVER-side on
+ * `projects.members.manage` or the legacy `configuration.users.users.create` /
+ * `.edit` / `.delete`, resolved from the database in administration mode on
+ * every request (`internal/api/router.go`, ADR-0059 R0.6a). An administrator
+ * needs no membership of the project. A change that would widen the caller's
+ * own permissions is refused (`role_self_escalation`); leaving is not. This dialog is only rendered when the admin-panel
  * config advertises the project-write permission, which is PRESENTATION state —
  * a caller without the permission is refused either way.
  */
@@ -49,6 +52,7 @@ import {
   useAddProjectMember,
   useProjectMembers,
   useProjectRoles,
+  useRemoveProjectMember,
   useUpdateProjectMemberRole,
   type AdminProjectRow,
   type ProjectRole,
@@ -196,6 +200,59 @@ function MemberAlerts({
 }
 
 /**
+ * Remove the member the typed address names (ADR-0059 R0.6a). Rendered only
+ * for an existing member, with its own mutation, so the form's branches stay
+ * inside the complexity budget.
+ */
+function RemoveMemberButton({
+  projectId,
+  member,
+  disabled,
+  setFeedback,
+  clearEmail,
+}: {
+  readonly projectId: number;
+  readonly member: ProjectMemberRow | undefined;
+  readonly disabled: boolean;
+  readonly setFeedback: (feedback: Feedback) => void;
+  readonly clearEmail: () => void;
+}) {
+  const removeMember = useRemoveProjectMember();
+  if (member === undefined) return null;
+  const handleRemove = () => {
+    setFeedback(NO_FEEDBACK);
+    removeMember.mutate(
+      { projectId, userId: member.id },
+      {
+        onSuccess: () => {
+          setFeedback({
+            error: '',
+            success: t('pages.admin.projects.member.removed', 'User removed from the project.'),
+          });
+          clearEmail();
+        },
+        onError: (error: unknown) => {
+          setFeedback({
+            success: '',
+            error: readErrorMessage(
+              error,
+              t('pages.admin.projects.member.error.remove', 'Failed to remove the user.'),
+            ),
+          });
+        },
+      },
+    );
+  };
+  return (
+    <Button color="error" onClick={handleRemove} disabled={disabled || removeMember.isPending}>
+      {removeMember.isPending
+        ? t('pages.admin.projects.member.removing', 'Removing…')
+        : t('pages.admin.projects.member.remove', 'Remove from project')}
+    </Button>
+  );
+}
+
+/**
  * The dialog SHELL only. The form below holds every piece of state and is keyed
  * on the project id, so opening the dialog for a second project cannot inherit
  * the first one's typed address, chosen role or success banner — the leak the
@@ -314,6 +371,13 @@ function ProjectMemberForm({
         </Stack>
       </DialogContent>
       <DialogActions>
+        <RemoveMemberButton
+          projectId={projectId}
+          member={existingMember}
+          disabled={isPending}
+          setFeedback={setFeedback}
+          clearEmail={() => setEmail('')}
+        />
         <Button onClick={onClose} disabled={isPending}>
           {t('pages.admin.projects.member.cancel', 'Cancel')}
         </Button>

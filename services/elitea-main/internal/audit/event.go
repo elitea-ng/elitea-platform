@@ -104,6 +104,14 @@ type Event struct {
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
+
+	// CentralOverride is true when a central (administration-mode)
+	// permission reached a project the caller is not a member of: a member
+	// write through the administration routes, a bulk invite, or a guarded
+	// project setting through the reviewed allowlist (ADR-0059 R0.6). It is
+	// on the record the middleware hands to the Recorder; R1.4a persists it
+	// as an audit column, and until then PostgresRecorder does not write it.
+	CentralOverride bool
 }
 
 // Recorder accepts an event for eventual persistence.
@@ -144,6 +152,10 @@ type Annotation struct {
 	// carries no user principal, so the trail names the integration that made
 	// the change rather than showing an empty actor. It never overrides a user.
 	Actor string
+	// CentralOverride marks the request as a central write into a project
+	// the caller is not a member of (Event.CentralOverride). Once set by any
+	// handler it stays set.
+	CentralOverride bool
 }
 
 // AnnotationSlot is the mutable cell the middleware puts on the context before
@@ -205,6 +217,9 @@ func Annotate(ctx context.Context, a Annotation) {
 	}
 	if a.Actor != "" {
 		slot.annotation.Actor = a.Actor
+	}
+	if a.CentralOverride {
+		slot.annotation.CentralOverride = true
 	}
 }
 
