@@ -69,8 +69,14 @@ adminTest('an LLM manager reaches the gateway editor through the navigation and 
   const context = await browser.newContext();
   try {
     const page = await context.newPage();
-    await signInThroughOidc(page, subject);
-    await page.goto(BASE_URL + '/admin/app/', { waitUntil: 'domcontentloaded' });
+    // The round trip lands on the console itself. Signing in to `/app/` and
+    // then navigating to `/admin/app/` fired the second navigation while the
+    // main app was still importing its route chunks: WebKit cancelled them,
+    // the main app's chunk guard reloaded `/app/` over the console navigation
+    // ("Load request cancelled" on `/admin/app/`, then "Importing a module
+    // script failed"), and the page never showed the console (CI run
+    // 45478984064, both attempts).
+    await signInThroughOidc(page, subject, '/admin/app/');
 
     // The navigation shows the pages the role opens, and no other.
     const nav = page.getByTestId('admin-nav');

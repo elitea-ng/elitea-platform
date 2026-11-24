@@ -7430,5 +7430,10 @@
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentLifecycle.import.teamOnAgents": "This zip is a team. Import it from the Agents list.",
   "features.agentTeams.exportAction": "Export",
-  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read."
+  "features.agentTeams.exportMemberFailed": "The team could not be exported: the agent {{name}} could not be read.",
+  "pages.admin.console.error.explanation": "This is not an answer about your access. Try again in a moment.",
+  "pages.admin.console.error.retry": "Try again",
+  "pages.admin.console.error.title": "We couldn't load the console",
+  "pages.admin.console.loading": "Loading the console…",
+  "pages.admin.console.refused": "You do not have access to the administration console."
 }

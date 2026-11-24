@@ -89,6 +89,10 @@ func init() {
 type drivenSurface struct {
 	result   adminsurface.Result
 	sections []adminsurface.Section
+	// composed and opts are the router and the options the result was driven
+	// with, for a test that sends its own requests (the separation matrix).
+	composed adminsurface.Composed
+	opts     adminsurface.Options
 }
 
 var composedSurface = sync.OnceValues(func() (drivenSurface, error) {
@@ -107,6 +111,8 @@ var composedSurface = sync.OnceValues(func() (drivenSurface, error) {
 	return drivenSurface{
 		result:   adminsurface.Drive(composed.Handler, composed.Resolver, composed.Routes, opts),
 		sections: sections,
+		composed: composed,
+		opts:     opts,
 	}, nil
 })
 

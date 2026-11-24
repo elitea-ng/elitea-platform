@@ -4980,5 +4980,10 @@
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentTeams.exportAction": "Exportieren",
   "features.agentTeams.exportMemberFailed": "Das Team konnte nicht exportiert werden: Der Agent {{name}} konnte nicht gelesen werden.",
-  "features.agentLifecycle.import.teamOnAgents": "Diese ZIP-Datei ist ein Team. Importieren Sie sie über die Agentenliste."
+  "features.agentLifecycle.import.teamOnAgents": "Diese ZIP-Datei ist ein Team. Importieren Sie sie über die Agentenliste.",
+  "pages.admin.console.error.explanation": "Dies ist keine Aussage über Ihren Zugriff. Versuchen Sie es gleich noch einmal.",
+  "pages.admin.console.error.retry": "Erneut versuchen",
+  "pages.admin.console.error.title": "Die Konsole konnte nicht geladen werden",
+  "pages.admin.console.loading": "Konsole wird geladen…",
+  "pages.admin.console.refused": "Sie haben keinen Zugriff auf die Verwaltungskonsole."
 }

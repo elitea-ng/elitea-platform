@@ -4980,5 +4980,10 @@
   "features.agentLifecycle.import.teamName": "Команда: {{name}}",
   "features.agentTeams.exportAction": "Експорт",
   "features.agentTeams.exportMemberFailed": "Не вдалося експортувати команду: не вдалося прочитати агента {{name}}.",
-  "features.agentLifecycle.import.teamOnAgents": "Цей zip — команда. Імпортуйте його зі списку агентів."
+  "features.agentLifecycle.import.teamOnAgents": "Цей zip — команда. Імпортуйте його зі списку агентів.",
+  "pages.admin.console.error.explanation": "Це не відповідь щодо вашого доступу. Спробуйте ще раз за мить.",
+  "pages.admin.console.error.retry": "Спробувати ще раз",
+  "pages.admin.console.error.title": "Не вдалося завантажити консоль",
+  "pages.admin.console.loading": "Завантаження консолі…",
+  "pages.admin.console.refused": "У вас немає доступу до консолі адміністрування."
 }
