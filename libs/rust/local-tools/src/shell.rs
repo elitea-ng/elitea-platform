@@ -660,16 +660,23 @@ fn token_environment() -> Vec<(String, String)> {
 /// A command's environment ([`environment`]) with what its grant adds;
 /// the proxy is the only way out, so no `NO_PROXY` lets a client around it.
 fn granted_environment(config: &ShellConfig, granted: Option<&Granted>) -> Vec<(String, String)> {
-    let mut env = environment(config);
+    with_grant(environment(config), granted.map(|granted| &granted.env[..]))
+}
+
+/// `env` with a grant's variables: each replaces any spelling of its name,
+/// and `NO_PROXY` goes.
+fn with_grant(
+    mut env: Vec<(String, String)>,
+    granted: Option<&[(String, String)]>,
+) -> Vec<(String, String)> {
     if let Some(granted) = granted {
         env.retain(|(name, _)| {
             !name.eq_ignore_ascii_case("no_proxy")
                 && !granted
-                    .env
                     .iter()
                     .any(|(granted, _)| granted.eq_ignore_ascii_case(name))
         });
-        env.extend(granted.env.iter().cloned());
+        env.extend(granted.iter().cloned());
     }
     env
 }
@@ -1270,6 +1277,75 @@ mod tests {
             loopback: false,
             grant: None,
         }
+    }
+
+    /// A grant's variables replace every spelling of their names, `NO_PROXY`
+    /// goes (the proxy is the only way out), the rest is kept; no grant
+    /// changes nothing. The secret-looking variables were dropped before
+    /// (`passthrough_environment`), and a grant adds only its own.
+    #[test]
+    fn a_grant_replaces_its_variables_and_drops_no_proxy() {
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        let base = vec![
+            pair("PATH", "/usr/bin"),
+            pair("no_proxy", "*"),
+            pair("NO_PROXY", "*"),
+            pair("https_proxy", "http://elsewhere:1"),
+        ];
+        assert_eq!(super::with_grant(base.clone(), None), base);
+        let granted = [
+            pair("GH_TOKEN", "t"),
+            pair("HTTPS_PROXY", "http://127.0.0.1:2"),
+        ];
+        let env = super::with_grant(base, Some(&granted));
+        assert_eq!(
+            env,
+            vec![
+                pair("PATH", "/usr/bin"),
+                pair("GH_TOKEN", "t"),
+                pair("HTTPS_PROXY", "http://127.0.0.1:2"),
+            ]
+        );
+    }
+
+    /// The login is redacted before the head and tail cut: a capped output
+    /// keeps no part of it, also where it straddles reads.
+    #[tokio::test]
+    async fn a_capped_output_keeps_no_part_of_a_secret() {
+        use crate::credentials::{Redactor, Secret};
+        let secret = Secret::for_test("gho_0123456789abcdefghij");
+        let mut text = String::new();
+        for _ in 0..2_000 {
+            text.push_str("line gho_0123456789abcdefghij end\n");
+        }
+        let into = super::SharedCapture::default();
+        // A slow reader: every read returns at most 7 bytes.
+        let reader = tokio_test_reader(text.into_bytes(), 7);
+        super::capture(reader, 4_096, into.clone(), Redactor::new(&[secret])).await;
+        let captured = super::rendered(&into, false);
+        assert!(captured.truncated);
+        assert!(!captured.text.contains("gho_"), "{}", captured.text);
+        assert!(captured.text.contains("[REDACTED]"));
+    }
+
+    /// An `AsyncRead` over `bytes` that returns at most `step` bytes a read.
+    fn tokio_test_reader(bytes: Vec<u8>, step: usize) -> impl tokio::io::AsyncRead + Unpin {
+        struct Slow(std::io::Cursor<Vec<u8>>, usize);
+        impl tokio::io::AsyncRead for Slow {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                use std::io::Read as _;
+                let step = self.1.min(buf.remaining());
+                let mut chunk = vec![0; step];
+                let read = self.0.read(&mut chunk)?;
+                buf.put_slice(&chunk[..read]);
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        Slow(std::io::Cursor::new(bytes), step)
     }
 
     /// In a container with a trusted root, a workspace command's git

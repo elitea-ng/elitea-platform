@@ -49,6 +49,7 @@ touch "$GH_CONFIG_DIR/planted" 2>/dev/null && echo "config=writable" || echo "co
 cat "$HOME/.config/gh/hosts.yml" 2>/dev/null && echo "hosts=read" || echo "hosts=hidden"
 /usr/bin/curl -sS -m 5 -o /dev/null https://evil.example.com 2>&1 | head -1
 /usr/bin/curl -sS -m 5 --noproxy '*' -o /dev/null https://140.82.112.6 2>&1 | head -1
+echo "local=$(/usr/bin/curl -sS -m 3 --noproxy '*' -o /dev/null "http://127.0.0.1:$3/" 2>&1 | head -1)"
 echo "end"
 "#
         ),
@@ -97,8 +98,11 @@ async fn inner() {
         credential: Some("gh".to_owned()),
         hosts: vec!["api.github.com".to_owned()],
     };
+    // Another local listener: the sandbox reaches the proxy's port only.
+    let other = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    let other_port = other.local_addr().expect("addr").port();
     let spec = CommandSpec {
-        command: "gh pr list".to_owned(),
+        command: format!("gh pr list {other_port}"),
         cwd: WsPath::root(),
         timeout: None,
         mode: SandboxMode::WorkspaceWrite,
@@ -120,6 +124,15 @@ async fn inner() {
     assert!(
         all.contains("403"),
         "the proxy refuses an unlisted host: {all}"
+    );
+    // Refused at connect (the listener would accept, then time out).
+    let local = all
+        .lines()
+        .find(|line| line.starts_with("local="))
+        .unwrap_or_default();
+    assert!(
+        local.contains("Failed to connect") || local.contains("Couldn't connect"),
+        "another local port: {local}"
     );
     assert!(all.contains("end"), "{all}");
     let network = output.network.expect("a network report");

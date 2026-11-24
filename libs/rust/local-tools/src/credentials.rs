@@ -149,6 +149,12 @@ impl Secret {
     pub fn expose(&self) -> &str {
         &self.0
     }
+
+    /// A secret from a literal, for the crate's tests.
+    #[cfg(test)]
+    pub(crate) fn for_test(value: &str) -> Self {
+        Self(Arc::from(value))
+    }
 }
 
 impl std::fmt::Debug for Secret {
