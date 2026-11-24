@@ -128,7 +128,7 @@ Six built-in roles of the central administration mode hold a set of permissions 
 
 The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
 
-**The sets are locked.** The server refuses to rename or delete a built-in role (`409`), and to change its permissions in the Roles matrix (`403` with the code `role_set_locked`), for every caller, a super admin included. A deployment that wants a different set creates a custom role and gives it the permissions. The operator command `elitea-main admin-role reset <role>`, which a later release adds, puts a built-in set back to the one Elitea defines.
+**The sets are locked.** The server refuses to rename or delete a built-in role (`409`), and to change its permissions in the Roles matrix (`403` with the code `role_set_locked`), for every caller, a super admin included. A deployment that wants a different set creates a custom role and gives it the permissions. The operator command [`elitea-main admin-role reset <role>`](/deployment/operations#administrative-roles-from-the-command-line) puts a built-in set back to the one Elitea defines.
 
 **Built-in is a record, not a name.** The upgrade records each built-in role in `elitea_auth.admin_role_seeds`. A role that already had one of the new names (for example a custom `llm_manager` or `security_auditor`) before the upgrade is left as it was: it gets no permission, is not recorded and is not locked, and can still be renamed and deleted. The upgrade runs once, so renaming the custom role later does not add the built-in one.
 
@@ -139,7 +139,7 @@ The server makes sure that no administrator can raise their own access, and that
 The six rules for central roles:
 
 1. **Grant and assign only what you hold.** You can add a permission to a central role, or remove one from it, only if you hold that permission yourself. You can assign or remove a central role only if you hold every permission of that role. Removing counts, so an administrator with fewer permissions cannot demote one with more.
-2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`, which applies only while no active account holds `super_admin`.
+2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`, which applies only while no active account holds `super_admin`, or from the operator command `elitea-main admin-role grant`.
 3. **Your own role is locked.** You cannot change the permissions of a central role that you hold.
 4. **Seeded only.** Six permissions are granted by the upgrade migrations only, and no change through the console or the API adds them to a role: `admin.auth.users.super_admin`, `identity.sso.trust.manage`, `access.breakglass.request`, `access.breakglass.approve`, `access.breakglass.manage` and `access.breakglass.review`.
 5. **Locked sets.** The permissions of a built-in role cannot be changed (see [Built-in administration roles](#built-in-administration-roles)). A role that is never assigned (the legacy `system` role) is assigned to nobody.
@@ -205,7 +205,8 @@ The source says how the change was made:
 | `console` | An administrator signed in through the browser, on the Users page or under `/admin/modes`. |
 | `api` | A caller with an access token, on the same routes. |
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
-| `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
+| `operator` | The operator command [`elitea-main admin-role`](/deployment/operations#administrative-roles-from-the-command-line), run inside the workload. There is no actor; the record keeps the command's `--reason`. |
+| `migration`, `review`, `scim` | Reserved for an upgrade step, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
 ### Read the holders and the history
 
