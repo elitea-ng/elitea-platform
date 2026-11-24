@@ -94,11 +94,15 @@ func (d *directory) ResolvePermissions(_ context.Context, user auth.User, mode, 
 	if id == 0 {
 		return auth.PermissionResolution{}, auth.ErrPermissionDenied
 	}
+	if user.CredentialKind == auth.CredentialKindToken {
+		// A token whose admin_access is none acts with no role and no name.
+		return auth.PermissionResolution{UserID: id}, nil
+	}
 	var permissions []string
 	for _, role := range d.users[id] {
 		permissions = append(permissions, d.roles[role]...)
 	}
-	return auth.PermissionResolution{UserID: id, Permissions: permissions}, nil
+	return auth.PermissionResolution{UserID: id, Permissions: permissions, Roles: slices.Clone(d.users[id])}, nil
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
@@ -243,6 +247,35 @@ func TestConsoleWithNoAdministrationPermissionAnswersNoArea(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), `"areas":[]`) {
 			t.Errorf("%s: areas must be an empty list, not absent: %s", name, rec.Body)
 		}
+	}
+}
+
+// TestConsoleListsTheRolesTheResolutionActedWith: the roles half and the
+// areas half come from one resolution. A token that acts with no role must
+// not list its owner's, and a native session is answered before any
+// resolution (a failing resolver would otherwise turn it into a 500).
+func TestConsoleListsTheRolesTheResolutionActedWith(t *testing.T) {
+	t.Parallel()
+	d := newDirectory()
+	d.users[13] = []string{registry.RoleSuperAdmin}
+
+	token := &auth.User{ID: "13", UserID: "13", CredentialKind: auth.CredentialKindToken}
+	doc := decode(t, serve(t, console.NewHandler(d, d, nil), token, "/console"))
+	if len(doc.Areas) != 0 || len(doc.Roles) != 0 {
+		t.Errorf("a token acting with no role: got %+v, want no area and no role", doc)
+	}
+
+	native := &auth.User{ID: "13", UserID: "13", CredentialKind: auth.CredentialKindNative}
+	rec := serve(t, console.NewHandler(failingResolver{}, d, nil), native, "/console")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("native session: status %d, want 200 without resolving", rec.Code)
+	}
+	if doc := decode(t, rec); len(doc.Areas) != 0 || len(doc.Roles) != 0 || doc.Elevation != nil {
+		t.Errorf("native session: got %+v, want an empty document", doc)
+	}
+
+	if doc := decode(t, serve(t, console.NewHandler(d, d, nil), session(13), "/console")); len(doc.Roles) != 1 {
+		t.Errorf("the session of the same owner: got roles %+v, want its one role", doc.Roles)
 	}
 }
 

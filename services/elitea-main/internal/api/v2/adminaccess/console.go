@@ -203,6 +203,14 @@ func (h *Handler) Console(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body := documentBody{Areas: []areaBody{}, Roles: []roleBody{}}
+	// No administration route gate admits a native device session
+	// (ADR-0059 decision 7), and the gates refuse it before resolving
+	// anything: so does the document, with no role and no elevation, since
+	// a session that opens nothing acts with none.
+	if apimw.AdministrationGatesRefuse(user) {
+		writeJSON(w, body)
+		return
+	}
 	// The call the route gates make: the caller's principal, credential
 	// included, in the administration mode, with no project.
 	resolution, err := h.resolver.ResolvePermissions(r.Context(), user, auth.PermissionModeAdministration, "")
@@ -217,11 +225,6 @@ func (h *Handler) Console(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	held := registry.SetOf(resolution.Permissions...)
-	// No administration route gate admits a native device session
-	// (ADR-0059 decision 7), so no item is open to one.
-	if apimw.AdministrationGatesRefuse(user) {
-		held = registry.Set{}
-	}
 	for _, area := range registry.ConsoleAccess(held) {
 		out := areaBody{ID: string(area.Area), LabelKey: registry.AreaLabelKey(area.Area), Items: []itemBody{}}
 		for _, access := range area.Items {
@@ -232,11 +235,16 @@ func (h *Handler) Console(w http.ResponseWriter, r *http.Request) {
 		body.Areas = append(body.Areas, out)
 	}
 	if resolution.UserID > 0 {
+		// The roles are the ones the resolution acted with
+		// (PermissionResolution.Roles), from the same query as the areas: a
+		// personal access token that acts with none lists none, not its
+		// owner's. The role reader only adds the built-in flag.
 		roles, err := h.roles.HeldRoles(r.Context(), resolution.UserID)
 		if err != nil {
 			h.fail(w, r, "the roles could not be read", err)
 			return
 		}
+		roles = slices.DeleteFunc(roles, func(held Role) bool { return !slices.Contains(resolution.Roles, held.Name) })
 		slices.SortFunc(roles, roleOrder)
 		for _, held := range roles {
 			body.Roles = append(body.Roles, role(held))

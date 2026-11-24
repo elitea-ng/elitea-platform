@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,14 +17,27 @@ import (
 type PostgresRoles struct {
 	pool      registry.Querier
 	seedTable atomic.Bool
+	// absentUntil caches a "no seed table" answer (unix nanoseconds), so a
+	// database without it costs one look per absentFor, not one per request;
+	// a migration that adds the table is seen within that time.
+	absentUntil atomic.Int64
+	now         func() time.Time
 }
 
+// absentFor is how long an absent seed table is believed absent.
+const absentFor = time.Minute
+
 // NewPostgresRoles returns the reader.
-func NewPostgresRoles(pool registry.Querier) *PostgresRoles { return &PostgresRoles{pool: pool} }
+func NewPostgresRoles(pool registry.Querier) *PostgresRoles {
+	return &PostgresRoles{pool: pool, now: time.Now}
+}
 
 func (p *PostgresRoles) seedsPresent(ctx context.Context) (bool, error) {
 	if p.seedTable.Load() {
 		return true, nil
+	}
+	if p.now().UnixNano() < p.absentUntil.Load() {
+		return false, nil
 	}
 	var present bool
 	if err := p.pool.QueryRow(ctx,
@@ -32,6 +46,8 @@ func (p *PostgresRoles) seedsPresent(ctx context.Context) (bool, error) {
 	}
 	if present {
 		p.seedTable.Store(true)
+	} else {
+		p.absentUntil.Store(p.now().Add(absentFor).UnixNano())
 	}
 	return present, nil
 }

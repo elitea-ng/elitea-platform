@@ -3658,12 +3658,19 @@ export type getAdminConsoleDocumentResponse500 = {
   status: 500;
 };
 
+export type getAdminConsoleDocumentResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
 export type getAdminConsoleDocumentResponseSuccess =
   getAdminConsoleDocumentResponse200 & {
     headers: Headers;
   };
 export type getAdminConsoleDocumentResponseError = (
-  getAdminConsoleDocumentResponse401 | getAdminConsoleDocumentResponse500
+  | getAdminConsoleDocumentResponse401
+  | getAdminConsoleDocumentResponse500
+  | getAdminConsoleDocumentResponse503
 ) & {
   headers: Headers;
 };
@@ -3714,7 +3721,7 @@ export const getGetAdminConsoleDocumentQueryKey = () => {
 
 export const getGetAdminConsoleDocumentQueryOptions = <
   TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
-  TError = N401Response | N500Response,
+  TError = N401Response | N500Response | ErrorResponse,
 >(options?: {
   query?: Partial<
     UseQueryOptions<
@@ -3744,11 +3751,12 @@ export const getGetAdminConsoleDocumentQueryOptions = <
 export type GetAdminConsoleDocumentQueryResult = NonNullable<
   Awaited<ReturnType<typeof getAdminConsoleDocument>>
 >;
-export type GetAdminConsoleDocumentQueryError = N401Response | N500Response;
+export type GetAdminConsoleDocumentQueryError =
+  N401Response | N500Response | ErrorResponse;
 
 export function useGetAdminConsoleDocument<
   TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
-  TError = N401Response | N500Response,
+  TError = N401Response | N500Response | ErrorResponse,
 >(
   options: {
     query: Partial<
@@ -3774,7 +3782,7 @@ export function useGetAdminConsoleDocument<
 };
 export function useGetAdminConsoleDocument<
   TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
-  TError = N401Response | N500Response,
+  TError = N401Response | N500Response | ErrorResponse,
 >(
   options?: {
     query?: Partial<
@@ -3800,7 +3808,7 @@ export function useGetAdminConsoleDocument<
 };
 export function useGetAdminConsoleDocument<
   TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
-  TError = N401Response | N500Response,
+  TError = N401Response | N500Response | ErrorResponse,
 >(
   options?: {
     query?: Partial<
@@ -3822,7 +3830,7 @@ export function useGetAdminConsoleDocument<
 
 export function useGetAdminConsoleDocument<
   TData = Awaited<ReturnType<typeof getAdminConsoleDocument>>,
-  TError = N401Response | N500Response,
+  TError = N401Response | N500Response | ErrorResponse,
 >(
   options?: {
     query?: Partial<
@@ -3868,6 +3876,11 @@ export type getAdminConsoleItemResponse500 = {
   status: 500;
 };
 
+export type getAdminConsoleItemResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
 export type getAdminConsoleItemResponseSuccess =
   getAdminConsoleItemResponse200 & {
     headers: Headers;
@@ -3876,6 +3889,7 @@ export type getAdminConsoleItemResponseError = (
   | getAdminConsoleItemResponse401
   | getAdminConsoleItemResponse404
   | getAdminConsoleItemResponse500
+  | getAdminConsoleItemResponse503
 ) & {
   headers: Headers;
 };
@@ -3914,7 +3928,7 @@ export const getGetAdminConsoleItemQueryKey = (itemId: string) => {
 
 export const getGetAdminConsoleItemQueryOptions = <
   TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
-  TError = N401Response | N404Response | N500Response,
+  TError = N401Response | N404Response | N500Response | ErrorResponse,
 >(
   itemId: string,
   options?: {
@@ -3954,11 +3968,11 @@ export type GetAdminConsoleItemQueryResult = NonNullable<
   Awaited<ReturnType<typeof getAdminConsoleItem>>
 >;
 export type GetAdminConsoleItemQueryError =
-  N401Response | N404Response | N500Response;
+  N401Response | N404Response | N500Response | ErrorResponse;
 
 export function useGetAdminConsoleItem<
   TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
-  TError = N401Response | N404Response | N500Response,
+  TError = N401Response | N404Response | N500Response | ErrorResponse,
 >(
   itemId: string,
   options: {
@@ -3985,7 +3999,7 @@ export function useGetAdminConsoleItem<
 };
 export function useGetAdminConsoleItem<
   TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
-  TError = N401Response | N404Response | N500Response,
+  TError = N401Response | N404Response | N500Response | ErrorResponse,
 >(
   itemId: string,
   options?: {
@@ -4012,7 +4026,7 @@ export function useGetAdminConsoleItem<
 };
 export function useGetAdminConsoleItem<
   TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
-  TError = N401Response | N404Response | N500Response,
+  TError = N401Response | N404Response | N500Response | ErrorResponse,
 >(
   itemId: string,
   options?: {
@@ -4035,7 +4049,7 @@ export function useGetAdminConsoleItem<
 
 export function useGetAdminConsoleItem<
   TData = Awaited<ReturnType<typeof getAdminConsoleItem>>,
-  TError = N401Response | N404Response | N500Response,
+  TError = N401Response | N404Response | N500Response | ErrorResponse,
 >(
   itemId: string,
   options?: {

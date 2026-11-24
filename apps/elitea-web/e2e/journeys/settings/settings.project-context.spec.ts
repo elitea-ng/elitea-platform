@@ -116,7 +116,9 @@ const MAX_CHARS = 2500;
 async function gotoProjectParams(page: Page, project: ScratchProject): Promise<void> {
   await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
   await ensureProjectSelected(page, project.name);
-  await page.waitForLoadState('networkidle').catch(() => {});
+  // Bounded: a long-lived request that kept the network busy would otherwise
+  // spend the test's whole budget here before the swallowed timeout.
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
   await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
 }
 

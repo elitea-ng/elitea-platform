@@ -293,9 +293,12 @@ func IsAdministrationGated(h http.Handler) bool {
 // MarkAdministrationRoute marks a route whose administration-mode check is in
 // its handler, so that the maintenance gate treats it like a route behind an
 // administration gate (ADR-0059 R0.4b). It decides nothing. Use it only on a
-// route whose handler refuses every caller its administration check refuses:
-// a holder of any administration permission reaches the handler during a
-// window.
+// route whose handler refuses every caller its administration check refuses,
+// or on a read-only route that answers every signed-in caller only about the
+// caller and the registry (the console capability document and its item
+// route, ADR-0059 R3.1a): a holder of any administration permission reaches
+// the handler during a window. A caller with none is refused by the window
+// on every route, marked or not.
 func MarkAdministrationRoute(next http.Handler) http.Handler { return administrationGate{next} }
 
 // ModeGatedEndpoint is an endpoint whose {mode} path segment selects its gate

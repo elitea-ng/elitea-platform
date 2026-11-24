@@ -25467,6 +25467,12 @@ paths:
                   value: {"areas": [], "roles": [], "elevation": null}
         '401': { $ref: '#/components/responses/401' }
         '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The deployment is composed without a permission resolver or role reader.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /admin/console/items/{item_id}:
     get:
@@ -25496,6 +25502,12 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The deployment is composed without a role reader.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /admin/access/roles:
     get:

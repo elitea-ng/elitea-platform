@@ -2231,6 +2231,29 @@ e2e-project-administrator@autotest.local=project_administrator/administration'
     fi
     echo "  ✓ built-in role personas verified: six, one administration role each."
 
+    # The two names that moved off the built-in `admin` role onto
+    # e2e_admin_extras: the admin persona must still resolve both, and the
+    # platform-admin persona (built-in `admin` alone) neither.
+    resolves_extras() {
+      stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
+        SELECT COUNT(DISTINCT rp.permission)
+        FROM auth_core__user u
+        JOIN auth_core__user_role ur ON ur.user_id = u.id
+        JOIN auth_core__role r ON r.id = ur.role_id AND r.mode = 'administration'
+        JOIN auth_core__role_permission rp ON rp.role_id = r.id
+        WHERE u.email = '$1'
+          AND rp.permission IN ('admin.auth.users.super_admin', 'configuration.secrets.secret.list');"
+    }
+    ADMIN_EXTRAS=$(resolves_extras 'e2e-admin@autotest.local')
+    PLATFORM_EXTRAS=$(resolves_extras 'e2e-platform-admin@autotest.local')
+    if [ "${ADMIN_EXTRAS:-0}" -ne 2 ] || [ "${PLATFORM_EXTRAS:-0}" -ne 0 ]; then
+      echo "ERROR: e2e_admin_extras is not where it belongs: the admin persona resolves" >&2
+      echo "  ${ADMIN_EXTRAS:-0} of its two extra names (want 2), the platform-admin persona" >&2
+      echo "  ${PLATFORM_EXTRAS:-0} (want 0, the built-in admin role is its declared set)." >&2
+      exit 1
+    fi
+    echo "  ✓ admin persona keeps its two extra names; built-in admin holds neither."
+
     # The admin PROJECTS surface (unit A14). Its listing is gated, as the user
     # listing now is too, so a missing grant here is a 403 on the page itself
     # rather than a write that quietly fails — but the failure mode is the same
