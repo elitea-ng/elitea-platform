@@ -19,8 +19,9 @@
     `networkPolicies.clusterCIDRs`;
   - `worker.networkPolicy.extraEgress`, verbatim.
 
-  Everything else is refused, including the Kubernetes API server and every
-  other in-cluster Service. `worker.networkPolicy.mode: proxy` replaces the
+  Everything else is refused, including every other in-cluster Service and
+  the Kubernetes API server (when its endpoint is a private address, or is
+  listed in `networkPolicies.clusterCIDRs`). `worker.networkPolicy.mode: proxy` replaces the
   public rule with the egress proxy. Two new values have no default and the
   chart lists them with the other missing values: `networkPolicies.clusterCIDRs`
   (the cluster's pod and Service CIDRs; empty, the egress proxy's
@@ -40,7 +41,8 @@
   1. Set `networkPolicies.clusterCIDRs` to the cluster's pod and Service
      CIDRs (`kubectl cluster-info dump | grep -m1 cluster-cidr` and the
      API server's `--service-cluster-ip-range`; on GKE, the cluster's Pod and
-     Service ranges).
+     Service ranges). Add the node range and the control-plane endpoint
+     (`kubectl get endpoints kubernetes`) when either uses public addresses.
   2. Set `networkPolicies.egressPeers.postgresql.to`, for example
      `[{ipBlock: {cidr: 10.20.0.5/32}}]` for a managed database, or a
      `namespaceSelector` with a `podSelector` for one in the cluster. Change

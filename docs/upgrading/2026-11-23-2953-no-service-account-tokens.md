@@ -5,7 +5,9 @@
   creates for them, except the workloads that call the Kubernetes API: the
   sandbox supervisor and the KEDA uninstall hook (both set `true`), and the
   NATS bootstrap Job, whose `issue` container mounts a projected token of its
-  own. The worker gets its own ServiceAccount, `elitea-worker`
+  own. The bundled NATS server pods also stop mounting the token
+  (`nats.podTemplate.merge`); the bundled Qdrant already ran without one. The
+  worker gets its own ServiceAccount, `elitea-worker`
   (`worker.serviceAccount.create`, default true); before it ran as the
   namespace's `default` account. A new value per component,
   `<component>.serviceAccount.automountToken` (default `false`), mounts the

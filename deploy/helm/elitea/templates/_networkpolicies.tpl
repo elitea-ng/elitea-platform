@@ -268,17 +268,56 @@
 {{- else if regexMatch "^\\[[0-9A-Fa-f:]+\\](:[0-9]+)?$" $e -}}
 {{- $cidr = printf "%s/128" (regexReplaceAll "^\\[([0-9A-Fa-f:]+)\\].*$" $e "${1}") -}}
 {{- $port = regexReplaceAll "^\\[[0-9A-Fa-f:]+\\]:?" $e "" -}}
-{{- else if regexMatch "^[0-9A-Fa-f]*:[0-9A-Fa-f:]+$" $e -}}
+{{- else if regexMatch "^([0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}$" $e -}}
 {{- $cidr = printf "%s/128" $e -}}
 {{- end -}}
-{{- if and $cidr (not (or (hasPrefix "169.254." $cidr) (hasPrefix "fe80:" (lower $cidr)))) -}}
+{{- if $cidr -}}
 {{- $out = append $out (dict "cidr" $cidr "port" $port) -}}
-{{- else if not $cidr -}}
+{{- else -}}
 {{- $out = append $out (dict "host" $e) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $out | toJson -}}
+{{- end }}
+
+{{/*
+  elitea.netpol.privateCidrRefusal — why a block cannot be a private egress rule
+  of the worker, or "" when it can. Shared by worker.networkPolicy.privateEgress
+  and the CIDR/IP entries of ELITEA_WORKER_EGRESS_PRIVATE_PERMIT, so the two
+  ways of naming an on-premises host obey one rule: never the whole address
+  space or a block wide enough to be most of it (IPv4 shorter than /8, IPv6
+  shorter than /16), and never a block that overlaps loopback or link-local
+  (the cloud metadata endpoints). Input: the CIDR string.
+*/}}
+{{- define "elitea.netpol.privateCidrRefusal" -}}
+{{- $c := toString . -}}
+{{- if regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$" $c -}}
+{{- $parts := splitList "/" $c -}}
+{{- $prefix := atoi (last $parts) -}}
+{{- $o := splitList "." (first $parts) -}}
+{{- if or (lt $prefix 8) (gt $prefix 32) -}}
+whole-space
+{{- else -}}
+{{- $a := atoi (index $o 0) -}}{{- $b := atoi (index $o 1) -}}
+{{- /* Overlap with 169.254.0.0/16: the second octet under the block's mask. */ -}}
+{{- $step := 1 -}}
+{{- if lt $prefix 16 }}{{ $step = index (list 256 128 64 32 16 8 4 2) (sub $prefix 8) }}{{ end -}}
+{{- if eq $a 127 -}}
+loopback
+{{- else if and (eq $a 169) (eq (div $b $step) (div 254 $step)) -}}
+link-local
+{{- end -}}
+{{- end -}}
+{{- else if regexMatch "^[0-9A-Fa-f:]+/[0-9]{1,3}$" $c -}}
+{{- $l := lower $c -}}
+{{- $prefix := atoi (last (splitList "/" $l)) -}}
+{{- if or (lt $prefix 16) (gt $prefix 128) -}}
+whole-space
+{{- else if or (hasPrefix "fe8" $l) (hasPrefix "fe9" $l) (hasPrefix "fea" $l) (hasPrefix "feb" $l) (hasPrefix "::1/" $l) -}}
+link-local
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{/* The sandbox supervisor Deployment's pods (no name label; templates/sandbox/supervisor.yaml). */}}

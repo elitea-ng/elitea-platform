@@ -166,7 +166,7 @@ Two values have no default, and the chart lists them with the other missing valu
 
 | Setting | What it is |
 |---|---|
-| `networkPolicies.clusterCIDRs` | The cluster's pod and Service CIDRs, for example `[10.244.0.0/16, 10.96.0.0/12]`. The public-internet rules except them: a cluster whose pods use public-range addresses would otherwise count as public. Not needed with `allowPublicEgress: false` on both. |
+| `networkPolicies.clusterCIDRs` | The cluster's pod and Service CIDRs, for example `[10.244.0.0/16, 10.96.0.0/12]`. Also list the node range and the control-plane endpoint when either uses public addresses. The public-internet rules except every listed block, so a cluster whose pods use public-range addresses doesn't count as public. Not needed with `allowPublicEgress: false` on both. |
 | `networkPolicies.egressPeers.postgresql.to` | Where PostgreSQL is, as NetworkPolicyPeer entries: an `ipBlock` with a managed database's address (`{ipBlock: {cidr: 10.20.0.5/32}}`), or a `namespaceSelector` with a `podSelector` for one in the cluster. Admitted on `egressPeers.postgresql.ports` (5432). |
 
 With `nats.enabled: false`, both policies admit every pod of `natsClient.namespace` on `natsClient.port`; `networkPolicies.egressPeers.nats.to` narrows that to your NATS pods.

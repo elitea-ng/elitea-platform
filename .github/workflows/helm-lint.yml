@@ -767,11 +767,11 @@ jobs:
           # gateway is a component of it and REFUSES to render without them —
           # render-only values, `.invalid` reserved by RFC 2606.
           - chart: elitea
-            values: -f deploy/helm/elitea/values-staging.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=public-unrestricted'
+            values: -f deploy/helm/elitea/values-staging.yaml -f deploy/helm/tests/fixtures/network-peers.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=public-unrestricted'
             # The runtime plane on, which is the configuration that serves chat
             # and the one whose absence this chart exists to stop shipping
             # silently. Also the non-default branches the pass above skips.
-            toggles: -f deploy/helm/elitea/values-standalone.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=allowlist' --set-string 'llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=ci-render-only.example.invalid:8000' --set main.autoscaling.enabled=false --set main.podDisruptionBudget.enabled=false --set web.autoscaling.enabled=true --set otelCollector.enabled=false
+            toggles: -f deploy/helm/elitea/values-standalone.yaml -f deploy/helm/tests/fixtures/network-peers.yaml --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' --set-string 'llmGateway.egressPosture=allowlist' --set-string 'llmGateway.env.GATEWAY_EGRESS_ALLOWLIST=ci-render-only.example.invalid:8000' --set main.autoscaling.enabled=false --set main.podDisruptionBudget.enabled=false --set web.autoscaling.enabled=true --set otelCollector.enabled=false
           # The optional sandbox runtime installer (ADR-0034), both modes.
           - chart: elitea-sandbox-runtime
             values: ""
@@ -873,7 +873,7 @@ jobs:
         if: matrix.chart == 'elitea'
         run: |
           helm template ci-release deploy/helm/elitea \
-            -f deploy/helm/elitea/values-standalone.yaml \
+            -f deploy/helm/elitea/values-standalone.yaml -f deploy/helm/tests/fixtures/network-peers.yaml \
             --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' \
             --set-string 'llmGateway.egressPosture=public-unrestricted' \
             --set main.autoscaling.maxReplicas=3 \
@@ -897,7 +897,7 @@ jobs:
         if: matrix.chart == 'elitea'
         run: |
           helm template ci-release deploy/helm/elitea \
-            -f deploy/helm/elitea/values-auth-minimal.yaml \
+            -f deploy/helm/elitea/values-auth-minimal.yaml -f deploy/helm/tests/fixtures/network-peers.yaml \
             --set-string 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1' \
             --set-string 'llmGateway.egressPosture=public-unrestricted' \
             > /tmp/elitea-main-auth-minimal.yaml

@@ -382,15 +382,20 @@
 {{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$" $cidr) }}
 {{- fail (printf "worker.networkPolicy.privateEgress[%d].cidr is %q, which is not a CIDR block: write the private range with its prefix, e.g. 10.20.0.0/16 or 10.20.0.5/32." $i $cidr) }}
 {{- end }}
-{{- if or (hasSuffix "/0" $cidr) (hasPrefix "169.254." $cidr) (hasPrefix "fe80:" (lower $cidr)) (hasPrefix "127." $cidr) (eq $cidr "::1/128") }}
-{{- fail (printf "worker.networkPolicy.privateEgress[%d].cidr is %q: privateEgress admits on-premises hosts, never the whole address space, loopback, or link-local addresses (the cloud metadata endpoints). The worker refuses these itself." $i $cidr) }}
+{{- if include "elitea.netpol.privateCidrRefusal" $cidr }}
+{{- fail (printf "worker.networkPolicy.privateEgress[%d].cidr is %q: privateEgress admits on-premises hosts, never the whole address space (or an IPv4 block wider than /8, IPv6 wider than /16), loopback, or link-local addresses (the cloud metadata endpoints). The worker refuses these itself." $i $cidr) }}
 {{- end }}
 {{- if not (dig "ports" list $e) }}
 {{- fail (printf "worker.networkPolicy.privateEgress[%d] (%s) has no ports: a rule without ports admits every port. List the ports the toolkit host serves, e.g. [{protocol: TCP, port: 443}]." $i $cidr) }}
 {{- end }}
 {{- end }}
 {{- $hosts := list }}
-{{- range (include "elitea.netpol.permitEntries" . | fromJsonArray) }}{{ if .host }}{{ $hosts = append $hosts .host }}{{ end }}{{ end }}
+{{- range (include "elitea.netpol.permitEntries" . | fromJsonArray) }}
+{{- if .host }}{{ $hosts = append $hosts .host }}{{ end }}
+{{- if and .cidr (include "elitea.netpol.privateCidrRefusal" .cidr) }}
+{{- fail (printf "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT holds %q, which the worker's egress policy cannot admit: a private permit names on-premises hosts, never the whole address space (or an IPv4 block wider than /8, IPv6 wider than /16), loopback, or link-local addresses (the cloud metadata endpoints). Narrow it to the hosts' own range." .cidr) }}
+{{- end }}
+{{- end }}
 {{- if and $hosts (not $wnp.privateEgress) (not $wnp.extraEgress) }}
 {{- fail (printf "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT names the host(s) %s, but the worker's egress policy admits no private address for them: a host name cannot become a NetworkPolicy rule. List their addresses in worker.networkPolicy.privateEgress (a CIDR and ports each), or the toolkits that use them fail at the network." (join ", " $hosts)) }}
 {{- end }}

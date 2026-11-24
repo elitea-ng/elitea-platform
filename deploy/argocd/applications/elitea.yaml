@@ -184,10 +184,13 @@ spec:
         # The LLM gateway's egress policy (#2952) excepts the cluster's own
         # pod and Service CIDRs from its public-internet rule, and admits
         # PostgreSQL only where you say it is. Both are refused empty.
-        # clusterCIDRs takes a list: "{10.244.0.0/16,10.96.0.0/12}". The
-        # database peer is its address as a block, e.g. "10.20.0.5/32"; for
-        # an in-cluster server, put a podSelector peer list in your own values
-        # file (networkPolicies.egressPeers.postgresql.to) instead.
+        # clusterCIDRs takes a list: "{10.244.0.0/16,10.96.0.0/12}" (add the
+        # node range and the control-plane endpoint when they are public
+        # addresses). The database peer is its address as a block, e.g.
+        # "10.20.0.5/32". For an in-cluster server, DELETE the ipBlock
+        # parameter and put a podSelector peer list in your own values file
+        # (networkPolicies.egressPeers.postgresql.to): a parameter merges into
+        # index 0 of that list, and the chart refuses the half-filled peer.
         - name: networkPolicies.clusterCIDRs
           value: ""
         - name: networkPolicies.egressPeers.postgresql.to[0].ipBlock.cidr

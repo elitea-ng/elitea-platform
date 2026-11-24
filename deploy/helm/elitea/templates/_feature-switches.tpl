@@ -194,7 +194,7 @@ only one at a time.
        templates/worker/networkpolicy.yaml, templates/llmGateway/networkpolicy.yaml. */ -}}
 {{- if or (include "elitea.netpol.workerPublicEgress" .) (include "elitea.netpol.gatewayPublicEgress" .) -}}
 {{- if not (include "elitea.netpol.clusterCidrs" . | fromJsonArray) -}}
-{{- $out = append $out "networkPolicies.clusterCIDRs: the cluster's pod and Service CIDRs, e.g. [10.244.0.0/16, 10.96.0.0/12]. The worker's and the LLM gateway's public-internet egress rules except them; without them a cluster whose pods use public-range addresses would count as public (or set worker.networkPolicy.allowPublicEgress / llmGateway.networkPolicy.allowPublicEgress false)" -}}
+{{- $out = append $out "networkPolicies.clusterCIDRs: the cluster's pod and Service CIDRs (and its node range and control-plane endpoint when they are public addresses), e.g. [10.244.0.0/16, 10.96.0.0/12]. The worker's and the LLM gateway's public-internet egress rules except them; without them a cluster whose pods use public-range addresses would count as public (or set worker.networkPolicy.allowPublicEgress / llmGateway.networkPolicy.allowPublicEgress false)" -}}
 {{- end -}}
 {{- end -}}
 {{- if or (include "elitea.netpol.workerEgress" .) (include "elitea.netpol.gatewayEgress" .) -}}

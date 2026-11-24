@@ -132,6 +132,27 @@ for sa, d in sorted(sas.items()):
     else:
         check(mount is False, f"ServiceAccount/{sa}: automountServiceAccountToken is {mount!r}, want false")
 
+# The bundled NATS and Qdrant subcharts: their pods set no automount of their
+# own (or the chart merges one in), so what holds is the pod's value, else its
+# ServiceAccount's, else Kubernetes' default of mounting. Neither server calls
+# the Kubernetes API. KEDA and prometheus-adapter are controllers that do, and
+# are not asserted here.
+all_sas = {d["metadata"]["name"]: d for _, d in docs if d["kind"] == "ServiceAccount"}
+sub = 0
+for src, d in docs:
+    if not (src.startswith("elitea/charts/nats/") or src.startswith("elitea/charts/qdrant/")):
+        continue
+    spec = pod_spec(d)
+    if spec is None:
+        continue
+    sub += 1
+    mount = spec.get("automountServiceAccountToken")
+    if mount is None:
+        mount = all_sas.get(spec.get("serviceAccountName", "default"), {}).get("automountServiceAccountToken", True)
+    check(mount is False, f'{d["kind"]}/{d["metadata"]["name"]} ({src}): the pod mounts a service-account token')
+if name == "defaults":
+    check(sub >= 2, f"only {sub} NATS/Qdrant pod templates rendered; the subchart check measured nothing")
+
 w = pods.get("Deployment/elitea-worker")
 check(w is not None, "the worker Deployment did not render")
 if w is not None:

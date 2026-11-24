@@ -1568,6 +1568,14 @@ nats:
       metadata:
         annotations:
           argocd.argoproj.io/sync-wave: "-10"
+  # No service-account token in the server pods (#2953): neither the server
+  # nor its config reloader calls the Kubernetes API, and the upstream chart
+  # sets no automount of its own, so the namespace's default account would
+  # mount one.
+  podTemplate:
+    merge:
+      spec:
+        automountServiceAccountToken: false
   configMap:
     merge:
       metadata:
@@ -2332,10 +2340,13 @@ networkPolicies:
     extraIngressFrom: []
 
   # ── Egress (the worker's and the LLM gateway's policies) ──────────────────
-  # The cluster's pod and Service CIDRs, e.g. [10.244.0.0/16, 10.96.0.0/12]
+  # The cluster's own address ranges, e.g. [10.244.0.0/16, 10.96.0.0/12]
   # (GKE: the cluster's Pod and Service ranges; kind: 10.244.0.0/16 and
-  # 10.96.0.0/12). The public-internet rules except them, because a cluster
-  # whose pods use public-range addresses would otherwise be "public".
+  # 10.96.0.0/12). The public-internet rules except every block listed here,
+  # because a cluster whose pods use public-range addresses would otherwise be
+  # "public". List the pod and Service ranges, and also the node range and the
+  # control-plane endpoint when either is in public address space (a public
+  # API server endpoint is reached on 443 like any public host).
   # REQUIRED while a public egress rule renders (worker.networkPolicy and
   # llmGateway.networkPolicy, both on by default). Empty: the egress proxy's
   # egressProxy.networkPolicy.podCidrs + serviceCidrs, when set.
@@ -2354,8 +2365,10 @@ networkPolicies:
   # its ports.
   egressPeers:
     # PostgreSQL (the platform database and the worker's agent-state
-    # database). REQUIRED while an egress policy renders: the chart cannot
-    # know a managed database's address. e.g.
+    # database). REQUIRED while an egress policy renders, with or without
+    # pgbouncer: the LLM gateway (and every pod whose DSN you do not point
+    # at the pooler) connects to the server directly. The chart cannot know a managed
+    # database's address. e.g.
     #   - ipBlock:
     #       cidr: 10.20.0.5/32
     postgresql:

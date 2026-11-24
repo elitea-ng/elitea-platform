@@ -564,7 +564,7 @@ worker:
             port: 8443
 main:
   env:
-    ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: "jira.corp.example,10.40.0.0/24,10.50.0.7:5000,[fd00::7]:9000"
+    ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: "jira.corp.example,db:5432,10.40.0.0/24,10.50.0.7:5000,[fd00::7]:9000,fd00::8"
 networkPolicies:
   metricsFrom:
     - namespaceSelector:
@@ -583,6 +583,9 @@ assert want in eg, "privateEgress entry not rendered verbatim: " + str(eg)
 assert {"to": [{"ipBlock": {"cidr": "10.40.0.0/24"}}]} in eg, "permit CIDR missing"
 assert {"to": [{"ipBlock": {"cidr": "10.50.0.7/32"}}], "ports": [{"protocol": "TCP", "port": 5000}]} in eg, "permit IP:port missing"
 assert {"to": [{"ipBlock": {"cidr": "fd00::7/128"}}], "ports": [{"protocol": "TCP", "port": 9000}]} in eg, "permit [v6]:port missing"
+assert {"to": [{"ipBlock": {"cidr": "fd00::8/128"}}]} in eg, "permit bare v6 missing"
+# A short host name of hex letters with a port is a host, never an IPv6 block.
+assert not any("db:" in str(r) for r in eg), "permit host db:5432 read as an address: " + str(eg)
 mon = [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}]
 for name, port in (("elitea-scheduler-netpol", 8081), ("elitea-llm-gateway-netpol", 8083)):
     rules = [r for r in pols[name]["spec"]["ingress"] if [p["port"] for p in r["ports"]] == [port]]
@@ -666,9 +669,18 @@ refuses "mode proxy without the egress proxy" "egressProxy.enabled is false" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.mode=proxy
 refuses "an unknown worker egress mode" "worker.networkPolicy.mode must be" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.networkPolicy.mode=open
-refuses "a link-local privateEgress block" "never the whole address space, loopback, or link-local" \
+refuses "a link-local privateEgress block" "never the whole address space" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set 'worker.networkPolicy.privateEgress[0].cidr=169.254.169.254/32' \
   --set 'worker.networkPolicy.privateEgress[0].ports[0].port=80'
+for wide in 0.0.0.0/0 128.0.0.0/1 160.0.0.0/4 169.0.0.0/8 127.0.0.0/8 ::/0 fe80::/10 ::1/128; do
+  refuses "a privateEgress block of $wide" "never the whole address space" \
+    "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set "worker.networkPolicy.privateEgress[0].cidr=$wide" \
+    --set 'worker.networkPolicy.privateEgress[0].ports[0].port=443'
+  refuses "a permit block of $wide" "which the worker's egress policy cannot admit" \
+    "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set-string "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT=$wide"
+done
+refuses "a permit address on the metadata range" "which the worker's egress policy cannot admit" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set-string 'main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT=169.254.169.254:80'
 refuses "a privateEgress entry without ports" "has no ports" \
   "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set 'worker.networkPolicy.privateEgress[0].cidr=10.30.0.0/16'
 refuses "a permit host name with nothing to admit it" "a host name cannot become a NetworkPolicy rule" \
