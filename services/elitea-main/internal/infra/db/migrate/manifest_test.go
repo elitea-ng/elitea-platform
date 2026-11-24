@@ -1252,7 +1252,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// credentials (elitea_auth.sealed_credentials): selector and Argon2id
 	// digest of the verifier only, never deleted (issue 2520, ADR-0059
 	// R2.6a). No permission.
-	require.EqualValues(t, 271, Head(shared))
+	//
+	// 272: shared/0272_sealed_browser_sessions.sql, the provider CHECK of
+	// elitea_auth.browser_sessions widened by `sealed`, the session kind of a
+	// sealed break-glass sign-in (issue 2521, ADR-0059 R2.7a). No permission.
+	require.EqualValues(t, 272, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

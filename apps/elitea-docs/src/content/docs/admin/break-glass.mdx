@@ -1,6 +1,6 @@
 ---
 title: "Break-glass access"
-description: "Time-boxed elevations of one browser session: the settings that bound them, how they run out, and how they move to review."
+description: "Time-boxed elevations of one browser session: the settings that bound them, how they run out, how they move to review, and the sealed session used when single sign-on is down."
 ---
 
 Break-glass access gives a person the administration permissions of the `admin` or `super_admin` role for a short time, in one browser session, with a stated reason. An elevation is not a role: it is bound to the session that asked for it, it ends by itself, and every elevation is reviewed after it ends.
@@ -52,3 +52,20 @@ The record catches up on its own. The `main.elevation_reconciler` routine runs e
 An elevation that ends early (by its holder, an approver or the operator command) moves to `review_pending` at the same moment, with its `ended` event. If the audit event cannot be written, the row is left as it was and the next pass completes it; access is not affected either way. One replica runs each pass, and two passes never record the same row twice.
 
 To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).
+
+## Sealed sessions
+
+A sealed session is how a [sealed credential](/deployment/break-glass-runbook#sealed-credentials) signs in when single sign-on is down. It is not an ordinary session with more permissions. It is a separate kind of session with its own limits:
+
+- **Its own cookie.** It is carried by the cookie `__Host-elitea_sealed`, which is `Secure`, `HttpOnly` and `SameSite=Strict`, with the path `/` and no domain. It never replaces the person's ordinary session cookie, and neither cookie can stand in for the other.
+- **The administration surface only.** The cookie counts only on routes of the administration surface: the administration console and the administration routes of the API. On every other route the platform ignores it, as if the browser had not sent it. A sealed session cannot open chat, agents or any project content, and it holds nothing in the developer and default modes.
+- **The elevation only.** A sealed session holds the permissions of its elevation's level (`admin` or `super_admin`, the level of the credential) and nothing else. The person's standing roles add nothing: a person who is `super_admin` signs in at the `admin` level with an `admin` credential and gets only the `admin` set.
+- **No identity provider.** A sealed session never refreshes, introspects or calls an identity provider. It is checked against the database only, so it works while the provider is down.
+- **It ends with its elevation.** Its expiry is the elevation's expiry: the sealed duration of the settings above, and never more than 240 minutes, the ceiling in code. It also ends at once when the elevation ends early: by its holder, an approver, the operator command `break-glass end` (see the [runbook](/deployment/break-glass-runbook#end-an-elevation)), or a session or account event. The next request after the end is unauthenticated, and the browser is told to drop the cookie.
+- **No recent-authentication proof.** An action that asks for a recent sign-in refuses a sealed session, and so does every `critical` action, which is refused under any elevation.
+
+A sealed session needs HTTPS. Browsers accept a `__Host-` cookie only from a secure origin, so on a deployment served over plain HTTP (a local development stack, for example) the sealed path does not work. The platform does not weaken the cookie to make it work there.
+
+<Note>
+This release ships the session kind, its cookie and its limits. The sign-in page that turns a sealed credential into a sealed session comes in a later release.
+</Note>

@@ -507,6 +507,10 @@ type ElevationEnd struct {
 // The end and its `admin.elevation` event (R2.3) are written under one
 // savepoint: `expired` when the stored end reason is `expired`, `ended`
 // otherwise. A failed append leaves the elevation open.
+//
+// An elevation on the sealed path also signs out its sealed session (the
+// browser_sessions row of provider `sealed`) in the same savepoint: the
+// session has no life of its own after the elevation (R2.7a).
 func EndElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, end ElevationEnd) (ElevationRecord, bool, error) {
 	if !knownElevationEndReason(end.Reason) {
 		return ElevationRecord{}, false, fmt.Errorf("%w %q", ErrElevationEndReason, end.Reason)
@@ -540,6 +544,18 @@ WHERE id = $1 AND started_at IS NOT NULL AND ended_at IS NULL
 RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 		if err != nil {
 			return err
+		}
+		if elevation.Path == ElevationPathSealed {
+			// A sealed session lives only as long as its elevation (R2.7a,
+			// browsersession/sealed.go): the session is signed out with it,
+			// in the same savepoint, whoever ended it. The session reader
+			// refuses it without this too; this keeps the row truthful.
+			if _, err := sp.Exec(ctx, `
+UPDATE elitea_auth.browser_sessions SET revoked_at = $2
+WHERE ref = $1 AND provider = 'sealed' AND revoked_at IS NULL`,
+				elevation.BrowserSessionRef, elevation.EndedAt.UTC()); err != nil {
+				return fmt.Errorf("sign out the sealed session: %w", err)
+			}
 		}
 		action := securityaudit.ElevationEnded
 		if elevation.EndReason == ElevationEndExpired {
