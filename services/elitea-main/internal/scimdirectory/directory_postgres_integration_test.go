@@ -296,6 +296,16 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 			permission TEXT,
 			UNIQUE (role_id, permission)
 		);
+		-- The built-in records (shared 0263): an unassignable role's
+		-- holders are not counted.
+		CREATE SCHEMA IF NOT EXISTS elitea_auth;
+		CREATE TABLE elitea_auth.admin_role_seeds (
+			role_id INTEGER PRIMARY KEY REFERENCES auth_core__role(id) ON DELETE CASCADE,
+			name VARCHAR(64) NOT NULL,
+			mode VARCHAR(64) NOT NULL,
+			marker TEXT NOT NULL,
+			seeded_by TEXT NOT NULL DEFAULT 'test'
+		);
 		CREATE TABLE auth_core__token (
 			id SERIAL PRIMARY KEY,
 			uuid VARCHAR(36),

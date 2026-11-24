@@ -179,7 +179,7 @@ Nobody can change the permissions of a built-in role through the console or the 
 
 ## The last administrator
 
-A deployment always keeps one administrator. The **last administrator** is the last active (unsuspended) account that holds `admin.auth.users.super_admin`, which in practice means the last `super_admin`. When nobody holds that permission, it is the last active account with the `admin` role. That second case is for a deployment upgraded from the legacy platform, where people can hold `admin` while nobody holds `super_admin`. On a new deployment nobody holds either role until the first administrator is added, and then there is nothing to protect.
+A deployment always keeps one administrator. The **last administrator** is the last active (unsuspended) account that holds `admin.auth.users.super_admin`, which in practice means the last `super_admin`. The legacy `system` role holds that permission too, but it is never assigned, so its holders (platform accounts) do not count. When nobody holds that permission, it is the last active account with the `admin` role. That second case is for a deployment upgraded from the legacy platform, where people can hold `admin` while nobody holds `super_admin`. On a new deployment nobody holds either role until the first administrator is added, and then there is nothing to protect.
 
 Nobody can demote, suspend, delete or deactivate the last administrator, a super admin included, on any path:
 

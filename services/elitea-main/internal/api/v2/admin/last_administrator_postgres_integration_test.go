@@ -86,6 +86,34 @@ func TestTheAdminHalfOfTheRuleProtectsALegacyBackedDatabase(t *testing.T) {
 		userSuspend(legacy), map[string]any{"suspended": true}), http.StatusOK)
 }
 
+// On a legacy-backed database the `system` role holds the permission too, but
+// it is marked unassignable and its holders are platform principals: they do
+// not count, so the last person with super_admin stays protected.
+func TestAnUnassignableRoleDoesNotMakeAnAdministrator(t *testing.T) {
+	pool := newSystemInfoPool(t)
+	ctx := t.Context()
+	if _, err := pool.Exec(ctx, `
+WITH system_role AS (
+    INSERT INTO public.auth_core__role (name, mode) VALUES ('system', 'administration') RETURNING id
+), granted AS (
+    INSERT INTO public.auth_core__role_permission (role_id, permission)
+    SELECT id, $1 FROM system_role
+)
+INSERT INTO elitea_auth.admin_role_seeds (role_id, name, mode, marker, seeded_by)
+SELECT id, 'system', 'administration', 'unassignable', 'r011-test' FROM system_role`,
+		adminaccess.SuperAdminPermission); err != nil {
+		t.Fatalf("seed the legacy system role: %v", err)
+	}
+	corpusAccount(t, pool, "system_user_9@centry.user", adminaccess.RoleSystem)
+	person := corpusAccount(t, pool, "r011-only-person@autotest.local", adminaccess.RoleSuperAdmin)
+	if counts := countAdministrators(t, pool); counts.SuperAdmins != 1 {
+		t.Fatalf("%+v: the system principal must not count", counts)
+	}
+	operator := corpusAccount(t, pool, "r011-system-operator@autotest.local")
+	expectLastAdministrator(t, adminDo(t, corpusUsersRouter(pool, operator), http.MethodPut,
+		userSuspend(person), map[string]any{"suspended": true}))
+}
+
 // Acceptance (2), second half: on a fresh database nobody holds either role,
 // so there is nothing to protect and the rule refuses nothing.
 func TestTheRuleRefusesNothingOnAFreshDatabase(t *testing.T) {

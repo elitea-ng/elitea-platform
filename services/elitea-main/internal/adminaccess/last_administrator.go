@@ -76,18 +76,40 @@ func (a Administrators) Protected() bool { return a.level() != levelNone }
 
 // CountAdministrators counts the holders of the rule, leaving out the users in
 // `without` (a what-if: the deployment as it would be if those accounts were
-// gone). Unsuspended is `suspended = false`, as the permission resolver reads
-// it (legacyrbac): an account the resolver would not let act is no
+// gone).
+//
+// The permission is counted through any role except an unassignable one: on
+// a legacy-backed database the `system` role holds it too, and the platform
+// principals that hold `system` administer nothing from the console, so
+// counting them would leave the last person unprotected. Unassignable is the
+// built-in record's marker; a database without the record table (before
+// shared 0263) has nothing marked, and `system` is unassignable by name
+// there, as the assignment routes treat it.
+//
+// Unsuspended is `suspended = false`, as the permission resolver reads it
+// (legacyrbac): an account the resolver would not let act is no
 // administrator.
 func CountAdministrators(ctx context.Context, q Querier, without ...int64) (Administrators, error) {
 	if without == nil {
 		without = []int64{}
 	}
+	var seeded bool
+	if err := q.QueryRow(ctx,
+		`SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&seeded); err != nil {
+		return Administrators{}, fmt.Errorf("count administrators: %w", err)
+	}
+	unassignable := `role.name = '` + RoleSystem + `'`
+	if seeded {
+		unassignable = `EXISTS (
+           SELECT 1 FROM elitea_auth.admin_role_seeds seed
+           WHERE seed.role_id = role.id AND seed.marker = '` + string(MarkerUnassignable) + `')`
+	}
 	var counts Administrators
 	err := q.QueryRow(ctx, `
 SELECT count(DISTINCT account.id) FILTER (WHERE EXISTS (
            SELECT 1 FROM public.auth_core__role_permission grant_row
-           WHERE grant_row.role_id = role.id AND grant_row.permission = $1)),
+           WHERE grant_row.role_id = role.id AND grant_row.permission = $1)
+         AND NOT `+unassignable+`),
        count(DISTINCT account.id) FILTER (WHERE role.name = $2)
 FROM public.auth_core__user account
 JOIN public.auth_core__user_role assignment ON assignment.user_id = account.id
