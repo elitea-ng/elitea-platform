@@ -17,7 +17,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -773,6 +776,16 @@ func newUsersWritePostgresPool(t *testing.T) *pgxpool.Pool {
 	}
 	if _, err := pool.Exec(ctx, bindingSQL); err != nil {
 		t.Fatalf("apply token binding migration: %v", err)
+	}
+	// The security audit outbox (shared 0183): a central membership write
+	// appends its admin.access.changed event there and fails closed without
+	// it (ADR-0059 R1.5, issue 2994).
+	outboxSQL, err := fs.ReadFile(migrations.Files, "shared/0183_security_audit_outbox.sql")
+	if err != nil {
+		t.Fatalf("read the security audit outbox migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(outboxSQL)); err != nil {
+		t.Fatalf("apply the security audit outbox migration: %v", err)
 	}
 	return pool
 }

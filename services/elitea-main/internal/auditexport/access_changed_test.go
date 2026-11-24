@@ -18,6 +18,15 @@ func TestAdminAccessChangedIsExportedWithItsSets(t *testing.T) {
 			Kind: securityaudit.AccessProjectMembership, Before: nil, After: []string{"editor"},
 			Membership: &securityaudit.MembershipFacts{MemberHoldsAdminRole: true},
 		},
+		// Issue 2994: the rename and the estate-wide push.
+		{
+			Kind: securityaudit.AccessRoleRenamed, Mode: "default", Before: []string{"auditors"},
+			After: []string{"reviewers"}, Fields: []string{"project_role_copies"},
+		},
+		{
+			Kind: securityaudit.AccessProjectPermissionsPushed, Mode: "default",
+			Before: []string{"models.alpha.view"}, After: []string{"models.beta.view"}, Fields: []string{"roles_assigned"},
+		},
 	} {
 		t.Run(string(change.Kind), func(t *testing.T) {
 			record := securityRecord(t, securityaudit.TypeAdminAccessChanged, func(e *securityaudit.SecurityEvent) {

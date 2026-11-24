@@ -33,6 +33,26 @@ const (
 	// and after is empty. A role still held is never deleted.
 	AccessRoleCreated AccessChangeKind = "role_created"
 	AccessRoleDeleted AccessChangeKind = "role_deleted"
+	// AccessRoleRenamed: a role was renamed (issue 2994). Subject role, by
+	// its NEW name, so it is the live role; before is the old name and after
+	// the new one, so an earlier event of the old subject joins to it. A
+	// central `default` role renamed with its project copies has Fields
+	// ["project_role_copies"]. Grants and assignments follow the role id, so
+	// no permission set changes.
+	AccessRoleRenamed AccessChangeKind = "role_renamed"
+	// AccessProjectPermissionsPushed: an estate-wide push wrote the
+	// permissions of a project role in every project of a target set: the
+	// personal-project or team-project matrix save, and Apply to Projects
+	// (issue 2994). One summary event per role whose grants or assignments
+	// the push changed, not one per project: a push reaches every project
+	// at once. Subject project_roles, "<target>:<role>" (target personal or
+	// team) on the platform partition. Before names the permissions the push
+	// removed from the role in at least one project and after those it
+	// added in at least one: disjoint sets, so after minus before is what
+	// the push added. Fields is ["roles_assigned"] when the push also gave
+	// the role to every member of the target projects. Mode is "default" for
+	// Apply to Projects, which copies the central default matrix.
+	AccessProjectPermissionsPushed AccessChangeKind = "project_permissions_pushed"
 	// AccessTokenScopes: a personal access token was given administration
 	// scopes. Subject token; before and after are its scopes. Wired by R1.3a
 	// (issue 2507) through NewAdminAccessChanged.
@@ -53,14 +73,16 @@ const (
 )
 
 var accessChangeKinds = map[AccessChangeKind]bool{
-	AccessRoleAssignment:      true,
-	AccessRolePermissions:     true,
-	AccessRoleCreated:         true,
-	AccessRoleDeleted:         true,
-	AccessTokenScopes:         true,
-	AccessProjectMembership:   true,
-	AccessGlobalProviderRoute: true,
-	AccessIdentityTrust:       true,
+	AccessRoleAssignment:           true,
+	AccessRolePermissions:          true,
+	AccessRoleCreated:              true,
+	AccessRoleDeleted:              true,
+	AccessRoleRenamed:              true,
+	AccessProjectPermissionsPushed: true,
+	AccessTokenScopes:              true,
+	AccessProjectMembership:        true,
+	AccessGlobalProviderRoute:      true,
+	AccessIdentityTrust:            true,
 }
 
 // Valid reports whether k is a known change kind.
@@ -70,8 +92,9 @@ func (k AccessChangeKind) Valid() bool { return accessChangeKinds[k] }
 // kind and for the docs.
 func AccessChangeKinds() []AccessChangeKind {
 	return []AccessChangeKind{
-		AccessRoleAssignment, AccessRolePermissions, AccessRoleCreated, AccessRoleDeleted,
-		AccessTokenScopes, AccessProjectMembership, AccessGlobalProviderRoute, AccessIdentityTrust,
+		AccessRoleAssignment, AccessRolePermissions, AccessRoleCreated, AccessRoleDeleted, AccessRoleRenamed,
+		AccessProjectPermissionsPushed, AccessTokenScopes, AccessProjectMembership, AccessGlobalProviderRoute,
+		AccessIdentityTrust,
 	}
 }
 
@@ -220,7 +243,7 @@ type AdminAccessChanged struct {
 	// first-login bootstrap, a migration).
 	ActorUserID int64
 	// SubjectType and SubjectID name what changed: "user"/<id>, "role"/
-	// "<mode>:<name>", "token"/<id>, "global_provider"/<id>,
+	// "<mode>:<name>", "project_roles"/"<target>:<name>", "token"/<id>, "global_provider"/<id>,
 	// "identity_provider"/<key>, "scim_client"/<id>.
 	SubjectType string
 	SubjectID   string

@@ -43,7 +43,7 @@ A change of who holds what on the administration surface is one `security_audit`
 | Field | Meaning |
 |---|---|
 | `kind` | One of the kinds below. |
-| `before`, `after` | The subject's set before and after the change, by name, sorted. Always present; empty for a kind that names fields instead. |
+| `before`, `after` | The subject's set before and after the change, by name, sorted. Always present; empty for a kind that names fields instead. Two kinds use them as stated in the table below: `role_renamed` (the old and the new name) and `project_permissions_pushed` (the permissions removed and added). |
 | `fields` | For a provider or trust change, the fields that changed (`created`, `deleted`, `issuer`, `secret`, `data.api_base`), never their values or a digest of them. |
 | `mode` | The role mode of a role change (`administration`, `default`). |
 | `source` | For `role_assignment`, how the change was made: `console`, `api`, `bootstrap`, `migration`, `operator`, `review`, `scim` (see [Role changes are recorded](/admin/users-and-roles#role-changes-are-recorded)). |
@@ -56,8 +56,10 @@ A change of who holds what on the administration surface is one `security_audit`
 | `role_assignment` | `user` | A central role is assigned or removed: the Users page, `/admin/modes`, an account deletion, the first sign-in of an initial administrator. |
 | `role_permissions` | `role` (`<mode>:<name>`) or `project_role` (`<project>:<name>`) | A role's permission set is edited on the Roles page. |
 | `role_created`, `role_deleted` | `role` or `project_role` | A role is created or deleted. A deleted role's `before` is the permission set it held. |
+| `role_renamed` | `role` or `project_role`, by the new name | A role is renamed. `before` is the old name and `after` the new one, so the events of the old name join to the live role. `fields` is `["project_role_copies"]` when a central `default` role was renamed in every project with it. No permission set changes: grants and members follow the role. |
+| `project_permissions_pushed` | `project_roles` (`personal:<role>` or `team:<role>`) | An estate-wide push wrote a role's permissions in every project of a set: the personal-project or team-project matrix save, and **Apply to Projects** (`mode` `default`). One summary event per role the push changed, not one per project. `before` is the permissions it removed from the role in at least one project and `after` those it added in at least one. `fields` is `["roles_assigned"]` when the push also gave the role to every member. |
 | `token_scopes` | `token` | A personal access token is given administration scopes. Reserved: comes with administration-scoped tokens. |
-| `project_membership` | `user`, partition the project | A membership is written through a central route (a bulk invite). |
+| `project_membership` | `user`, partition the project | A membership is written through a central route: a bulk invite, or an invite, role change or removal on the central member routes (`/admin/users/administration/{projectID}`). `bulk` is set for a bulk invite and for a request that writes more than one membership. A removal's `after` is empty. |
 | `global_provider_route` | `global_provider` | A global provider is created or deleted, or its endpoint, credential or keyless identity changes. |
 | `identity_trust` | `identity_provider` or `scim_client` | An identity provider is created, deleted, turned on or off, or has a trust field or its secret changed; a SCIM client is created or its secret rotated. |
 
