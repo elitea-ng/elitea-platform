@@ -26,7 +26,6 @@ func TestDeliveryLogOfADeletedWebhookIsTheTypedGoneError(t *testing.T) {
 	created, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    "https://autotest.invalid/hook",
 		Events: []string{"conversation.created"},
-		Secret: "integration-secret",
 		Active: true,
 	})
 	if err != nil {
@@ -69,7 +68,6 @@ func TestRedeliveryOfAPrunedDeliveryIsLoggedNotGone(t *testing.T) {
 	created, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    "https://autotest.invalid/hook",
 		Events: []string{"conversation.created"},
-		Secret: "integration-secret",
 		Active: true,
 	})
 	if err != nil {

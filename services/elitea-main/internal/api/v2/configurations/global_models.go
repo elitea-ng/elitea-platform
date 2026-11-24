@@ -188,17 +188,18 @@ const listGlobalModelsSQL = `
 	 WHERE c.shared = true
 	 ORDER BY c.section, c.elitea_title, c.id`
 
-// GlobalModelRoutes is the admin surface for platform-wide models. Mount it
-// behind the central gate; it applies none itself.
-func (h *Handler) GlobalModelRoutes() chi.Router {
+// GlobalModelRoutes is the admin surface for platform-wide models, each route
+// behind its catalogue gate (ADR-0059 R0.3).
+func (h *Handler) GlobalModelRoutes(gates CatalogueGates) chi.Router {
+	view, manage := gates.must("platform models")
 	r := chi.NewRouter()
-	r.Get("/", h.ListGlobalModels)
-	r.Post("/", h.CreateGlobalModel)
-	r.Put("/{configID}", h.UpdateGlobalModel)
-	r.Delete("/{configID}", h.DeleteGlobalModel)
+	r.With(view).Get("/", h.ListGlobalModels)
+	r.With(manage).Post("/", h.CreateGlobalModel)
+	r.With(manage).Put("/{configID}", h.UpdateGlobalModel)
+	r.With(manage).Delete("/{configID}", h.DeleteGlobalModel)
 	// What the delete confirmation reads first (#6826): how many projects
 	// name this model as their default. platform_default_model.go.
-	r.Get("/{configID}/default_usage", h.GlobalModelDefaultUsage)
+	r.With(view).Get("/{configID}/default_usage", h.GlobalModelDefaultUsage)
 	return r
 }
 

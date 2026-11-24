@@ -3,39 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import {
-  InProgressIndicator,
-  ProcessStepIcon,
-  RunStatus,
-  StateItemView,
-  StateValueModal,
-} from './RunStateDialog.parts';
+import { RunStatus, StateItemView, StateValueModal } from './RunStateDialog.parts';
 
 describe('RunStateDialog.parts', () => {
   it('RunStatus renders the raw status text', () => {
     renderWithTheme(<RunStatus status="Completed" />);
     expect(screen.getByText('Completed')).toBeInTheDocument();
-  });
-
-  it('ProcessStepIcon renders a real button and fires onSelect(index) on click', () => {
-    const onSelect = vi.fn();
-    renderWithTheme(
-      <ProcessStepIcon
-        active={false}
-        tooltip="step-1"
-        index={2}
-        onSelect={onSelect}
-        isError={false}
-      />,
-    );
-
-    // A native <button> (not a role="button" <div>) — Enter/Space
-    // activation then comes from the browser's own default action, not
-    // component-level code, so there is nothing extra to unit-test for it.
-    const control = screen.getByRole('button', { name: 'step-1' });
-    expect(control.tagName).toBe('BUTTON');
-    fireEvent.click(control);
-    expect(onSelect).toHaveBeenCalledWith(2);
   });
 
   it('StateItemView renders Before/After sections and wires fullscreen clicks', () => {
@@ -56,12 +29,6 @@ describe('RunStateDialog.parts', () => {
 
     fireEvent.click(screen.getAllByLabelText('Full screen view')[0] as HTMLElement);
     expect(onFullScreen).toHaveBeenCalledWith('counter', 1);
-  });
-
-  it('InProgressIndicator shows the step name and "Performing" label', () => {
-    renderWithTheme(<InProgressIndicator stepName="llm_call" />);
-    expect(screen.getByText('llm_call:')).toBeInTheDocument();
-    expect(screen.getByText('Performing')).toBeInTheDocument();
   });
 
   it('StateValueModal shows the label and stringified value, and closes', () => {

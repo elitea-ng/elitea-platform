@@ -126,14 +126,15 @@ describe('EditorPanel', () => {
     expect(screen.queryByRole('button', { name: /copy/i })).not.toBeInTheDocument();
   });
 
-  it('switching to Yaml mode hides the AddNodeMenu and shows the copy button', async () => {
+  it('switching to YAML mode hides the AddNodeMenu and shows Copy YAML and Full screen view controls', async () => {
     const user = userEvent.setup();
     renderEditorPanel();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
 
     expect(screen.queryByRole('button', { name: 'Add node' })).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: /copy yaml code/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy YAML' })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Full screen view' })).toBeInTheDocument();
   });
 
   /**
@@ -153,7 +154,7 @@ describe('EditorPanel', () => {
     const user = userEvent.setup();
     renderEditorPanel();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'This change could not be written as pipeline YAML, so the stored YAML was kept: Pipeline YAML serialization changed its contract: nodes[1].input_mapping.folder.enum has no YAML form',
@@ -174,7 +175,7 @@ describe('EditorPanel', () => {
     });
     const user = userEvent.setup();
     renderEditorPanel();
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 
     act(() => usePipelineYamlStore.getState().resetPipelineYaml());
@@ -193,9 +194,9 @@ describe('EditorPanel', () => {
     const user = userEvent.setup();
     renderEditorPanel();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /copy yaml code/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Copy YAML' })).toBeInTheDocument());
     expect(screen.queryByText(/could not be written as pipeline YAML/)).not.toBeInTheDocument();
     // The Yaml tab shows the canonical re-dump (pre-existing behaviour); it is the same pipeline.
     expect(load(usePipelineYamlStore.getState().yamlCode)).toStrictEqual(load(PIPELINE_165_YAML));
@@ -281,7 +282,7 @@ describe('EditorPanel', () => {
     const user = userEvent.setup();
     renderEditorPanel();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     const editor = await screen.findByRole('textbox');
     await user.type(editor, 'x');
 
@@ -300,7 +301,7 @@ describe('EditorPanel', () => {
     });
     renderEditorPanel();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     await screen.findByRole('textbox');
     await user.click(await screen.findByRole('button', { name: 'Flow' }));
 
@@ -319,7 +320,7 @@ describe('EditorPanel', () => {
   ])('retains a $kind draft when switching to Flow before the editor debounce fires', async ({ source, parsed }) => {
     const user = userEvent.setup();
     const { unmount } = renderEditorPanel();
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     const editor = await screen.findByRole('textbox');
     const view = EditorView.findFromDOM(editor);
     if (!view) throw new Error('Live YAML CodeMirror view not found');
@@ -343,7 +344,7 @@ describe('EditorPanel', () => {
         vi.advanceTimersByTime(1);
       });
       expect(usePipelineYamlStore.getState().yamlCode).toBe(source);
-      fireEvent.click(screen.getByRole('button', { name: 'Yaml' }));
+      fireEvent.click(screen.getByRole('button', { name: 'YAML' }));
       expect(EditorView.findFromDOM(screen.getByRole('textbox'))?.state.doc.toString()).toBe(source);
     } finally {
       unmount();
@@ -365,7 +366,7 @@ describe('EditorPanel', () => {
     renderEditorPanel({}, '/chat/latest/1');
     expect(await screen.findByRole('button', { name: 'Add node' })).toBeInTheDocument();
 
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     expect(await screen.findByRole('textbox')).toBeInTheDocument();
   });
 
@@ -378,7 +379,7 @@ describe('EditorPanel', () => {
     const user = userEvent.setup();
     try {
       renderEditorPanel();
-      await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+      await user.click(await screen.findByRole('button', { name: 'YAML' }));
       expect(await screen.findByRole('textbox')).toBeInTheDocument();
     } finally {
       Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: 1024 });
@@ -409,7 +410,7 @@ describe('EditorPanel', () => {
       .initPipelineYaml({ yamlCode: source, yamlJsonObject: load(source) as Record<string, unknown> });
     const user = userEvent.setup();
     renderEditorPanel();
-    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+    await user.click(await screen.findByRole('button', { name: 'YAML' }));
     await user.click(await screen.findByRole('button', { name: 'Flow' }));
     usePipelineYamlStore.getState().setLayoutVersion('new-layout');
     usePipelineYamlStore.getState().markYamlCodeSaved();

@@ -120,6 +120,8 @@
         "services/elitea-llm-gateway/**",
         ".github/workflows/ci-gateway.yml",
         "scripts/ci/check-gateway-toolchain.sh",
+        "docs/ARCHITECTURE.md",
+        "services/elitea-main/internal/transport/internal_listener_checks_test.go",
         "libs/go/natsconn/**",
         "deploy/helm/elitea/values.yaml",
         "deploy/helm/elitea/values-nats-ha.yaml",
@@ -190,6 +192,7 @@
         "rust-toolchain.toml",
         "scripts/ci/assert-rust-toolchain.sh",
         "services/elitea-worker-rust/**",
+        "docs/ARCHITECTURE.md",
         "deploy/runtime/sandbox-workspace.kubernetes.example.json",
         "services/elitea-code-runner/**",
         "services/elitea-main/migrations/agentstate/**",
@@ -382,6 +385,7 @@
         "rust-toolchain.toml",
         "scripts/ci/assert-rust-toolchain.sh",
         "services/elitea-worker-rust/**",
+        "docs/ARCHITECTURE.md",
         "deploy/runtime/sandbox-workspace.kubernetes.example.json",
         "services/elitea-code-runner/**",
         "services/elitea-main/migrations/agentstate/**",
@@ -558,12 +562,13 @@
         "services/elitea-subapp-host/internal/apps/inventory/descriptor.json",
         "libs/rust/vendor/adk-agent/**",
         "libs/rust/vendor/adk-runner/**",
-        "apps/elitea-web/src/**",
-        "apps/elitea-web/vite.config.ts",
+        "apps/elitea-web/src/entries/desktop/**",
+        "apps/elitea-web/src/shared/desktop/**",
         "apps/elitea-web/package.json",
         "apps/elitea-web/package-lock.json",
-        "libs/ts/client-core/**",
-        ".github/workflows/ci-desktop.yml"
+        ".github/workflows/ci-desktop.yml",
+        ".github/actions/desktop-host-checks/**",
+        "scripts/ci/runner-acquired.mjs"
       ]
     },
     "ci-desktop-control": {
@@ -663,7 +668,17 @@
         ".github/workflows/ci-governed-conformance.yml",
         ".github/workflows/ci-build-once.yml",
         ".github/actions/stack-images/**",
-        ".github/actions/pull-stack-images/**"
+        ".github/actions/pull-stack-images/**",
+        "libs/rust/egress-guard/**",
+        "libs/rust/agent-runtime/src/egress*.rs",
+        "libs/rust/agent-runtime/src/toolkits/egress*.rs",
+        "libs/rust/agent-runtime/src/toolkits/mcp*.rs",
+        "libs/rust/agent-runtime/src/toolkits/mcp/**",
+        "libs/rust/agent-runtime/src/toolkits/governed*.rs",
+        "libs/rust/agent-runtime/src/toolkits/governed/**",
+        "services/elitea-worker-rust/src/protocol/egress.rs",
+        "services/elitea-worker-rust/src/**/governed*.rs",
+        "services/elitea-worker-rust/src/toolkits/*governed*.rs"
       ]
     },
     "ci-handoff-loadgate": {
@@ -672,7 +687,14 @@
         "services/elitea-main/internal/application/workspacestore/**",
         "services/elitea-main/internal/application/workspacehandoff/**",
         "services/elitea-main/internal/infra/db/repos/workspace_*",
-        "services/elitea-main/migrations/shared/**",
+        "services/elitea-main/migrations/shared/0057_artifact_storage.sql",
+        "services/elitea-main/migrations/shared/0058_artifact_multipart.sql",
+        "services/elitea-main/migrations/shared/0087_artifact_object_expiry_from_object_age.sql",
+        "services/elitea-main/migrations/shared/0167_workspace_handoffs.sql",
+        "services/elitea-main/migrations/shared/0168_workspace_store.sql",
+        "services/elitea-main/migrations/shared/0176_workspace_handoff_rest_pending.sql",
+        "services/elitea-main/migrations/shared/0179_workspace_handoff_forge_credential.sql",
+        "services/elitea-main/migrations/shared/0224_handoff_take_back_when_done.sql",
         ".github/workflows/ci-handoff-loadgate.yml"
       ]
     }

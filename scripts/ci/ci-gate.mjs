@@ -45,6 +45,21 @@ export function e2eReachesNoLane(needs) {
   return E2E_LANE_OUTPUTS.every((key) => outputs[key] === "false");
 }
 
+// A hosted job GitHub never gives a runner ends as cancelled with no step run
+// (scripts/ci/runner-acquired.mjs). ci-desktop.yml gives its macOS host ONE
+// second attempt then, and its `verdict` job publishes the workflow's real
+// result as the output `verdict`, because the first attempt's job stays
+// cancelled and so does the workflow's result. Only these called workflows
+// may decide their own result that way, and only with exactly `pass`: an
+// empty, missing or other value leaves the failure a failure.
+export const VERDICT_OUTPUT = "verdict";
+export const VERDICT_JOBS = new Set(["ci-desktop"]);
+
+/** True when a called workflow failed only by a job that was never acquired, and its second attempt passed. */
+export function retriedAndPassed(id, need) {
+  return VERDICT_JOBS.has(id) && need?.outputs?.[VERDICT_OUTPUT] === "pass";
+}
+
 /**
  * @param {{stage: "fast"|"final", needs: Record<string,{result:string}>, run: Record<string,boolean>, draft: boolean, tiers: {jobs: Record<string,{tier:string}>}}} input
  * @returns {{ok: boolean, problems: string[]}}
@@ -61,8 +76,12 @@ export function evaluate({ stage, needs, run, draft, tiers }) {
     const result = needs[id]?.result;
     if (result === undefined) {
       problems.push(`${id}: not in the gate's needs`);
+    } else if ((result === "failure" || result === "cancelled") && retriedAndPassed(id, needs[id])) {
+      // A job of it was never acquired by a runner, and its second attempt ran and passed.
+      continue;
     } else if (result === "failure" || result === "cancelled") {
-      problems.push(`${id}: ${result}`);
+      const v = needs[id]?.outputs?.[VERDICT_OUTPUT];
+      problems.push(`${id}: ${result}${v === "fail" ? " (its verdict job says fail)" : ""}`);
     } else if (run[id] === true && result !== "success") {
       // A draft never runs the heavy tier: the one `draft` problem below says so.
       if (draft && job.tier === "heavy") continue;
@@ -91,6 +110,11 @@ export function main(env = process.env, log = console.log, err = console.error) 
   }
   const { ok, problems } = evaluate({ stage, needs, run, draft: env.DRAFT === "true", tiers });
   for (const [id, n] of Object.entries(needs)) log(`${String(n.result).padEnd(10)} ${id}`);
+  for (const [id, n] of Object.entries(needs)) {
+    if ((n.result === "failure" || n.result === "cancelled") && retriedAndPassed(id, n)) {
+      log(`::notice::${id}: a job of it was never acquired by a GitHub-hosted runner (nothing ran); its second attempt ran and passed`);
+    }
+  }
   if (!ok) {
     for (const p of problems) err(`::error::${stage === "fast" ? "fast tier" : "ci-gate"}: ${p}`);
     return 1;

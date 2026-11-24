@@ -31,8 +31,9 @@ func cloudExecutorSection() map[string]any {
 		}
 	}
 	return map[string]any{
-		"id":    section,
-		"title": "Cloud executor",
+		"id":     section,
+		"access": nativeClientsSectionAccess,
+		"title":  "Cloud executor",
 		"description": "Whether desktop Local work threads can be sent to a cloud executor, and its limits. The " +
 			"project settings can only narrow these values. The executor needs object storage with default " +
 			"encryption at rest; the deployment refuses to enable it otherwise.",

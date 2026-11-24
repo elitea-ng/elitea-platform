@@ -303,8 +303,11 @@ export const getValueDataTypeInfo = (dataType = 'string'): string =>
   `Value of ${dataType} type is expected`;
 
 export const getNodeFieldInfo = (nodeType: string | undefined, fieldKey: string): string => {
-  const byNode = nodeType ? NODE_FIELD_INFO[nodeType as PipelineNodeType]?.[fieldKey] : undefined;
-  return byNode || COMMON_NODE_FIELD_INFO[fieldKey] || '';
+  const nodeInfoMap = NODE_FIELD_INFO as Readonly<Record<string, Readonly<Record<string, string>> | undefined>>;
+  const nodeEntry = nodeType && Object.hasOwn(nodeInfoMap, nodeType) ? nodeInfoMap[nodeType] : undefined;
+  const byNode = nodeEntry && Object.hasOwn(nodeEntry, fieldKey) ? nodeEntry[fieldKey] : undefined;
+  const common = Object.hasOwn(COMMON_NODE_FIELD_INFO, fieldKey) ? COMMON_NODE_FIELD_INFO[fieldKey] : undefined;
+  return byNode || common || '';
 };
 
 // Field texts of one node type: `getNodeFieldInfoOf(type)(fieldKey)`
@@ -321,7 +324,8 @@ export const getInputMappingFieldInfo = (
   description?: string,
 ): string => {
   const isAgent = nodeType === PipelineNodeTypes.Agent;
-  const fixedInfo = isAgent ? NODE_FIELD_INFO[PipelineNodeTypes.Agent]?.[key] : undefined;
+  const agentEntry = NODE_FIELD_INFO[PipelineNodeTypes.Agent];
+  const fixedInfo = isAgent && agentEntry && Object.hasOwn(agentEntry, key) ? agentEntry[key] : undefined;
   if (fixedInfo) return fixedInfo;
   if (description) return description;
   return isAgent ? getAgentInputFallbackInfo(key) : getToolParamFallbackInfo(key);

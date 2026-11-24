@@ -1,0 +1,55 @@
+name: Sunset Reminder
+
+# ADR-0059 decision 2 (story R0.14b, #2590). The legacy administration items
+# (runtime.plugins, configuration.governance, `inherit` token access, the
+# reason warning period) end on SunsetAfter in
+# services/elitea-main/internal/adminaccess/registry.go. From 14 days after
+# that date scripts/ci/check-sunset.mjs fails every pull request that still
+# holds one, so the removal becomes the only change that merges.
+#
+# This workflow opens ONE tracking issue for the removal from 30 days before
+# the date (scripts/ci/sunset-reminder.mjs, tested by sunset-reminder.test.mjs).
+# It reads the clock and gates nothing. It is idempotent: it looks for an
+# issue of the dated title, in any state, before it opens one. While
+# SunsetAfter is empty it does nothing. Scheduled workflows run on the default
+# branch only.
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  remind:
+    name: Open the sunset tracking issue when it is due
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      # Read the registry constants; the one write is the issue.
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            scripts/ci
+            services/elitea-main/internal/adminaccess
+            services/elitea-main/internal/infra/legacyrbac
+            .github/actions
+          persist-credentials: false
+      # eng-runner: caches and TMPDIR on the work volume, and node (none in its
+      # image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+      - name: Open the issue 30 days before SunsetAfter
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/sunset-reminder.mjs

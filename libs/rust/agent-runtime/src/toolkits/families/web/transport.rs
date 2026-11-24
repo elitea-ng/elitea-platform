@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use elitea_egress_guard::Allowlist;
+use elitea_egress_guard::{Allowlist, PrivatePermit};
 use reqwest::header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Request, StatusCode};
 
@@ -281,6 +281,9 @@ pub(crate) struct PinnedTransport {
     http: crate::egress::HttpClient,
     origins: &'static [&'static str],
     egress: Arc<Allowlist>,
+    /// The deployment allowlist's CIDRs and literals: the private addresses
+    /// a provider origin may resolve to beside the run's private permit.
+    operator: Arc<PrivatePermit>,
 }
 
 impl PinnedTransport {
@@ -297,10 +300,12 @@ impl PinnedTransport {
             .user_agent(user_agent)
             .build_for_run()
             .map_err(|_| ProviderError::Unavailable)?;
+        let operator = Arc::new(PrivatePermit::addresses_only(egress.private_permits()));
         Ok(Self {
             http,
             origins,
             egress,
+            operator,
         })
     }
 }
@@ -328,7 +333,7 @@ impl Transport for PinnedTransport {
         }
         let response = self
             .http
-            .execute_operator_origin(request)
+            .execute_operator_origin(request, Some(Arc::clone(&self.operator)))
             .await
             .map_err(|error| map_reqwest(&error.without_url()))?;
         read_answer(response, max_bytes).await

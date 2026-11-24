@@ -97,9 +97,12 @@ test('double-clicking a node name renames it, and the rename reaches the stored 
   const added = page.locator('.react-flow__node[data-id="Printer_1"]');
   await expect(added).toBeVisible({ timeout: 15_000 });
 
-  const nameLabel = added.getByText('Printer_1', { exact: true });
-  await nameLabel.dblclick();
-  const nameInput = added.getByRole('textbox').first();
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="Printer_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await added.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  const nameInput = panel.getByTestId('pipeline-node-panel-name-input');
   await expect(nameInput).toBeVisible({ timeout: 5_000 });
   await nameInput.fill('MyCustomPrinter');
   await nameInput.blur();
@@ -130,10 +133,14 @@ test('deleting a node from its own menu removes it from the canvas and the store
   const added = page.locator('.react-flow__node[data-id="Printer_1"]');
   await expect(added).toBeVisible({ timeout: 15_000 });
 
-  await added.getByRole('button', { name: 'Node actions' }).click();
-  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  const panel = page.locator('[data-testid="pipeline-node-panel"][data-node-id="Printer_1"]');
+  if (!(await panel.isVisible().catch(() => false))) {
+    await added.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
+  await panel.getByTestId('pipeline-node-panel-delete').click();
   // `useDeleteItems` gates every node delete behind a confirm dialog
-  // ("Delete node?" / "Remove") — the menu click alone only opens it.
+  // ("Delete node?" / "Remove") — the panel button alone only opens it.
   await page.getByRole('button', { name: 'Remove' }).click();
 
   await expect(added).toHaveCount(0);

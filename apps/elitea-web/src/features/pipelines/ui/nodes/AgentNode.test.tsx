@@ -8,7 +8,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
@@ -56,7 +56,16 @@ function renderAgentNode(
         <ReactFlow
           nodes={[flowNode]}
           edges={[...edges]}
-          nodeTypes={{ testNode: () => <AgentNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <AgentNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <AgentNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -72,11 +81,8 @@ describe('AgentNode', () => {
   });
 
   it('shows no orphan warning when no tool is bound', async () => {
-    const { queryByText, findByText } = renderAgentNode({});
-    // Wait for the component to actually mount (the router resolves
-    // asynchronously) before asserting an absence -- otherwise this would
-    // trivially pass against an empty, not-yet-rendered document.
-    await findByText('Agent');
+    const { queryByText, findAllByText } = renderAgentNode({});
+    await findAllByText('Agent');
     expect(queryByText('Agent not found — select a replacement or delete this node')).not.toBeInTheDocument();
   });
 

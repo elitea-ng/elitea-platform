@@ -195,10 +195,12 @@ var (
 		{"configuration.users.users.create", []string{"admin", "super_admin"}},
 		{"configuration.users.users.edit", []string{"admin", "super_admin"}},
 		{"configuration.roles.permissions.edit", []string{"admin", "super_admin"}},
-		{"projects.projects.projects.edit", []string{"admin", "super_admin"}},
+		// shared/0263 (ADR-0059 R0.7) adds the built-in project_administrator.
+		{"projects.projects.projects.edit", []string{"admin", "project_administrator", "super_admin"}},
 		{"configuration.scheduling.schedules.view", []string{"admin", "super_admin"}},
 		{"configuration.scheduling.schedules.edit", []string{"admin", "super_admin"}},
-		{"models.admin.audit_trail.view", []string{"admin", "super_admin"}},
+		// shared/0263 (ADR-0059 R0.7) adds the built-in security_auditor.
+		{"models.admin.audit_trail.view", []string{"admin", "security_auditor", "super_admin"}},
 		{"runtime.airun.serviceproviders", []string{"admin", "super_admin"}},
 		{"provider_hub.descriptor.register", []string{"admin", "super_admin"}},
 		// shared/0109_provider_policy_overlay.sql. A CHOSEN string with no
@@ -217,7 +219,8 @@ var (
 		// names `system`, which a clean database seeds no administration role
 		// for, so the holder set here is the same two.
 		{"toolkit_catalogue.type.manage", []string{"admin", "super_admin"}},
-		{"admin.moderation.edit", []string{"admin", "editor", "super_admin"}},
+		// shared/0263 (ADR-0059 R0.7) adds the built-in project_administrator.
+		{"admin.moderation.edit", []string{"admin", "editor", "project_administrator", "super_admin"}},
 	}
 )
 
@@ -471,7 +474,7 @@ func resolveAdministrationModeFor(t *testing.T, pool *pgxpool.Pool, userID strin
 
 	resolution, err := legacyrbac.NewPostgresResolver(pool).ResolvePermissions(
 		ctx,
-		auth.User{ID: userID, UserID: userID},
+		auth.User{ID: userID, UserID: userID, CredentialKind: auth.CredentialKindSession},
 		auth.PermissionModeAdministration,
 		"",
 	)

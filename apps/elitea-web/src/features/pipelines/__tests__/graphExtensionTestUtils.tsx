@@ -3,7 +3,7 @@ import type { NodeProps } from '@xyflow/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { beforeAll } from 'vitest';
 import type { FlowNode } from '../lib/flow-editor/reactFlowTypes';
-import { FlowEditorContext } from '../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext } from '../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
 import { parsePipelineYamlDocument } from '../lib/pipelineYamlDocument.helpers';
 import { usePipelineYamlStore } from '../model/pipelineYamlStore';
@@ -77,7 +77,15 @@ export function renderExtensionCard(Component: (props: NodeProps<FlowNode>) => R
     const value = buildFlowEditorContextValue({ yamlJsonObject: document, setYamlJsonObject: edit, expandAll: true, disabled });
     const node = document.nodes?.find((entry) => entry.id === 'extension');
     const props = { id: 'extension', type: node?.type, data: {}, selected: true } as unknown as NodeProps<FlowNode>;
-    return <ReactFlowProvider><FlowEditorContext.Provider value={value}><Component {...props} /></FlowEditorContext.Provider></ReactFlowProvider>;
+    return (
+      <ReactFlowProvider>
+        <FlowEditorContext.Provider value={value}>
+          <NodeConfigPanelContext.Provider value={{ isEntrypoint: document.entry_point === 'extension', isLegacyLayout: false }}>
+            <Component {...props} />
+          </NodeConfigPanelContext.Provider>
+        </FlowEditorContext.Provider>
+      </ReactFlowProvider>
+    );
   }
   return renderWithRouterAndProject(<BoundCard />, undefined);
 }

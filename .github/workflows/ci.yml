@@ -294,6 +294,12 @@ jobs:
   ci-desktop:
     needs: [changes, fast-gate]
     if: ${{ !cancelled() && needs.fast-gate.result == 'success' && github.event.pull_request.draft == false && fromJSON(needs.changes.outputs.run)['ci-desktop'] }}
+    permissions:
+      contents: read
+      # `host-runner` reads this run's jobs and a check run's annotations: was
+      # the macOS host ever given a runner (scripts/ci/runner-acquired.mjs)?
+      actions: read
+      checks: read
     uses: ./.github/workflows/ci-desktop.yml
     secrets: inherit
 

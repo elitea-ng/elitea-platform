@@ -53,6 +53,27 @@ test("a failed or cancelled job fails the gate", () => {
   }
 });
 
+test("ci-desktop: a never-acquired job whose second attempt passed is accepted only by the verdict output `pass`", () => {
+  const t = { jobs: { ...tiers.jobs, "ci-desktop": { tier: "heavy", paths: ["d/**"] } } };
+  const r = { ...run, "ci-desktop": true };
+  for (const result of ["failure", "cancelled"]) {
+    const pass = evaluate({ stage: "final", needs: needs({ "ci-desktop": { result, outputs: { verdict: "pass" } } }), run: r, draft: false, tiers: t });
+    assert.deepEqual(pass, { ok: true, problems: [] });
+    for (const outputs of [{ verdict: "fail" }, { verdict: "" }, { verdict: "PASS" }, {}, undefined]) {
+      const out = evaluate({ stage: "final", needs: needs({ "ci-desktop": { result, outputs } }), run: r, draft: false, tiers: t });
+      assert.equal(out.ok, false, JSON.stringify({ result, outputs }));
+      assert.match(out.problems.join("\n"), new RegExp(`ci-desktop: ${result}`));
+    }
+  }
+  // Only the workflows that publish a verdict: another job's `verdict` output decides nothing.
+  const other = evaluate({ stage: "final", needs: needs({ h: { result: "failure", outputs: { verdict: "pass" } } }), run, draft: false, tiers });
+  assert.equal(other.ok, false);
+  // A skipped ci-desktop that should have run stays missing, whatever it outputs.
+  const skipped = evaluate({ stage: "final", needs: needs({ "ci-desktop": { result: "skipped", outputs: { verdict: "pass" } }, "fast-gate": { result: "failure" } }), run: r, draft: false, tiers: t });
+  assert.equal(skipped.ok, false);
+  assert.match(skipped.problems.join("\n"), /ci-desktop: missing/);
+});
+
 test("a heavy job that should have run but is skipped is missing", () => {
   const out = evaluate({ stage: "final", needs: needs({ h: { result: "skipped" }, "fast-gate": { result: "failure" } }), run, draft: false, tiers });
   assert.equal(out.ok, false);

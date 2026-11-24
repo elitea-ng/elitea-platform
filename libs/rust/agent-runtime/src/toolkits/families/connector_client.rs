@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use adk_core::AdkError;
-use elitea_connectors::reqwest012::ReqwestTransport;
 use elitea_connectors::transport::Transport;
 use elitea_connectors::{BuildError, ClientPolicy};
 
@@ -20,7 +19,7 @@ pub(crate) trait IntoAdk {
 }
 
 /// This host's transport for one provider client: reqwest 0.12 (rustls on
-/// ring), built to the provider's policy and bound to the run's egress
+/// ring), built to the provider's policy on the guarded resolver and bound to the run's egress
 /// policy (#1490): a host outside it is refused before sending, and the hosts
 /// reached are counted.
 pub(crate) fn transport(policy: &ClientPolicy) -> Result<Arc<dyn Transport>, BuildError> {
@@ -36,6 +35,6 @@ pub(crate) fn transport_for(
 ) -> Result<Arc<dyn Transport>, BuildError> {
     Ok(Arc::new(EgressTransport::new(
         egress,
-        Arc::new(ReqwestTransport::hardened(policy)?),
+        Arc::new(crate::egress::hardened_transport(policy)?),
     )))
 }

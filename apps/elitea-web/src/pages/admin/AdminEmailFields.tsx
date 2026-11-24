@@ -113,6 +113,21 @@ export interface EmailFormValues {
   readonly publicBaseURL: string;
 }
 
+/**
+ * The line under the password control. A server refusal that names the
+ * password wins: a save that moves the relay asks for the password again, and
+ * the reason belongs where the operator has to type it.
+ */
+function passwordHelperText(password: string | undefined, passwordError: string | undefined): string {
+  if (passwordError !== undefined) return passwordError;
+  return password === ''
+    ? t('pages.admin.email.field.passwordClearing', 'Saving now REMOVES the stored password.')
+    : t(
+        'pages.admin.email.field.passwordHelp',
+        'Sealed in the platform vault and never shown again. Leave untouched to keep the stored one.',
+      );
+}
+
 export function AdminEmailFields({
   values,
   effective,
@@ -120,6 +135,7 @@ export function AdminEmailFields({
   passwordSet,
   passwordSource,
   password,
+  passwordError,
   onChange,
   onPasswordChange,
   onClearPassword,
@@ -133,6 +149,8 @@ export function AdminEmailFields({
   readonly passwordSource?: AdminEmailSource | undefined;
   /** `undefined` while the operator has not touched the password. */
   readonly password: string | undefined;
+  /** The server's refusal of the last save, when it named the password. */
+  readonly passwordError?: string | undefined;
   readonly onChange: (field: keyof EmailFormValues, value: string) => void;
   readonly onPasswordChange: (value: string) => void;
   readonly onClearPassword: () => void;
@@ -219,14 +237,8 @@ export function AdminEmailFields({
               ? t('pages.admin.email.field.passwordSet', 'A password is stored. Type to replace it.')
               : t('pages.admin.email.field.passwordUnset', 'No password stored.')
           }
-          helperText={
-            password === ''
-              ? t('pages.admin.email.field.passwordClearing', 'Saving now REMOVES the stored password.')
-              : t(
-                  'pages.admin.email.field.passwordHelp',
-                  'Sealed in the platform vault and never shown again. Leave untouched to keep the stored one.',
-                )
-          }
+          error={passwordError !== undefined}
+          helperText={passwordHelperText(password, passwordError)}
           onChange={(event) => onPasswordChange(event.target.value)}
           slotProps={{ htmlInput: { 'data-testid': 'admin-email-password' } }}
         />

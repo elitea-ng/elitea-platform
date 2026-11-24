@@ -10,7 +10,7 @@ import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirror
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { PrinterNode } from './PrinterNode';
 
@@ -49,7 +49,16 @@ function renderPrinterNode(flowEditorOverrides: Partial<FlowEditorContextValue> 
         <ReactFlow
           nodes={[{ id: 'Node1', type: 'testNode', position: { x: 0, y: 0 }, data: {} }]}
           edges={edges}
-          nodeTypes={{ testNode: PrinterNode }}
+          nodeTypes={{
+            testNode: props => (
+              <>
+                <PrinterNode {...props} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <PrinterNode {...props} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
@@ -77,7 +86,9 @@ function renderPrinterNodeBare(flowEditorOverrides: Partial<FlowEditorContextVal
   return renderWithRouterAndProject(
     <ReactFlowProvider>
       <FlowEditorContext.Provider value={flowEditorValue}>
-        <PrinterNode id="Node1" />
+        <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+          <PrinterNode id="Node1" />
+        </NodeConfigPanelContext.Provider>
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
     PROJECT_ID,
@@ -93,10 +104,10 @@ describe('PrinterNode', () => {
   });
 
   it('renders the printer input-mapping row and the Final Message field', async () => {
-    const { findByText, getByText, getByLabelText } = renderPrinterNode();
+    const { findByText, getAllByText, getByLabelText } = renderPrinterNode();
     await findByText('Node1');
 
-    expect(getByText('Printer')).toBeInTheDocument();
+    expect(getAllByText('Printer').length).toBeGreaterThan(0);
     expect(getByLabelText('Final Message')).toBeInTheDocument();
   });
 
@@ -136,7 +147,9 @@ describe('PrinterNode', () => {
       <SocketClientContext.Provider value={socketClient}>
         <ReactFlowProvider>
           <FlowEditorContext.Provider value={flowEditorValue}>
-            <PrinterNode id="Node1" />
+            <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+              <PrinterNode id="Node1" />
+            </NodeConfigPanelContext.Provider>
           </FlowEditorContext.Provider>
         </ReactFlowProvider>
       </SocketClientContext.Provider>,

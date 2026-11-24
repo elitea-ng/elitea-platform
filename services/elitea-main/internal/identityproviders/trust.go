@@ -1,6 +1,8 @@
 package identityproviders
 
 import (
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -46,6 +48,10 @@ import (
 // Removing a certificate or a tenant, lowering the clock skew, or tightening a
 // flag only narrows trust and stays open to an `admin`, as do the display
 // name, the scopes, the login domains and the name attribute.
+//
+// It fails closed (ADR-0059 R0.4c): a document field that FieldClasses does
+// not list, a field added after this was written, is a trust field. Its change
+// is named in its wire spelling until someone lists it as a setting.
 func TrustChanges(before, after Provider) []string {
 	if before.Key == "" {
 		return []string{"created"}
@@ -54,13 +60,139 @@ func TrustChanges(before, after Provider) []string {
 	if before.Enabled != after.Enabled {
 		changed = append(changed, "enabled")
 	}
+	changed = append(changed, unclassifiedChanges(before, after, providerFieldClasses)...)
 	switch {
 	case after.OIDC != nil:
 		changed = append(changed, oidcTrustChanges(before.OIDC, after.OIDC)...)
+		changed = append(changed, unclassifiedChanges(orZero(before.OIDC), *after.OIDC, oidcFieldClasses)...)
 	case after.SAML != nil:
 		changed = append(changed, samlTrustChanges(before.SAML, after.SAML)...)
+		changed = append(changed, unclassifiedChanges(orZero(before.SAML), *after.SAML, samlFieldClasses)...)
 	}
 	return changed
+}
+
+// FieldClass says which half of the identity permissions a field belongs to
+// (ADR-0059 decision 2, story R0.4c).
+type FieldClass string
+
+const (
+	// FieldTrust decides who an assertion says a person is, which identity
+	// provider is believed, or whether an assertion is believed at all. A
+	// save that changes one is a trust action: identity.sso.trust.manage or
+	// super_admin. TrustChanges compares each, in the direction that widens
+	// trust where only one direction does.
+	FieldTrust FieldClass = "trust"
+	// FieldSettings is presentation or routing: changing it cannot make the
+	// platform believe a different person. identity.sso.settings.manage or
+	// runtime.plugins.
+	FieldSettings FieldClass = "settings"
+)
+
+// The classification of every field of the stored provider, keyed by the Go
+// field name of Provider and by the wire name of each document. A field that
+// is missing here is a trust field (unclassifiedChanges), and
+// TestEveryProviderFieldIsClassified fails until it is listed.
+var (
+	providerFieldClasses = map[string]FieldClass{
+		// The key is the path segment and the kind cannot change under it
+		// (409); both name what a link is bound to.
+		"Key":  FieldTrust,
+		"Kind": FieldTrust,
+		// The button text.
+		"DisplayName": FieldSettings,
+		// Turning a provider on retires the live provider of its kind; off
+		// stops every sign-in through it (issue 2558).
+		"Enabled": FieldTrust,
+		// Written by the store, never by the body.
+		"Revision":  FieldSettings,
+		"UpdatedAt": FieldSettings,
+		// The sealed credential; the admin write path names a replacement
+		// "secret".
+		"SecretRef": FieldTrust,
+		// The documents; each of their fields is classified below.
+		"OIDC": FieldTrust,
+		"SAML": FieldTrust,
+	}
+	oidcFieldClasses = map[string]FieldClass{
+		"issuer":                     FieldTrust,
+		"client_id":                  FieldTrust,
+		"redirect_uri":               FieldTrust,
+		"scopes":                     FieldSettings,
+		"require_email_verified":     FieldTrust,
+		"login_domains":              FieldSettings,
+		"adopt_scim_users":           FieldTrust,
+		"entra":                      FieldTrust,
+		"entra_tenants":              FieldTrust,
+		"entra_api_scope":            FieldTrust,
+		"entra_federated_token_file": FieldTrust,
+		"entra_agent_blueprint_id":   FieldTrust,
+	}
+	samlFieldClasses = map[string]FieldClass{
+		"idp_entity_id":       FieldTrust,
+		"idp_sso_url":         FieldTrust,
+		"idp_slo_url":         FieldSettings,
+		"idp_certificates":    FieldTrust,
+		"sp_entity_id":        FieldTrust,
+		"acs_url":             FieldTrust,
+		"name_id_format":      FieldTrust,
+		"email_attribute":     FieldTrust,
+		"name_attribute":      FieldSettings,
+		"sign_authn_requests": FieldTrust,
+		"sp_certificate":      FieldTrust,
+		"clock_skew_seconds":  FieldTrust,
+		"login_domains":       FieldSettings,
+		"adopt_scim_users":    FieldTrust,
+	}
+)
+
+// FieldClasses answers the classification of the provider row ("provider",
+// Go field names) and of the two documents ("oidc", "saml", wire names). The
+// maps are copies.
+func FieldClasses() map[string]map[string]FieldClass {
+	return map[string]map[string]FieldClass{
+		"provider": maps.Clone(providerFieldClasses),
+		"oidc":     maps.Clone(oidcFieldClasses),
+		"saml":     maps.Clone(samlFieldClasses),
+	}
+}
+
+// FieldName is the name a classification map keys a struct field by: its
+// wire name when it has a JSON tag, its Go name otherwise.
+func FieldName(field reflect.StructField) string {
+	if name, _, _ := strings.Cut(field.Tag.Get("json"), ","); name != "" && name != "-" {
+		return name
+	}
+	return field.Name
+}
+
+// unclassifiedChanges names every field of before and after (structs of one
+// type) that classes does not list and whose value differs. It is the fail
+// closed half of TrustChanges: such a field is a trust field.
+func unclassifiedChanges[T any](before, after T, classes map[string]FieldClass) []string {
+	beforeValue, afterValue := reflect.ValueOf(before), reflect.ValueOf(after)
+	var changed []string
+	for i := range beforeValue.NumField() {
+		name := FieldName(beforeValue.Type().Field(i))
+		if _, classified := classes[name]; classified {
+			continue
+		}
+		// An unexported field cannot be read through Interface (it panics),
+		// so it is reported as changed on every save: fail closed, not a 500.
+		if !beforeValue.Type().Field(i).IsExported() ||
+			!reflect.DeepEqual(beforeValue.Field(i).Interface(), afterValue.Field(i).Interface()) {
+			changed = append(changed, name)
+		}
+	}
+	return changed
+}
+
+func orZero[T any](document *T) T {
+	if document == nil {
+		var zero T
+		return zero
+	}
+	return *document
 }
 
 func oidcTrustChanges(before, after *OIDCDocument) []string {

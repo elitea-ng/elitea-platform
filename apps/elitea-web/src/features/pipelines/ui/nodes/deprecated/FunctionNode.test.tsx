@@ -25,7 +25,7 @@ describe('FunctionNode', () => {
       setFlowEdges: vi.fn(),
     };
 
-    const { findByText } = renderDeprecatedNode(
+    const { findByTestId } = renderDeprecatedNode(
       'function-1',
       contextValue,
       <FunctionNode
@@ -35,6 +35,6 @@ describe('FunctionNode', () => {
       />,
     );
 
-    expect(await findByText('function-1')).toBeInTheDocument();
+    expect(await findByTestId('pipeline-node-v2-name')).toHaveTextContent('function-1');
   });
 });

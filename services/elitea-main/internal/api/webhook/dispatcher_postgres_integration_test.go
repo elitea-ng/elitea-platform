@@ -161,11 +161,11 @@ func TestConversationCreatedEventIsDeliveredSignedLoggedAndRedeliverable(t *test
 	}))
 	defer server.Close()
 
-	webhooksRepo := repos.NewWebhooksRepo(pool)
+	webhooksRepo, resolver := vaultedWebhooksRepo(t, pool)
 	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
-	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(resolver))
 
-	const projectID = "proj-webhook-it"
+	const projectID = "9101"
 	created, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    server.URL,
 		Events: []string{"conversation.created"},
@@ -242,7 +242,7 @@ func TestListDeliveriesIsScopedToTheOwningProjectAndWebhook(t *testing.T) {
 	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
 
 	ownerWebhook, err := webhooksRepo.Create(ctx, "proj-owner", webhook.Webhook{
-		URL: server.URL, Events: []string{"conversation.created"}, Secret: "s", Active: true,
+		URL: server.URL, Events: []string{"conversation.created"}, Active: true,
 	})
 	if err != nil {
 		t.Fatalf("create owner webhook: %v", err)

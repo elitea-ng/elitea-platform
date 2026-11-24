@@ -251,6 +251,11 @@ pub struct RemoteMcpConfig {
     /// The run's delegation assertions (ADR-0044 decision 4): every request
     /// to the server carries one. `None` sends none.
     assertions: Option<Arc<DelegationAssertions>>,
+    /// The run whose egress rules (its private permit, #2950) the session's
+    /// resolver applies. Carried here, not read from the task scope, because
+    /// a session is opened wherever the toolsets are assembled. `None` falls
+    /// back to the scope's run ([`crate::egress::current`]).
+    egress: Option<Arc<crate::egress::RunEgress>>,
 }
 
 impl RemoteMcpConfig {
@@ -346,7 +351,15 @@ impl RemoteMcpConfig {
             pinned_tools: super::mcp_pin::parse_pinned_tools(settings)
                 .map_err(|()| invalid_configuration())?,
             assertions: None,
+            egress: None,
         })
+    }
+
+    /// Open the session under `egress`, the run's rules (#2950).
+    #[must_use]
+    pub(crate) fn with_egress(mut self, egress: &Arc<crate::egress::RunEgress>) -> Self {
+        self.egress = Some(Arc::clone(egress));
+        self
     }
 
     /// Carry the run's delegation assertions on every request to the
@@ -712,13 +725,15 @@ const fn assertion_refused(
 /// headers (static headers and the bearer) as defaults, no automatic replay,
 /// and redirects limited to the frozen endpoint's origin. No client identity
 /// is ever presented: a remote MCP server never sees the worker's workload
-/// identity. Factored out so tests exercise exactly what `connect_session`
-/// builds.
+/// identity. It starts from [`crate::egress::mcp_client_builder`], so every
+/// connection resolves through the egress guard under the run's private
+/// permit (#2950). Factored out so tests exercise exactly what
+/// `connect_session` builds.
 pub(crate) fn session_client_builder(
     config: &RemoteMcpConfig,
 ) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {
     let origin = reqwest_mcp::Url::parse(config.endpoint()).map_err(|_| invalid_configuration())?;
-    let mut client = reqwest_mcp::Client::builder()
+    let mut client = crate::egress::mcp_client_builder(&origin, config.egress.clone())
         .https_only(true)
         .redirect(same_origin_redirect_policy(origin))
         .retry(reqwest_mcp::retry::never())
@@ -844,14 +859,18 @@ pub async fn materialize_mcp_toolsets_with_tokens_and_authorization(
     let mut authorization = DelegatedAuthorizationCatalog::default();
     for reference in references {
         let config = RemoteMcpConfig::parse(reference, mcp_tokens)?
-            .with_assertions(policy.egress().assertions());
-        // A remote server outside the run's egress policy is never contacted
-        // (#1490); internal categories go to Main over gRPC, not a public host.
+            .with_assertions(policy.egress().assertions())
+            .with_egress(policy.egress());
+        // A remote server outside the run's egress policy (#1490), or one
+        // that resolves only to private, local or metadata addresses the
+        // operator's private permit does not name (#2950), is never
+        // contacted; internal categories go to Main over gRPC, not a public
+        // host. The session's resolver applies the same rule again at dial.
         let endpoint = public_endpoint(&config);
         if let Some(endpoint) = &endpoint
-            && policy.egress().check_url(endpoint).is_err()
+            && let Err(refused) = policy.egress().check_destination(endpoint).await
         {
-            push_egress_refused_toolset(reference, &config, endpoint, policy, &mut toolsets)?;
+            push_egress_refused_toolset(reference, &config, &refused, policy, &mut toolsets)?;
             continue;
         }
         let session = match connector.connect_session(&config).await {
@@ -1135,7 +1154,7 @@ fn public_endpoint(config: &RemoteMcpConfig) -> Option<reqwest::Url> {
 fn push_egress_refused_toolset(
     reference: &FrozenToolReference<'_>,
     config: &RemoteMcpConfig,
-    endpoint: &reqwest::Url,
+    refused: &crate::egress::EgressRefused,
     policy: &Arc<ToolAdmissionPolicy>,
     toolsets: &mut Vec<Arc<dyn Toolset>>,
 ) -> Result<(), McpMaterializationError> {
@@ -1143,7 +1162,8 @@ fn push_egress_refused_toolset(
         event = "agent_toolkit_egress_refused",
         toolkit_type = reference.tool_type(),
         toolkit_name = reference.toolkit_name(),
-        "the MCP server's host is not on this run's egress allowlist"
+        reason = refused.reason(),
+        "the run's egress rules refuse the MCP server's host"
     );
     let refusing = config
         .selected_tools()
@@ -1152,7 +1172,7 @@ fn push_egress_refused_toolset(
         .map(|name| {
             Arc::new(McpEgressRefusedTool::new(
                 name,
-                endpoint.clone(),
+                refused.clone(),
                 Arc::clone(policy.egress()),
             )) as Arc<dyn Tool>
         })
@@ -1171,22 +1191,26 @@ fn push_egress_refused_toolset(
     Ok(())
 }
 
-/// A selected tool of a remote MCP server the run's egress policy refuses
-/// (#1490). Every call re-checks the endpoint, so the refusal is counted and
-/// the call fails as `egress_host_not_allowed` naming the host.
+/// A selected tool of a remote MCP server the run's egress rules refuse
+/// (#1490, #2950). Every call counts the refusal again and fails as
+/// `egress_host_not_allowed` naming the host and port.
 struct McpEgressRefusedTool {
     name: Box<str>,
-    endpoint: reqwest::Url,
-    /// The run whose policy refused the endpoint, named explicitly rather
+    refused: crate::egress::EgressRefused,
+    /// The run whose rules refused the endpoint, named explicitly rather
     /// than read from the scope.
     egress: Arc<crate::egress::RunEgress>,
 }
 
 impl McpEgressRefusedTool {
-    fn new(name: &str, endpoint: reqwest::Url, egress: Arc<crate::egress::RunEgress>) -> Self {
+    fn new(
+        name: &str,
+        refused: crate::egress::EgressRefused,
+        egress: Arc<crate::egress::RunEgress>,
+    ) -> Self {
         Self {
             name: name.into(),
-            endpoint,
+            refused,
             egress,
         }
     }
@@ -1199,7 +1223,7 @@ impl Tool for McpEgressRefusedTool {
     }
 
     fn description(&self) -> &'static str {
-        "This MCP operation is unavailable: the server's host is not on this run's egress allowlist."
+        "This MCP operation is unavailable: the run's egress rules refuse the server's host."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -1222,22 +1246,8 @@ impl Tool for McpEgressRefusedTool {
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
     ) -> adk_core::Result<Value> {
-        match self.egress.check_url(&self.endpoint) {
-            Err(refused) => Err(refused.tool_error()),
-            // A policy that admits the host now is not this run's: the
-            // session was never opened, so there is nothing to call.
-            Ok(()) => Err(dependency_unavailable_tool_error()),
-        }
+        Err(self.egress.repeat_refusal(&self.refused).tool_error())
     }
-}
-
-fn dependency_unavailable_tool_error() -> AdkError {
-    AdkError::new(
-        ErrorComponent::Tool,
-        ErrorCategory::Unavailable,
-        "tool.execution.unavailable",
-        "tool dependency is unavailable",
-    )
 }
 
 fn authorization_error(requirement: &DelegatedAuthorizationRequirement) -> adk_core::Result<Value> {

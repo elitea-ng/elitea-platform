@@ -240,13 +240,14 @@ else
            "worker.runtimeSession.expectedIdentity:" "deepwiki.env.ELITEA_DEEPWIKI_GIT_ALLOWLIST:" \
            "inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST:" "networkPolicies.main.ingressFrom:" \
            "llmGateway.env.GATEWAY_SELF_LLM_ORIGINS:" "llmGateway.egressPosture must be one of" \
+           "networkPolicies.clusterCIDRs:" "networkPolicies.egressPeers.postgresql.to:" \
            "docs/UPGRADING.md lists them"; do
     grep -qF -- "$f" "$TMP/missing.err" || missing="$missing [$f]"
   done
   if [ -n "$missing" ]; then fail "the missing-values message lacks$missing"
-  elif [ "$(grep -c '^  - ' "$TMP/missing.err")" != 9 ]; then
-    fail "the missing-values message lists $(grep -c '^  - ' "$TMP/missing.err") values, want 9: $(cat "$TMP/missing.err")"
-  else ok "the chart's defaults alone are refused with ONE message listing all 9 operator values"; fi
+  elif [ "$(grep -c '^  - ' "$TMP/missing.err")" != 11 ]; then
+    fail "the missing-values message lists $(grep -c '^  - ' "$TMP/missing.err") values, want 11: $(cat "$TMP/missing.err")"
+  else ok "the chart's defaults alone are refused with ONE message listing all 11 operator values"; fi
 fi
 # With authentication but no public origin, the origin is named on its own.
 if render noorigin -f "$OPERATOR" --set main.fileConfig.authConfig.document.public_origin=; then

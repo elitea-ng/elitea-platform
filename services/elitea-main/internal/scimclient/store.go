@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // Client is one row of `elitea_auth.scim_clients`, without the hash.
@@ -126,7 +129,12 @@ func (s *Store) Create(ctx context.Context, name, method string, expiresAt *time
 	if clientID != "" {
 		clientIDValue = clientID
 	}
-	client, err := scanClient(s.pool.QueryRow(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Issued{}, fmt.Errorf("begin create: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	client, err := scanClient(tx.QueryRow(ctx, `
 		INSERT INTO elitea_auth.scim_clients (name, auth_method, client_id, secret_hash, secret_hint, created_by, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING `+clientColumns,
@@ -137,6 +145,14 @@ func (s *Store) Create(ctx context.Context, name, method string, expiresAt *time
 			return Issued{}, ErrDuplicateName
 		}
 		return Issued{}, fmt.Errorf("insert scim client: %w", err)
+	}
+	// The security audit event of the route, in this transaction (ADR-0059
+	// R1.5).
+	if err := securityaudit.RunChangeHook(ctx, tx, strconv.FormatInt(client.ID, 10)); err != nil {
+		return Issued{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Issued{}, fmt.Errorf("commit create: %w", err)
 	}
 	return Issued{Client: client, Secret: secret}, nil
 }
@@ -250,6 +266,11 @@ func (s *Store) Rotate(ctx context.Context, id int64) (Issued, error) {
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM elitea_auth.scim_access_tokens WHERE client_id = $1`, id); err != nil {
 		return Issued{}, fmt.Errorf("revoke scim access tokens: %w", err)
+	}
+	// The security audit event of the route, in this transaction (ADR-0059
+	// R1.5).
+	if err := securityaudit.RunChangeHook(ctx, tx, strconv.FormatInt(id, 10)); err != nil {
+		return Issued{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Issued{}, fmt.Errorf("commit rotate: %w", err)

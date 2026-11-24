@@ -31,9 +31,9 @@ package gateway
 //
 // ## Authorisation and safety
 //
-// Mounted inside the existing `/gateway` group under
-// `RequireCentralPermissions("configuration.governance")` — the same boundary
-// the governance CRUD it explains already sits behind. The upstream body
+// Mounted inside the `/gateway` group behind the usage gate: `llm.usage.view`
+// or `configuration.governance` (ADR-0059 R0.3), the name the governance CRUD
+// it explains also accepts. The upstream body
 // carries row ids, names, types and refusal reasons only, never secret
 // material or a tenant's prompt, which is what makes it safe to surface to an
 // admin at all.

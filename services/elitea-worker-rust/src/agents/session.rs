@@ -964,7 +964,7 @@ impl AuthorizedNativeCommandBinding {
             client_message_id: "message-1".to_owned(),
             sio_event: "chat_predict".to_owned(),
             deadline_unix_millis: 4_102_444_800_000,
-            egress: elitea_agent_runtime::egress::RunEgress::open(),
+            egress: crate::protocol::egress::open_for_local_fixtures(),
             approval: elitea_agent_runtime::approval_policy::ApprovalPolicy::none(),
             run_caps: elitea_agent_runtime::run_caps::RunCapsMeter::new(
                 elitea_agent_runtime::run_caps::RunCapLimits::worker_default(),

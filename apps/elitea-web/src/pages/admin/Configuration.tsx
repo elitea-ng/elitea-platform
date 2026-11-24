@@ -118,10 +118,11 @@
  * ## Authorisation
  *
  * `window.admin_ui_config.permissions` is presentation state and never a gate —
- * see `./adminUiConfig`. Every route here is gated server-side on
- * `runtime.plugins`, the permission every legacy handler in this set declares,
- * and sections carrying a `required_permission` are checked again inside the
- * handler because that permission depends on the section.
+ * see `./adminUiConfig`. The server decides per section (ADR-0059 R0.5): a
+ * section opens on its narrow read or write permission alone, or on
+ * `runtime.plugins` with its `required_permission`. The schema list it serves
+ * names only the sections the caller can open, so this page renders that list
+ * as given and a narrow holder sees only its own sections.
  */
 import type { ComponentType } from 'react';
 

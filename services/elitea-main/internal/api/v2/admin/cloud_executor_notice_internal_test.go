@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
@@ -15,9 +17,13 @@ import (
 // reports its rule, and the admin form says which one this deployment has.
 func TestCloudExecutorSectionShowsTheEncryptionAnswer(t *testing.T) {
 	notice := func(status string) (string, bool) {
-		handler := NewHandler(nil, WithCloudExecutorEncryption(status))
+		// The section lists only for a caller who may read it.
+		handler := NewHandler(nil, WithCloudExecutorEncryption(status),
+			WithPermissionResolver(fixedResolver{adminaccess.ConfigurationNativeClients}))
 		rec := httptest.NewRecorder()
-		handler.PluginConfigSchemas(rec, httptest.NewRequest(http.MethodGet, "/admin/plugin_config_schemas/administration", nil))
+		req := httptest.NewRequest(http.MethodGet, "/admin/plugin_config_schemas/administration", nil)
+		req = req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: "5", UserID: "5"}))
+		handler.PluginConfigSchemas(rec, req)
 		var body struct {
 			Sections []map[string]any `json:"sections"`
 		}

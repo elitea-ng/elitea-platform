@@ -239,6 +239,34 @@ var Capabilities = map[string][]Capability{
 	// A schedule runs a platform routine with no user principal.
 	"configuration.scheduling.schedules.edit": {AdministerPlatform},
 
+	// The narrow administration permissions of ADR-0059 decision 2 (shared
+	// 0261). A write carries at least every capability of each legacy name
+	// it narrows (TestNarrowWritesCarryTheirLegacyCapabilities); the reads
+	// are in NotGovernanceRelevant.
+	adminaccess.LLMCatalogueManage:        {OverrideCaps},
+	adminaccess.LLMPolicyManage:           {OverrideCaps, AdministerPlatform},
+	adminaccess.LLMGuardrailsManage:       {OverrideCaps, AdministerPlatform},
+	adminaccess.LLMAlertsManage:           {OverrideCaps},
+	adminaccess.PlatformConfigManage:      {AdministerPlatform},
+	adminaccess.PlatformEmailManage:       {AdministerPlatform},
+	adminaccess.PlatformMaintenanceManage: {AdministerPlatform},
+	adminaccess.PlatformOperationsManage:  {AdministerPlatform},
+	adminaccess.MCPCatalogueManage:        {AdministerPlatform, ApproveConnectors},
+	// Identity setup decides who can sign in and, through SCIM group
+	// bindings, which roles they get; identity trust can become any account.
+	adminaccess.IdentitySSOSettingsManage: {ManageAccess, AdministerPlatform},
+	adminaccess.IdentitySSOTrustManage:    {ManageAccess},
+	adminaccess.ProjectsMembersManage:     {ManageAccess},
+	// The guarded settings of any project: cloud executor, worker egress,
+	// AI disclosure, browser and computer use.
+	adminaccess.ProjectsSettingsManage: {ManageProjects},
+	// Break-glass: requesting, approving and configuring an elevation is
+	// access to administration rights; reviewing an ended one attests it.
+	adminaccess.AccessBreakglassRequest: {ManageAccess},
+	adminaccess.AccessBreakglassApprove: {ManageAccess},
+	adminaccess.AccessBreakglassManage:  {ManageAccess},
+	adminaccess.AccessBreakglassReview:  {Attest},
+
 	ExportPermission: {ExportEntitlements},
 }
 
@@ -252,7 +280,16 @@ var OwnerCapabilities = []Capability{EditAgentRegistry}
 // permission that is in neither this set nor Capabilities fails the
 // coverage test, so it cannot silently escape the export.
 var NotGovernanceRelevant = map[string]bool{
-	"models.applications.memory.list": true,
+	// The read halves of ADR-0059 decision 2 (shared 0261).
+	adminaccess.LLMCatalogueView:       true,
+	adminaccess.LLMPolicyView:          true,
+	adminaccess.LLMUsageView:           true,
+	adminaccess.PlatformConfigView:     true,
+	adminaccess.PlatformOperationsView: true,
+	adminaccess.IdentitySSOView:        true,
+	adminaccess.ProjectsSettingsView:   true,
+	adminaccess.AccessRolesView:        true,
+	"models.applications.memory.list":  true,
 	// Saved teams (ADR-0050 decision 8, shared 0233): a team names agents and
 	// grants nothing, so saving or starting one configures nothing.
 	"models.teams.list":                                 true,

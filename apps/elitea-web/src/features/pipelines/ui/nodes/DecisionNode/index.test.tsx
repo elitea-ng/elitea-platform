@@ -5,7 +5,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue } from '../../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
 import { DecisionNode } from './index';
@@ -29,7 +29,13 @@ function renderDecisionNode(nodeId: string, flowEditorValue: FlowEditorContextVa
         <ReactFlow
           nodes={[flowNode]}
           edges={[]}
-          nodeTypes={{ testNode: DecisionNode }}
+          nodeTypes={{
+            testNode: props => (
+              <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: nodeId.endsWith('~~~DecisionNode') }}>
+                <DecisionNode {...props} />
+              </NodeConfigPanelContext.Provider>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,

@@ -8,7 +8,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { LLMNode } from './LLMNode';
 
@@ -51,10 +51,18 @@ function renderLLMNode(
           edges={edges}
           nodeTypes={{
             testNode: props => (
-              <LLMNode
-                {...props}
-                versionTools={versionTools}
-              />
+              <>
+                <LLMNode
+                  {...props}
+                  versionTools={versionTools}
+                />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <LLMNode
+                    {...props}
+                    versionTools={versionTools}
+                  />
+                </NodeConfigPanelContext.Provider>
+              </>
             ),
           }}
         />
@@ -82,12 +90,12 @@ describe('LLMNode', () => {
   });
 
   it('renders the Input, Output, and Toolkits selects', async () => {
-    const { findByText, getByText } = renderLLMNode();
+    const { findByText, getAllByText } = renderLLMNode();
     await findByText('Node1');
 
-    expect(getByText('Input')).toBeInTheDocument();
-    expect(getByText('Output')).toBeInTheDocument();
-    expect(getByText('Toolkits')).toBeInTheDocument();
+    expect(getAllByText('Input').length).toBeGreaterThan(0);
+    expect(getAllByText('Output').length).toBeGreaterThan(0);
+    expect(getAllByText('Toolkits').length).toBeGreaterThan(0);
   });
 
   it('renders the CommonInterruptSettings switches', async () => {

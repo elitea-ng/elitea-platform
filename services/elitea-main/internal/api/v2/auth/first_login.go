@@ -21,7 +21,7 @@ import (
 type FirstLoginPolicy struct {
 	// InitialGlobalAdmins is `identity.initial_global_admins` from the
 	// authentication configuration document, or ELITEA_INITIAL_GLOBAL_ADMINS
-	// when the deployment has no document. See matchesInitialGlobalAdmin for
+	// when the deployment has no document. See initialGlobalAdminMatch for
 	// what an entry is compared against.
 	InitialGlobalAdmins []string
 }
@@ -52,7 +52,7 @@ func InitialGlobalAdminsFromEnv() []string {
 	return admins
 }
 
-// matchesInitialGlobalAdmin decides whether a stored provider reference names a
+// initialGlobalAdminMatch decides whether a stored provider reference names a
 // configured initial global administrator.
 //
 // THE MATCHING RULE, stated once, because getting it wrong makes the whole
@@ -80,16 +80,19 @@ func InitialGlobalAdminsFromEnv() []string {
 // below therefore cannot reach it: identity.MatchesInitialGlobalAdmin compares
 // an `email:` entry against the address and against nothing else, so a subject
 // spelled `email:someone@corp.com` collects no grant.
-func matchesInitialGlobalAdmin(admins []string, providerRef, verifiedEmail string) bool {
-	if identity.MatchesInitialGlobalAdmin(admins, providerRef, verifiedEmail) {
-		return true
+//
+// It answers the shape of the entry that matched
+// (identity.InitialGlobalAdminMatch), or "" for no match.
+func initialGlobalAdminMatch(admins []string, providerRef, verifiedEmail string) string {
+	if shape := identity.InitialGlobalAdminMatch(admins, providerRef, verifiedEmail); shape != "" {
+		return shape
 	}
 	for _, prefix := range []string{OIDCProviderRefPrefix, SAMLProviderRefPrefix} {
 		if bare, found := strings.CutPrefix(providerRef, prefix); found {
-			return identity.MatchesInitialGlobalAdmin(admins, bare, verifiedEmail)
+			return identity.InitialGlobalAdminMatch(admins, bare, verifiedEmail)
 		}
 	}
-	return false
+	return ""
 }
 
 // applyFirstLoginGrants is what a login gets beyond an account row, and it runs
@@ -124,10 +127,10 @@ func applyFirstLoginGrants(
 	}
 	queries := sqlcgen.New(tx)
 
-	if matchesInitialGlobalAdmin(policy.InitialGlobalAdmins, providerRef, verifiedEmail) {
+	if shape := initialGlobalAdminMatch(policy.InitialGlobalAdmins, providerRef, verifiedEmail); shape != "" {
 		if err := identityrepo.ApplyInitialAdministrationRole(
 			ctx, tx, int32(userID),
-			identity.InitialAdministrationMode, identity.InitialAdministrationRole,
+			identity.InitialAdministrationMode, identity.InitialAdministrationRole, shape,
 		); err != nil {
 			return err
 		}

@@ -19,8 +19,9 @@ func approvalsSection() map[string]any {
 	const section = platformconfig.SectionApprovals
 	defaults := platformconfig.DefaultApprovalsSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Approvals",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Approvals",
 		"description": "What a schedule or trigger run does when a step needs an approval and no person is " +
 			"there. It never approves the step. fail ends the run with approval_required_unattended. skip " +
 			"refuses the step, and the model reads that it was skipped. notify_and_wait pauses the run, " +

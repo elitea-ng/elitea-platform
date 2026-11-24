@@ -150,6 +150,9 @@ A chat answer shows this as `error_code: egress_policy_invalid`. A synchronous t
   <Step title="Seed the platform allowlist">
     Select **Copy as allowlist**. This copies the reached hosts as entries, one per line: a bare host (any port) where only ports 80 and 443 were used, and one `host:port` entry for each port otherwise. Remove the hosts that you do not approve, and paste the rest into the **Platform Allowlist** field. Toolkit base URLs, the base URL of each configuration that a toolkit uses, and the fixed API hosts of each toolkit type are added to each run automatically, governed runs included, so you do not need to list them.
   </Step>
+  <Step title="Permit on-premises hosts">
+    In both modes the worker refuses loopback, private-network, CGNAT, link-local and cloud metadata addresses. A toolkit or MCP server on a private network, such as a self-hosted Jira or GitLab, needs an entry in the **Private Permit** field: a host name, `*.domain` or CIDR block. Link-local and metadata addresses stay refused even when the permit names them. Only this platform field supplies the permit. A project entry or a toolkit URL never adds to it. Refusals are listed in the panel with the reason `not_public`.
+  </Step>
   <Step title="Add project entries if necessary">
     A project that needs more hosts than the platform list can add its own. A project admin (permission `models.project_settings.edit`) creates one configuration of type `worker_egress`:
 
@@ -455,6 +458,41 @@ A removal re-checks the item when it runs: an item that has since been used, is 
 
 - Decide the window that reflects how your agents are used; a grant used only at quarter end needs a longer window.
 - Act on the report: the platform lists candidates and removes on request, it does not remove on its own.
+
+## Administration rights by credential
+
+### The risk
+
+A person holds several credentials at once: a browser session, personal access tokens, a desktop or mobile device session, and the run tokens of the agents that act for them. If every credential carried the person's full administration rights, a leaked token or a stolen desktop refresh token would be an administrator credential, and so would every agent run an administrator starts.
+
+### What is enforced
+
+The platform resolves administration permissions from the credential that sent the request (ADR-0059):
+
+| Credential | Administration permissions |
+|---|---|
+| Browser session (OIDC, SAML or Form sign-in) | All of the owner's. |
+| Personal access token, `none` (every new token) | None. |
+| Personal access token, `inherit` (an administrator's token that existed at the upgrade) | All of the owner's, until the sunset date. |
+| Personal access token, `scoped` | The scopes the owner still holds, checked on every request. |
+| Desktop or mobile device session | Only the maintenance bypass and Marketplace moderation. No administration API answers it. |
+| Agent run token | None. |
+| Project system token | None. |
+
+A request with the `X-API-Key` header follows the credential the header carries. A credential the platform cannot place in this table resolves no administration permission. Project and developer permissions do not depend on the credential.
+
+### Configure and use
+
+There is nothing to switch on. Do administration work from a browser session. See [Administration access of personal access tokens](/admin/authentication#administration-access-of-personal-access-tokens) for the token values.
+
+### Evidence
+
+The `admin_access` column of `public.auth_core__token` records each token's value. A credential without the permission an administration API needs gets `403` from it.
+
+### Customer responsibility
+
+- Review the `inherit` tokens and replace them before the sunset date.
+- Do not give automation an administrator's browser session; once scopes can be chosen, give it a `scoped` token.
 
 ## Entitlement export for access reviews
 

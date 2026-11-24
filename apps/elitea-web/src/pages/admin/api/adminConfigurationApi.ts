@@ -219,6 +219,20 @@ export function configFailureReason(error: unknown): string | undefined {
   return typeof reason === 'string' && reason !== '' ? reason : undefined;
 }
 
+/**
+ * The field a 400 refusal names (`{"error": …, "field": "password"}`), so an
+ * editor can show the reason on that control rather than above the form.
+ */
+export function configFailureField(error: unknown): string | undefined {
+  if (!(error instanceof EliteaApiError)) return undefined;
+  const failure = error.failure;
+  if (failure.kind !== 'http') return undefined;
+  const body = failure.body;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const field = (body as { field?: unknown }).field;
+  return typeof field === 'string' && field !== '' ? field : undefined;
+}
+
 /** The HTTP status of a failure, when it had one. Distinguishes 501 from 4xx. */
 export function configFailureStatus(error: unknown): number | undefined {
   if (!(error instanceof EliteaApiError)) return undefined;

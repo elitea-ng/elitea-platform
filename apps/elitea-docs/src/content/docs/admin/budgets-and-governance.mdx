@@ -76,6 +76,19 @@ Open **LLM Governance**. Each row is a scoped rule the gateway reads and enforce
 
 <Screenshot id="admin-governance-table" alt="LLM Governance rule table" />
 
+### Permissions for governance rules
+
+| Action | Permission |
+|---|---|
+| Read the rules and validate a CEL expression | `llm.policy.view` |
+| Create, edit or delete a routing rule, rate limit, budget or model config rule | `llm.policy.manage` |
+| Create, edit or delete a content guardrail | `llm.guardrails.manage` |
+| Create, edit or delete an egress allowlist, MCP allowlist or credential policy | `configuration.governance` only |
+
+`configuration.governance` still does every action in this table. The check uses the kind of the rule. A holder of `llm.policy.manage` cannot create a guardrail, cannot change a guardrail into another kind, and cannot delete one. Guardrails are a safety control, so the LLM manager role can read them but cannot change them.
+
+Project and member budgets on the **Budgets** page keep their own permissions, `models.admin.project_budgets.view` and `models.admin.project_budgets.edit`.
+
 ### Egress allowlist
 
 An **Egress allowlist** entry adds provider hosts that a credential's `api_base` (or a cloud provider's regional endpoint) may name. Put the hosts in **Permitted destinations**: a host, `host:port`, `*.domain`, or a CIDR block. This is the first place to add a host when **Test connection** answers `The LLM gateway refused the host <host> because it is not on the egress allowlist`.

@@ -8,13 +8,20 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import type { Viewport } from '@xyflow/react';
 
+import {
+  canDuplicateNodeType,
+  duplicateFlowNode,
+  duplicateYamlNode,
+  getDuplicateNodeId,
+} from '../lib/duplicateNode';
 import { FlowEditorConstants } from '../lib/flow-editor/constants';
 import * as FlowEditorHelpers from '../lib/flow-editor/helpers/flowEditor.helpers';
 import * as LayoutHelpers from '../lib/flow-editor/helpers/layout.helpers';
 import * as NewNodeRevealHelpers from '../lib/flow-editor/helpers/newNodeReveal.helpers';
 import * as ParsePipelineHelpers from '../lib/flow-editor/helpers/parsePipeline.helpers';
-import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
+import type { YamlPipelineDocument, YamlPipelineNode } from '../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode, SetFlowEdges, SetFlowNodes, SetYamlJsonObject, YamlPipelineDocumentRef } from '../lib/flow-editor/reactFlowTypes';
+import type { CanvasArrangeOrientation } from './canvas-controls';
 
 export interface UseFlowEditorNodeOperationsArgs {
   readonly flowNodes: readonly FlowNode[];
@@ -34,7 +41,14 @@ export interface UseFlowEditorNodeOperationsResult {
   /** The created canvas node, or `undefined` when the document write was refused and nothing was added. */
   readonly onNodeCreateAtPosition: (type: string, position: { readonly x: number; readonly y: number }) => FlowNode | undefined;
   readonly onAddNode: (type: string) => FlowNode | undefined;
-  readonly calculateLayoutNodes: (parsedYamlJson: YamlPipelineDocument, shouldDoLayout: boolean, layoutAll: boolean, expanded: boolean) => void;
+  readonly onDuplicateNode: (nodeId: string, toolNames?: readonly string[]) => FlowNode | undefined;
+  readonly calculateLayoutNodes: (
+    parsedYamlJson: YamlPipelineDocument,
+    shouldDoLayout: boolean,
+    layoutAll: boolean,
+    expanded: boolean,
+    orientation?: CanvasArrangeOrientation,
+  ) => void;
 }
 
 /** The document with `newNode` appended, and made the entry point when none is set yet. */
@@ -167,6 +181,80 @@ function useOnAddNode(
   );
 }
 
+function resolveLayoutOrientation(
+  orientation: CanvasArrangeOrientation | undefined,
+): (typeof FlowEditorConstants.ORIENTATION)[keyof typeof FlowEditorConstants.ORIENTATION] {
+  return orientation === 'LR'
+    ? FlowEditorConstants.ORIENTATION.horizontal
+    : FlowEditorConstants.ORIENTATION.vertical;
+}
+
+interface PendingDuplicateState {
+  readonly baseDoc: YamlPipelineDocument;
+  readonly doc: YamlPipelineDocument;
+  readonly addedIds: readonly string[];
+}
+
+function resolveDuplicateContext(
+  committedDoc: YamlPipelineDocument,
+  pending: PendingDuplicateState | null,
+  flowNodes: readonly FlowNode[],
+  nodeId: string,
+): {
+  readonly currentDoc: YamlPipelineDocument;
+  readonly yamlNode: YamlPipelineNode;
+  readonly originalFlowNode: FlowNode;
+  readonly existingNodeIds: readonly string[];
+  readonly priorAddedIds: readonly string[];
+} | undefined {
+  const activePending = pending?.baseDoc === committedDoc ? pending : null;
+  const currentDoc = activePending ? activePending.doc : committedDoc;
+  const yamlNodes = (currentDoc.nodes ?? []).filter((node): node is YamlPipelineNode => Boolean(node));
+  const yamlNode = yamlNodes.find(node => node.id === nodeId);
+  const originalFlowNode = flowNodes.find(node => node.id === nodeId);
+  if (!yamlNode || !originalFlowNode || !canDuplicateNodeType(yamlNode.type)) {
+    return undefined;
+  }
+  const priorAddedIds = activePending?.addedIds ?? [];
+  return {
+    currentDoc,
+    yamlNode,
+    originalFlowNode,
+    existingNodeIds: [...yamlNodes.map(node => node.id), ...flowNodes.map(node => node.id), ...priorAddedIds],
+    priorAddedIds,
+  };
+}
+
+/** Duplicates a canvas node's YAML configuration without outgoing connections and selects the copy. */
+function useOnDuplicateNode(
+  args: Pick<UseFlowEditorNodeOperationsArgs, 'flowNodes' | 'setFlowNodes' | 'setYamlJsonObject' | 'yamlJsonObjectRef'>,
+): UseFlowEditorNodeOperationsResult['onDuplicateNode'] {
+  const { flowNodes, setFlowNodes, setYamlJsonObject, yamlJsonObjectRef } = args;
+  const pendingStateRef = useRef<PendingDuplicateState | null>(null);
+
+  return useCallback(
+    (nodeId, toolNames = []) => {
+      const committedDoc = yamlJsonObjectRef.current;
+      const context = resolveDuplicateContext(committedDoc, pendingStateRef.current, flowNodes, nodeId);
+      if (!context) return undefined;
+
+      const newId = getDuplicateNodeId({ name: nodeId, existingNodeIds: context.existingNodeIds, toolNames });
+      const nextDoc = withAppendedNode(context.currentDoc, duplicateYamlNode(context.yamlNode, newId), false);
+      if (setYamlJsonObject(nextDoc) === false) return undefined;
+
+      pendingStateRef.current = { baseDoc: committedDoc, doc: nextDoc, addedIds: [...context.priorAddedIds, newId] };
+
+      const copiedFlowNode = duplicateFlowNode(context.originalFlowNode, newId);
+      setFlowNodes(prevNodes => [
+        ...prevNodes.map(node => (node.selected ? { ...node, selected: false } : node)),
+        copiedFlowNode,
+      ]);
+      return copiedFlowNode;
+    },
+    [flowNodes, setFlowNodes, setYamlJsonObject, yamlJsonObjectRef],
+  );
+}
+
 /** `FlowEditor.jsx:278-325` — re-parses the YAML into a graph, optionally runs the dagre auto-layout pass, then merges the result back onto the live canvas nodes/edges (preserving each node's live position unless `layoutAll`). */
 function useCalculateLayoutNodes(
   args: Pick<UseFlowEditorNodeOperationsArgs, 'flowNodes' | 'getZoom' | 'editorRef' | 'setFlowEdges' | 'setFlowNodes'>,
@@ -174,8 +262,9 @@ function useCalculateLayoutNodes(
   const { flowNodes, getZoom, editorRef, setFlowEdges, setFlowNodes } = args;
 
   return useCallback(
-    (parsedYamlJson, shouldDoLayout, layoutAll, expanded) => {
-      const parsed = ParsePipelineHelpers.parseYaml(parsedYamlJson, FlowEditorConstants.ORIENTATION.vertical);
+    (parsedYamlJson, shouldDoLayout, layoutAll, expanded, orientation) => {
+      const layoutOrientation = resolveLayoutOrientation(orientation);
+      const parsed = ParsePipelineHelpers.parseYaml(parsedYamlJson, layoutOrientation);
       // `parseYaml`'s `FlowGraphNode`/`FlowGraphEdge` (structural, unit A2c) ->
       // `doLayout`'s `@xyflow/react`-typed `FlowNode`/`FlowEdge` (unit A2d) —
       // real cross-file structural-vs-nominal boundary, same "cast once,
@@ -190,7 +279,7 @@ function useCalculateLayoutNodes(
           nodes: finalNodes,
           edges: finalEdges,
           flowNodes: measuredNodes,
-          orientation: FlowEditorConstants.ORIENTATION.vertical,
+          orientation: layoutOrientation,
           expanded,
         });
         finalNodes = layout.nodes;
@@ -217,7 +306,8 @@ function useCalculateLayoutNodes(
 export function useFlowEditorNodeOperations(args: UseFlowEditorNodeOperationsArgs): UseFlowEditorNodeOperationsResult {
   const onNodeCreateAtPosition = useOnNodeCreateAtPosition(args);
   const onAddNode = useOnAddNode(args, onNodeCreateAtPosition);
+  const onDuplicateNode = useOnDuplicateNode(args);
   const calculateLayoutNodes = useCalculateLayoutNodes(args);
 
-  return { onNodeCreateAtPosition, onAddNode, calculateLayoutNodes };
+  return { onNodeCreateAtPosition, onAddNode, onDuplicateNode, calculateLayoutNodes };
 }

@@ -39,6 +39,22 @@ type State struct {
 	Provider           *string         `json:"provider"`
 	ProviderAttributes json.RawMessage `json:"provider_attr"`
 	UserID             *int64          `json:"user_id"`
+	// AuthenticatedAt is when the person behind this session last entered
+	// their password (ADR-0059 R1.10b): at sign-in and at each re-entry. Nil
+	// is unknown and never counts as a recent authentication.
+	//
+	// It is NOT part of the language-neutral record: the store keeps it in
+	// its own column (elitea_auth.form_sessions.authenticated_at, shared
+	// 0264), because the previous release decodes the record with unknown
+	// members refused and deletes a record it cannot decode. Rotation
+	// compares the record bytes only, so moving this time never conflicts
+	// with them.
+	AuthenticatedAt *time.Time `json:"-"`
+	// Ref is the stable, non-secret reference of the stored session row
+	// (elitea_auth.form_sessions.ref, shared 0266), 0 when the store has none.
+	// Like AuthenticatedAt it is a column, not a member of the record: the
+	// store assigns it and only reads it back.
+	Ref int64 `json:"-"`
 }
 
 // Validate checks the fixed session schema and its allocation bounds. It does

@@ -118,6 +118,11 @@ func NewServer(addr string, tlsConfig *tls.Config, allow Allowlist, service *Ser
 	return &Server{service: service, grpc: server, addr: addr}, nil
 }
 
+// ServiceInfo reports the services and methods the listener serves, as
+// grpc.Server.GetServiceInfo does. The internal-listener surface test
+// (ADR-0059 R1.9) compares it with the reviewed allowlist.
+func (s *Server) ServiceInfo() map[string]grpc.ServiceInfo { return s.grpc.GetServiceInfo() }
+
 // Serve accepts calls on lis until Stop. It returns nil after Stop.
 func (s *Server) Serve(lis net.Listener) error {
 	if err := s.grpc.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {

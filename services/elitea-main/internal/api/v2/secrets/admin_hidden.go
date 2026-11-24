@@ -31,9 +31,9 @@ package secrets
 // Nothing here is registered on a router. The Secrets page's own six
 // administration routes stay the only HTTP surface on this vault, and they are
 // gated on `configuration.secrets.secret.*`. A feature that calls these methods
-// carries its own gate on its own surface; the catalogue's is `runtime.plugins`,
-// the same permission the admin Configuration page it replaces already
-// requires.
+// carries its own gate on its own surface; the catalogue's is
+// `mcp.catalogue.manage` or `runtime.plugins`, the permission the admin
+// Configuration page it replaces already requires.
 
 import (
 	"context"

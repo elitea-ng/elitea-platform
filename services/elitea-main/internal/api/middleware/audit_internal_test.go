@@ -384,3 +384,146 @@ func TestAuditNeverReplacesAUserWithANonUserActor(t *testing.T) {
 		t.Fatalf("events = %+v, want the user's own address", events)
 	}
 }
+
+/* ── role use (ADR-0059 R1.4a, shared 0268) ─────────────────────────────── */
+
+// Each credential kind of the credentials table (ADR-0059 decision 7) maps to
+// its credential_kind value; the zero kind and a kind outside the table map to
+// "" (NULL), never to a guess.
+func TestCredentialKindColumnMapsEveryKindAndNothingElse(t *testing.T) {
+	cases := map[auth.CredentialKind]string{
+		auth.CredentialKindSession: audit.CredentialKindSession,
+		auth.CredentialKindForm:    audit.CredentialKindForm,
+		auth.CredentialKindSealed:  audit.CredentialKindSealed,
+		auth.CredentialKindToken:   audit.CredentialKindToken,
+		auth.CredentialKindNative:  audit.CredentialKindNative,
+		auth.CredentialKindRun:     audit.CredentialKindRun,
+		auth.CredentialKindSystem:  audit.CredentialKindSystem,
+		auth.CredentialKindNone:    "",
+		"api_key":                  "",
+		"scim":                     "",
+		"SESSION":                  "",
+	}
+	for kind, want := range cases {
+		if got := credentialKindColumn(kind); got != want {
+			t.Errorf("credentialKindColumn(%q) = %q, want %q", kind, got, want)
+		}
+		if want != "" && !audit.KnownCredentialKind(want) {
+			t.Errorf("%q is not a credential_kind value", want)
+		}
+	}
+}
+
+func roleUseRequest(kind auth.CredentialKind) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/admin/modes/administration", nil)
+	return request.WithContext(auth.ContextWithUser(request.Context(), auth.User{
+		ID: "77", UserID: "77", Email: "admin@test.local", CredentialKind: kind,
+	}))
+}
+
+// A request that resolved the administration mode is an administration-mode
+// row: it carries the roles the resolver recorded, the credential kind of the
+// principal and the elevation id of the context accessor.
+func TestAuditRecordsRoleUseOnAnAdministrationModeRow(t *testing.T) {
+	const elevation = "0192f0c1-7b6e-7c3a-8f00-000000000001"
+	override, missing := true, true
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusOK, func(r *http.Request) {
+		audit.RecordAdministration(r.Context(), audit.Administration{ActingRoles: []string{"admin", "llm_manager"}})
+		audit.ContextWithElevationID(r.Context(), elevation)
+		audit.Annotate(r.Context(), audit.Annotation{
+			CentralOverride: override, ReasonCode: "incident", Reason: "INC-1", ReasonMissing: &missing,
+		})
+	})
+	router.ServeHTTP(httptest.NewRecorder(), roleUseRequest(auth.CredentialKindForm))
+
+	events := recorder.all()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	event := events[0]
+	if strings.Join(event.ActingRoles, ",") != "admin,llm_manager" {
+		t.Errorf("acting_roles = %v, want [admin llm_manager]", event.ActingRoles)
+	}
+	if event.CredentialKind != audit.CredentialKindForm {
+		t.Errorf("credential_kind = %q, want form", event.CredentialKind)
+	}
+	if event.ElevationID != elevation {
+		t.Errorf("elevation_id = %q, want %q", event.ElevationID, elevation)
+	}
+	if !event.CentralOverride || event.ReasonCode != "incident" ||
+		event.Reason != "INC-1" || event.ReasonMissing == nil || !*event.ReasonMissing {
+		t.Errorf("annotation fields = %+v", event)
+	}
+}
+
+// A request that never resolved the administration mode writes NULL in every
+// role-use column, whatever credential it carried.
+func TestAuditLeavesRoleUseNullWithoutAnAdministrationResolution(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusOK, nil)
+	router.ServeHTTP(httptest.NewRecorder(), roleUseRequest(auth.CredentialKindToken))
+
+	events := recorder.all()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	if events[0].ActingRoles != nil || events[0].CredentialKind != "" || events[0].ElevationID != "" {
+		t.Errorf("role use on a row with no administration resolution = %+v, want NULLs", events[0])
+	}
+}
+
+// A credential that acts with no role writes {}, not NULL: the resolution ran
+// and found none.
+func TestAuditRecordsAnEmptyRoleSetAsEmpty(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusForbidden, func(r *http.Request) {
+		audit.RecordAdministration(r.Context(), audit.Administration{})
+	})
+	router.ServeHTTP(httptest.NewRecorder(), roleUseRequest(auth.CredentialKindRun))
+
+	events := recorder.all()
+	if len(events) != 1 || events[0].ActingRoles == nil || len(events[0].ActingRoles) != 0 {
+		t.Fatalf("events = %+v, want acting_roles {}", events)
+	}
+	if events[0].CredentialKind != audit.CredentialKindRun {
+		t.Errorf("credential_kind = %q, want run", events[0].CredentialKind)
+	}
+}
+
+// An unknown principal kind on an administration-mode row writes NULL.
+func TestAuditWritesNullForAnUnknownCredentialKind(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := auditTestRouter(recorder, "/*", http.StatusOK, func(r *http.Request) {
+		audit.RecordAdministration(r.Context(), audit.Administration{ActingRoles: []string{"admin"}})
+	})
+	router.ServeHTTP(httptest.NewRecorder(), roleUseRequest("api_key"))
+
+	events := recorder.all()
+	if len(events) != 1 || events[0].CredentialKind != "" {
+		t.Fatalf("events = %+v, want credential_kind NULL", events)
+	}
+}
+
+// A SCIM client never reaches the resolver; its row carries the kind `scim`
+// from the annotation, and a user principal is never given it.
+func TestAuditRecordsTheSCIMCredentialKind(t *testing.T) {
+	recorder := &captureRecorder{}
+	annotate := func(r *http.Request) {
+		audit.Annotate(r.Context(), audit.Annotation{Actor: "scim:Entra ID", ActorCredentialKind: audit.CredentialKindSCIM})
+	}
+	router := auditTestRouter(recorder, "/*", http.StatusCreated, annotate)
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v2/scim/v2/Users", nil))
+	router.ServeHTTP(httptest.NewRecorder(), authenticatedRequest(http.MethodPost, "/api/v2/scim/v2/Users"))
+
+	events := recorder.all()
+	if len(events) != 2 {
+		t.Fatalf("recorded %d events, want 2", len(events))
+	}
+	if events[0].CredentialKind != audit.CredentialKindSCIM {
+		t.Errorf("SCIM row credential_kind = %q, want scim", events[0].CredentialKind)
+	}
+	if events[1].CredentialKind != "" {
+		t.Errorf("user row credential_kind = %q, want NULL", events[1].CredentialKind)
+	}
+}

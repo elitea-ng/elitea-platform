@@ -41,7 +41,8 @@ def render(extra):
         override.write_text(yaml.safe_dump({"postgresql": {"maxConnections": 440}, **extra}))
         return subprocess.run(
             ["helm", "template", "code", "deploy/helm/elitea", "-f",
-             "deploy/helm/elitea/values-standalone.yaml", "-f", str(override),
+             "deploy/helm/elitea/values-standalone.yaml",
+             "-f", "deploy/helm/tests/fixtures/network-peers.yaml", "-f", str(override),
              "--set", "llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1",
              "--set", "llmGateway.egressPosture=public-unrestricted"],
             cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)

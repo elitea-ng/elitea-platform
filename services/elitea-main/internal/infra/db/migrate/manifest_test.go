@@ -1196,7 +1196,46 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// central role assignments (elitea_auth.admin_role_grants) and the
 	// auth_core__project_user_role (user_id) index (issue 2499, ADR-0059
 	// R0.10a). No permission.
-	require.EqualValues(t, 260, Head(shared))
+	//
+	// 261: shared/0261_narrow_admin_permissions.sql, the 25 narrow
+	// administration permissions of ADR-0059 decision 2, granted to
+	// super_admin and admin (identity.sso.trust.manage to super_admin alone;
+	// issue 2491, ADR-0059 R0.2). Deletes nothing.
+	//
+	// 262: shared/0262_browser_session_authenticated_at.sql, when the person
+	// behind a browser session last authenticated
+	// (browser_sessions.authenticated_at; issue 2577, ADR-0059 R1.10a). No
+	// permission.
+	//
+	// 263: shared/0263_builtin_admin_roles.sql, the built-in administration
+	// roles llm_manager, project_administrator, emergency_access and
+	// security_auditor with their grants, and elitea_auth.admin_role_seeds,
+	// the record of which roles are built-in (issue 2496, ADR-0059 R0.7).
+	// Deletes nothing.
+	//
+	// 264: shared/0264_recent_authentication_saml_and_form.sql,
+	// browser_sessions.authentication_proven and form_sessions.authenticated_at
+	// (issue 2594, ADR-0059 R1.10b). No permission.
+	//
+	// 265: shared/0265_token_admin_access.sql, auth_core__token.admin_access
+	// and admin_scopes, with the `inherit` backfill for personal access tokens
+	// of administration-role holders (issue 2505, ADR-0059 R1.1). No
+	// permission.
+	//
+	// 266: shared/0266_form_session_ref.sql, elitea_auth.form_sessions.ref
+	// from the browser_sessions.ref sequence, so a Form session reaches the
+	// resolver with a reference (issue 2506, ADR-0059 R1.2a). No permission.
+	//
+	// 267: shared/0267_webhook_secret_reference.sql, webhooks.secret_ref, the
+	// vault reference that replaces the plaintext signing secret (issue
+	// 2963). No permission.
+	//
+	// 268: shared/0268_admin_audit_role_use.sql, the nullable role-use
+	// columns of centry.audit_events (acting_roles, elevation_id,
+	// credential_kind, central_override, reason_code, reason,
+	// reason_missing), outside the chain hash (issue 2508, ADR-0059 R1.4a).
+	// No permission.
+	require.EqualValues(t, 268, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -57,11 +57,29 @@ Only a super admin may make these changes. Another administrator gets `403` with
 
 | Change | `code` | Audit Trail action |
 | --- | --- | --- |
-| Create an identity provider. Turn it on or off. Replace or clear its secret. Change its issuer, client ID, redirect URI or Entra settings (OIDC), or its entity ID, SSO URL, NameID format, e-mail attribute, service provider entity ID, ACS URL, request signing or service provider certificate (SAML). Add a certificate or an Entra tenant, raise the clock-skew tolerance, turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
+| Create or delete an identity provider. Turn it on or off. Replace or clear its secret. Change its issuer, client ID, redirect URI or Entra settings (OIDC), or its entity ID, SSO URL, NameID format, e-mail attribute, service provider entity ID, ACS URL, request signing or service provider certificate (SAML). Add a certificate or an Entra tenant, raise the clock-skew tolerance, turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
 | Re-bind accounts to a provider | `identity_binding_super_admin_required` | `identity_binding.rebind_refused` |
 | Create, rotate or delete a SCIM client | `scim_client_super_admin_required` | `scim_client.change_refused` |
 
 A provider refusal also lists the changed trust fields in `fields`. Other edits stay open to any administrator with the Authentication permission: the display name, the scopes, the login domains, the name attribute, and changes that only narrow trust (removing a certificate or a tenant, lowering the clock skew, turning on e-mail verification). A save made against a provider that changed after the form was opened gets `409`; reload the provider and save again. A change that a super admin makes is recorded as `identity_provider.trust_changed`, `scim_client.created`, `scim_client.rotated` or `scim_client.deleted`.
+
+### Who can change what
+
+Identity setup is split by action into a trust half and a settings half. Each half has its own permission, and the permissions the routes accepted before still work.
+
+| Action | Accepted permissions |
+| --- | --- |
+| **Read**: the identity provider list, the SCIM client list, the SCIM group bindings and the roles of a project | `identity.sso.view`, or the permission the route accepted before: `runtime.plugins` (providers), `admin.auth.users` (SCIM clients), `configuration.roles.user_project_permissions.view` (bindings) |
+| **Trust**: every change in the table above, deleting an identity provider, and re-binding accounts | `identity.sso.trust.manage` or `admin.auth.users.super_admin`. Both belong to the `super_admin` role only. No other permission opens a trust action |
+| **Settings**: the display name, the scopes, the login domains, the name attribute, and the changes that only narrow trust | `identity.sso.settings.manage` or `runtime.plugins` |
+| **Settings**: revoke a SCIM client | `identity.sso.settings.manage` or `admin.auth.users` |
+| **Settings**: create, change or delete a SCIM group binding | `identity.sso.settings.manage` or `configuration.roles.user_project_permissions.edit` |
+
+A save of an identity provider is classified by comparing the stored provider with the body. If the body changes any trust field, the whole save is a trust action. A save to a key that does not exist yet creates a provider, so it is a trust action. A field added to the provider in a later release counts as a trust field until it is listed as a setting.
+
+A group binding also needs the role it grants. You must hold every permission of that role in that project, or the save gets `403` with the code `role_permission_not_held`. Holding `identity.sso.settings.manage` does not change this. In practice, a binding to a project role is written by a super admin or by a member of the project who holds that role.
+
+The permissions `identity.sso.view` and `identity.sso.settings.manage` can be given to a narrower role on the **Roles** page. `identity.sso.trust.manage` cannot: the platform refuses it on every role except `super_admin`.
 
 ### Rotate an issuer: re-bind the accounts
 
@@ -73,7 +91,7 @@ curl -X POST "https://<host>/api/v2/admin/identity_providers/administration/corp
   -d '{"from_issuer": "https://old-idp.example.com/realms/corp"}'
 ```
 
-The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
+`$SUPER_ADMIN_TOKEN` is a personal access token of the super admin with `admin_access` `inherit`: a new token carries no administration rights (see [Which credential carries which administration rights](#which-credential-carries-which-administration-rights)). The answer is `{"provider_key": "corporate", "issuer": "<new issuer>", "rebound": <count>}`. The old binding is removed, so the old issuer stops working. A repeated request moves nothing.
 
 - To move the accounts of another provider, add `"from_provider_key": "<key>"`. Use `"from_provider_key": "@environment"` for the accounts of a provider that was configured through environment variables, when you replace it with a provider on this screen.
 - To bind accounts that have no binding, send `{"from_unbound": true}` alone. After the upgrade, these are the accounts of a protocol that had no enabled stored provider. An account linked by a replica of the previous release while the upgrade rolled out is bound at its next sign-in, as long as the provider has not been saved since the upgrade.
@@ -83,6 +101,15 @@ Each re-bind writes the security audit event `ai.elitea.security.v1.identity.lin
 <Warning>
 Re-bind only when you are sure that the new issuer is the same directory as the old one. A re-bind lets the new issuer sign in to every account it moves. The platform does not re-link accounts by e-mail address, because the address is a claim of the new identity provider.
 </Warning>
+
+## The first global administrator
+
+`identity.initial_global_admins` (or `ELITEA_INITIAL_GLOBAL_ADMINS` on a deployment without an authentication document) names the accounts that get `super_admin` at their first sign-in. It is a **bootstrap only**: it applies only while no active account holds `super_admin`.
+
+- While nobody holds `super_admin`, the first listed account to sign in gets it. A suspended `super_admin` does not count, so the list can still recover a deployment whose only global administrator is suspended.
+- Once an active account holds `super_admin`, a listed account that signs in gets no role. The server logs a warning that says which kind of entry matched (`reference` or `email`), but not the address, and how to add an administrator instead.
+- Add later administrators from the console of an existing administrator (or with `POST /api/v2/admin/auth_users/administration`). Then empty the list: anyone who can edit it and owns an account at your identity provider could otherwise become global administrator while no `super_admin` is active.
+- A deployment with no administrator left, or one where the list was never set, gets one with the operator command [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line), run inside the main workload.
 
 ## OIDC sign-in rules
 
@@ -217,6 +244,108 @@ Every run that a browser session started records the session's reference (`execu
 - Set the sign-in frequency and multi-factor policy in your identity provider. The session policy limits how long a browser stays signed in after that.
 - Choose maximums that match your organisation's policy for unattended devices.
 
+## Recent authentication
+
+Some actions need proof that the person signed in a short time ago, not only that the browser is still signed in. A session that stays active through regular requests does not count as a recent sign-in.
+
+### What asks for it
+
+In this release, no action requires a recent sign-in yet. The check is ready for these upcoming features:
+
+- Administration scopes on access tokens.
+- Starting a break-glass elevation.
+- Critical administrative actions.
+
+When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. An OIDC, SAML or Form browser session can satisfy the check, as described below. A personal access token, a desktop or mobile session, and a run token never do.
+
+### The limit
+
+Each browser session records when its person last authenticated. A request does not change that time; only a new sign-in does. With OIDC, the time is the id_token's `auth_time` claim. If the identity provider does not send `auth_time`, the time is unknown, and the session never counts as a recent sign-in. With SAML, only a sign-in that asked for `ForceAuthn` records a time: the assertion's `AuthnInstant`. An ordinary SAML sign-in records no time, so it never counts as a recent sign-in. With Form sign-in, the time is when the person last typed their password: at sign-in, or at the password prompt.
+
+The limit is 15 minutes by default. Set `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` on the main service to change it. The value is a Go duration from `1m` to `24h`, for example `10m`. Any other value stops the main service at startup, and the error names the variable.
+
+### Starting a sign-in with a limit
+
+The console asks for a fresh sign-in by opening the login of the deployment's sign-in method with two parameters:
+
+```
+/auth/oidc/login?max_age=900&target_to=/admin/access
+/auth/saml/login?max_age=900&target_to=/admin/access
+```
+
+- `max_age` is the limit in whole seconds, from 0 to 86400. For OIDC, the platform passes it to the identity provider. For SAML, the platform sets `ForceAuthn="true"` on the authentication request. Any other value is refused with 400.
+- `target_to` is the page to return to. It must be a relative path on this site that starts with `/`. A full URL or a URL to another site is refused with 400. An ordinary sign-in would replace it with `/` instead.
+
+The limit is saved in the signed login state (OIDC) or the signed request cookie (SAML), so it cannot be dropped from the callback.
+
+### What the identity provider must support
+
+For an OIDC provider:
+
+- The provider must honour `max_age`. If the person's session at the provider is older than the limit, the provider must ask them to sign in again.
+- The provider must return the `auth_time` claim in the id_token. OpenID Connect requires the claim when a request carries `max_age`.
+
+The callback refuses the sign-in if `auth_time` is missing or older than the limit, and returns the person to the sign-in page with an error. A clock difference of up to five minutes is allowed, which is the same allowance the id_token check uses. A refused callback creates no session and does not change any existing session.
+
+For a SAML provider:
+
+- The provider must honour `ForceAuthn="true"`. It must ask the person to authenticate again, even when they have a session at the provider.
+- The provider must send an `AuthnStatement` whose `AuthnInstant` is the time of that new authentication.
+
+The assertion consumer service refuses the sign-in if `AuthnInstant` is missing or older than the limit, and returns the person to the sign-in page with an error. The clock skew allowed is the provider's **Clock skew** setting, the same allowance the other assertion time checks use. A refused assertion creates no session. A response to a request that did not ask for `ForceAuthn` never changes the time of any session.
+
+Check your identity provider's documentation before you rely on the check.
+
+### The Form password prompt
+
+Form sign-in has no identity provider to ask. Instead, the console opens a password prompt:
+
+```
+/auth/form/reauthenticate?target_to=/admin/access
+```
+
+The prompt is a step of the Form sign-in pages. It shows the login of the current session and asks only for its password. The password is checked the same way as at sign-in, and each attempt counts against the same sign-in attempt limits. A correct password records a new authentication time, replaces the session cookie, and returns the person to `target_to`. A wrong password changes nothing and shows the prompt again. A browser without a Form session is sent to the ordinary sign-in page with the same `target_to`.
+
+Form sessions that existed before this release have no recorded time. They count as a recent sign-in only after the person signs in again or enters the password at the prompt.
+
+## Administration access of personal access tokens
+
+Each personal access token records which administration permissions it may use, apart from the permissions of the person who owns it. It has one of three values:
+
+| Value | The token may use |
+|---|---|
+| `none` | No administration permission. This is the value of every new token. |
+| `scoped` | Only the administration permissions chosen for the token, and only while its owner still holds them. |
+| `inherit` | All administration permissions of its owner, until the sunset date that a later release announces. |
+
+The upgrade that added these values set `inherit` on each existing personal access token whose owner held an administration permission at that time. Every other existing token got `none`, and keeps `none` when its owner gets an administration role later. Desktop and mobile device sessions and project system tokens always have `none`.
+
+The platform enforces the value. A `none` token gets `403` on every administration API, also when its owner is an administrator. Choosing administration scopes for a token comes in a later release.
+
+### Tokens and critical actions
+
+Some administration actions are **critical**: changing who is an administrator, editing the permissions of a role, deleting a role or a project, the identity provider and SCIM trust actions, releasing a legal hold, shortening retention, and the LLM provider routes. A personal access token with `scoped` or `inherit` access gets `403` with the code `token_critical_action_refused` on a critical action. Sign in to the console to do it. The same token keeps working on every other administration action its access covers.
+
+One exception keeps a broken sign-in repairable: the identity provider and SCIM trust actions (create, change the trust settings of, turn off, delete or re-bind an identity provider; create or rotate a SCIM client) accept an `inherit` token whose owner is a global administrator by their standing role. A `scoped` token, or an `inherit` token of any other administrator, is refused them. The exception ends at the sunset date of `inherit`.
+
+On the gateway governance, global provider update and retention routes, a token is refused every change for now, not only the critical ones.
+
+Every refusal is recorded in the admin audit trail with the action `admin.token_refused`. The upgrade note lists every critical action.
+
+## Which credential carries which administration rights
+
+The administration permissions of a request come from the credential that sent it, not only from the person who owns it:
+
+| Credential | Administration permissions |
+|---|---|
+| Browser session (OIDC, SAML or Form sign-in) | All of the owner's. |
+| Personal access token | By its value above: none, its scopes that the owner still holds, or all of the owner's. |
+| Desktop or mobile device session | Only the two checks the apps make in place: working during a maintenance window, and Marketplace moderation. No administration API answers it. |
+| Agent run token | None. |
+| Project system token | None. |
+
+A request with the `X-API-Key` header follows the credential the header carries: a personal access token or a run token. A `scoped` token is checked on each request, so a permission its owner loses is lost by the token at once. Project and developer permissions do not depend on the credential.
+
 ## Connect an identity provider with SCIM
 
 SCIM lets an identity provider push its directory. It creates accounts when people join and deactivates them when they leave. The SCIM endpoint is `/api/v2/scim/v2`.
@@ -229,7 +358,7 @@ An identity provider authenticates to SCIM with a **SCIM client**. A SCIM client
 
 <Steps>
   <Step title="Open Configuration › Authentication › SCIM provisioning">
-    The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need the `admin.auth.users` permission to manage SCIM clients. Only a super admin can create, rotate or delete a SCIM client, because a SCIM client can create and change accounts.
+    The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need `identity.sso.view` or `admin.auth.users` to see the SCIM clients, and `identity.sso.settings.manage` or `admin.auth.users` to revoke one (see [Who can change what](#who-can-change-what)). Only a super admin can create, rotate or delete a SCIM client, because a SCIM client can create and change accounts.
   </Step>
   <Step title="Create a SCIM client">
     Select **New SCIM client**. Type a name for the identity provider, and select a method:
@@ -310,6 +439,17 @@ Some accounts are off limits to SCIM. Any write to them is refused with `403` (`
     The next provisioning cycle repeats the request, and this time it succeeds.
   </Step>
 </Steps>
+
+### Deprovision the last administrator
+
+The [last administrator](/admin/users-and-roles#the-last-administrator) of the deployment is never deactivated, by SCIM or anyone else: the deployment would have nobody left to administer it. But when your identity provider deactivates that person (`PATCH` with `active: false`, `PUT` with `active: false`, or `DELETE`), the organisation has said that the person left, so the access ends anyway:
+
+- the account stays active and keeps its roles, so the deployment keeps an administrator on record;
+- the person's browser sessions, device sessions and personal access tokens are revoked at once: the next request with any of them is refused;
+- one `critical` security audit event is written (action `admin.access.deprovision_refused`), and the Audit Trail records `role.last_administrator_refused`. A retry that finds no session or token left to end writes no second critical event; one that ends a new sign-in does;
+- the identity provider gets a SCIM error with status `409` that says to give a successor the role.
+
+Then give someone else the role: from the console of another administrator, or, when there is none, with [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line). The next provisioning cycle repeats the deactivation. While a second administrator exists, it is refused as for any administrator (above): remove the person's role, and the cycle after that deactivates the account.
 
 <Note>
 SCIM stores one address per account, and that address is the SCIM `userName`. A change to the work email alone is accepted but does not change the account's address. Only a `userName` change does.

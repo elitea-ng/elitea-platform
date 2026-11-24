@@ -92,8 +92,37 @@ listed below, and the administration-mode rule above.
 
 A future internal RPC that changes administration data carries the principal
 and the elevation id, Main makes the decision, and it follows ADR-0036 (gRPC
-over mTLS, contract in `libs/proto`). The gateway and the Rust worker, outside
-the Go workspace, have their own listener tests.
+over mTLS, contract in `libs/proto`).
+
+The LLM gateway and the Rust worker are outside the Go workspace. Each has its
+own allowlist and its own listener test, run by its own CI job (ADR-0059 R1.9):
+
+| Service | Allowlist | Test | CI job |
+|---------|-----------|------|--------|
+| elitea-llm-gateway | `services/elitea-llm-gateway/internal/grpcapi/internal_listener_allowlist.txt` | `internal/grpcapi/surface_allowlist_test.go`, `internal/server/surface_allowlist_test.go` | `ci-gateway` |
+| elitea-worker-rust | `services/elitea-worker-rust/src/sandbox/internal_listener_allowlist.txt` | `src/sandbox/surface_allowlist_tests.rs` | `ci-rust` |
+
+- **The gateway** uses a copy of the Go checks above. Its test builds the
+  `GatewayService` listener through `grpcapi.NewServer` and compares
+  `GetServiceInfo()` with the allowlist. It also scans the module's source for
+  listener sites and the routes of the health and metrics mux. The HTTP twin
+  walks the `/llm` chi router (`chi.Walk`), which only the `GatewayService`
+  RPCs reach. The gateway reads provider, policy and model data from
+  PostgreSQL. Its calls write run and metering data only: the request log,
+  budget counters and usage.
+- **The worker** serves nothing in its default binary. The
+  `elitea-sandbox-supervisor` binary serves `SandboxSupervisorService`,
+  `BrowserSessionService` and `WorkspaceRunService`, one mTLS listener for
+  each runtime profile. The test finds each tonic server module that the
+  non-test source names, and the file that names it. It reads the routes of
+  that server from the code that tonic generated, and compares each file and
+  route with the allowlist. It also counts every
+  listener and registration site in the non-test source. Each request carries
+  a grant that Main signed for one run (`claim`). No method writes provider,
+  policy, identity or role data.
+
+Each allowlist line gives a reason: who calls the method and what it writes. A
+fixture method, route or site that is not on the list makes each test fail.
 
 The internal methods that can change administration data, and the caller
 identity each requires (the test compares this table with the allowlists):
@@ -110,6 +139,27 @@ route's project-mode permission checks decide for the bearer's own principal.
 The workload identity on the platform listener (`dns:` or `spiffe://`, from
 `ELITEA_INTERNAL_TOOL_SERVICE_CLIENTS`: the agent worker, and the Inventory
 engine's callback identity) only admits the call to the service.
+
+## Admin audit role use and tamper evidence
+
+<a id="admin-audit-role-use-not-tamper-evident"></a>
+
+Every administration-mode row of `centry.audit_events` (a request during which
+the permission resolver answered the `administration` mode for the caller)
+records the capacity it was written in (ADR-0059 decision 8, story R1.4a,
+shared migration 0268): `acting_roles` (the caller's standing administration
+roles, from the resolution the request already made), `elevation_id`,
+`credential_kind` (`session`, `form`, `sealed`, `token`, `native`, `run`,
+`system`, `scim`; NULL when unknown, never a guess), `central_override`,
+`reason_code`, `reason` and `reason_missing`.
+
+**These fields are not tamper-evident until R1.4b (issue 2576).** They are
+plain nullable columns outside the row hash: `centry.audit_event_canonical`
+(shared 0206) does not name them, so the chain verifier does not cover them
+and the append-only trigger does not guard them. A person with write access
+to the table can change them without breaking the chain. R1.4b moves them
+into a versioned canonical form and into the `elitea.audit.v1` export. Until
+then, read them as recorded facts, not as evidence.
 
 ## Shared Libraries
 

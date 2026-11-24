@@ -1568,6 +1568,14 @@ nats:
       metadata:
         annotations:
           argocd.argoproj.io/sync-wave: "-10"
+  # No service-account token in the server pods (#2953): neither the server
+  # nor its config reloader calls the Kubernetes API, and the upstream chart
+  # sets no automount of its own, so the namespace's default account would
+  # mount one.
+  podTemplate:
+    merge:
+      spec:
+        automountServiceAccountToken: false
   configMap:
     merge:
       metadata:
@@ -2064,9 +2072,9 @@ platform:
   aiProjectId: ""
 
 
-# Ingress NetworkPolicies for the pods this chart renders (default-deny). They
-# need a CNI that enforces NetworkPolicy (Calico, Cilium, etc.); on one that does
-# not, the objects are inert.
+# NetworkPolicies for the pods this chart renders (default-deny). They need a
+# CNI that enforces NetworkPolicy (Calico, Cilium, etc.); on one that does not,
+# the objects are inert.
 #
 #   elitea-main     HTTP 8080 admits main.ingressFrom / extraIngressFrom and
 #                   probeFrom only: no provider pod. The runtime listeners
@@ -2076,19 +2084,30 @@ platform:
 #                   source-tool calls there over gRPC (ModelService,
 #                   ArtifactObjectService, InternalToolService.InvokeToolkit,
 #                   #1359 U2/U5).
-#   worker          no inbound connections. Worker egress is NOT restricted (the
-#                   worker reaches NATS, PostgreSQL, elitea-main, the sandbox
-#                   supervisors and, through toolkits, external hosts); egress
-#                   controls are separate work.
+#   worker          no inbound connections. Egress (worker.networkPolicy,
+#                   #2951): DNS, elitea-main's runtime listeners, NATS,
+#                   PostgreSQL (egressPeers.postgresql), the sandbox
+#                   supervisors, elitea-vector, the OTel collector,
+#                   privateEgress, and the public internet minus every private,
+#                   link-local and cluster range.
 #   sandbox         the supervisor profile ports admit the worker and elitea-main.
 #   web             HTTP 80 admits elitea-main (the browser edge relays /app and
 #                   /docs there, #1359 P3), web.extraIngressFrom and probeFrom.
 #                   The gateway or ingress controller is not admitted: the
 #                   Ingress / HTTPRoute names elitea-main alone.
+#   scheduler       no inbound except its health port from probeFrom and
+#                   metricsFrom (#2952).
+#   llmGateway      gRPC from elitea-main and llmGateway.extraIngressFrom;
+#                   8083 from probeFrom and metricsFrom (#2952). Egress
+#                   (llmGateway.networkPolicy, on by default): DNS, NATS,
+#                   PostgreSQL, the OTel collector, llmGateway.networkPolicy.egress
+#                   and the public internet minus the private ranges.
+#   otelCollector   OTLP 4317/4318 from the chart's pods that export traces and
+#                   otelCollector.extraIngressFrom (#2952).
+#   pgbouncer       its port from the chart's pods that read the database
+#                   Secret and pgbouncer.extraIngressFrom (#2952).
 #
-# Not covered here: the scheduler, LLM gateway (its own opt-in egress policy
-# is llmGateway.networkPolicy), OTel collector, PgBouncer and provider pods
-# accept inbound traffic as before.
+# Egress of the other pods is not restricted by this chart.
 # ── Scaling: autoscaler sources, spread, cluster add-ons (S11) ──────────────
 #
 # WHAT SCALES ON WHAT (the Scaling page of the deployment docs has the table):
@@ -2250,20 +2269,23 @@ prometheusAdapter:
 networkPolicies:
   enabled: true
   # Set true ONLY when `enabled` is false because your own NetworkPolicy already
-  # limits who may reach elitea-main, the worker and the
-  # sandbox supervisor. templates/guards.yaml refuses `enabled: false` without
+  # limits who may reach elitea-main, the worker, the sandbox supervisor, the
+  # scheduler, the LLM gateway, the OTel collector and PgBouncer, and where the
+  # worker and the gateway may connect. templates/guards.yaml refuses `enabled: false` without
   # it: the chart cannot see your policy, so this is a statement, not a probe.
   externallyManaged: false
   # Optional NetworkPolicyPeer entries admitted on the probe ports of
-  # elitea-main (8080), elitea-web (80) and the sandbox supervisor, for a
+  # elitea-main (8080), elitea-web (80), the sandbox supervisor, the
+  # scheduler's health port and the LLM gateway's 8083, for a
   # CNI that applies policy to kubelet probes. Kubelet probes are not subject to
   # policy on the CNIs this chart is tested with, so this is normally empty
   # (the same assumption as nats.networkPolicy).
   probeFrom: []
   # NetworkPolicyPeer entries for the Prometheus that scrapes the metrics
   # ports the chart's ingress policies close: the DeepWiki and Inventory hosts'
-  # admin port (/metrics, elitea_subapp_invocations_in_flight). (The gateway's
-  # :8083 has no ingress policy; llmGateway.networkPolicy is egress only.) A KEDA `prometheus` trigger reads what that
+  # admin port (/metrics, elitea_subapp_invocations_in_flight), the LLM
+  # gateway's 8083 (gateway_llm_sse_active_connections, which its autoscaler
+  # reads) and the scheduler's health port. A KEDA `prometheus` trigger reads what that
   # Prometheus scraped, so a scrape this policy drops is a gauge that reads
   # zero. Empty: the probe peers only.
   #   - namespaceSelector:
@@ -2305,6 +2327,63 @@ networkPolicies:
     # browser request for /app and /docs. Normally empty: a peer listed here
     # reaches the SPA without passing the edge's `/` redirect and MCP carve-out.
     extraIngressFrom: []
+  llmGateway:
+    # More peers on the gateway's gRPC port besides elitea-main: a caller you
+    # added to llmGateway.env.GATEWAY_GRPC_CLIENTS.
+    extraIngressFrom: []
+  otelCollector:
+    # More OTLP senders besides the chart's own pods.
+    extraIngressFrom: []
+  pgbouncer:
+    # More clients of the pooler besides the chart's own pods: the KEDA
+    # operator (a postgresql trigger pointed at the pooler), a backup tool.
+    extraIngressFrom: []
+
+  # ── Egress (the worker's and the LLM gateway's policies) ──────────────────
+  # The cluster's own address ranges, e.g. [10.244.0.0/16, 10.96.0.0/12]
+  # (GKE: the cluster's Pod and Service ranges; kind: 10.244.0.0/16 and
+  # 10.96.0.0/12). The public-internet rules except every block listed here,
+  # because a cluster whose pods use public-range addresses would otherwise be
+  # "public". List the pod and Service ranges, and also the node range and the
+  # control-plane endpoint when either is in public address space (a public
+  # API server endpoint is reached on 443 like any public host).
+  # REQUIRED while a public egress rule renders (worker.networkPolicy and
+  # llmGateway.networkPolicy, both on by default). Empty: the egress proxy's
+  # egressProxy.networkPolicy.podCidrs + serviceCidrs, when set.
+  clusterCIDRs: []
+  # Add ::/0 (minus the IPv6 private ranges) beside 0.0.0.0/0 in the public rules.
+  ipv6: true
+  # Raw NetworkPolicyEgressRule entries that replace the DNS rule of the
+  # egress policies. Empty: UDP/TCP 53 to pods labelled k8s-app=kube-dns in
+  # any namespace. Set it for NodeLocal DNSCache (a link-local address, e.g.
+  # {to: [{ipBlock: {cidr: 169.254.20.10/32}}], ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]})
+  # or a resolver with other labels.
+  dnsEgress: []
+  # Where the dependencies outside this chart live, as NetworkPolicyPeer
+  # entries (an ipBlock for a managed service, or a namespaceSelector plus
+  # podSelector for one in the cluster). The egress policies admit each on
+  # its ports.
+  egressPeers:
+    # PostgreSQL (the platform database and the worker's agent-state
+    # database). REQUIRED while an egress policy renders, with or without
+    # pgbouncer: the LLM gateway (and every pod whose DSN you do not point
+    # at the pooler) connects to the server directly. The chart cannot know a managed
+    # database's address. e.g.
+    #   - ipBlock:
+    #       cidr: 10.20.0.5/32
+    postgresql:
+      to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+    # NATS you run yourself (nats.enabled=false), by its pods. Empty: every
+    # pod of natsClient.namespace on natsClient.port. Ignored for the bundled
+    # server, which the policies name by its pods.
+    nats:
+      to: []
+      ports:
+        - protocol: TCP
+          port: 4222
 
 # Microsoft Default apps (ADR-0057 decision 5, epic 2254 story S1b). Each entry
 # seeds one Microsoft Entra app into the admin registry at Main's start, so a
@@ -3100,6 +3179,14 @@ main:
     # either rule stops the boot with a message that names the variable.
     ELITEA_SESSION_ABSOLUTE_LIFETIME: ""
 
+    # ELITEA_SESSION_REAUTHENTICATION_MAX_AGE is how long ago a person may have
+    # last authenticated for an action that needs a RECENT sign-in (ADR-0059:
+    # administration scopes on tokens, break-glass, critical actions). It is
+    # measured from the authentication, never from the last request. Empty
+    # means 15m. A value outside 1m..24h stops the boot with a message that
+    # names the variable.
+    ELITEA_SESSION_REAUTHENTICATION_MAX_AGE: ""
+
     # ELITEA_SESSION_REJECT_LEGACY_COOKIES ends the upgrade window.
     #
     # A deployment that upgrades to this release holds signed, self-contained
@@ -3260,6 +3347,11 @@ main:
     # The grant is one-shot per account: someone who already holds any
     # administration-mode role is left as the operator left them, so a demotion
     # is never undone by the next login. Empty grants nobody.
+    #
+    # IT IS A BOOTSTRAP ONLY. The list grants nothing once an unsuspended
+    # account holds super_admin: a listed sign-in then logs a warning and gets
+    # no role. Add later administrators from the console of an existing
+    # administrator, and empty the list.
     #
     # A malformed entry WARNS at start-up and is ignored. The pod logs how many
     # entries are reference-shaped and how many are address-shaped, so a
@@ -3852,6 +3944,13 @@ main:
     # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
     # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
+    # The worker's private permit (#2950), merged with Configuration > Worker
+    # Egress > Private Permit: the private destinations agent toolkits and
+    # remote MCP servers may reach (an on-premises Jira or GitLab), comma
+    # separated, egresslib grammar. A host name admits the private addresses it
+    # resolves to. Link-local and cloud-metadata addresses are never admitted.
+    # See docs/upgrading/2026-11-23-2950-worker-toolkit-private-addresses.md.
+    ELITEA_WORKER_EGRESS_PRIVATE_PERMIT: ""
     # (ELITEA_INVENTORY_CALLBACK_BASE_URL is retired, #1359 U5: artifacts go
     # over ArtifactObjectService on the platform listener, and source
     # expansion no longer depends on a callback origin. The render refuses the
@@ -4584,6 +4683,12 @@ main:
     # in the secrets: block above. Empty by default: static keys remain the
     # baseline until an environment opts into workload identity.
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
 
   nodeSelector: {}
   tolerations: []
@@ -4723,6 +4828,30 @@ web:
     create: true
     name: ""
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
+
+  # Hardening (privilege escalation on exec). The image is the stock
+  # nginx:stable-alpine (apps/elitea-web/Containerfile): its master process
+  # starts as root, binds :80 (NET_BIND_SERVICE), chowns its temp dirs under
+  # /var/cache/nginx (CHOWN) and switches its workers to the `nginx` user
+  # (SETUID/SETGID); docker-entrypoint.sh writes config.js into the image
+  # filesystem at start. So every other capability is dropped, and those four
+  # are added back; it needs no other (it signals its workers over a channel,
+  # not kill(2)). runAsNonRoot and readOnlyRootFilesystem need an
+  # unprivileged nginx image first.
+  podSecurityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+      add: ["CHOWN", "NET_BIND_SERVICE", "SETGID", "SETUID"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -4996,6 +5125,25 @@ scheduler:
     create: true
     name: ""
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
+
+  # Same hardening as main: the image is distroless static:nonroot and the
+  # binary writes no files (no os.Create/CreateTemp/WriteFile in
+  # services/elitea-scheduler), so a read-only root filesystem costs nothing.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -5447,11 +5595,13 @@ llmGateway:
   # GATEWAY_EGRESS_ALLOWLIST above; this is the second layer, for the case where
   # that one is bypassed or a future carve-out widens it.
   #
-  # OPT-IN, because attaching ANY egress rule to a pod denies everything not
-  # listed, and this chart cannot know where your Postgres, NATS and OTLP
-  # collector live. Enable it only after filling in `egress` below — otherwise the
-  # gateway loses its own dependencies. Requires a CNI that enforces
-  # NetworkPolicy; on one that does not, the object renders but does nothing.
+  # ON by default (#2952), with networkPolicies.enabled. The chart admits the
+  # dependencies it knows: DNS, the bundled NATS, PostgreSQL as
+  # networkPolicies.egressPeers.postgresql names it, the bundled PgBouncer and
+  # OTel collector. List every self-hosted model host (an in-cluster vLLM, a
+  # private-network endpoint GATEWAY_EGRESS_ALLOWLIST names) in `egress`
+  # below. Requires a CNI that enforces NetworkPolicy; on one that does not,
+  # the object renders but does nothing.
   # egressPosture — issue #467. Which egress policy this deployment runs.
   #
   # The chart REFUSES TO RENDER until this names one of the two values below.
@@ -5498,33 +5648,25 @@ llmGateway:
   acknowledgeUnenforcedBudgets: false
 
   networkPolicy:
-    enabled: false
-    # allowPublicEgress opens 0.0.0.0/0 minus every private/link-local range, so
-    # cloud provider APIs work but nothing in-cluster is reachable. Set false only
+    enabled: true
+    # Set true ONLY when `enabled` is false because your own policy already
+    # restricts the gateway's egress. templates/guards.yaml refuses
+    # enabled=false without it (while networkPolicies.enabled).
+    externallyManaged: false
+    # allowPublicEgress opens 0.0.0.0/0 (and ::/0) minus every private,
+    # link-local and cluster range (networkPolicies.clusterCIDRs), so cloud
+    # provider APIs work but nothing in-cluster is reachable. Set false only
     # for an install that talks exclusively to self-hosted models.
     allowPublicEgress: true
     publicEgressPorts:
       - protocol: TCP
         port: 443
-    # In-cluster dependencies, rendered verbatim under spec.egress. Worked
-    # example — replace the selectors and ports with your own topology, and add
-    # an entry for every self-hosted model host GATEWAY_EGRESS_ALLOWLIST names:
+    # More destinations, rendered verbatim under spec.egress: every self-hosted
+    # model host GATEWAY_EGRESS_ALLOWLIST names, and an OTLP collector named by
+    # global.otelEndpoint. PostgreSQL and NATS go in
+    # networkPolicies.egressPeers instead (the worker needs them too). e.g.
     #
     # egress:
-    #   - to:
-    #       - podSelector:
-    #           matchLabels:
-    #             app.kubernetes.io/name: postgresql
-    #     ports:
-    #       - protocol: TCP
-    #         port: 5432
-    #   - to:
-    #       - podSelector:
-    #           matchLabels:
-    #             app.kubernetes.io/name: nats
-    #     ports:
-    #       - protocol: TCP
-    #         port: 4222
     #   - to:
     #       - podSelector:
     #           matchLabels:
@@ -5651,6 +5793,12 @@ llmGateway:
     # gateway USE it: set workloadIdentity.enabled below for that. Empty by
     # default, like main.serviceAccount.annotations.
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
 
   # Keyless PLATFORM credentials (GATEWAY_WORKLOAD_IDENTITY_ENABLED). When true,
   # a platform provider (Administration, LLM providers) of type vertex_ai or
@@ -6003,6 +6151,12 @@ deepwiki:
     create: true
     name: ""
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
 
   # Shutdown, on one clock: the preStop sleep (endpoints and DNS drop the
   # replica first), the host stops its gRPC listener (up to 10s), waits up to
@@ -6367,6 +6521,12 @@ inventory:
     create: true
     name: ""
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
 
   # Shutdown, on one clock: the preStop sleep (endpoints and DNS drop the
   # replica first), the host stops its gRPC listener (up to 10s), waits up to
@@ -7700,6 +7860,66 @@ worker:
   tolerations: []
   affinity: {}
 
+  # The worker's own ServiceAccount (#2953). Before it the worker ran as the
+  # namespace's `default` account. The worker never calls the Kubernetes API.
+  serviceAccount:
+    create: true
+    # Empty: elitea-worker. With create false, empty is the namespace's `default`.
+    name: ""
+    annotations: {}
+    # Mount the ServiceAccount token in the pod. Off: nothing in the worker
+    # calls the Kubernetes API, and a token is a cluster credential that any
+    # file read in the pod (a toolkit or template bug) would hand out. Turn it
+    # on only for a mesh or sidecar that reads the automounted token. GKE
+    # Workload Identity, EKS Pod Identity, IRSA and Azure Workload Identity do
+    # NOT need it: they use their own projected tokens or the metadata server.
+    automountToken: false
+
+  # Egress NetworkPolicy of the worker pods (#2951), rendered with
+  # networkPolicies.enabled; templates/worker/networkpolicy.yaml lists every
+  # peer it admits. The worker runs tenant-chosen toolkits in-process, so its
+  # pod reaches only the peers it needs, private hosts you list, and the public
+  # internet minus every private, link-local (cloud metadata) and cluster range.
+  # This is defence in depth beside the worker's own address check (#2950):
+  # some CNIs do not apply policy to host-network destinations.
+  networkPolicy:
+    egressEnabled: true
+    # Set true ONLY when egressEnabled is false because your own policy
+    # already restricts the worker's egress. templates/guards.yaml refuses
+    # egressEnabled=false without it.
+    externallyManaged: false
+    # public  the named peers, privateEgress, and the public internet on
+    #         publicEgressPorts (minus the private and cluster ranges).
+    # proxy   the named peers, privateEgress, and the egress proxy
+    #         (egressProxy.enabled) instead of the public internet. The worker's
+    #         toolkit clients connect directly (they do not use a forward
+    #         proxy, #2950), so in this mode toolkits reach only the private
+    #         and extra destinations listed here; sandboxed workspace runs keep
+    #         reaching the internet through the proxy from their own pods.
+    mode: public
+    # mode public only. False drops the public rule: toolkits then reach only
+    # privateEgress and extraEgress. True needs networkPolicies.clusterCIDRs.
+    allowPublicEgress: true
+    publicEgressPorts:
+      - protocol: TCP
+        port: 443
+    # The network side of the worker's private permit (#2950): each entry
+    # admits one private block on its ports, for on-premises toolkit hosts (a
+    # self-hosted Jira, GitLab, an in-cluster MCP service). The CIDR and IP
+    # entries of main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT are admitted
+    # without an entry here; a HOST NAME entry there needs its addresses here.
+    # Entries in the console's Private Permit are not visible to the chart:
+    # list their addresses here too. Link-local blocks are refused.
+    #   - cidr: 10.20.0.0/16
+    #     ports:
+    #       - protocol: TCP
+    #         port: 443
+    privateEgress: []
+    # Raw NetworkPolicyEgressRule entries appended to the policy: a vector
+    # store, sandbox supervisor or NATS the chart does not run, an OTLP
+    # collector named by global.otelEndpoint, anything else the worker dials.
+    extraEgress: []
+
 otelCollector:
   # Telemetry. Safe to disable.
   enabled: true
@@ -7790,6 +8010,39 @@ otelCollector:
     create: true
     name: ""
     annotations: {}
+    # Mount the ServiceAccount token in the pod (#2953). Off: nothing here
+    # calls the Kubernetes API. Turn it on only for a mesh or sidecar that
+    # reads the automounted token; GKE Workload Identity, EKS Pod Identity,
+    # IRSA and Azure Workload Identity use their own projected tokens or the
+    # metadata server and do not need it.
+    automountToken: false
+
+  # The contrib image runs as a non-root user (10001) and the shipped config
+  # (debug exporter) writes nothing to disk. An exporter or extension that
+  # does (file exporter, file_storage queue) needs a writable volume for its
+  # path: add it with extraVolumes/extraVolumeMounts below (an emptyDir, or a
+  # PVC when it must outlive the pod). Setting readOnlyRootFilesystem to false
+  # is not enough on its own: the image has no directory uid 10001 may write.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+
+  # Extra pod volumes and container mounts, e.g. a writable directory for a
+  # file exporter or a file_storage extension:
+  #   extraVolumes:
+  #     - name: otel-data
+  #       emptyDir: {}
+  #   extraVolumeMounts:
+  #     - name: otel-data
+  #       mountPath: /var/lib/otelcol
+  extraVolumes: []
+  extraVolumeMounts: []
 
   podAnnotations: {}
   nodeSelector: {}

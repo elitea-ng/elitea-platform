@@ -15,11 +15,12 @@ package admin
 //
 // # The permission
 //
-// `runtime.plugins`, in administration mode — the string the legacy Tasks page
-// declares, and one this platform already grants (shared/0060). No new grant
-// arrives with this feature, which is deliberate: an operator who could see the
-// legacy Tasks page can see this one, and nobody has to be re-authorised for a
-// page they already had.
+// In administration mode, the listing accepts `platform.operations.view` and a
+// cancel `platform.operations.manage`, each beside `runtime.plugins` (ADR-0059
+// R0.4a). `runtime.plugins` is the string the legacy Tasks page declares and
+// one this platform already grants (shared/0060), so an operator who could see
+// the legacy Tasks page can see this one, and nobody has to be re-authorised
+// for a page they already had.
 //
 // # The row shape
 //

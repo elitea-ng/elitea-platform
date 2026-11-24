@@ -27,7 +27,7 @@ func TestMembershipPermissionsSeeAProjectTheCallerIsNotAskedAbout(t *testing.T) 
 	pool := newGrantPool(t)
 	seedMembershipShape(t, pool)
 	resolver := legacyrbac.NewPostgresResolver(pool)
-	member := auth.User{ID: "9", UserID: "9"}
+	member := auth.User{ID: "9", UserID: "9", CredentialKind: auth.CredentialKindSession}
 
 	// The single-project answer for the PUBLIC project is empty, which is what
 	// the project-list gate used to ask for and refuse on.
@@ -62,7 +62,7 @@ func TestMembershipPermissionsAreEmptyForANonMember(t *testing.T) {
 	resolver := legacyrbac.NewPostgresResolver(pool)
 
 	resolution, err := resolver.ResolveMembershipPermissions(
-		context.Background(), auth.User{ID: "8", UserID: "8"}, auth.PermissionModeDefault)
+		context.Background(), auth.User{ID: "8", UserID: "8", CredentialKind: auth.CredentialKindSession}, auth.PermissionModeDefault)
 	if err != nil {
 		t.Fatalf("non-member resolution = %v, want an empty answer and no error", err)
 	}
@@ -85,7 +85,7 @@ VALUES (4, 14, 'models.something.else')`); err != nil {
 		t.Fatal(err)
 	}
 	resolver := legacyrbac.NewPostgresResolver(pool)
-	member := auth.User{ID: "7", UserID: "7"}
+	member := auth.User{ID: "7", UserID: "7", CredentialKind: auth.CredentialKindSession}
 
 	resolution, err := resolver.ResolveMembershipPermissions(ctx, member, auth.PermissionModeDefault)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestMembershipPermissionsRefuseASuspendedUser(t *testing.T) {
 	resolver := legacyrbac.NewPostgresResolver(pool)
 
 	_, err := resolver.ResolveMembershipPermissions(
-		context.Background(), auth.User{ID: "9", UserID: "9"}, auth.PermissionModeDefault)
+		context.Background(), auth.User{ID: "9", UserID: "9", CredentialKind: auth.CredentialKindSession}, auth.PermissionModeDefault)
 	if err == nil {
 		t.Fatal("suspended user resolved, want a refusal")
 	}
@@ -143,7 +143,7 @@ INSERT INTO public.auth_core__user_role (user_id, role_id) VALUES (8, 4)`); err 
 		t.Fatal(err)
 	}
 	resolver := legacyrbac.NewPostgresResolver(pool)
-	administrator := auth.User{ID: "8", UserID: "8"}
+	administrator := auth.User{ID: "8", UserID: "8", CredentialKind: auth.CredentialKindSession}
 
 	central, err := resolver.ResolvePermissions(
 		ctx, administrator, auth.PermissionModeAdministration, "")

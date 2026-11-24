@@ -56,6 +56,20 @@ is base64url of a JSON object, which always begins `ey`.
 | `ELITEA_SESSION_IDLE_TIMEOUT` | `8h` | Measured from `last_seen_at`. `0` turns it off. |
 | `ELITEA_SESSION_ABSOLUTE_LIFETIME` | `168h` | Measured from creation. Never moves. |
 | `ELITEA_SESSION_REJECT_LEGACY_COOKIES` | off | Refuse the pre-0117 signed cookie. |
+| `ELITEA_SESSION_REAUTHENTICATION_MAX_AGE` | `15m` | The limit of `apimw.RecentAuthentication`, measured from `authenticated_at`. Read at the check, not stamped on the row. |
+
+`authenticated_at` (shared 0262, ADR-0059 R1.10a) is when the person last
+authenticated: the OIDC `auth_time` (NULL, unknown, when the provider sends
+none), or the SAML `AuthnInstant` of a sign-in that asked for ForceAuthn (NULL
+for any other SAML sign-in). A touch never writes it.
+`authentication_proven` (shared 0264, R1.10b) says the time is proof of an
+authentication; rows written before 0264 and rows a previous-release replica
+writes are unproven. `apimw.RecentAuthentication` answers 401
+`reauthentication_required` when the time is older than the limit, unknown or
+unproven. A proven OIDC or SAML row, or a Form session
+(`elitea_auth.form_sessions.authenticated_at`: the last password entry, at
+sign-in or at `/auth/form/reauthenticate`), can satisfy it; a token, a native
+session, a run token or the legacy cookie never does.
 
 Both lifetimes are stamped ONTO the row at creation. A deployment that shortens
 its idle window does not retroactively shorten sessions issued under the old

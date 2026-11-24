@@ -74,6 +74,17 @@ impl Allowlist {
         Ok(Self { entries })
     }
 
+    /// Both lists' entries, each once.
+    pub(crate) fn merged(&self, other: &Self) -> Self {
+        let mut entries = self.entries.clone();
+        for entry in &other.entries {
+            if !entries.contains(entry) {
+                entries.push(entry.clone());
+            }
+        }
+        Self { entries }
+    }
+
     /// Whether the list carries any entry.
     #[must_use]
     pub fn is_configured(&self) -> bool {
@@ -85,23 +96,37 @@ impl Allowlist {
     /// origins are fail-closed (#1238).
     #[must_use]
     pub fn allows(&self, host: &str, port: u16) -> bool {
+        self.allows_on(host, Some(port))
+    }
+
+    /// Whether an entry that pins NO port names `host`: the answer when the
+    /// port is not known.
+    #[must_use]
+    pub fn allows_unpinned(&self, host: &str) -> bool {
+        self.allows_on(host, None)
+    }
+
+    fn allows_on(&self, host: &str, port: Option<u16>) -> bool {
         let host = normalise_host(&host.to_ascii_lowercase());
         if host.is_empty() {
             return false;
         }
+        let port_matches = |pinned: &Option<u16>| match (pinned, port) {
+            (None, _) => true,
+            (Some(pinned), Some(port)) => *pinned == port,
+            (Some(_), None) => false,
+        };
         let literal = host.parse::<IpAddr>().ok();
         self.entries.iter().any(|entry| match entry {
             Entry::Exact {
                 host: name,
                 port: pinned,
-            } => *name == host && pinned.is_none_or(|pinned| pinned == port),
+            } => *name == host && port_matches(pinned),
             Entry::Wildcard {
                 suffix,
                 port: pinned,
             } => {
-                host.len() > suffix.len()
-                    && host.ends_with(suffix.as_str())
-                    && pinned.is_none_or(|pinned| pinned == port)
+                host.len() > suffix.len() && host.ends_with(suffix.as_str()) && port_matches(pinned)
             }
             Entry::Cidr { network, prefix } => {
                 literal.is_some_and(|ip| block_contains(*network, *prefix, canonical(ip)))
@@ -175,6 +200,23 @@ impl PermitSet {
             permit.port.is_none_or(|pinned| pinned == port)
                 && block_contains(permit.network, permit.prefix, address)
         })
+    }
+
+    /// Whether a permit that pins NO port names this private address: the
+    /// answer when the port is not known.
+    #[must_use]
+    pub fn admits_unpinned(&self, address: IpAddr) -> bool {
+        let address = canonical(address);
+        self.permits.iter().any(|permit| {
+            permit.port.is_none() && block_contains(permit.network, permit.prefix, address)
+        })
+    }
+
+    /// Both sets' permits.
+    pub(crate) fn merged(&self, other: &Self) -> Self {
+        let mut permits = self.permits.clone();
+        permits.extend(other.permits.iter().copied());
+        Self { permits }
     }
 
     /// Whether the set holds no permit.

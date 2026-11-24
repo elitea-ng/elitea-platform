@@ -12,7 +12,6 @@ use http_body_util::Full;
 use hyper::body::{Body as _, Incoming};
 use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client as HyperClient;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use reqwest::header::{
@@ -291,7 +290,8 @@ struct CachedOpenApiAccessToken {
     expires_at: Instant,
 }
 
-type OpenApiHttpClient = HyperClient<HttpsConnector<HttpConnector>, Full<Bytes>>;
+type OpenApiHttpClient =
+    HyperClient<HttpsConnector<crate::egress::GuardedHttpConnector>, Full<Bytes>>;
 
 struct RustlsOpenApiTransport {
     http: tokio::sync::OnceCell<OpenApiHttpClient>,
@@ -317,8 +317,17 @@ impl OpenApiTransport for RustlsOpenApiTransport {
         self.egress
             .check_url(&url)
             .map_err(|_| dependency_unavailable())?;
-        let response = tokio::time::timeout(REQUEST_TIMEOUT, execute_http(http, request))
+        // Inside `guarded`, the connector's resolver applies the SSRF rule
+        // under the run's private permit (#2950); a refusal is named to the
+        // tool call, which fails as `egress_host_not_allowed`.
+        let response = self
+            .egress
+            .guarded(
+                &url,
+                tokio::time::timeout(REQUEST_TIMEOUT, execute_http(http, request)),
+            )
             .await
+            .map_err(|_| dependency_unavailable())?
             .map_err(|_| timeout())??;
         self.egress.record_reached(&url);
         Ok(response)
@@ -366,7 +375,7 @@ async fn execute_http(
 }
 
 fn build_http_client() -> Result<OpenApiHttpClient, OpenApiClientError> {
-    let mut connector = HttpConnector::new();
+    let mut connector = crate::egress::guarded_http_connector();
     // The outer Rustls connector enforces HTTPS. The TCP connector must accept
     // the original `https` URI so the outer layer can perform TLS.
     connector.enforce_http(false);

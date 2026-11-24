@@ -82,6 +82,9 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: {{ $name }}
+      # The hook deletes ScaledObjects through the Kubernetes API (the Role
+      # above), so it keeps the token (#2953).
+      automountServiceAccountToken: true
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.main.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       securityContext:
         runAsNonRoot: true

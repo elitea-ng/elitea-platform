@@ -255,9 +255,9 @@ type ModelWrite struct {
 // LLMProxyHandler serves the admin LLM Proxy surface: gateway enforcement
 // status, the model price catalogue, and the usage rollup beside it.
 //
-// The caller is responsible for RBAC gating — the authorization boundary is the
-// server-side RequireCentralPermissions wrapper in router.go, never a client
-// check. `status` may be nil (a deployment with no gateway address), and every
+// Register takes the route gates (gates.go), so the authorization boundary is
+// the server-side RequireCentralPermissions gates router.go builds, never a
+// client check. `status` may be nil (a deployment with no gateway address), and every
 // route reports that posture rather than failing.
 type LLMProxyHandler struct {
 	db     LLMProxyQuerier
@@ -271,22 +271,27 @@ func NewLLMProxyHandler(db LLMProxyQuerier, status StatusReader) *LLMProxyHandle
 }
 
 // Register attaches the LLM Proxy endpoints to an existing router, alongside
-// the governance CRUD under the same `/gateway` prefix and RBAC group.
-func (h *LLMProxyHandler) Register(r chi.Router) {
-	r.Get("/status", h.Status)
-	r.Get("/models", h.ListModels)
-	r.Get("/usage", h.Usage)
-	r.Get("/logs", h.Logs)
-	r.Put("/models", h.UpsertModel)
-	r.Delete("/models/{id}", h.ClearModelOverride)
-	r.Get("/metered-prices", h.ListMeteredPrices)
-	r.Put("/metered-prices", h.UpsertMeteredPrice)
+// the governance CRUD under the same `/gateway` prefix, each behind its gate
+// (gates.go): the status, usage and logs are usage reads; the model prices and
+// the metered prices are the catalogue.
+func (h *LLMProxyHandler) Register(r chi.Router, gates LLMProxyGates) {
+	usage := mustGate("LLM proxy", "usage", gates.Usage)
+	view := mustGate("LLM proxy", "catalogue view", gates.CatalogueView)
+	manage := mustGate("LLM proxy", "catalogue manage", gates.CatalogueManage)
+	r.With(usage).Get("/status", h.Status)
+	r.With(view).Get("/models", h.ListModels)
+	r.With(usage).Get("/usage", h.Usage)
+	r.With(usage).Get("/logs", h.Logs)
+	r.With(manage).Put("/models", h.UpsertModel)
+	r.With(manage).Delete("/models/{id}", h.ClearModelOverride)
+	r.With(view).Get("/metered-prices", h.ListMeteredPrices)
+	r.With(manage).Put("/metered-prices", h.UpsertMeteredPrice)
 }
 
 // Routes returns a standalone router mounting the same endpoints — used in tests.
-func (h *LLMProxyHandler) Routes() chi.Router {
+func (h *LLMProxyHandler) Routes(gates LLMProxyGates) chi.Router {
 	r := chi.NewRouter()
-	h.Register(r)
+	h.Register(r, gates)
 	return r
 }
 

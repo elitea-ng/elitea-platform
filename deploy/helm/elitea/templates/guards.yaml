@@ -348,3 +348,79 @@
 {{- if and .Values.objectInit.enabled (has $storageBackend (list "gcs" "azure")) }}
 {{- fail (printf "objectInit.enabled is true with main.env.STORAGE_BACKEND=%q: objectInit creates S3-compatible buckets only. Create the bucket/container yourself before the install and set objectInit.enabled=false." $storageBackend) }}
 {{- end }}
+
+{{- /*
+  The worker's and the LLM gateway's egress policies (#2951, #2952). Turning
+  one off needs the same statement as networkPolicies.enabled=false: the chart
+  cannot see your own policy. The other refusals are shapes that would render
+  a rule broader than it reads (an empty port list admits every port) or a
+  policy that cuts a component off from what it was told to reach.
+  The values only the operator can supply (networkPolicies.clusterCIDRs and
+  egressPeers) are listed with the other missing values
+  (elitea.requiredValuesMissing).
+*/ -}}
+{{- $np := .Values.networkPolicies }}
+{{- $wnp := .Values.worker.networkPolicy }}
+{{- if and $np.enabled .Values.worker.enabled (not $wnp.egressEnabled) (not $wnp.externallyManaged) }}
+{{- fail "worker.networkPolicy.egressEnabled is false. The worker's egress policy is what keeps a toolkit off the cloud metadata endpoint, the Kubernetes API and every in-cluster Service the worker has no business with. If your own NetworkPolicy already restricts the worker's egress, say so with worker.networkPolicy.externallyManaged=true." }}
+{{- end }}
+{{- if and $np.enabled .Values.llmGateway.enabled (not .Values.llmGateway.networkPolicy.enabled) (not .Values.llmGateway.networkPolicy.externallyManaged) }}
+{{- fail "llmGateway.networkPolicy.enabled is false. The gateway's egress policy keeps a tenant-authored api_base off private, link-local and in-cluster addresses if the in-process guard is bypassed. If your own NetworkPolicy already restricts the gateway's egress, say so with llmGateway.networkPolicy.externallyManaged=true." }}
+{{- end }}
+{{- if include "elitea.netpol.workerEgress" . }}
+{{- if not (has (toString $wnp.mode) (list "public" "proxy")) }}
+{{- fail (printf "worker.networkPolicy.mode must be \"public\" or \"proxy\", not %q." (toString $wnp.mode)) }}
+{{- end }}
+{{- if and (eq (toString $wnp.mode) "proxy") (not .Values.egressProxy.enabled) }}
+{{- fail "worker.networkPolicy.mode is \"proxy\" but egressProxy.enabled is false: the policy would admit an egress proxy that does not run. Enable the egress proxy, or use mode public." }}
+{{- end }}
+{{- if and (include "elitea.netpol.workerPublicEgress" .) (not $wnp.publicEgressPorts) }}
+{{- fail "worker.networkPolicy.publicEgressPorts is empty: a NetworkPolicy rule without ports admits every port. List the ports toolkits use on public hosts (443 by default), or set allowPublicEgress=false." }}
+{{- end }}
+{{- range $i, $e := ($wnp.privateEgress | default list) }}
+{{- $cidr := toString (dig "cidr" "" $e) }}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$" $cidr) }}
+{{- fail (printf "worker.networkPolicy.privateEgress[%d].cidr is %q, which is not a CIDR block: write the private range with its prefix, e.g. 10.20.0.0/16 or 10.20.0.5/32." $i $cidr) }}
+{{- end }}
+{{- if include "elitea.netpol.privateCidrRefusal" $cidr }}
+{{- fail (printf "worker.networkPolicy.privateEgress[%d].cidr is %q: privateEgress admits on-premises hosts, never the whole address space (or an IPv4 block wider than /8, IPv6 wider than /16), loopback, or link-local addresses (the cloud metadata endpoints). The worker refuses these itself." $i $cidr) }}
+{{- end }}
+{{- if not (dig "ports" list $e) }}
+{{- fail (printf "worker.networkPolicy.privateEgress[%d] (%s) has no ports: a rule without ports admits every port. List the ports the toolkit host serves, e.g. [{protocol: TCP, port: 443}]." $i $cidr) }}
+{{- end }}
+{{- end }}
+{{- $hosts := list }}
+{{- range (include "elitea.netpol.permitEntries" . | fromJsonArray) }}
+{{- if .host }}{{ $hosts = append $hosts .host }}{{ end }}
+{{- if and .cidr (include "elitea.netpol.privateCidrRefusal" .cidr) }}
+{{- fail (printf "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT holds %q, which the worker's egress policy cannot admit: a private permit names on-premises hosts, never the whole address space (or an IPv4 block wider than /8, IPv6 wider than /16), loopback, or link-local addresses (the cloud metadata endpoints). Narrow it to the hosts' own range." .cidr) }}
+{{- end }}
+{{- end }}
+{{- if and $hosts (not $wnp.privateEgress) (not $wnp.extraEgress) }}
+{{- fail (printf "main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT names the host(s) %s, but the worker's egress policy admits no private address for them: a host name cannot become a NetworkPolicy rule. List their addresses in worker.networkPolicy.privateEgress (a CIDR and ports each), or the toolkits that use them fail at the network." (join ", " $hosts)) }}
+{{- end }}
+{{- end }}
+{{- if and (include "elitea.netpol.gatewayPublicEgress" .) (not .Values.llmGateway.networkPolicy.publicEgressPorts) }}
+{{- fail "llmGateway.networkPolicy.publicEgressPorts is empty: a NetworkPolicy rule without ports admits every port. List the provider API ports (443 by default), or set allowPublicEgress=false." }}
+{{- end }}
+{{- if or (include "elitea.netpol.workerEgress" .) (include "elitea.netpol.gatewayEgress" .) }}
+{{- range $key := list "postgresql" "nats" }}
+{{- $p := index $np.egressPeers $key }}
+{{- if and $p.to (not $p.ports) }}
+{{- fail (printf "networkPolicies.egressPeers.%s.ports is empty: a rule without ports admits every port of the peers it names. List the port (%s)." $key (ternary "5432" "4222" (eq $key "postgresql"))) }}
+{{- end }}
+{{- range $i, $peer := ($p.to | default list) }}
+{{- if and (kindIs "map" $peer) (hasKey $peer "ipBlock") }}
+{{- $cidr := toString (dig "ipBlock" "cidr" "" $peer) }}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$" $cidr) }}
+{{- fail (printf "networkPolicies.egressPeers.%s.to[%d].ipBlock.cidr is %q: fill in the address as a CIDR block, e.g. 10.20.0.5/32 (an unfilled slot of an example file reads as this)." $key $i $cidr) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- range (include "elitea.netpol.clusterCidrs" . | fromJsonArray) }}
+{{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$|^[0-9A-Fa-f:]+/[0-9]{1,3}$" (toString .)) }}
+{{- fail (printf "networkPolicies.clusterCIDRs holds %q, which is not a CIDR block: list the cluster's pod and Service ranges, e.g. [10.244.0.0/16, 10.96.0.0/12]." (toString .)) }}
+{{- end }}
+{{- end }}
+{{- end }}

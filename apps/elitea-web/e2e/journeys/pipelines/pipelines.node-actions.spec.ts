@@ -94,7 +94,7 @@ async function openCanvas(page: Page, pipeline: CreatedPipeline): Promise<void> 
  * `handleCentre` records).
  */
 async function fitAndSettle(page: Page, target: ReturnType<Page['locator']>): Promise<void> {
-  await page.getByRole('button', { name: 'Fit View' }).click();
+  await page.getByRole('button', { name: 'Fit view' }).click();
   await expect
     .poll(
       async () => {
@@ -164,30 +164,25 @@ test('J16g: "Make entrypoint" on a node’s own menu moves the entry point in th
   const addedNode = page.locator(`.react-flow__node[data-id="${ADDED_NODE_ID}"]`);
   await expect(addedNode).toBeVisible({ timeout: 20_000 });
 
-  const nodeMenuTrigger = addedNode.getByRole('button', { name: 'Node actions' });
-  await fitAndSettle(page, nodeMenuTrigger);
+  const panel = page.locator(`[data-testid="pipeline-node-panel"][data-node-id="${ADDED_NODE_ID}"]`);
+  if (!(await panel.isVisible().catch(() => false))) {
+    await fitAndSettle(page, addedNode);
+    await addedNode.click();
+  }
+  await expect(panel).toBeVisible({ timeout: 10_000 });
 
-  await nodeMenuTrigger.click();
-  const menuItem = page.getByRole('menuitem', { name: 'Make entrypoint' });
+  const makeEntrypointButton = panel.getByTestId('pipeline-node-panel-make-entrypoint');
   await expect(
-    menuItem,
-    'a node that is not already the entry point must offer "Make entrypoint" — the legacy test skipped itself here',
+    makeEntrypointButton,
+    'a node that is not already the entry point must offer "Make Entrypoint" — the legacy test skipped itself here',
   ).toBeVisible({ timeout: 10_000 });
-  await menuItem.click();
+  await makeEntrypointButton.click();
 
-  // DIAGNOSTIC ONLY, and deliberately labelled as such: `NodeCardHeader.tsx`
-  // withholds "Make entrypoint" from the node that already IS the entry
-  // point, so re-opening this menu and finding only "Delete" says the click
-  // reached the editor's store — and nothing more, because that store is
-  // exactly what a screen assertion here would be reading back. The evidence
-  // is the stored document below.
-  await nodeMenuTrigger.click();
-  const reopened = page.getByRole('menu');
-  await expect(reopened).toBeVisible({ timeout: 10_000 });
-  await expect(reopened.getByRole('menuitem', { name: 'Make entrypoint' })).toHaveCount(0);
-  await expect(reopened.getByRole('menuitem')).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await expect(reopened).toHaveCount(0);
+  // After promoting the node, the drawer switches from the action button to the
+  // non-interactive Entrypoint badge and the canvas card displays its badge.
+  await expect(makeEntrypointButton).toHaveCount(0);
+  await expect(panel.getByTestId('pipeline-node-panel-entrypoint-state')).toBeVisible({ timeout: 10_000 });
+  await expect(addedNode.getByTestId('pipeline-node-v2-entrypoint')).toBeVisible({ timeout: 10_000 });
 
   await saveAndAwaitPersist(page);
 

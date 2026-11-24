@@ -35,8 +35,9 @@ func delegationSection() map[string]any {
 	const section = platformconfig.SectionDelegation
 	defaults := platformconfig.DefaultDelegationSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Delegation",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Delegation",
 		"description": "Limits on delegation. When an agent calls a saved agent or pipeline, a pipeline node runs " +
 			"one, or an agent starts a sub-agent, the delegated agent runs with only the toolkits, tools, " +
 			"credentials, data classes and egress hosts that both it and its caller hold. A delegation that " +

@@ -76,7 +76,6 @@ import (
 	"strings"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 )
 
 // The permissions the legacy runtime declares on the two forms this route
@@ -210,14 +209,14 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 
 	// Each pair commits in its own transaction (addProjectMembership), so the
 	// check and the loop run under a hold of the role-writes lock that spans them.
-	hold, release, err := rolepolicy.HoldRoleWrites(ctx, h.pool)
+	hold, release, err := adminaccess.HoldRoleWrites(ctx, h.pool)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to read the projects"})
 		return
 	}
 	defer release()
 	if refusal := h.checkBulkInviteSelf(r, hold, users, resolvedProjects); refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return
 	}
 
@@ -229,7 +228,7 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, userID := range users {
 		for _, projectID := range projects {
-			result := h.bulkInvitePair(ctx, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role)
+			result := h.bulkInvitePair(r, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role)
 			switch result.Outcome {
 			case bulkInviteOutcomeAdded:
 				summary.Added++
@@ -253,7 +252,7 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 
 // bulkInvitePair applies one (user, project) pair and describes what happened.
 func (h *Handler) bulkInvitePair(
-	ctx context.Context, user *userTarget, userID int64, project *projectTarget, projectID int64, role string,
+	r *http.Request, user *userTarget, userID int64, project *projectTarget, projectID int64, role string,
 ) bulkInviteResult {
 	result := bulkInviteResult{UserID: userID, ProjectID: projectID}
 	if user != nil {
@@ -285,7 +284,7 @@ func (h *Handler) bulkInvitePair(
 			fmt.Sprintf("project %s does not define the role %q", project.name, role))
 	}
 
-	added, err := h.addProjectMembership(ctx, projectID, userID, *project.roleID)
+	added, err := h.addProjectMembership(r, projectID, userID, *project.roleID)
 	switch {
 	case err != nil:
 		return refuse(bulkInviteOutcomeFailed,
@@ -312,19 +311,32 @@ func (h *Handler) bulkInvitePair(
 // time would both read "not a member" and one of them would then report an
 // insert it did not make. ON CONFLICT DO NOTHING makes the second one report
 // `already_member`, which is what happened.
-func (h *Handler) addProjectMembership(ctx context.Context, projectID, userID int64, roleID int) (bool, error) {
+func (h *Handler) addProjectMembership(r *http.Request, projectID, userID int64, roleID int) (bool, error) {
+	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	before, err := projectMemberRoles(ctx, tx, projectID, userID)
+	if err != nil {
+		return false, err
+	}
 	tag, err := tx.Exec(ctx,
 		`INSERT INTO public.auth_core__project_user_role (project_id, user_id, role_id)
 		 VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
 		projectID, userID, roleID)
 	if err != nil {
 		return false, err
+	}
+	// A membership written through a central route is a security audit
+	// event (ADR-0059 R1.5), in this transaction: a failed append fails the
+	// pair. A pair that changed nothing appends none.
+	if tag.RowsAffected() > 0 {
+		if err := h.appendMembershipChange(ctx, tx, r, projectID, userID, before, true); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
@@ -453,37 +465,65 @@ func dedupeIDs(ids []int64) []int64 {
 // empty. Inviting the caller's own account into a project is refused when the
 // role carries a permission that the caller does not already hold there.
 // Nothing is written for any pair. A super_admin holder is exempt.
+//
+// A batch that passes and names a project the caller is not a member of marks
+// its audit record central_override (ADR-0059 R0.6a).
 func (h *Handler) checkBulkInviteSelf(
-	r *http.Request, q rolepolicy.Querier, users []int64, projects map[int64]*projectTarget,
-) *rolepolicy.Refusal {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	r *http.Request, q adminaccess.Querier, users []int64, projects map[int64]*projectTarget,
+) *adminaccess.Refusal {
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
 		return refusal
-	}
-	if caller.SuperAdmin || !slices.Contains(users, caller.UserID) {
-		return nil
 	}
 	ids := make([]int64, 0, len(projects))
 	for id := range projects {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(a, b int) bool { return ids[a] < ids[b] })
+	if refusal := bulkInviteSelfRefusal(r, q, caller, users, ids, projects); refusal != nil {
+		return refusal
+	}
+	for _, id := range ids {
+		if projects[id] == nil {
+			continue
+		}
+		member, err := adminaccess.IsProjectMember(r.Context(), q, caller.UserID, id)
+		if err != nil {
+			return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
+		}
+		if !member {
+			adminaccess.MarkCentralOverride(r.Context())
+			break
+		}
+	}
+	return nil
+}
+
+// bulkInviteSelfRefusal is the rule itself, for a resolved caller and the
+// sorted project ids.
+func bulkInviteSelfRefusal(
+	r *http.Request, q adminaccess.Querier, caller adminaccess.Caller,
+	users []int64, ids []int64, projects map[int64]*projectTarget,
+) *adminaccess.Refusal {
+	if caller.SuperAdmin || !slices.Contains(users, caller.UserID) {
+		return nil
+	}
 	ctx := r.Context()
 	for _, id := range ids {
 		project := projects[id]
 		if project == nil || project.roleID == nil || project.isPersonal {
 			continue
 		}
-		required, err := rolepolicy.ProjectRolesPermissions(ctx, q, int(id), []int{*project.roleID})
+		required, err := adminaccess.ProjectRolesPermissions(ctx, q, int(id), []int{*project.roleID})
 		if err != nil {
-			return rolepolicy.Unresolved("the project roles could not be read, so the role change was refused")
+			return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
 		}
 		held, err := caller.ProjectSet(ctx, int(id))
 		if err != nil {
-			return rolepolicy.Unresolved("your own permissions could not be read, so the role change was refused")
+			return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused")
 		}
-		if missing := rolepolicy.Missing(held, required); len(missing) > 0 {
-			return rolepolicy.SelfEscalation(rolepolicy.ProjectGain{ProjectID: id, Permissions: missing})
+		if missing := adminaccess.Missing(held, required); len(missing) > 0 {
+			return adminaccess.SelfEscalation(adminaccess.ProjectGain{ProjectID: id, Permissions: missing})
 		}
 	}
 	return nil

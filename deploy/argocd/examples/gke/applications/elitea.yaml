@@ -104,6 +104,19 @@ spec:
             - 35.191.0.0/16
             - 130.211.0.0/22
 
+        # The worker's and the LLM gateway's egress policies: the cluster's own
+        # ranges, excepted from their public-internet rule, and the Cloud SQL
+        # instance's private IP (values-gke.yaml holds the same placeholders).
+        networkPolicies:
+          clusterCIDRs:
+            - "<pod CIDR>"
+            - "<service CIDR>"
+          egressPeers:
+            postgresql:
+              to:
+                - ipBlock:
+                    cidr: "<Cloud SQL private IP>/32"
+
         main:
           serviceAccount:
             annotations:
