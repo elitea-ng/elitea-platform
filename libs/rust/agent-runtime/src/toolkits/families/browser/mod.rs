@@ -500,7 +500,7 @@ fn record_egress_refusal(result: &Value) {
         .and_then(Value::as_u64)
         .and_then(|port| u16::try_from(port).ok())
         .unwrap_or(443);
-    crate::egress::current().record_refused(host, port);
+    crate::egress::current().record_refused(host, port, crate::egress::REFUSAL_REASON_NOT_ALLOWED);
 }
 
 fn image_result(mut result: Value, image: &SessionImage) -> Value {

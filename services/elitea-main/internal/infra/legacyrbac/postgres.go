@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -58,9 +61,12 @@ func (r *PostgresResolver) ResolvePermissions(
 		return auth.PermissionResolution{}, err
 	}
 
+	if mode == auth.PermissionModeAdministration {
+		return r.administrationResolution(ctx, principal, userID)
+	}
 	var permissions []string
 	switch mode {
-	case auth.PermissionModeAdministration, auth.PermissionModeDeveloper:
+	case auth.PermissionModeDeveloper:
 		permissions, err = r.centralPermissions(ctx, userID, mode)
 	case auth.PermissionModeDefault:
 		var id int64
@@ -105,9 +111,12 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 		return auth.PermissionResolution{}, err
 	}
 
+	if mode == auth.PermissionModeAdministration {
+		return r.administrationResolution(ctx, principal, userID)
+	}
 	var permissions []string
 	switch mode {
-	case auth.PermissionModeAdministration, auth.PermissionModeDeveloper:
+	case auth.PermissionModeDeveloper:
 		permissions, err = r.centralPermissions(ctx, userID, mode)
 	case auth.PermissionModeDefault:
 		permissions, err = r.membershipPermissions(ctx, userID)
@@ -119,6 +128,212 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 		permissions = []string{}
 	}
 	return auth.PermissionResolution{UserID: userID, Permissions: permissions}, nil
+}
+
+// administrationResolution answers the administration mode: the credential
+// decides the set (ADR-0059 decision 7, the credentials table). The developer
+// and default modes never come here and resolve as before.
+//
+//   - session, form: the owner's set;
+//   - token: by the token row's admin_access, read at this request, so a
+//     `scoped` token is the owner's CURRENT set intersected with
+//     admin_scopes and a scope the owner loses is lost by the token with no
+//     write;
+//   - native: the owner's set intersected with the registry permissions
+//     marked native_client;
+//   - run, system, sealed (its standing set; the elevation is R2.1) and the
+//     zero kind: empty.
+//
+// userID is already resolved and checked by the caller, so a suspended owner
+// or an expired token was refused before any of this.
+func (r *PostgresResolver) administrationResolution(
+	ctx context.Context,
+	principal auth.User,
+	userID int64,
+) (_ auth.PermissionResolution, failure error) {
+	credential := principal.Credential()
+	resolution := auth.PermissionResolution{
+		UserID:              userID,
+		Permissions:         []string{},
+		ElevationSessionRef: credential.ElevationSessionRef(),
+		Roles:               []string{},
+	}
+	// The admin audit row of the request records the roles the caller acted
+	// with (ADR-0059 R1.4a), from this resolution: no second query. A failed
+	// resolution records nothing.
+	defer func() {
+		if failure == nil {
+			audit.RecordAdministration(ctx, audit.Administration{ActingRoles: resolution.Roles})
+		}
+	}()
+	if !credentialShapeCoherent(credential) {
+		resolution.ElevationSessionRef = 0
+		return resolution, nil
+	}
+	var access TokenAdminAccess
+	switch credential.Kind {
+	case auth.CredentialKindSession, auth.CredentialKindForm, auth.CredentialKindNative:
+	case auth.CredentialKindToken:
+		var err error
+		access, err = r.tokenAdminAccess(ctx, credential.TokenID, userID)
+		if err != nil {
+			return auth.PermissionResolution{}, err
+		}
+		resolution.TokenAdminAccess = access.Access
+		if access.Access != TokenAdminAccessScoped && access.Access != TokenAdminAccessInherit {
+			return resolution, nil
+		}
+	default:
+		// run, system, sealed and the zero kind: no query, nothing held.
+		return resolution, nil
+	}
+	roles, owner, err := r.administrationRoles(ctx, userID)
+	if err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	resolution.Roles = roles
+	resolution.Permissions = AdministrationSet(credential.Kind, access, owner)
+	return resolution, nil
+}
+
+// administrationRoles answers the user's administration-mode roles and the
+// permissions they grant, in one query: what centralPermissions answers for
+// the administration mode, plus the role names the admin audit row records.
+// Both are sorted and de-duplicated, and never nil. A role with no grant is a
+// role the user holds and is named.
+func (r *PostgresResolver) administrationRoles(ctx context.Context, userID int64) ([]string, []string, error) {
+	rows, err := r.store.Query(ctx, `
+SELECT role.name, role_grant.permission
+FROM public.auth_core__user_role AS assignment
+JOIN public.auth_core__role AS role ON role.id = assignment.role_id
+LEFT JOIN public.auth_core__role_permission AS role_grant ON role_grant.role_id = role.id
+WHERE assignment.user_id = $1
+  AND role.mode = $2`, userID, auth.PermissionModeAdministration)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve legacy administration roles: %w", err)
+	}
+	defer rows.Close()
+	roles, permissions := []string{}, []string{}
+	for rows.Next() {
+		var role string
+		var permission *string
+		if err := rows.Scan(&role, &permission); err != nil {
+			return nil, nil, fmt.Errorf("scan legacy administration roles: %w", err)
+		}
+		roles = append(roles, role)
+		if permission != nil {
+			permissions = append(permissions, *permission)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read legacy administration roles: %w", err)
+	}
+	slices.Sort(roles)
+	slices.Sort(permissions)
+	return slices.Compact(roles), slices.Compact(permissions), nil
+}
+
+// credentialShapeCoherent refuses a kind the principal's other fields
+// contradict: a browser session that names a token row, or a token-backed
+// kind that names none. No authenticating site builds such a principal, and
+// it resolves nothing.
+func credentialShapeCoherent(credential auth.Credential) bool {
+	switch credential.Kind {
+	case auth.CredentialKindSession, auth.CredentialKindForm, auth.CredentialKindSealed:
+		return credential.TokenID == ""
+	case auth.CredentialKindToken, auth.CredentialKindNative, auth.CredentialKindRun, auth.CredentialKindSystem:
+		return credential.TokenID != ""
+	}
+	return false
+}
+
+// The values of auth_core__token.admin_access (shared 0265).
+const (
+	TokenAdminAccessNone    = "none"
+	TokenAdminAccessScoped  = "scoped"
+	TokenAdminAccessInherit = "inherit"
+)
+
+// TokenAdminAccess is the administration access a personal access token row
+// carries (auth_core__token.admin_access and admin_scopes, shared 0265).
+type TokenAdminAccess struct {
+	Access string
+	Scopes []string
+}
+
+// tokenScopeAllowed says whether a name may be a token scope at all: its
+// registry row opts in (adminaccess.Permission.Token). The write path (R1.3a)
+// validates scopes too; this is the read side, so a scope written by hand or
+// by a defect (super_admin, identity trust) never resolves. No row opts in
+// yet, so every scoped token resolves nothing until R1.3a opts rows in: the
+// safe failure. A variable so the package's tests can stand in an
+// eligibility while no row has it.
+var tokenScopeAllowed = func(name string) bool {
+	row, ok := adminaccess.Lookup(name)
+	return ok && row.Token
+}
+
+// AdministrationSet is the administration set a credential of kind holds,
+// given its owner's standing set (owner) and, for a personal access token,
+// the token row's access. It is the one statement of the credentials table of
+// ADR-0059 decision 7; the resolver applies it to what PostgreSQL answered.
+// A scoped token keeps the scopes its owner still holds and the registry
+// admits as token scopes (tokenScopeAllowed).
+// The result is sorted, de-duplicated and never nil.
+func AdministrationSet(kind auth.CredentialKind, access TokenAdminAccess, owner []string) []string {
+	var keep func(string) bool
+	switch kind {
+	case auth.CredentialKindSession, auth.CredentialKindForm:
+		keep = func(string) bool { return true }
+	case auth.CredentialKindToken:
+		switch access.Access {
+		case TokenAdminAccessInherit:
+			keep = func(string) bool { return true }
+		case TokenAdminAccessScoped:
+			keep = func(name string) bool {
+				return slices.Contains(access.Scopes, name) && tokenScopeAllowed(name)
+			}
+		}
+	case auth.CredentialKindNative:
+		keep = func(name string) bool {
+			row, ok := adminaccess.Lookup(name)
+			return ok && row.NativeClient
+		}
+	}
+	set := make([]string, 0, len(owner))
+	if keep == nil {
+		return set
+	}
+	for _, name := range owner {
+		if keep(name) {
+			set = append(set, name)
+		}
+	}
+	slices.Sort(set)
+	return slices.Compact(set)
+}
+
+// tokenAdminAccess reads the administration access of the token row the
+// principal names, at this request. It is a separate read, made only for a
+// personal access token in the administration mode, so the developer and
+// default modes issue exactly the statements they issued before.
+func (r *PostgresResolver) tokenAdminAccess(ctx context.Context, tokenID string, userID int64) (TokenAdminAccess, error) {
+	id, err := parsePositiveID(tokenID)
+	if err != nil {
+		return TokenAdminAccess{}, err
+	}
+	var access TokenAdminAccess
+	err = r.store.QueryRow(ctx, `
+SELECT token.admin_access, token.admin_scopes
+FROM public.auth_core__token AS token
+WHERE token.id = $1 AND token.user_id = $2`, id, userID).Scan(&access.Access, &access.Scopes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TokenAdminAccess{}, ErrPermissionDenied
+		}
+		return TokenAdminAccess{}, fmt.Errorf("resolve token administration access: %w", err)
+	}
+	return access, nil
 }
 
 func normalizeMode(mode string) (string, error) {

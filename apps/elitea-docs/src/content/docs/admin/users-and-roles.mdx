@@ -32,6 +32,28 @@ Open **Users** in the admin console. The table lists every account on the deploy
 Invitations do not have a dedicated accept-invite page. A new member accepts an invite by signing in; the invite is resolved by matching their identity on first login.
 </Note>
 
+## Several administration roles per person
+
+A person can hold several administration roles at once, for example `llm_manager` and `security_auditor`. They hold the union of the permissions of every role; there is no role switcher. Any role of the administration mode can be assigned, built-in or custom, except one that is never assigned (the legacy `system` role).
+
+The Users page still offers one role per person; a control for several roles comes in a later release. Until then, assign several roles through the API.
+
+**`POST /api/v2/admin/auth_users/administration`** with `action: set_admin_role` sets a person's roles. Send one of two forms:
+
+- `role_names`, the set the person holds afterwards (`[]` for none):
+
+  ```json
+  {"action": "set_admin_role", "user_id": 11, "role_names": ["admin", "llm_manager"]}
+  ```
+
+- `role_name`, the single form existing automation uses: it replaces every role with that one role (`null` for none).
+
+A request with both is a `400`, and so is a role the deployment does not define (the answer names it). The server applies the difference: a role in both the old and the new set is not touched, and each role given or taken writes one [record](#role-changes-are-recorded). Every [rule](#no-escalation) applies to each role given or taken, and if one role fails, nothing is written and the refusal names that role. The answer carries `role_names`, the person's roles after the change.
+
+**`POST /api/v2/admin/modes/administration`** with `{"user_id", "mode": "administration", "role"}` adds one role and keeps the others; `DELETE` with `?id=<user_id>:administration:<role>` removes one.
+
+**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, the four legacy names first. The single `admin_role` field, the highest of `super_admin`, `admin`, `editor` and `viewer` that the person holds, is kept for one release and then removed.
+
 ## Edit roles and permissions
 
 Open **Roles**. It shows a permission matrix across three scopes, each a tab:
@@ -51,25 +73,126 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 <Screenshot id="admin-roles-matrix" alt="Roles permission matrix with scope tabs" />
 
-## No escalation
+## Narrow administration permissions
 
-The server makes sure that no administrator can raise their own access, and that no administrator can give a central (administration) role or permission that they do not hold. It applies these rules to the Roles matrix, to role definitions, to the Users page, to the role assignments under `/admin/modes`, to project members, to bulk invites, to the personal and team project matrix and to SCIM group bindings:
+Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
 
-- **Grant only what you hold.** You can add a permission to a central role, or remove one from it, only if you hold that permission yourself.
-- **Assign only what you hold.** You can assign or remove a central role only if you hold every permission of that role. Removing a role counts, so an administrator with fewer permissions cannot demote one with more.
-- **Your own role is locked.** You cannot change the permissions of a central role that you hold.
-- **The super admin permission stays on the super admin role.** `admin.auth.users.super_admin` can be granted only to the administration `super_admin` role. This rule applies to super admins too.
-- **Project members give only what they hold.** A project member who manages members (`/admin/users/default/{project}`) can give or take a project role only if they hold all of its permissions in that project.
-- **SCIM group bindings give only what you hold.** A binding gives its role to the members your identity provider pushes later, and you can be one of them. To create, move or delete a binding, you must hold every permission of its role in its project.
-- **No self-escalation in projects.** The admin Projects page, bulk invites, a change to a project role, to the Standard Roles template or to **Apply to Projects** cannot give you a permission in a project that you did not already hold there. Managing the members and roles of other accounts in any project stays the power of a central administrator.
+A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation still shows the E-mail, Tasks and Configuration pages only to a holder of `runtime.plugins`, so a role that holds only a narrow name can call those routes but does not see the pages in the menu until a later release. The built-in narrow roles below hold only a narrow set.
 
-A super admin (a holder of `admin.auth.users.super_admin`) is exempt from all rules except the fourth. A new role always starts with no permissions. Only a super admin can use `append_user_role` on the personal and team project matrix, because it gives the roles to every member of every target project. Clearing a role of the retired `developer` mode needs no subset, because that mode grants nothing.
+| Permission | Allows | Narrows |
+|---|---|---|
+| `llm.catalogue.view` | Read global providers, platform models, the default model and prices. Never a credential value. | `configuration.governance` |
+| `llm.catalogue.manage` | Create, edit, check, revalidate and delete them; adopt provider models. | `configuration.governance` |
+| `llm.policy.view` | Read gateway governance rules (routing, throttles, guardrails) and the guardrail and breaker sections; validate a rule expression. | `configuration.governance`, `runtime.plugins` |
+| `llm.policy.manage` | Edit routing and throttle rules and the breaker section. | `configuration.governance`, `runtime.plugins` |
+| `llm.guardrails.manage` | Edit guardrail rules and the guardrail sections, including the fail mode. | `configuration.governance`, `runtime.plugins` |
+| `llm.usage.view` | Read gateway status, usage, request logs and budget alerts. | `configuration.governance` |
+| `llm.alerts.manage` | Edit budget alerts. | `configuration.governance` |
+| `platform.config.view` | Read Configuration sections that have no narrower permission, and Features. | `runtime.plugins` |
+| `platform.config.manage` | Edit them. | `runtime.plugins` |
+| `identity.sso.view` | Read identity providers, SCIM clients and SCIM group bindings. | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.view` |
+| `identity.sso.settings.manage` | Edit what does not change trust: the display name, the button text and order, the attribute mapping other than its identity fields, and whether an existing provider is enabled; revoke and delete a SCIM client; edit SCIM group bindings to project roles (you still give only what you hold). | `runtime.plugins`, `admin.auth.users`, `configuration.roles.user_project_permissions.edit` |
+| `identity.sso.trust.manage` | Change whom the platform trusts: create or delete an identity provider; change its issuer, metadata URL, client credentials, signing certificate, adoption flags and the identity fields of its attribute mapping; create or rotate a SCIM client. Equivalent to `super_admin`, and granted to `super_admin` alone. | none (today these actions need `admin.auth.users.super_admin`) |
+| `platform.email.manage` | Read and edit e-mail settings; send a test. There is no separate view permission. **Accepted.** | `runtime.plugins` |
+| `platform.maintenance.manage` | Read and set maintenance mode; use the application during a window. | `runtime.plugins` |
+| `platform.operations.view` | Read system information, tracing status, background jobs and tasks. **Accepted.** | `runtime.plugins` |
+| `platform.operations.manage` | Cancel a background job; start the notice run. It does not include reading the list: pair it with `platform.operations.view`. **Accepted.** | `runtime.plugins` |
+| `mcp.catalogue.manage` | Read and edit prebuilt MCP servers. **Accepted.** | `runtime.plugins` |
+| `projects.members.manage` | Add, change and remove members of any project, without widening your own access. | `configuration.users.users.create`, `.edit` and `.delete` |
+| `projects.settings.view` | Read the guarded settings of any project. | none (new) |
+| `projects.settings.manage` | Edit the guarded settings of any project. | none (new) |
+| `access.roles.view` | Read who holds which administrative role, tokens with administration access, the elevation history and the access posture. | `admin.auth.users`, `modes.users` |
+| `access.breakglass.request` | Request an elevation. | none |
+| `access.breakglass.approve` | Approve or deny another person's request; end an elevation. | none |
+| `access.breakglass.review` | Review an ended elevation. | none |
+| `access.breakglass.manage` | Edit the break-glass settings; read the sealed credential list. | none |
 
-The server refuses a change that breaks a rule with `403` and a `code`: `role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation` or `role_caller_unresolved`. The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
+`identity.sso.trust.manage` and the four `access.breakglass.*` permissions are seeded-only: an upgrade grants them, and they are not meant to be added to other roles from the Roles matrix.
 
 <Note>
-An account that holds only the `admin` role cannot change the permissions of the `admin` role. A super admin can. The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in.
+Six names are not a narrower part of an existing permission. `projects.settings.view` and `projects.settings.manage` are a privilege increase: once the project settings gate accepts them, both administrator roles can read and change the guarded settings (cloud executor, worker egress, AI disclosure, browser, computer use) of a project they are not a member of. `identity.sso.trust.manage` names a power that `super_admin` already has. The four `access.breakglass.*` names belong to break-glass elevation and allow nothing until that feature ships; then every holder of `admin` can use them.
 </Note>
+
+## Built-in administration roles
+
+Six built-in roles of the central administration mode hold a set of permissions that Elitea defines. The upgrade that adds the four new ones creates them with their sets; it assigns them to nobody. The Roles matrix still labels each column with the role name; the display names appear when the roles can be assigned from the console.
+
+| Role | Display name | Permissions | Cannot |
+|---|---|---|---|
+| `super_admin` | Global administrator | Every administration permission except `configuration.service_descriptors`, which no upgrade grants. Alone among the assignable roles it holds `admin.auth.users.super_admin` and `identity.sso.trust.manage`. | Hold `security.signals.reidentify`; that permission goes to no built-in role. |
+| `admin` | Platform administrator | Every administration permission except `admin.auth.users.super_admin`, `identity.sso.trust.manage` and `configuration.service_descriptors`. | Make a global administrator, or change whom an identity provider vouches for. |
+| `llm_manager` | LLM manager | `llm.catalogue.view`, `llm.catalogue.manage`, `llm.policy.view`, `llm.policy.manage`, `llm.usage.view`, `llm.alerts.manage`, `models.admin.project_budgets.view`, `models.admin.project_budgets.edit`, `projects.projects.projects.view` | Manage users, roles, identity providers, SCIM, tokens, project members, branding, e-mail, maintenance, retention, the kill switch, the agent registry, delegation reviews, worker egress or guardrails. |
+| `project_administrator` | Project administrator (all projects) | `projects.projects.projects.view`, `projects.projects.projects.edit`, `projects.projects.project.create`, `projects.projects.project.delete`, `projects.members.manage`, `projects.settings.view`, `projects.settings.manage`, `configuration.users.users.view`, `configuration.roles.roles.view`, `configuration.roles.user_project_permissions.view`, `invites.bulkusers`, `invites.bulkprojects`, `admin.moderation`, `admin.moderation.edit`, `models.admin.project_budgets.view` | Change platform configuration or LLM settings, identity providers or SCIM bindings, edit the project role matrix, assign administrative roles, suspend or delete users, or configure the credentials, models and toolkits of a project. It cannot read project content without a membership, and cannot give itself one. It can still add a second account, or another project administrator, to a project: that is detected by the `access.admin_membership_granted` signal, not prevented. |
+| `security_auditor` | Security auditor | `models.admin.audit_trail.view`, `access.roles.view`, `access.breakglass.review`, and the security signal permissions when security signals ship | Use any route that writes or approves, other than attesting a break-glass review. Never `security.signals.reidentify`. |
+| `emergency_access` | Emergency access | `access.breakglass.request` | Anything else: the role only lets its holder ask for a break-glass elevation. |
+
+The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
+
+**The sets are locked.** The server refuses to rename or delete a built-in role (`409`), and to change its permissions in the Roles matrix (`403` with the code `role_set_locked`), for every caller, a super admin included. A deployment that wants a different set creates a custom role and gives it the permissions. The operator command [`elitea-main admin-role reset <role>`](/deployment/operations#administrative-roles-from-the-command-line) puts a built-in set back to the one Elitea defines.
+
+**Built-in is a record, not a name.** The upgrade records each built-in role in `elitea_auth.admin_role_seeds`. A role that already had one of the new names (for example a custom `llm_manager` or `security_auditor`) before the upgrade is left as it was: it gets no permission, is not recorded and is not locked, and can still be renamed and deleted. The upgrade runs once, so renaming the custom role later does not add the built-in one.
+
+## No escalation
+
+The server makes sure that no administrator can raise their own access, and that no administrator can give a central (administration) role or permission that they do not hold. It applies these rules to the Roles matrix, to role definitions, to the Users page, to the role assignments under `/admin/modes`, to project members, to bulk invites, to the personal and team project matrix and to SCIM group bindings. The central rules hold in the `administration` mode and in the retired `developer` mode alike.
+
+The six rules for central roles:
+
+1. **Grant and assign only what you hold.** You can add a permission to a central role, or remove one from it, only if you hold that permission yourself. You can assign or remove a central role only if you hold every permission of that role. Removing counts, so an administrator with fewer permissions cannot demote one with more.
+2. **Not yourself.** You cannot give yourself a central role, or take one away from yourself, on the Users page or under `/admin/modes`. Another administrator makes that change. The first administrator comes from `identity.initial_global_admins`, which applies only while no active account holds `super_admin`, or from the operator command `elitea-main admin-role grant`.
+3. **Your own role is locked.** You cannot change the permissions of a central role that you hold.
+4. **Seeded only.** Six permissions are granted by the upgrade migrations only, and no change through the console or the API adds them to a role: `admin.auth.users.super_admin`, `identity.sso.trust.manage`, `access.breakglass.request`, `access.breakglass.approve`, `access.breakglass.manage` and `access.breakglass.review`.
+5. **Locked sets.** The permissions of a built-in role cannot be changed (see [Built-in administration roles](#built-in-administration-roles)). A role that is never assigned (the legacy `system` role) is assigned to nobody.
+6. **Loud.** Every refusal is in the Audit Trail with the action `role.escalation_refused`.
+
+The role name `break_glass` is reserved: creating a role with that name, or renaming one to it, answers `400`.
+
+**The global administrator's exemption.** A holder of `admin.auth.users.super_admin` through a standing role is exempt from rules 1 to 3: it can assign and remove roles, its own included, and edit a custom role it holds. Rules 4 to 6 bind it too: it cannot add a seeded-only permission to another role, edit a built-in set or assign the `system` role.
+
+In projects:
+
+- **Project members give only what they hold.** A project member who manages members (`/admin/users/default/{project}`) can give or take a project role only if they hold all of its permissions in that project.
+- **SCIM group bindings give only what you hold.** A binding gives its role to the members your identity provider pushes later, and you can be one of them. To create, move or delete a binding, you must hold every permission of its role in its project.
+- **No self-escalation in projects.** The admin Projects page, bulk invites, a change to a project role, to the Standard Roles template or to **Apply to Projects** cannot give you a permission in a project that you did not already hold there. Managing the members and roles of other accounts in any project stays the power of a central administrator. A super admin is exempt.
+- **Seeded only** (rule 4) holds for project roles and the Standard Roles template too.
+
+A new role always starts with no permissions. Only a super admin can use `append_user_role` on the personal and team project matrix, because it gives the roles to every member of every target project. Clearing a role of the retired `developer` mode needs no subset, because that mode grants nothing.
+
+The server refuses a change that breaks a rule with `403` and a `code`:
+
+| Code | Rule |
+|---|---|
+| `role_permission_not_held` | 1: you do not hold a permission that the change grants, removes, assigns or takes away |
+| `role_self_assignment` | 2: the change gives or takes one of your own central roles |
+| `role_own_set_locked` | 3: the change edits the permissions of a role you hold |
+| `role_permission_reserved` | 4: the change adds a seeded-only permission to a role |
+| `role_set_locked` | 5: the change edits a built-in set, or assigns a role that is never assigned |
+| `role_super_admin_required` | only a super admin assigns or removes the `super_admin` role |
+| `role_self_escalation` | the change would widen your own permissions in a project |
+| `role_caller_unresolved` | your own permissions could not be read, so the change was refused |
+
+The body also names the `role` and the `permissions`. The Roles page shows that reason in place of a generic error. Each refusal is in the Audit Trail with the action `role.escalation_refused`.
+
+<Note>
+Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in, but only while no active account holds `super_admin` (see [The first global administrator](/admin/authentication#the-first-global-administrator)).
+</Note>
+
+## The last administrator
+
+A deployment always keeps one administrator. The **last administrator** is the last active (unsuspended) account that holds `admin.auth.users.super_admin`, which in practice means the last `super_admin`. The legacy `system` role holds that permission too, but it is never assigned, so its holders (platform accounts) do not count. When nobody holds that permission, it is the last active account with the `admin` role. That second case is for a deployment upgraded from the legacy platform, where people can hold `admin` while nobody holds `super_admin`. On a new deployment nobody holds either role until the first administrator is added, and then there is nothing to protect.
+
+Nobody can demote, suspend, delete or deactivate the last administrator, a super admin included, on any path:
+
+- the Users page and `POST /api/v2/admin/auth_users/administration` (`set_admin_role` and `delete`),
+- `DELETE /api/v2/admin/modes/administration`,
+- `PUT /api/v2/admin/user_suspend/administration/{id}`,
+- SCIM deactivation and `DELETE` (see [Deprovision the last administrator](/admin/authentication#deprovision-the-last-administrator)).
+
+The server answers `409` with the code `last_administrator`, and the Users page shows the reason. A bulk delete that includes the last administrator is refused whole: no account of the selection is deleted. Each refusal is in the Audit Trail with the action `role.last_administrator_refused`.
+
+To replace the last administrator, give a second person the role first, then demote, suspend or delete the first one. If nobody else can give the role (the last administrator has left, or lost access), an operator with access to the `elitea-main` workload runs [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line). Only that command can override the rule, with `admin-role revoke --override-last-administrator`.
+
+The check runs under the same database lock as every role change, so two administrators who demote each other at the same moment cannot both succeed.
 
 ## Role changes are recorded
 
@@ -82,6 +205,20 @@ The source says how the change was made:
 | `console` | An administrator signed in through the browser, on the Users page or under `/admin/modes`. |
 | `api` | A caller with an access token, on the same routes. |
 | `bootstrap` | The first sign-in of an account in `identity.initial_global_admins`. There is no actor. |
-| `migration`, `operator`, `review`, `scim` | Reserved for an upgrade step, the operator command, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
+| `operator` | The operator command [`elitea-main admin-role`](/deployment/operations#administrative-roles-from-the-command-line), run inside the workload. There is no actor; the record keeps the command's `--reason`. |
+| `migration`, `review`, `scim` | Reserved for an upgrade step, a confirmed provisional grant and a SCIM binding to an administration role. A `migration` record has no actor. |
 
-Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. A change made outside Elitea, such as SQL run by hand against the database, or the roles removed with a deleted account, leaves no record.
+### Security audit events
+
+Each change of who holds what is also a chained security audit event, `admin.access.changed`, that your SIEM receives through the [audit export](/reference/audit-event-schema#adminaccesschanged): a role assigned or removed, a role's permission set edited, a role created or deleted, a membership written by a bulk invite, a global provider's route changed, and a change of identity trust. The event names the actor, the subject and the sets before and after by name. It carries a reason code when one was given, never the reason text. It is written in the same transaction as the change, so a change whose event cannot be written fails and nothing moves.
+
+### Read the holders and the history
+
+Two read routes answer "who holds which administration role" and "who changed it, when and how". The Access page that shows them comes in a later release.
+
+- **`GET /api/v2/admin/access/roles`** lists every account that holds at least one administration role, once, with all its roles. Each role says whether it is built-in (`built_in`, with the built-in record's `marker`) or custom. Accounts without an administration role are not listed.
+- **`GET /api/v2/admin/access/history`** lists the records below, newest first. Filter with `user_id` and `role`, page with `limit` (up to 200, default 50) and `offset`. Each row names the account, the role and mode, `granted` or `revoked`, the actor, the time and the source.
+
+Both need `access.roles.view`, or one of the two broader permissions it narrows, `admin.auth.users` and `modes.users`. The built-in `security_auditor` role holds `access.roles.view`, so an auditor reads the holders and the history, but not the user directory: `GET /api/v2/admin/auth_users/administration`, which lists every account with its e-mail address, stays on `admin.auth.users`, and an auditor gets `403` there. The names of administrators appear only in these two reads, because a list of administrators is a target list for phishing.
+
+Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Removing one of two roles writes one record and leaves the other role as it was. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. Deleting an account revokes each of its central roles first, with one `revoked` record each that names who deleted it. A change made outside Elitea, such as SQL run by hand against the database, leaves no record.

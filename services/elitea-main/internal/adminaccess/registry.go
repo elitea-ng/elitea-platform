@@ -103,7 +103,7 @@ type Grantable string
 
 const (
 	// GrantableAny may be granted from the Roles matrix, under the
-	// no-escalation rules of internal/rolepolicy.
+	// no-escalation rules of internal/adminaccess.
 	GrantableAny Grantable = "any"
 	// GrantableSeededOnly is granted by a seeding migration and by nothing
 	// else. The registry test fails when no migration grants such a name.
@@ -118,8 +118,10 @@ type Permission struct {
 	Area Area
 	// Class is read, write or approve.
 	Class Class
-	// Narrows is the legacy permission this one narrows, or "".
-	Narrows string
+	// Narrows lists the legacy permissions this one narrows, empty for a
+	// new capability. A gate that accepts this permission keeps accepting
+	// every name listed here (ADR-0059 decision 2).
+	Narrows []string
 	// Legacy marks a name that ends on the sunset date (story R0.14a sets
 	// it for the two overloaded names).
 	Legacy bool
@@ -130,8 +132,10 @@ type Permission struct {
 	// NativeClient says whether a native device session (desktop, mobile)
 	// keeps the permission (ADR-0059 decision 7, "Native sessions").
 	NativeClient bool
-	// Maintenance says whether a holder is admitted during a maintenance
-	// window.
+	// Maintenance says whether a holder is admitted to every route during a
+	// maintenance window (AdmitsDuringMaintenance). Any other administration
+	// permission admits its holder only to the routes an administration
+	// gate decides, which then decides as it does outside a window.
 	Maintenance bool
 }
 
@@ -143,9 +147,13 @@ type Table struct {
 
 // NewTable validates rows and returns them as a table sorted by name. It
 // refuses an empty or over-long name, a duplicate, a row with no valid area,
-// class or grantable value, and a Narrows that names no row of the table.
+// class or grantable value, and a Narrows entry that names no row of the table
+// or the row itself.
 func NewTable(rows []Permission) (Table, error) {
-	sorted := append([]Permission(nil), rows...)
+	sorted := make([]Permission, len(rows))
+	for i, row := range rows {
+		sorted[i] = row.clone()
+	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	byName := make(map[string]int, len(sorted))
 	for i, row := range sorted {
@@ -158,15 +166,14 @@ func NewTable(rows []Permission) (Table, error) {
 		byName[row.Name] = i
 	}
 	for _, row := range sorted {
-		if row.Narrows == "" {
-			continue
-		}
-		if row.Narrows == row.Name {
-			return Table{}, fmt.Errorf("adminaccess: permission %q narrows itself", row.Name)
-		}
-		if _, ok := byName[row.Narrows]; !ok {
-			return Table{}, fmt.Errorf("adminaccess: permission %q narrows %q, which is not in the table",
-				row.Name, row.Narrows)
+		for _, legacy := range row.Narrows {
+			if legacy == row.Name {
+				return Table{}, fmt.Errorf("adminaccess: permission %q narrows itself", row.Name)
+			}
+			if _, ok := byName[legacy]; !ok {
+				return Table{}, fmt.Errorf("adminaccess: permission %q narrows %q, which is not in the table",
+					row.Name, legacy)
+			}
 		}
 	}
 	return Table{rows: sorted, byName: byName}, nil
@@ -205,7 +212,18 @@ func validateRow(row Permission) error {
 
 // Rows returns a copy of the rows, sorted by name.
 func (t Table) Rows() []Permission {
-	return append([]Permission(nil), t.rows...)
+	rows := make([]Permission, len(t.rows))
+	for i, row := range t.rows {
+		rows[i] = row.clone()
+	}
+	return rows
+}
+
+// clone copies a row, including its Narrows slice, so a caller cannot write
+// the table through it.
+func (p Permission) clone() Permission {
+	p.Narrows = append([]string(nil), p.Narrows...)
+	return p
 }
 
 // Names returns the permission names, sorted.
@@ -223,7 +241,7 @@ func (t Table) Lookup(name string) (Permission, bool) {
 	if !ok {
 		return Permission{}, false
 	}
-	return t.rows[i], true
+	return t.rows[i].clone(), true
 }
 
 // registry is the table of this service. It is built once and never written.
@@ -251,3 +269,29 @@ func Lookup(name string) (Permission, bool) { return registry.Lookup(name) }
 
 // Names returns every registered permission name, sorted.
 func Names() []string { return registry.Names() }
+
+// HoldsAdministrationPermission reports whether permissions hold at least one
+// registered administration permission. A string the registry does not know
+// is no administration permission, whatever role carries it.
+func HoldsAdministrationPermission(permissions []string) bool {
+	for _, name := range permissions {
+		if _, ok := registry.Lookup(name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// AdmitsDuringMaintenance reports whether permissions hold a name the
+// registry marks Maintenance: the in-application maintenance bypass, which
+// opens every route during a window (ADR-0059 decision 2, R0.4b). The
+// maintenance gate and the platform_settings flag read ask it, so the two
+// cannot disagree.
+func AdmitsDuringMaintenance(permissions []string) bool {
+	for _, name := range permissions {
+		if row, ok := registry.Lookup(name); ok && row.Maintenance {
+			return true
+		}
+	}
+	return false
+}

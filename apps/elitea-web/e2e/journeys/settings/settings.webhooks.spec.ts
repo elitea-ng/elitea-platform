@@ -19,9 +19,11 @@
  * Elitea at all — it is the address of an external receiver, not a route on
  * this server — so this journey does not attempt that. What it proves
  * end-to-end instead is the full CRUD lifecycle the issue actually asks for:
- * create (secret revealed once), the row and its secret persisting on the
- * server, rotate (secret changes, url/events/active unchanged), disable
- * (active flips server-side), and delete (row gone from a fresh GET).
+ * create (secret revealed once), the row persisting on the server with
+ * `has_secret` and never the value (the secret is write-only, issue 2963),
+ * rotate (a new server-generated secret shown once, url/events/active
+ * unchanged), disable (active flips server-side), and delete (row gone from
+ * a fresh GET).
  */
 import { test, expect } from '@playwright/test';
 
@@ -37,7 +39,9 @@ interface WebhookWire {
   readonly id: string;
   readonly url: string;
   readonly events: readonly string[];
-  readonly secret: string;
+  /** Present on the create and rotate responses only. */
+  readonly secret?: string;
+  readonly has_secret: boolean;
   readonly active: boolean;
 }
 
@@ -147,11 +151,13 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
   expect(persisted!.url).toBe(destination);
   expect(persisted!.events).toEqual(['application.created', 'execution.completed']);
   expect(persisted!.active).toBe(true);
-  expect(persisted!.secret).toBe(revealedSecret);
+  // Write-only: the read says a secret is set and never returns it.
+  expect(persisted!.has_secret).toBe(true);
+  expect(persisted).not.toHaveProperty('secret');
 
   /* ── rotate: the secret changes, everything else does not ───────────── */
   const rotated = page.waitForResponse(
-    (res) => res.request().method() === 'PUT' && res.url().includes(`/webhooks/prompt_lib/${DEFAULT_PROJECT_ID}/${createdWebhook.id}`),
+    (res) => res.request().method() === 'POST' && res.url().includes(`/webhooks/prompt_lib/${DEFAULT_PROJECT_ID}/${createdWebhook.id}/rotate_secret`),
     { timeout: 20_000 },
   );
   await row.getByRole('button', { name: 'Rotate secret' }).click({ timeout: 5_000 });
@@ -160,12 +166,14 @@ test('Settings: create, rotate, disable and delete a webhook', async ({ page }, 
 
   await expect(page.getByTestId('webhook-secret-dialog')).toBeVisible({ timeout: 5_000 });
   const rotatedSecret = await page.getByTestId('webhook-secret-value').inputValue();
+  expect(rotatedSecret.length).toBeGreaterThan(0);
   expect(rotatedSecret).not.toBe(revealedSecret);
   await page.getByRole('button', { name: 'Done', exact: true }).click({ timeout: 3_000 });
 
   const afterRotate = await listWebhooks(page.request);
   const rotatedRow = afterRotate.find((w) => w.id === createdWebhook.id);
-  expect(rotatedRow!.secret).toBe(rotatedSecret);
+  expect(rotatedRow).not.toHaveProperty('secret');
+  expect(rotatedRow!.has_secret).toBe(true);
   expect(rotatedRow!.url).toBe(destination);
   expect(rotatedRow!.events).toEqual(['application.created', 'execution.completed']);
 

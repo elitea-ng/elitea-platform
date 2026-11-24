@@ -231,10 +231,41 @@ describe('Admin › Authentication › identity providers', () => {
 
     expect(
       await screen.findByText(
-        'Only a super admin can create an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: issuer.',
+        'Only a super admin can create or delete an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: issuer.',
       ),
     ).toBeInTheDocument();
     expect(screen.getByTestId('identity-provider-save')).toBeInTheDocument();
+  });
+
+  it('explains a super admin refusal of a delete, a trust action since ADR-0059 R0.4c', async () => {
+    server.use(
+      http.delete('*/admin/identity_providers/administration/*', ({ request }) => {
+        recorded.push({ method: 'DELETE', url: request.url, body: null });
+        return HttpResponse.json(
+          {
+            error: 'only a super admin can delete an identity provider',
+            code: 'identity_provider_trust_super_admin_required',
+            fields: ['deleted'],
+          },
+          { status: 403 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await screen.findByText('Corporate SSO');
+    const row = screen.getByText('Corporate SSO').closest('tr');
+    if (!row) throw new Error('no row for Corporate SSO');
+    const remove = Array.from(row.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Remove',
+    );
+    if (!remove) throw new Error('no remove button for Corporate SSO');
+    await user.click(remove);
+    await user.click(await screen.findByTestId('admin-identity-provider-delete-confirm'));
+
+    expect(await screen.findByTestId('admin-identity-providers-action-error')).toHaveTextContent(
+      'Only a super admin can create or delete an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: deleted.',
+    );
   });
 
   it('says the accounts are still bound to the previous issuer after an issuer change (#2558)', async () => {

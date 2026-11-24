@@ -141,6 +141,13 @@ type SAMLHandler struct {
 	// attempts is the begin/ACS limiter (signin_attempts.go). Nil unless
 	// WithAttemptLimiter attached one.
 	attempts *signInAttempts
+
+	// retrieveAssertion and provision are the two steps of the ACS that need
+	// a signed response and a database. Nil means the production steps
+	// (runtime.provider.RetrieveAssertionInfo, provisionUser); only a test
+	// sets them, to drive the ACS's own decisions around them.
+	retrieveAssertion func(runtime *samlRuntime, encoded string) (*saml2.AssertionInfo, error)
+	provision         func(ctx context.Context, runtime *samlRuntime, nameID, email, name string) (string, error)
 }
 
 // WithSessionManager gives this plane the server-side session store.
@@ -323,16 +330,43 @@ func (h *SAMLHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestID := document.Root().SelectAttrValue("ID", "")
-	if requestID == "" {
-		slog.Error("SAML: the authentication request carries no ID")
+	if requestID == "" || strings.ContainsAny(requestID, oidcStateLimitSeparator+"|") {
+		slog.Error("SAML: the authentication request carries no usable ID")
 		http.Error(w, "single sign-on is not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	target := safeRedirectTarget(r.URL.Query().Get("target_to"))
+	// A limited sign-in (ADR-0059 R1.10b, recent_authentication.go):
+	// ForceAuthn asks the identity provider to authenticate the person again
+	// rather than answer from a session of its own, and the ACS holds the
+	// assertion's AuthnInstant to the limit.
+	limit, limited, err := requestedAuthenticationLimit(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	requestedTarget := r.URL.Query().Get("target_to")
+	target := safeRedirectTarget(requestedTarget)
+	if limited && requestedTarget != "" && target != requestedTarget {
+		// As on the OIDC plane: a limited sign-in returns to one page, so a
+		// target it cannot follow is the caller's error, said so.
+		http.Error(w, "target_to must be a same-origin relative path", http.StatusBadRequest)
+		return
+	}
+	if limited {
+		// On THIS request's document, never on the cached service provider
+		// (gosaml2's SAMLServiceProvider.ForceAuthn), which every concurrent
+		// login shares. The attribute is set before BuildAuthURLRedirect
+		// deflates and signs the document, so a signed request covers it.
+		document.Root().CreateAttr("ForceAuthn", "true")
+	}
+
+	// The limit is bound to the SIGNED cookie, never read again from the
+	// ACS's form: an assertion cannot be made to count as a fresh
+	// authentication by anything the browser or the identity provider sends.
 	http.SetCookie(w, &http.Cookie{
 		Name:     samlRequestCookie,
-		Value:    signBrowserValue(h.secretKey, requestID+"|"+target),
+		Value:    signBrowserValue(h.secretKey, encodeLoginHead(requestID, limit, limited)+"|"+target),
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.secureCookies,
@@ -377,7 +411,8 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestID, target, ok := h.consumeRequestCookie(w, r)
+	login, ok := h.consumeRequestCookie(w, r)
+	requestID, target := login.requestID, login.targetTo
 	if !ok {
 		http.Error(w, "missing or invalid login request cookie", http.StatusBadRequest)
 		return
@@ -394,7 +429,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assertion, err := runtime.provider.RetrieveAssertionInfo(encoded)
+	assertion, err := h.retrieveAssertionInfo(runtime, encoded)
 	if err != nil {
 		// The library's error names the element or the signature that failed.
 		// It is logged and not returned: the browser gets one sentence.
@@ -409,6 +444,19 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A limited sign-in must prove a recent authentication. Refused BEFORE
+	// any account is touched or session written, as the OIDC callback
+	// refuses a stale auth_time. See checkAuthnInstant.
+	skew := time.Duration(max(runtime.clockSkewSeconds, 0)) * time.Second
+	authenticatedAt, proven, recent := checkAuthnInstant(assertion.AuthnInstant, login, skew, time.Now())
+	if !recent {
+		slog.Warn("SAML: refused a ForceAuthn sign-in without a recent authentication",
+			"provider", runtime.origin, "authn_instant_present", assertion.AuthnInstant != nil,
+			"max_age_seconds", int64(login.limit/time.Second))
+		http.Redirect(w, r, SignInErrorURL(target), http.StatusFound)
+		return
+	}
+
 	email, name := samlIdentity(assertion, runtime.document)
 	email = normalizeAssertedEmail(email)
 	if email == "" {
@@ -417,7 +465,7 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, err := h.provisionUser(r.Context(), runtime.binding, assertion.NameID, email, name, runtime.document.AdoptSCIMUsers)
+	userID, err := h.provisionFor(r.Context(), runtime, assertion.NameID, email, name)
 	if err != nil {
 		h.writeProvisioningFailure(w, err, email)
 		return
@@ -437,6 +485,12 @@ func (h *SAMLHandler) ACS(w http.ResponseWriter, r *http.Request) {
 		// provider sent no SessionIndex, which is legal and only means single
 		// logout cannot address this session.
 		ProviderSessionIndex: assertion.SessionIndex,
+		// The AuthnInstant of a ForceAuthn sign-in, proven. Any other
+		// sign-in records no time (see checkAuthnInstant), so it never
+		// counts as a recent authentication.
+		AuthenticatedAt:           authenticatedAt,
+		AuthenticationTimeUnknown: !proven,
+		AuthenticationProven:      proven,
 	}, r) {
 		return
 	}
@@ -470,10 +524,14 @@ func (h *SAMLHandler) requestCookieSameSite() http.SameSite {
 // It is cleared UNCONDITIONALLY and before the assertion is examined, which is
 // what makes a login attempt single use: a second POST of the same assertion
 // arrives with no cookie and is refused before any verification runs.
+//
+// The cookie's head is `<request id>[:<max_age seconds>]`: the limit of a
+// ForceAuthn sign-in. A cookie with no limit (an ordinary sign-in, or one a
+// previous release set) is an ordinary sign-in.
 func (h *SAMLHandler) consumeRequestCookie(
 	w http.ResponseWriter,
 	r *http.Request,
-) (requestID, target string, ok bool) {
+) (samlLoginRequest, bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     samlRequestCookie,
 		Value:    "",
@@ -485,17 +543,43 @@ func (h *SAMLHandler) consumeRequestCookie(
 	})
 	cookie, err := r.Cookie(samlRequestCookie)
 	if err != nil || cookie.Value == "" {
-		return "", "", false
+		return samlLoginRequest{}, false
 	}
 	value, signed := verifyBrowserValue(h.secretKey, cookie.Value)
 	if !signed {
-		return "", "", false
+		return samlLoginRequest{}, false
 	}
 	separator := strings.Index(value, "|")
 	if separator < 0 {
-		return "", "", false
+		return samlLoginRequest{}, false
 	}
-	return value[:separator], safeRedirectTarget(value[separator+1:]), true
+	head := value[:separator]
+	request := samlLoginRequest{targetTo: safeRedirectTarget(value[separator+1:])}
+	request.requestID = head
+	if limitAt := strings.Index(head, oidcStateLimitSeparator); limitAt >= 0 {
+		request.requestID = head[:limitAt]
+	}
+	request.limit, request.limited = decodeLoginHead(head)
+	if request.requestID == "" {
+		return samlLoginRequest{}, false
+	}
+	return request, true
+}
+
+// retrieveAssertionInfo is the library's verification, or a test's stand-in.
+func (h *SAMLHandler) retrieveAssertionInfo(runtime *samlRuntime, encoded string) (*saml2.AssertionInfo, error) {
+	if h.retrieveAssertion != nil {
+		return h.retrieveAssertion(runtime, encoded)
+	}
+	return runtime.provider.RetrieveAssertionInfo(encoded)
+}
+
+// provisionFor is provisionUser, or a test's stand-in.
+func (h *SAMLHandler) provisionFor(ctx context.Context, runtime *samlRuntime, nameID, email, name string) (string, error) {
+	if h.provision != nil {
+		return h.provision(ctx, runtime, nameID, email, name)
+	}
+	return h.provisionUser(ctx, runtime.binding, nameID, email, name, runtime.document.AdoptSCIMUsers)
 }
 
 // assertionAcceptable applies every check `RetrieveAssertionInfo` leaves to its

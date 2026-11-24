@@ -96,7 +96,8 @@
  *
  * `window.admin_ui_config.permissions` is presentation state and never a gate —
  * see `./adminUiConfig`. Every route this page calls is gated server-side on
- * `runtime.plugins`.
+ * `runtime.plugins` or a section's narrow permission (ADR-0059 R0.5), and the
+ * schema list names only the sections the caller can open.
  */
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';

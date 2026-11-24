@@ -1,9 +1,35 @@
 {{- if and .Values.worker.enabled .Values.networkPolicies.enabled }}
+{{- $w := .Values.worker.networkPolicy }}
+{{- $egress := include "elitea.netpol.workerEgress" . }}
+{{- $sk := .Values.sandboxKubernetes }}
 # The worker pods listen on nothing and are only ever clients, so they admit no
-# inbound connection at all. Egress is deliberately NOT restricted here: the
-# worker reaches elitea-main, NATS, PostgreSQL, the sandbox supervisors and,
-# through toolkits, arbitrary external hosts. Egress controls are a separate
-# piece of work.
+# inbound connection at all.
+#
+# Egress (#2951, worker.networkPolicy): the worker runs tenant-chosen toolkits
+# in-process, so its pod may open a connection only to the peers it needs:
+#
+#   DNS             the cluster resolver (networkPolicies.dnsEgress replaces it)
+#   elitea-main     the runtime listeners (control, output, content, platform)
+#   NATS            the bundled server's 4222, or networkPolicies.egressPeers.nats
+#   PostgreSQL      networkPolicies.egressPeers.postgresql (the agent-state
+#                   database), and the bundled PgBouncer when it runs
+#   supervisors     the sandbox supervisor profile ports, when they run here
+#   elitea-vector   its gRPC port, while the release indexes
+#   OTel collector  the bundled collector's OTLP ports, while it runs
+#   private hosts   worker.networkPolicy.privateEgress and the CIDR/IP entries
+#                   of main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT
+#   public          (mode public) 0.0.0.0/0 and ::/0 on
+#                   worker.networkPolicy.publicEgressPorts, minus RFC 1918,
+#                   loopback, link-local (cloud metadata), CGNAT, unique-local
+#                   and networkPolicies.clusterCIDRs
+#   egress proxy    (mode proxy) the egress proxy's port instead of the
+#                   public rule
+#   anything else   worker.networkPolicy.extraEgress, verbatim
+#
+# Everything else, the Kubernetes API server and every other in-cluster
+# Service included, is refused. This is defence in depth beside the worker's
+# own address check (#2950): some CNIs do not apply policy to host-network
+# destinations.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -18,4 +44,90 @@ spec:
       app.kubernetes.io/component: worker
   policyTypes:
     - Ingress
+    {{- if $egress }}
+    - Egress
+  egress:
+    {{- include "elitea.netpol.clusterDnsEgress" . | nindent 4 }}
+    {{- if and .Values.main.enabled .Values.main.runtime.enabled }}
+    {{- $l := .Values.main.runtime.listeners }}
+    # elitea-main's runtime listeners.
+    - to:
+        {{- include "elitea.netpol.mainPeer" . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ include "elitea-main.runtimePort" $l.controlAddress }}
+        - protocol: TCP
+          port: {{ include "elitea-main.runtimePort" $l.outputAddress }}
+        - protocol: TCP
+          port: {{ include "elitea-main.runtimePort" $l.contentAddress }}
+        - protocol: TCP
+          port: {{ include "elitea-main.runtimePort" $l.platformAddress }}
+    {{- end }}
+    {{- include "elitea.netpol.natsEgress" . | nindent 4 }}
+    {{- include "elitea.netpol.postgresqlEgress" . | nindent 4 }}
+    {{- if and $sk.enabled $sk.supervisor.enabled }}
+    # The sandbox supervisors' profile ports.
+    - to:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-sandbox-supervisor.selectorLabels" .)) | nindent 8 }}
+      ports:
+        {{- range $sk.supervisor.profiles }}
+        - protocol: TCP
+          port: {{ .port }}
+        {{- end }}
+        {{- if $sk.workspaceRuns.enabled }}
+        - protocol: TCP
+          port: {{ $sk.workspaceRuns.profile.port }}
+        {{- end }}
+        {{- if $sk.browserSessions.enabled }}
+        - protocol: TCP
+          port: {{ $sk.browserSessions.profile.port }}
+        {{- end }}
+    {{- end }}
+    {{- if and (include "elitea.indexingEnabled" .) .Values.vector.enabled }}
+    # elitea-vector, for index runs and the memory toolkit.
+    - to:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-vector.selectorLabels" .)) | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.vector.service.port }}
+    {{- end }}
+    {{- include "elitea.netpol.otelEgress" . | nindent 4 }}
+    {{- range $w.privateEgress }}
+    # worker.networkPolicy.privateEgress
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+    {{- end }}
+    {{- range (include "elitea.netpol.permitEntries" . | fromJsonArray) }}
+    {{- if .cidr }}
+    # main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+      {{- if .port }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if include "elitea.netpol.workerPublicEgress" . }}
+    # The public internet, for toolkits and remote MCP servers.
+    {{- include "elitea.netpol.publicEgress" (dict "ctx" . "ports" $w.publicEgressPorts) | nindent 4 }}
+    {{- end }}
+    {{- if eq (toString $w.mode) "proxy" }}
+    # mode proxy: the egress proxy instead of the public internet.
+    - to:
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (include "elitea-egress-proxy.selectorLabels" .)) | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressProxy.service.port }}
+    {{- end }}
+    {{- with $w.extraEgress }}
+    # worker.networkPolicy.extraEgress
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
 {{- end }}

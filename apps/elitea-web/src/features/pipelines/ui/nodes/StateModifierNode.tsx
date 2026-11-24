@@ -17,11 +17,13 @@ import { useEdges, type NodeProps } from '@xyflow/react';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
 import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { AIAssistantInput } from '../AIAssistantInput';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
@@ -121,34 +123,53 @@ export const StateModifierNode = memo(function StateModifierNode(props: StateMod
         />
       )}
     >
-      <AIAssistantInput
-        value={templateValue}
-        disabled={isFieldsDisabled}
-        label={t('pipelines.flowEditor.stateModifierNode.jinjaTemplate', 'Jinja Template')}
-        fieldName="Template"
-        language="jinja"
-        modelConfig={resolvedLlmSettings}
-        fieldBinding={{ name: 'template', onInput: handleTemplateFilling }}
-      />
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.stateModifierNode.variablesToClean', 'Variables to clean')}
-        inputFieldName="variables_to_clean"
-        disabled={isFieldsDisabled}
-      />
-      <InputSelect
-        id={id}
-        label={t('pipelines.flowEditor.stateModifierNode.input', 'Input')}
-        inputFieldName="input"
-        disabled={isFieldsDisabled}
-      />
-      <OutputSelect
-        id={id}
-        label={t('pipelines.flowEditor.stateModifierNode.output', 'Output')}
-        outputFieldName="output"
-        disabled={isFieldsDisabled}
-      />
-      <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.StateModifier} disabled={isFieldsDisabled} />
+      <NodeConfigSection section="basic">
+        <AIAssistantInput
+          value={templateValue}
+          disabled={isFieldsDisabled}
+          label={t('pipelines.flowEditor.stateModifierNode.jinjaTemplate', 'Jinja Template')}
+          fieldName="Template"
+          language="jinja"
+          modelConfig={resolvedLlmSettings}
+          fieldBinding={{ name: 'template', onInput: handleTemplateFilling }}
+        />
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.stateModifierNode.variablesToClean', 'Variables to clean')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.StateModifier}
+          fieldKey={NODE_FIELD_KEYS.variablesToClean}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.stateModifierNode.variablesToClean', 'Variables to clean')}
+          inputFieldName="variables_to_clean"
+          disabled={isFieldsDisabled}
+        />
+      </NodeConfigSection>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.stateModifierNode.input', 'Input')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.StateModifier}
+          fieldKey={NODE_FIELD_KEYS.input}
+        />
+        <InputSelect
+          id={id}
+          label={t('pipelines.flowEditor.stateModifierNode.input', 'Input')}
+          inputFieldName="input"
+          disabled={isFieldsDisabled}
+        />
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.stateModifierNode.output', 'Output')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.StateModifier}
+          fieldKey={NODE_FIELD_KEYS.output}
+        />
+        <OutputSelect
+          id={id}
+          label={t('pipelines.flowEditor.stateModifierNode.output', 'Output')}
+          outputFieldName="output"
+          disabled={isFieldsDisabled}
+        />
+        <NodeSettings id={id} type={FlowEditorConstants.PipelineNodeTypes.StateModifier} disabled={isFieldsDisabled} />
+      </NodeConfigSection>
     </NodeCard>
   );
 });

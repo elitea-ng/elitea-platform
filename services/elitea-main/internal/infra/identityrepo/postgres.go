@@ -7,14 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/identity"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 const projectViewerRole = "viewer"
@@ -226,9 +230,12 @@ func applyInitialAdministrationRole(
 	userID int32,
 	command identity.ProvisionCommand,
 ) error {
+	// This plane matches by provider reference only (identity.IsInitialGlobalAdmin
+	// passes no verified address), so the entry is always a reference.
 	return ApplyInitialAdministrationRole(
 		ctx, db, userID,
 		command.InitialAdministrationMode, command.InitialAdministrationRole,
+		identity.InitialGlobalAdminShapeReference,
 	)
 }
 
@@ -244,6 +251,26 @@ func applyInitialAdministrationRole(
 // role in the administration mode is left exactly as the operator left them, so
 // a demotion is never silently undone by the next login.
 //
+// The list is a BOOTSTRAP (issue 2589, ADR-0059 decision 5): it applies only
+// while the deployment has no unsuspended holder of
+// admin.auth.users.super_admin. Once one exists, anyone who could edit the
+// list and own an identity-provider account could otherwise make themselves
+// global administrator at first sign-in. A skipped entry logs a warning that
+// names the entry's shape (`entryShape`, never the address) and the command
+// that replaces the list.
+//
+// The grant and its final check run under adminaccess.LockRoleWrites, so a
+// global administrator made by another role write cannot appear between them.
+// The lock is taken only when a grant is due: a listed account that holds no
+// administration role, on a deployment with no global administrator. That is
+// a bootstrap sign-in, so ordinary sign-ins never wait on it. The lock is NOT
+// this transaction's first statement, unlike every other role write: the
+// sign-in has already locked its provider identity and account rows. A role
+// write that waits on one of those rows (deleting this very account during
+// its first sign-in) and this sign-in can deadlock. PostgreSQL detects it and
+// fails one of the two; when the sign-in is the one, it fails and the person
+// signs in again. Nothing retries it automatically.
+//
 // The grant goes through rolegrants, so it writes one history row with source
 // `bootstrap` and no actor (issue 2499) in the same transaction. `db` is that
 // transaction; `queries` is bound to it.
@@ -253,26 +280,34 @@ func ApplyInitialAdministrationRole(
 	userID int32,
 	mode string,
 	role string,
+	entryShape string,
 ) error {
 	if mode == "" || role == "" {
 		return nil
 	}
-	queries := sqlcgen.New(db)
-	count, err := queries.CountAuthUserRolesInMode(ctx, sqlcgen.CountAuthUserRolesInModeParams{
-		UserID: userID,
-		Mode:   mode,
-	})
-	if err != nil {
-		return fmt.Errorf("identityrepo: count administration roles: %w", err)
+	// The two checks run first WITHOUT the lock, so the sign-in of a listed
+	// account that already holds a role, or of any listed account once the
+	// bootstrap is over, never waits on role writes. Only a sign-in that may
+	// grant takes the lock, and then repeats both checks under it.
+	proceed, err := initialAdministrationRoleDue(ctx, db, userID, mode, entryShape)
+	if err != nil || !proceed {
+		return err
 	}
-	if count != 0 {
-		return nil
+	if err := adminaccess.LockRoleWrites(ctx, db); err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	if proceed, err = initialAdministrationRoleDue(ctx, db, userID, mode, entryShape); err != nil || !proceed {
+		return err
 	}
 	// Grant reports false only when the row is already there: a concurrent
 	// first sign-in of the same account committed it (and its history row)
 	// first. The user then holds the role, which is what this grant is for, so
 	// that is not an error.
-	_, err = rolegrants.Grant(ctx, db, int64(userID), mode, role,
+	before, err := adminaccess.UserCentralRoles(ctx, db, int(userID), mode)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	granted, err := rolegrants.Grant(ctx, db, int64(userID), mode, role,
 		rolegrants.Origin{Source: rolegrants.SourceBootstrap})
 	if errors.Is(err, rolegrants.ErrRoleNotFound) {
 		return errors.New("identityrepo: initial administration role is unavailable")
@@ -280,7 +315,52 @@ func ApplyInitialAdministrationRole(
 	if err != nil {
 		return fmt.Errorf("identityrepo: assign initial administration role: %w", err)
 	}
+	if !granted {
+		return nil
+	}
+	return appendBootstrapRoleAssignment(ctx, db, userID, mode, before)
+}
+
+// bootstrapEventSource is the CloudEvents source of the first sign-in's
+// admin.access.changed event.
+const bootstrapEventSource = "elitea-main/identity"
+
+// appendBootstrapRoleAssignment appends the admin.access.changed event of the
+// bootstrap grant (ADR-0059 R1.5): a role_assignment with source bootstrap
+// and no actor, in the sign-in's transaction, so a failed append fails the
+// sign-in and no administrator is made without its evidence. The DBTX of
+// both provisioning planes is a transaction; anything else is refused.
+func appendBootstrapRoleAssignment(ctx context.Context, db sqlcgen.DBTX, userID int32, mode string, before []string) error {
+	tx, ok := db.(pgx.Tx)
+	if !ok {
+		return errors.New("identityrepo: the initial administration role is granted inside a transaction only")
+	}
+	after, err := adminaccess.UserCentralRoles(ctx, tx, int(userID), mode)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	appender, err := securityaudit.NewPostgresAppender(bootstrapEventSource)
+	if err != nil {
+		return fmt.Errorf("identityrepo: %w", err)
+	}
+	event := securityaudit.NewAdminAccessChanged(securityaudit.AdminAccessChanged{
+		SubjectType: "user",
+		SubjectID:   strconv.Itoa(int(userID)),
+		Change: securityaudit.AccessChange{
+			Kind: securityaudit.AccessRoleAssignment, Mode: mode, Source: rolegrants.SourceBootstrap,
+			Before: sortedRoles(before), After: sortedRoles(after),
+		},
+	})
+	if err := appender.Append(ctx, tx, event); err != nil {
+		return fmt.Errorf("identityrepo: record the initial administration role: %w", err)
+	}
 	return nil
+}
+
+func sortedRoles(roles []string) []string {
+	out := append([]string{}, roles...)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func reconcileProjectEnrollment(

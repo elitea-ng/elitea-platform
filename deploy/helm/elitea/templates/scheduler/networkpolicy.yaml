@@ -1,0 +1,31 @@
+{{- if and .Values.scheduler.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $healthFrom := concat ($np.probeFrom | default list) ($np.metricsFrom | default list) }}
+# Ingress to the scheduler pods (#2952). The scheduler serves no product
+# traffic: it is a NATS and PostgreSQL client. Its one port is the in-process
+# health server (/healthz and /metrics), admitted to networkPolicies.probeFrom
+# and networkPolicies.metricsFrom only; with both empty nothing in the cluster
+# may connect. Kubelet probes are not subject to the policy on the CNIs this
+# chart is tested with. Egress is not restricted here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-scheduler.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-scheduler.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-scheduler.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- with $healthFrom }}
+  ingress:
+    - ports:
+        - port: {{ $.Values.scheduler.healthPort }}
+          protocol: TCP
+      from:
+        {{- toYaml . | nindent 8 }}
+  {{- end }}
+{{- end }}

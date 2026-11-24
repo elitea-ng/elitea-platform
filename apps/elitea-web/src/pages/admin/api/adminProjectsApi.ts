@@ -37,6 +37,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
+import { administrationUserDelete } from '@/shared/api/generated/admin/admin';
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
@@ -321,6 +322,26 @@ export function useUpdateProjectMemberRole(): UseMutationResult<
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: userId, roles: [role] }),
       });
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminProjectsKeys.all }),
+  });
+}
+
+/**
+ * `DELETE /admin/users/administration/{projectID}` — remove a member from the
+ * project (ADR-0059 R0.6a, issue 2495). The account survives. GENERATED,
+ * unlike its neighbours: `v2.yaml` describes this operation
+ * (`administrationUserDelete`), so a drift is a codegen diff.
+ */
+export function useRemoveProjectMember(): UseMutationResult<
+  void,
+  Error,
+  { projectId: number; userId: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ projectId, userId }) => {
+      await administrationUserDelete(String(projectId), { 'id[]': [Number(userId)] });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminProjectsKeys.all }),
   });

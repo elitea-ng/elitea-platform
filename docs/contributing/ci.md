@@ -47,6 +47,54 @@ that a later push cancelled.
 
 A required status check can point at `CI / ci-gate` alone. The repository ruleset does not require it today.
 
+### A job GitHub never acquired
+
+GitHub gives a hosted job three tries at a runner, five minutes apart. If no runner takes the job, GitHub ends
+it as cancelled about 15 minutes after it was queued. The job has no runner and no steps, and it carries the
+annotation "The job was not acquired by Runner of type hosted even after multiple attempts". None of our
+workflows cancels a queued job: `cancel-merged-pr-runs.yml` cancels only the runs of a merged pull request,
+and its 15-minute `timeout-minutes` limits its own job.
+
+On 2026-11-23 this ended the macOS host job of `ci-desktop.yml` five times (PRs #2947, #2976, #2979, #2934 and
+#2980). The cause was GitHub's macOS arm64 capacity, not our concurrency:
+
+- Each of those jobs carried GitHub's notice "Due to capacity constraints, jobs targeting macOS arm64 runners
+  may experience longer queue times".
+- When each job was queued, none of our macOS jobs was running, and 3 to 17 of our hosted jobs were running,
+  under the cap of 20.
+- On the same day the macOS jobs that did start waited about 5 or 10 minutes, so they got a runner on the
+  second or third try.
+
+Two changes address it:
+
+1. **Fewer macOS jobs.** A web change no longer starts `ci-desktop.yml`. Before, any change under
+   `apps/elitea-web/src`, `vite.config.ts` or `libs/ts/client-core` started its four hosted jobs (the macOS
+   host, two Windows jobs and one Linux job) just to build the desktop bundle. `ci-web.yml` `build` now builds
+   that bundle on the pool for both brands (ELITEA and brand/sample). `ci-desktop` keeps the web paths the host
+   itself reads:
+   - the desktop entry `src/entries/desktop/**` (the host's tests read its i18n catalogues);
+   - the desktop transport `src/shared/desktop/**`;
+   - the lockfile, which pins the tsc that compiles the page scripts.
+
+   Over 2026-11-20 to 2026-11-23, 37 of the 87 runs that started the macOS host would not start it now. Four of
+   the five jobs GitHub never acquired came from those runs.
+2. **One second attempt, and a verdict.** If the macOS host job fails or is cancelled, `host-runner` (on the
+   pool) reads the API through `scripts/ci/runner-acquired.mjs`. The job counts as never acquired only when all
+   of these hold: it had no runner, it ran no step, and it carries GitHub's annotation. In that case
+   `desktop-second-attempt` runs the same steps once on `macos-latest`
+   (`.github/actions/desktop-host-checks`). It restores the same cache entry and never writes it. A job that
+   ran and failed, timed out, or was cancelled by a newer push gets no second attempt.
+
+   The workflow's own result stays failed, because the first job stays cancelled. So `ci-desktop.yml`'s
+   `verdict` job publishes the output `verdict`. The value is `pass` only when every job passed, or when the
+   host was never acquired and its second attempt ran and passed. `ci-gate` accepts a failed or cancelled
+   `ci-desktop` only when `verdict` is exactly `pass`, and it posts a notice when it does. The gate never goes
+   green for a job that did not run.
+
+The trade-off: in the never-acquired case the first job still shows red in the check list. That mark is
+GitHub's, and `ci-gate` is the verdict. If the second attempt is not acquired either, `ci-gate` fails and says
+so. Push again later. Re-running the jobs does not help, because the capacity is GitHub's.
+
 ### Make `ci-gate` required (repository owner)
 
 1. Open **Settings > Rules > Rulesets** and edit the ruleset that targets `main` (or create one).
@@ -63,7 +111,12 @@ A required status check can point at `CI / ci-gate` alone. The repository rulese
 - a job of `ci.yml` has no entry in `scripts/ci/tier-paths.json`;
 - a workflow starts on `pull_request` and is not a job of `ci.yml` (a new workflow would run untiered);
 - a called workflow builds its concurrency group from `github.workflow`. In a called workflow that name is
-  `CI`, so all called workflows would cancel each other.
+  `CI`, so all called workflows would cancel each other;
+- `ci-governed-conformance` is not started by a change to the worker's egress, governed or MCP code
+  (`libs/rust/egress-guard`, `agent-runtime`'s `egress*` and `toolkits/{mcp,governed}*`, the worker's
+  `protocol/egress.rs` and `governed*` modules) or to `deploy/docker-compose.governed.yml`
+  (`GOVERNED_MUST_REACH`). PR #2976 changed that code and the job was skipped, so the governed stack's test
+  hosts were refused as private addresses on main (#2981).
 
 To add a workflow to the pull request pipeline:
 
@@ -127,6 +180,27 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   shards (api-core, infra-suites, db-storage) run the same packages with `-race`. ci.yml passes `no-binaries`
   ci-go's filter as `go_runs`; `ci-contract` carries `"unless": "ci-go"` in `tier-paths.json`, so the changes
   output itself says it does not run and the gates read its skip as correct. `check-tiering.mjs` holds both.
+- **Handoff load gate.** `ci-handoff-loadgate.yml` gates the workspace publish path at a p99 under 50 ms
+  (ADR-0034 decision 15), measured on the shared pool, whose pods have no guaranteed CPU. A stall of the pod
+  must not read as a regression (#2940), so every measured window runs a stall canary: a goroutine that ticks
+  every 1 ms and records its largest lag, plus the largest gap between two `pg_stat_activity` samples beyond
+  their 2 ms sleep (the database server's side). Both count only inside the window. A gated window whose
+  canary saw more than 25 ms is invalid. It is logged and measured again on a fresh fixture, up to 3 attempts.
+  There is one exception: a stalled window whose p99 minus the stall still breaches the gate fails at once,
+  because no stall explains it, so a regression that also stalls the process is not re-rolled until a quiet
+  window passes. The first clean window decides: a breach there fails as a regression and is never measured
+  again. When every attempt stalled, the case fails as `measurement invalid: runner stalled N in every attempt`,
+  with each attempt's p99 and stall. That is a different failure from a regression, and it is never a pass.
+  The canary of every window is in the log and the job summary (`stall canary`). A full re-measure of every
+  gated case adds about nine windows of roughly 5 s each, well inside the 15-minute test timeout.
+  The job starts only on changes that can reach the publish path: the workspacestore and handoff packages,
+  the `workspace_*` files of the repos package (the test included), the workflow, and the shared migrations
+  that name a table of the publish transaction (`workspace_segments`, `workspace_refs`, `workspace_handoffs`
+  in `elitea_runtime`; `buckets`, `transfer_grants` in `elitea_storage`). Those migrations are listed one by
+  one in `tier-paths.json`. `check-tiering.mjs` reads every shared migration's SQL, comments removed, and
+  matches the table names in any form (qualified or not, quoted or not). It fails when a migration that names
+  such a table is missing from the list, when a listed one names none or is gone, and when any pattern
+  reaches every shared migration (a wildcard). The nightly run on main tests everything regardless of the filter.
 - **Web coverage.** One web unit suite per run. On a draft, and in the nightly, the unit shards run without
   coverage in the fast tier (`ci-web.yml` `unit-tests`). On a ready pull request `ci-web-coverage.yml` runs every
   unit test with coverage in the heavy tier and enforces the thresholds, and the plain shards are skipped:
@@ -305,6 +379,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
 | `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
 | `eng-runner-image.yml` | `runner-pin` |
+| `sunset-reminder.yml` | `remind` (the ADR-0059 sunset tracking issue, daily on `main`) |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
 
 Everything else stays hosted, because it needs what the pool does not have (audited 2026-11-21: 46 hosted
@@ -324,8 +399,10 @@ job definitions, down from 59; every other job is routed):
 - **System packages through apt**: the Tauri host on Linux (`ci-desktop.yml` `pane-drivers`, webkit2gtk).
 - **The pool's own janitor**: `cancel-merged-pr-runs.yml` (`cancel`, `delete-caches`) cancels the runs of
   merged pull requests to free the pool. Queued on the pool, it would wait behind the very runs it cancels.
-- **macOS and Windows**: `ci-desktop.yml` `desktop` and `windows-host`, `ci-local-tools-macos.yml`,
-  `desktop-package.yml`, and `ci-desktop-control.yml`, whose matrix has a Windows leg.
+- **macOS and Windows**: `ci-desktop.yml` `desktop` (and `desktop-second-attempt`, which runs only when GitHub
+  never acquired `desktop`) and `windows-host`, `ci-local-tools-macos.yml`, `desktop-package.yml`, and
+  `ci-desktop-control.yml`, whose matrix has a Windows leg. `ci-desktop.yml` `host-runner` and `verdict` run on
+  the pool. A web-only change starts none of `ci-desktop.yml` (see "A job GitHub never acquired").
 
 The routed jobs pin their parallelism to the pod's 4 CPUs, because the node reports 8. `eng-runner-env` sets
 `GOMAXPROCS=4`, `CARGO_BUILD_JOBS=4` and `RUST_TEST_THREADS=4` on the pool only, and a job's own `env:` still wins

@@ -10,7 +10,7 @@ import { server } from '@/test/setup';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
 import { DefaultNode } from './DefaultNode';
@@ -58,11 +58,20 @@ function renderDefaultNode(
           edges={[]}
           nodeTypes={{
             testNode: props => (
-              <DefaultNode
-                {...props}
-                type="defaultType"
-                {...(versionTools !== undefined ? { versionTools } : {})}
-              />
+              <>
+                <DefaultNode
+                  {...props}
+                  type="defaultType"
+                  {...(versionTools !== undefined ? { versionTools } : {})}
+                />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+                  <DefaultNode
+                    {...props}
+                    type="defaultType"
+                    {...(versionTools !== undefined ? { versionTools } : {})}
+                  />
+                </NodeConfigPanelContext.Provider>
+              </>
             ),
           }}
         />
@@ -94,11 +103,13 @@ function renderDefaultNodeBare(
   return renderWithRouterAndProject(
     <ReactFlowProvider>
       <FlowEditorContext.Provider value={flowEditorValue}>
-        <DefaultNode
-          id="Node1"
-          type="defaultType"
-          {...(versionTools !== undefined ? { versionTools } : {})}
-        />
+        <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+          <DefaultNode
+            id="Node1"
+            type="defaultType"
+            {...(versionTools !== undefined ? { versionTools } : {})}
+          />
+        </NodeConfigPanelContext.Provider>
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,
     PROJECT_ID,
@@ -114,12 +125,12 @@ describe('DefaultNode', () => {
   });
 
   it('renders the Toolkit, Input, and Output selects, plus interrupt settings', async () => {
-    const { findByText, getByText } = renderDefaultNode();
+    const { findByText, getByText, getAllByText } = renderDefaultNode();
     await findByText('Node1');
 
     expect(getByText('Toolkit')).toBeInTheDocument();
-    expect(getByText('Input')).toBeInTheDocument();
-    expect(getByText('Output')).toBeInTheDocument();
+    expect(getAllByText('Input').length).toBeGreaterThan(0);
+    expect(getAllByText('Output').length).toBeGreaterThan(0);
     expect(getByText('Interrupt before')).toBeInTheDocument();
     expect(getByText('Interrupt after')).toBeInTheDocument();
     expect(getByText('Structured output')).toBeInTheDocument();
@@ -249,11 +260,20 @@ describe('DefaultNode', () => {
           edges={[]}
           nodeTypes={{
             testNode: props => (
-              <DefaultNode
-                {...props}
-                type="defaultType"
-                {...(versionTools !== undefined ? { versionTools } : {})}
-              />
+              <>
+                <DefaultNode
+                  {...props}
+                  type="defaultType"
+                  {...(versionTools !== undefined ? { versionTools } : {})}
+                />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+                  <DefaultNode
+                    {...props}
+                    type="defaultType"
+                    {...(versionTools !== undefined ? { versionTools } : {})}
+                  />
+                </NodeConfigPanelContext.Provider>
+              </>
             ),
           }}
         />

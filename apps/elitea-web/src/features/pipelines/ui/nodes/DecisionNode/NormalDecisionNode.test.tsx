@@ -6,7 +6,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue } from '../../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowEdge, FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
 import { NormalDecisionNode, type NormalDecisionNodeProps } from './NormalDecisionNode';
@@ -40,7 +40,16 @@ function renderNormalDecisionNode(
         <ReactFlow
           nodes={[flowNode]}
           edges={[...edges]}
-          nodeTypes={{ testNode: () => <NormalDecisionNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <NormalDecisionNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: false }}>
+                  <NormalDecisionNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,

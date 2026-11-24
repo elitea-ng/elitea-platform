@@ -58,6 +58,12 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "elitea-scheduler.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.scheduler.serviceAccount }}
+      {{- with .Values.scheduler.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- include "elitea.scaling.topologySpread" (dict "ctx" . "v" .Values.scheduler "selector" (include "elitea-scheduler.selectorLabels" .)) | nindent 6 }}
       terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.scheduler.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
@@ -65,6 +71,10 @@ spec:
         - name: elitea-scheduler
           image: "{{ .Values.scheduler.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.scheduler.image.pullPolicy }}
+          {{- with .Values.scheduler.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             # In-process health server only — this worker serves no product
             # traffic. Must match the port in env.HTTP_ADDR.

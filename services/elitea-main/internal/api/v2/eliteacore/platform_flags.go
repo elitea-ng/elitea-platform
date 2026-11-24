@@ -70,7 +70,7 @@ import (
 	"sort"
 	"strconv"
 
-	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -308,7 +308,13 @@ func (h *Handler) announcements(
 		slog.ErrorContext(ctx, "platform_settings: banner read failed; reporting no banner", "err", err)
 		banner = platformconfig.Banner{}
 	}
-	maintenance, err := platformconfig.LoadMaintenance(ctx, h.pool)
+	readMaintenance := func(ctx context.Context) (platformconfig.Maintenance, error) {
+		return platformconfig.LoadMaintenance(ctx, h.pool)
+	}
+	if h.maintenanceState != nil {
+		readMaintenance = h.maintenanceState
+	}
+	maintenance, err := readMaintenance(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "platform_settings: maintenance read failed; reporting no maintenance",
 			"err", err)
@@ -352,7 +358,8 @@ func (h *Handler) maintenancePayload(
 	}
 }
 
-// holdsMaintenanceBypass asks the permission model the middleware's question.
+// holdsMaintenanceBypass asks the permission model the middleware's question:
+// does the caller use the whole application during a window.
 func (h *Handler) holdsMaintenanceBypass(ctx context.Context) bool {
 	if h.permissionResolver == nil {
 		return false
@@ -369,10 +376,8 @@ func (h *Handler) holdsMaintenanceBypass(ctx context.Context) bool {
 			"err", err)
 		return false
 	}
-	for _, granted := range resolution.Permissions {
-		if granted == apimw.MaintenanceAdminPermission {
-			return true
-		}
-	}
-	return false
+	// The registry rule the gate applies to every route (ADR-0059 R0.4b):
+	// a narrow administration permission reaches only its own routes during a
+	// window, so its holder does not bypass the window.
+	return adminaccess.AdmitsDuringMaintenance(resolution.Permissions)
 }

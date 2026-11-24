@@ -29,11 +29,14 @@ func (s *PostgresStore) Insert(ctx context.Context, session Session) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO elitea_auth.browser_sessions (
 			id, user_id, email, provider, provider_session_index,
-			created_at, last_seen_at, expires_at, idle_timeout_seconds
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			created_at, last_seen_at, expires_at, idle_timeout_seconds,
+			authenticated_at, authentication_proven
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		session.ID, session.UserID, session.Email, session.Provider,
 		session.ProviderSessionIndex, session.CreatedAt, session.LastSeenAt,
 		session.ExpiresAt, int32(session.IdleTimeout/time.Second),
+		authenticatedAtParameter(session.AuthenticatedAt),
+		session.AuthenticationProven && !session.AuthenticatedAt.IsZero(),
 	)
 	if err != nil {
 		return fmt.Errorf("browsersession: insert session: %w", err)
@@ -41,15 +44,26 @@ func (s *PostgresStore) Insert(ctx context.Context, session Session) error {
 	return nil
 }
 
+// authenticatedAtParameter writes NULL for a zero time: an unknown
+// authentication time, which the reader answers as zero again.
+func authenticatedAtParameter(at time.Time) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at
+}
+
 func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 	var (
-		session Session
-		idle    int32
+		session         Session
+		idle            int32
+		authenticatedAt *time.Time
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, user_id, email, provider, provider_session_index,
 		       created_at, last_seen_at, expires_at, idle_timeout_seconds, revoked_at,
-		       ref, ended_at, COALESCE(end_reason, '')
+		       ref, ended_at, COALESCE(end_reason, ''),
+		       authenticated_at, authentication_proven
 		FROM elitea_auth.browser_sessions
 		WHERE id = $1`, id,
 	).Scan(
@@ -57,6 +71,7 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		&session.ProviderSessionIndex, &session.CreatedAt, &session.LastSeenAt,
 		&session.ExpiresAt, &idle, &session.RevokedAt,
 		&session.Ref, &session.EndedAt, &session.EndReason,
+		&authenticatedAt, &session.AuthenticationProven,
 	)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -69,10 +84,24 @@ func (s *PostgresStore) Get(ctx context.Context, id string) (Session, error) {
 		return Session{}, fmt.Errorf("browsersession: read session: %w", err)
 	}
 	session.IdleTimeout = time.Duration(idle) * time.Second
+	// NULL is an unknown authentication time (an id_token without auth_time,
+	// or a row a replica of the previous release wrote during the upgrade):
+	// the zero time, which no recent-authentication check accepts. Rows that
+	// existed before shared 0262 were backfilled from created_at.
+	if authenticatedAt != nil {
+		session.AuthenticatedAt = authenticatedAt.UTC()
+	} else {
+		session.AuthenticationProven = false
+	}
 	return session, nil
 }
 
 func (s *PostgresStore) Touch(ctx context.Context, id string, seenAt time.Time) error {
+	// last_seen_at ONLY. authenticated_at (shared 0262) is the person's last
+	// authentication, and a request is not one: a refresh that moved it would
+	// let a session kept alive by background polling pass every "signed in
+	// within the last 15 minutes" check forever.
+	//
 	// The WHERE clause repeats the throttle. Two replicas can decide to touch
 	// the same session in the same second, and without it the later one writes
 	// an older timestamp over a newer one.

@@ -56,7 +56,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # against a refusal. The gateway postures are render-only values: `.invalid` is
 # reserved by RFC 2606 and never resolves.
 RENDER=(
-  -f "$CHART/values-standalone.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/network-peers.yaml"
   --set worker.enabled=true
   --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1

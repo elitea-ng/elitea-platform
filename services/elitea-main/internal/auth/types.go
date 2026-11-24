@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrPrincipalInactive means the principal store ANSWERED, and the answer is
@@ -94,6 +95,29 @@ type User struct {
 	// (execution_jobs.browser_session_ref) so a run joins the session's
 	// audit events. Never serialised.
 	BrowserSessionRef int64 `json:"-"`
+	// BrowserSessionAuthenticatedAt is when the person behind that browser
+	// session last authenticated (browser_sessions.authenticated_at, shared
+	// 0262), zero for every other credential. Set only by the browser session
+	// reader, beside BrowserSessionRef; it is what the recent-authentication
+	// helper (apimw.RecentAuthentication, ADR-0059 R1.10) reads. Never
+	// serialised: no forwarded or cached principal can claim a fresh sign-in.
+	BrowserSessionAuthenticatedAt time.Time `json:"-"`
+	// BrowserSessionProvider is the plane that created that session
+	// (browsersession.ProviderOIDC, ProviderSAML, ProviderForm), "" for every
+	// other credential. Set and serialised like BrowserSessionAuthenticatedAt.
+	BrowserSessionProvider string `json:"-"`
+	// BrowserSessionAuthenticationProven is TRUE when
+	// BrowserSessionAuthenticatedAt is proof of an authentication, not the
+	// moment of a sign-in that may have been silent (shared 0264, ADR-0059
+	// R1.10b): an OIDC auth_time, a SAML AuthnInstant under ForceAuthn, or a
+	// Form password entry. Set and serialised like
+	// BrowserSessionAuthenticatedAt.
+	BrowserSessionAuthenticationProven bool `json:"-"`
+	// CredentialKind is the kind of credential that authenticated this
+	// request (ADR-0059 decision 7; see CredentialKind). Only the code that
+	// authenticated the credential sets it. The zero value resolves the empty
+	// administration set. Never serialised.
+	CredentialKind CredentialKind `json:"-"`
 }
 
 // BoundProjectRefused reports a binding whose project is no longer usable.

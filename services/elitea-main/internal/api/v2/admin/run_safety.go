@@ -56,8 +56,9 @@ func (h *Handler) invalidateRunSafety(section string) {
 func sessionPolicySection() map[string]any {
 	const section = platformconfig.SectionSessionPolicy
 	return map[string]any{
-		"id":    section,
-		"title": "Session Policy",
+		"id":     section,
+		"access": identitySectionAccess,
+		"title":  "Session Policy",
 		"description": "The longest a browser session may last. Each value is a maximum in seconds; 0 sets no " +
 			"maximum and keeps the deployment's own session lifetimes. A maximum shortens new sessions and " +
 			"also ends existing sessions that pass it. When a maximum idle timeout is set, a session with no " +
@@ -140,8 +141,9 @@ func runCapsSection() map[string]any {
 		}
 	}
 	return map[string]any{
-		"id":    section,
-		"title": "Run Caps",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Run Caps",
 		"description": "Limits on one agent run, by the agent's risk tier. A run that reaches a cap stops with " +
 			"CAP_REACHED and the cap's name, and the conversation shows why. The tier caps apply only after " +
 			"the first save of a tier value: save them after every worker runs this release. Until then, " +

@@ -19,6 +19,13 @@ func TestWorkerEgressSectionIsGovernanceGated(t *testing.T) {
 	if !found {
 		t.Fatal("worker_egress is not a configuration section")
 	}
+	keys := []string{}
+	for _, field := range section["fields"].([]map[string]any) {
+		keys = append(keys, field["key"].(string))
+	}
+	if strings.Join(keys, ",") != "mode,allowlist,private_permit" {
+		t.Fatalf("fields=%v", keys)
+	}
 }
 
 func TestValidateWorkerEgressValues(t *testing.T) {
@@ -42,6 +49,11 @@ func TestValidateWorkerEgressValues(t *testing.T) {
 		{name: "blank", values: map[string]any{"allowlist": []any{" "}}, want: `"allowlist":`},
 		{name: "too long", values: map[string]any{"allowlist": []any{strings.Repeat("a", 262)}}, want: "too long"},
 		{name: "too many", values: map[string]any{"allowlist": many}, want: "at most 512"},
+		// The private permit (#2950): the same grammar, its own bound.
+		{name: "valid private permit", values: map[string]any{"private_permit": []any{"jira.corp.example", "*.corp.example:8443", "10.20.0.0/16"}}},
+		{name: "private permit url", values: map[string]any{"private_permit": []any{"https://jira.corp.example"}}, want: `"private_permit":`},
+		{name: "private permit not a string", values: map[string]any{"private_permit": []any{1}}, want: `"private_permit"[0] must be a string`},
+		{name: "private permit too many", values: map[string]any{"private_permit": many[:129]}, want: "at most 128"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := validateWorkerEgressValues(test.values)

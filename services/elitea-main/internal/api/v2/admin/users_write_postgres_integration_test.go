@@ -789,5 +789,6 @@ func newAdminUsersPool(t *testing.T) *pgxpool.Pool {
 			t.Fatalf("apply %s: %v", file, err)
 		}
 	}
+	applySecurityAuditOutbox(t, ctx, pool)
 	return pool
 }

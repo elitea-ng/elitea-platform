@@ -56,16 +56,17 @@ SELECT 9202, id FROM public.auth_core__role WHERE name = 'ce_projects_viewer' AN
 
 func newCloudSwitchRouter(pool *pgxpool.Pool, userID int, projectPermissions ...string) http.Handler {
 	id := fmt.Sprintf("%d", userID)
-	return NewRouter(RouterConfig{
-		Pool:       pool,
-		SkillsRepo: struct{ v2skills.Repository }{},
-		AuthValidator: testTokenValidator{user: auth.User{
-			ID: id, UserID: id, Email: "ce-" + id + "@autotest.local",
-		}},
+	user := auth.User{ID: id, UserID: id, Email: "ce-" + id + "@autotest.local"}
+	// A browser session: only it carries the administration set (ADR-0059 R1.2a).
+	return asConsoleSession(NewRouter(RouterConfig{
+		Pool:               pool,
+		SkillsRepo:         struct{ v2skills.Repository }{},
+		SessionSecret:      consoleTestSessionSecret,
+		AuthValidator:      testTokenValidator{user: user},
 		PrincipalValidator: testPrincipalValidator{},
 		// The project gates resolve through this; it grants only in project 2.
 		ProjectPermissionResolver: fakePermissionResolver{granted: projectPermissions, forProject: "2"},
-	})
+	}), user)
 }
 
 type cloudSwitchState struct {

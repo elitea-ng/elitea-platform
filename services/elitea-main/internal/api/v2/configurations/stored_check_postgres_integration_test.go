@@ -156,6 +156,7 @@ SELECT create_tenant_schema('p_%d');`,
 		storedCheckProject, storedCheckOther, storedCheckProject, storedCheckOther)); err != nil {
 		t.Fatalf("create the tenant schemas: %v", err)
 	}
+	applySecurityAuditOutbox(t, ctx, pool)
 	// The naive-clock probe the dbtest template installs, after the last
 	// schema statement: a writer that stores the session-local clock in a
 	// `timestamp` WITHOUT time zone column fails instead of passing unread.
@@ -210,7 +211,7 @@ func storedCheckRouter(t *testing.T, pool *pgxpool.Pool, checker handler.Connect
 	// The central gate is not applied. It is applied at the mount in router.go
 	// and asserted in global_providers_test.go; what this file measures is what
 	// happens after a caller is admitted.
-	router.Mount("/api/v2/admin/gateway/providers", configurations.GlobalProviderRoutes())
+	router.Mount("/api/v2/admin/gateway/providers", configurations.GlobalProviderRoutes(openCatalogueGatesExternal))
 	return router
 }
 

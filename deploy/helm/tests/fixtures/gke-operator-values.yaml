@@ -23,3 +23,12 @@ llmGateway:
       iam.gke.io/gcp-service-account: elitea-llm@example-project.iam.gserviceaccount.com
   env:
     GATEWAY_EGRESS_ALLOWLIST: "europe-west4-aiplatform.googleapis.com,aiplatform.googleapis.com"
+networkPolicies:
+  clusterCIDRs:
+    - 10.8.0.0/14
+    - 34.118.224.0/20
+  egressPeers:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.20.0.5/32

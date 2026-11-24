@@ -52,6 +52,11 @@ func TestEveryWriteToAnAdministratorIsRefused(t *testing.T) {
 	grantRole(t, pool, admin, "admin", "administration")
 	viewer := seedAccount(t, pool, "audit@corp.com", "Audit")
 	grantRole(t, pool, viewer, "viewer", "administration")
+	// A second `admin`, so root is not the last administrator: the deactivation
+	// of the last one is refused by its own rule (issue 2500, covered in
+	// internal/api/scim), which ends its access first.
+	spare := seedAccount(t, pool, "spare@corp.com", "Spare")
+	grantRole(t, pool, spare, "admin", "administration")
 
 	for _, id := range []int{admin, viewer} {
 		attacker, inactive := "mallory@evil.com", false

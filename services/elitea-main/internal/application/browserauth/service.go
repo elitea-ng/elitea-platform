@@ -119,6 +119,14 @@ type Authorization struct {
 	Provider           string
 	ProviderAttributes json.RawMessage
 	Expiration         *time.Time
+	// AuthenticatedAt is when the person last entered their password: at
+	// sign-in or at a re-entry (Reauthenticate). Zero is unknown (a session
+	// signed in before shared 0264, or by a previous-release replica).
+	AuthenticatedAt time.Time
+	// SessionRef is the stored session's stable non-secret reference
+	// (elitea_auth.form_sessions.ref, shared 0266), 0 when the store has
+	// none. The principal carries it as BrowserSessionRef.
+	SessionRef int64
 }
 
 // LogoutContext is a bounded snapshot for optional OIDC or SAML federated
@@ -385,6 +393,12 @@ func (s *Service) Complete(
 	}
 
 	replacement := authenticatedState(assertion, provisioned.UserID)
+	if assertion.Provider == FormProviderName {
+		// The password was just verified: that is the authentication the
+		// recent-authentication check asks for (ADR-0059 R1.10b).
+		authenticatedAt := now
+		replacement.AuthenticatedAt = &authenticatedAt
+	}
 	newSessionID, err := s.sessions.RotateAndReplace(ctx, request.SessionID, replacement)
 	if err != nil {
 		// Identity provisioning may already have committed in PostgreSQL. The
@@ -452,12 +466,17 @@ func (s *Service) Authorize(ctx context.Context, sessionID string) (Authorizatio
 	}
 
 	providerAttributes := append(json.RawMessage(nil), state.ProviderAttributes...)
-	return Authorization{
+	authorization := Authorization{
 		Principal:          principal,
 		Provider:           *state.Provider,
 		ProviderAttributes: providerAttributes,
 		Expiration:         cloneTime(state.Expiration),
-	}, nil
+		SessionRef:         state.Ref,
+	}
+	if state.AuthenticatedAt != nil {
+		authorization.AuthenticatedAt = state.AuthenticatedAt.UTC()
+	}
+	return authorization, nil
 }
 
 // Logout snapshots bounded provider state without checking authentication

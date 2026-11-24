@@ -1,0 +1,42 @@
+{{- if and .Values.pgbouncer.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $clients := include "elitea.netpol.namesPeer" (dict "ctx" . "components" (list "main" "mainJobs" "scheduler" "llmGateway" "worker" "deepwiki" "inventory")) }}
+# Ingress to PgBouncer (#2952). The pooler holds an authenticated pool to the
+# database, so its port ({{ .Values.pgbouncer.service.port }}) admits only the chart's pods that may read the
+# shared database Secret (postgresql.existingSecret), each while it runs:
+# elitea-main and its migration Jobs, the scheduler, the LLM gateway, the
+# worker and its workload-session Jobs, DeepWiki and Inventory with their
+# migration Jobs, and the dbInit Job. Anything else (the KEDA operator's
+# postgresql trigger, a backup tool) goes in
+# networkPolicies.pgbouncer.extraIngressFrom.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-pgbouncer.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-pgbouncer.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-pgbouncer.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- /* A rule with an empty `from` admits every source. */}}
+  {{- if or $clients .Values.dbInit.enabled $np.pgbouncer.extraIngressFrom }}
+  ingress:
+    - ports:
+        - port: {{ .Values.pgbouncer.service.port }}
+          protocol: TCP
+      from:
+        {{- with $clients }}
+        {{- . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.dbInit.enabled }}
+        {{- include "elitea.netpol.peer" (dict "ctx" . "labels" (printf "%s\napp.kubernetes.io/component: db-init" (include "elitea.selectorLabels" .))) | nindent 8 }}
+        {{- end }}
+        {{- with $np.pgbouncer.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- end }}
+{{- end }}

@@ -51,7 +51,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -76,52 +76,52 @@ type bindingPair struct {
 // guardBindingWrite answers the request itself when the write is refused. On
 // success it returns `release`, which the handler defers: the store commits
 // in its own transaction, so the role-writes lock is held by a
-// rolepolicy.HoldRoleWrites hold from before the check until after that
+// adminaccess.HoldRoleWrites hold from before the check until after that
 // commit, and the caller is read again under it.
 func (h *Handler) guardBindingWrite(
 	w http.ResponseWriter, r *http.Request, bindingID int64, next *bindingPair,
 ) (release func(), ok bool) {
-	caller, refusal := rolepolicy.ResolveCaller(r, h.resolver)
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return nil, false
 	}
-	unreadable := rolepolicy.Unresolved("the binding could not be read, so the change was refused")
+	unreadable := adminaccess.Unresolved("the binding could not be read, so the change was refused")
 	if h.pool == nil {
 		// Only a super_admin, which the rule exempts, writes without a database
 		// to check against (the store seam's own tests).
 		if caller.SuperAdmin {
 			return func() {}, true
 		}
-		rolepolicy.Write(w, r, unreadable)
+		adminaccess.Write(w, r, unreadable)
 		return nil, false
 	}
 	ctx := r.Context()
-	hold, release, err := rolepolicy.HoldRoleWrites(ctx, h.pool)
+	hold, release, err := adminaccess.HoldRoleWrites(ctx, h.pool)
 	if err != nil {
-		rolepolicy.Write(w, r, unreadable)
+		adminaccess.Write(w, r, unreadable)
 		return nil, false
 	}
 	if caller, err = caller.Reload(ctx); err != nil {
 		release()
-		rolepolicy.Write(w, r, rolepolicy.Unresolved("your own permissions could not be read, so the change was refused"))
+		adminaccess.Write(w, r, adminaccess.Unresolved("your own permissions could not be read, so the change was refused"))
 		return nil, false
 	}
 	if refusal := h.checkBindingAssignment(ctx, hold, caller, bindingID, next); refusal != nil {
 		release()
-		rolepolicy.Write(w, r, refusal)
+		adminaccess.Write(w, r, refusal)
 		return nil, false
 	}
 	return release, true
 }
 
 func (h *Handler) checkBindingAssignment(
-	ctx context.Context, q rolepolicy.Querier, caller rolepolicy.Caller, bindingID int64, next *bindingPair,
-) *rolepolicy.Refusal {
+	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, bindingID int64, next *bindingPair,
+) *adminaccess.Refusal {
 	if caller.SuperAdmin {
 		return nil
 	}
-	unreadable := rolepolicy.Unresolved("the binding could not be read, so the change was refused")
+	unreadable := adminaccess.Unresolved("the binding could not be read, so the change was refused")
 	pairs := []bindingPair{}
 	if next != nil {
 		pairs = append(pairs, *next)
@@ -154,16 +154,16 @@ func (h *Handler) checkBindingAssignment(
 			return unreadable
 		}
 		roleIDs = append(roleIDs, roleID)
-		required, err := rolepolicy.ProjectRolesPermissions(ctx, q, pair.projectID, roleIDs)
+		required, err := adminaccess.ProjectRolesPermissions(ctx, q, pair.projectID, roleIDs)
 		if err != nil {
 			return unreadable
 		}
 		held, err := caller.ProjectSet(ctx, pair.projectID)
 		if err != nil {
-			return rolepolicy.Unresolved("your own permissions could not be read, so the change was refused")
+			return adminaccess.Unresolved("your own permissions could not be read, so the change was refused")
 		}
-		if missing := rolepolicy.Missing(held, required); len(missing) > 0 {
-			refusal := rolepolicy.NotHeld(
+		if missing := adminaccess.Missing(held, required); len(missing) > 0 {
+			refusal := adminaccess.NotHeld(
 				"a group binding assigns its role, so you can bind, move or remove only a role whose "+
 					"permissions you all hold in its project", pair.roleName, missing)
 			refusal.ProjectID = int64(pair.projectID)

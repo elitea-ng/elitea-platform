@@ -114,7 +114,7 @@ helm template deploy/helm/elitea -f deploy/helm/elitea/values-standalone.yaml \
 
 ## First-admin bootstrap
 
-A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no password on a single-sign-on deployment — name your own account instead through `identity.initial_global_admins` (a YAML list, wins when the authentication document has one) or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` (comma-separated, the usual path for a single-sign-on-only install with no document). With Form sign-in off (the default), the first OIDC or SAML sign-in that matches an entry — `oidc:<sub>`, `saml:<nameid>`, or `email:<address>` for an OIDC login with a verified address — is your first administrator. Write Form logins there only if you enable Form sign-in.
+A fresh database seeds exactly one administrator, `dev@elitea.ai`, with no password on a single-sign-on deployment — name your own account instead through `identity.initial_global_admins` (a YAML list, wins when the authentication document has one) or `main.env.ELITEA_INITIAL_GLOBAL_ADMINS` (comma-separated, the usual path for a single-sign-on-only install with no document). With Form sign-in off (the default), the first OIDC or SAML sign-in that matches an entry — `oidc:<sub>`, `saml:<nameid>`, or `email:<address>` for an OIDC login with a verified address — is your first administrator. Write Form logins there only if you enable Form sign-in. The list applies only while no active account holds `super_admin`; after that, add administrators from the console of an existing administrator.
 
 An entry is `oidc:<sub>`, `saml:<nameid>`, or `email:<verified address>` (matches only when the id_token asserts `email_verified: true`). The grant is one-shot: an account that already holds any administration role is left as is; one with none receives the grant on its next sign-in.
 
@@ -141,6 +141,51 @@ For other cases, sign in once and open **Settings › Profile**. Each **Sign-in 
 <Warning>
 `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` stays off in every shipped values file. It composes a second, asynchronous write route that would win the path from the compatibility route every install currently serves — and the compatibility route already writes `status_ok` inline from the same admission decision, which is what makes a saved credential usable. Turning it on is a separate cutover with its own client-side work, not a fix for an invisible credential.
 </Warning>
+
+## Network policies
+
+With `networkPolicies.enabled` (the default) the chart renders a NetworkPolicy for each workload it runs. They need a CNI that enforces NetworkPolicy (Calico, Cilium, GKE Dataplane V2 and others); on one that does not, the objects are inert. They are defence in depth beside each component's own checks, and some CNIs do not apply policy to host-network destinations.
+
+| Workload | Ingress | Egress |
+|---|---|---|
+| elitea-main | 8080 from `networkPolicies.main.ingressFrom` / `extraIngressFrom` and `probeFrom`; the runtime listeners (9443-9446) from the worker; the platform listener also from DeepWiki and Inventory | not restricted |
+| worker | none | DNS, elitea-main's runtime listeners, NATS 4222, PostgreSQL (`networkPolicies.egressPeers.postgresql`), the sandbox supervisors, elitea-vector, the OTel collector, `worker.networkPolicy.privateEgress`, and the public internet on 443 minus every private, link-local and cluster range |
+| sandbox supervisor | its profile ports from the worker and elitea-main | not restricted |
+| elitea-web | 80 from elitea-main and `networkPolicies.web.extraIngressFrom` | not restricted |
+| scheduler | its health port from `probeFrom` and `metricsFrom` only | not restricted |
+| LLM gateway | gRPC from elitea-main and `networkPolicies.llmGateway.extraIngressFrom`; 8083 from `probeFrom` and `metricsFrom` | DNS, NATS, PostgreSQL, the OTel collector, `llmGateway.networkPolicy.egress`, and the public internet on 443 minus every private, link-local and cluster range |
+| OTel collector | OTLP 4317/4318 from the chart's pods that export traces and `networkPolicies.otelCollector.extraIngressFrom` | not restricted |
+| PgBouncer | its port from the chart's pods that read the database Secret, the dbInit Job and `networkPolicies.pgbouncer.extraIngressFrom` | not restricted |
+| DeepWiki, Inventory, elitea-vector, Qdrant, NATS | see the comments in `values.yaml` | not restricted |
+
+`networkPolicies.metricsFrom` is the Prometheus that scrapes the closed metrics ports. The gateway's autoscaler reads `gateway_llm_sse_active_connections` from it, so list it when the gateway autoscales on that metric.
+
+### Egress of the worker and the LLM gateway
+
+Two values have no default, and the chart lists them with the other missing values while either egress policy renders:
+
+| Setting | What it is |
+|---|---|
+| `networkPolicies.clusterCIDRs` | The cluster's pod and Service CIDRs, for example `[10.244.0.0/16, 10.96.0.0/12]`. Also list the node range and the control-plane endpoint when either uses public addresses. The public-internet rules except every listed block, so a cluster whose pods use public-range addresses doesn't count as public. Not needed with `allowPublicEgress: false` on both. |
+| `networkPolicies.egressPeers.postgresql.to` | Where PostgreSQL is, as NetworkPolicyPeer entries: an `ipBlock` with a managed database's address (`{ipBlock: {cidr: 10.20.0.5/32}}`), or a `namespaceSelector` with a `podSelector` for one in the cluster. Admitted on `egressPeers.postgresql.ports` (5432). |
+
+With `nats.enabled: false`, both policies admit every pod of `natsClient.namespace` on `natsClient.port`; `networkPolicies.egressPeers.nats.to` narrows that to your NATS pods.
+
+To open more destinations:
+
+- **Private toolkit hosts.** Add each on-premises host the worker's toolkits, index sources or remote MCP servers reach (a self-hosted Jira, GitLab, an in-cluster MCP service) to `worker.networkPolicy.privateEgress`, a CIDR and its ports each. The CIDR and IP entries of `main.env.ELITEA_WORKER_EGRESS_PRIVATE_PERMIT` are admitted for you. A host name entry there, and every entry of the console's **Private Permit**, needs its addresses in `privateEgress`. Link-local blocks are refused.
+- **Other public ports.** `worker.networkPolicy.publicEgressPorts` and `llmGateway.networkPolicy.publicEgressPorts` (443 by default).
+- **Self-hosted models.** Every model host `GATEWAY_EGRESS_ALLOWLIST` names that is private or in the cluster goes in `llmGateway.networkPolicy.egress`, as raw egress rules.
+- **Anything else.** `worker.networkPolicy.extraEgress` takes raw egress rules: a vector store, supervisor or OTLP collector (`global.otelEndpoint`) the chart does not run.
+- **DNS.** The rules admit pods labelled `k8s-app: kube-dns`. With NodeLocal DNSCache, or a resolver with other labels, set `networkPolicies.dnsEgress` (for example a rule to `169.254.20.10/32` on UDP and TCP 53).
+
+`worker.networkPolicy.mode: proxy` replaces the worker's public rule with the egress proxy (`egressProxy.enabled`). The worker's toolkit clients connect directly, so in this mode toolkits reach only the private and extra destinations you list.
+
+Turning off one of these egress policies (`worker.networkPolicy.egressEnabled: false`, `llmGateway.networkPolicy.enabled: false`) needs the statement `externallyManaged: true` beside it, as `networkPolicies.enabled: false` does.
+
+### Service-account tokens
+
+No pod mounts a Kubernetes service-account token unless it calls the Kubernetes API: the sandbox supervisor, the KEDA uninstall hook and the NATS bootstrap Job's `issue` container (through a projected token of its own). The worker runs as its own `elitea-worker` ServiceAccount (`worker.serviceAccount`). For a mesh or sidecar that reads the automounted token, set `<component>.serviceAccount.automountToken: true` for that component (`main`, `web`, `scheduler`, `llmGateway`, `deepwiki`, `inventory`, `otelCollector`, `worker`). GKE Workload Identity, EKS Pod Identity, IRSA and Azure Workload Identity do not need it: they use their own projected tokens or the metadata server.
 
 ## Post-install checks
 

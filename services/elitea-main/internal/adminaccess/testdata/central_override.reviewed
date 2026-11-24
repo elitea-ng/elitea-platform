@@ -1,0 +1,60 @@
+# The central override of ADR-0059 R0.6b: the (route, configuration type) pairs
+# a holder of projects.settings.view or projects.settings.manage reaches in a
+# project it is not a member of. One line per pair:
+#   METHOD PATTERN CONFIGURATION_TYPE CENTRAL_PERMISSION
+#
+# A pair is added to internal/adminaccess/central_override.go and to this file
+# in the same change, after a security review of what the type controls. A
+# credential, model or toolkit configuration type never belongs here: the
+# override reaches the five guarded project settings and nothing else.
+
+GET /api/v2/configurations/configurations/{projectID} ai_disclosure projects.settings.view
+GET /api/v2/configurations/configurations/{projectID} browser projects.settings.view
+GET /api/v2/configurations/configurations/{projectID} cloud_executor projects.settings.view
+GET /api/v2/configurations/configurations/{projectID} computer_use projects.settings.view
+GET /api/v2/configurations/configurations/{projectID} worker_egress projects.settings.view
+GET /api/v2/configurations/configurations/{mode}/{projectID} ai_disclosure projects.settings.view
+GET /api/v2/configurations/configurations/{mode}/{projectID} browser projects.settings.view
+GET /api/v2/configurations/configurations/{mode}/{projectID} cloud_executor projects.settings.view
+GET /api/v2/configurations/configurations/{mode}/{projectID} computer_use projects.settings.view
+GET /api/v2/configurations/configurations/{mode}/{projectID} worker_egress projects.settings.view
+GET /api/v2/configurations/configuration/{projectID}/{configID} ai_disclosure projects.settings.view
+GET /api/v2/configurations/configuration/{projectID}/{configID} browser projects.settings.view
+GET /api/v2/configurations/configuration/{projectID}/{configID} cloud_executor projects.settings.view
+GET /api/v2/configurations/configuration/{projectID}/{configID} computer_use projects.settings.view
+GET /api/v2/configurations/configuration/{projectID}/{configID} worker_egress projects.settings.view
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} ai_disclosure projects.settings.view
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} browser projects.settings.view
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} cloud_executor projects.settings.view
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} computer_use projects.settings.view
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} worker_egress projects.settings.view
+POST /api/v2/configurations/configurations/{projectID} ai_disclosure projects.settings.manage
+POST /api/v2/configurations/configurations/{projectID} browser projects.settings.manage
+POST /api/v2/configurations/configurations/{projectID} cloud_executor projects.settings.manage
+POST /api/v2/configurations/configurations/{projectID} computer_use projects.settings.manage
+POST /api/v2/configurations/configurations/{projectID} worker_egress projects.settings.manage
+POST /api/v2/configurations/configurations/{mode}/{projectID} ai_disclosure projects.settings.manage
+POST /api/v2/configurations/configurations/{mode}/{projectID} browser projects.settings.manage
+POST /api/v2/configurations/configurations/{mode}/{projectID} cloud_executor projects.settings.manage
+POST /api/v2/configurations/configurations/{mode}/{projectID} computer_use projects.settings.manage
+POST /api/v2/configurations/configurations/{mode}/{projectID} worker_egress projects.settings.manage
+PUT /api/v2/configurations/configuration/{projectID}/{configID} ai_disclosure projects.settings.manage
+PUT /api/v2/configurations/configuration/{projectID}/{configID} browser projects.settings.manage
+PUT /api/v2/configurations/configuration/{projectID}/{configID} cloud_executor projects.settings.manage
+PUT /api/v2/configurations/configuration/{projectID}/{configID} computer_use projects.settings.manage
+PUT /api/v2/configurations/configuration/{projectID}/{configID} worker_egress projects.settings.manage
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} ai_disclosure projects.settings.manage
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} browser projects.settings.manage
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} cloud_executor projects.settings.manage
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} computer_use projects.settings.manage
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} worker_egress projects.settings.manage
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} ai_disclosure projects.settings.manage
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} browser projects.settings.manage
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} cloud_executor projects.settings.manage
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} computer_use projects.settings.manage
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} worker_egress projects.settings.manage
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} ai_disclosure projects.settings.manage
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} browser projects.settings.manage
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} cloud_executor projects.settings.manage
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} computer_use projects.settings.manage
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} worker_egress projects.settings.manage

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -16,15 +17,24 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/buildinfo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/microsoftapps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 type Handler struct {
 	// memoryUsers journals the removal of a deleted user's personal memories;
 	// nil when the deployment keeps none in the vector store.
 	memoryUsers MemoryUserJournal
+	// seedTable is set once elitea_auth.admin_role_seeds has been seen
+	// (roles_crud.go, seededRoles).
+	seedTable   atomic.Bool
 	pool        *pgxpool.Pool
 	resolver    auth.PermissionResolver
 	suggestions ToolkitRegistrySource
+
+	// maintenanceState reads the maintenance window in place of pool for
+	// GET /admin/maintenance/{mode} (WithMaintenanceState); nil reads pool.
+	maintenanceState func(context.Context) (platformconfig.Maintenance, error)
+
 	// The brand-pack resolver the Branding surface reads and invalidates
 	// (branding.go). Nil unless WithBranding is applied.
 	branding BrandingResolver
@@ -121,6 +131,10 @@ type Handler struct {
 	microsoftApps   MicrosoftAppStore
 	microsoftDoer   microsoftapps.HTTPDoer
 	microsoftOrigin string
+
+	// accessAudit appends the admin.access.changed events of the role write
+	// paths in their transactions (ADR-0059 R1.5, access_events.go).
+	accessAudit securityaudit.Appender
 }
 
 // Option configures a Handler at construction time.
@@ -169,8 +183,15 @@ func WithToolkitRegistry(source ToolkitRegistrySource) Option {
 	}
 }
 
+// WithMaintenanceState reads the maintenance window through state instead of
+// the platform_settings rows of the pool, the reader the maintenance gate
+// takes (api.RouterConfig.MaintenanceState). Nil keeps the pool read.
+func WithMaintenanceState(state func(context.Context) (platformconfig.Maintenance, error)) Option {
+	return func(h *Handler) { h.maintenanceState = state }
+}
+
 func NewHandler(pool *pgxpool.Pool, options ...Option) *Handler {
-	handler := &Handler{pool: pool}
+	handler := &Handler{pool: pool, accessAudit: defaultAccessAppender()}
 	for _, option := range options {
 		option(handler)
 	}
@@ -274,14 +295,20 @@ func (h *Handler) migrationHead(ctx context.Context) (int64, bool) {
 
 // Projects and ProjectSuspend live in projects.go (unit A14).
 
-func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, _ *http.Request) {
-	sections := configSections()
-	for _, section := range sections {
-		if section["id"] == platformconfig.SectionCloudExecutor {
+// PluginConfigSchemas lists the sections the caller may read (ADR-0059 R0.5):
+// a section the caller can open on neither path is absent, so the list names
+// no section whose values would answer 403.
+func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, r *http.Request) {
+	readable := h.readableSections(r)
+	sections := make([]map[string]any, 0, len(readable))
+	for _, s := range readable {
+		section := s.raw
+		if s.id == platformconfig.SectionCloudExecutor {
 			if notice := cloudExecutorEncryptionNotice(h.cloudExecutorEncryption); notice != "" {
 				section["notice"] = notice
 			}
 		}
+		sections = append(sections, section)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sections": sections,
@@ -342,7 +369,13 @@ func (h *Handler) Maintenance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := platformconfig.LoadMaintenance(r.Context(), h.pool)
+	read := func(ctx context.Context) (platformconfig.Maintenance, error) {
+		return platformconfig.LoadMaintenance(ctx, h.pool)
+	}
+	if h.maintenanceState != nil {
+		read = h.maintenanceState
+	}
+	state, err := read(r.Context())
 	if err != nil {
 		// NOT permissive, unlike the middleware's own read. An operator asking
 		// this endpoint whether the platform is in maintenance must never be

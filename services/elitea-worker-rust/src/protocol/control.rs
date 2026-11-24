@@ -3575,7 +3575,7 @@ fn egress_summary_request(
             .map(|host| EgressHostRefusedV1 {
                 host: host.host.clone(),
                 port: u32::from(host.port),
-                reason: elitea_agent_runtime::egress::REFUSAL_REASON_NOT_ALLOWED.to_owned(),
+                reason: host.reason.to_owned(),
                 count: count(host.count),
             })
             .collect(),

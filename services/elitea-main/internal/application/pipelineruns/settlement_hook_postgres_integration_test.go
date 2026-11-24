@@ -25,6 +25,9 @@ package pipelineruns_test
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	"io"
@@ -39,6 +42,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	v2secrets "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/webhook"
 	executionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
@@ -174,23 +178,33 @@ func TestPipelineRunSucceededReachesAWebhookReceiverSignedAndLogged(t *testing.T
 
 	var received int32
 	var gotSignature, gotEventType string
+	var gotBody []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&received, 1)
 		gotSignature = r.Header.Get(webhook.SignatureHeader)
 		gotEventType = r.Header.Get(webhook.EventTypeHeader)
+		gotBody, _ = io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	webhooksRepo := repos.NewWebhooksRepo(pool)
+	// The signing secret lives in the project vault (issue 2963), so the
+	// registry and the dispatcher are composed with it, the way
+	// cmd/elitea-main composes them.
+	secrets := v2secrets.NewHandler(pool)
+	vault, err := repos.NewCurrentSecretVaultRepository(pool, nil, repos.WithProjectVaultCreator(secrets))
+	if err != nil {
+		t.Fatalf("vault repository: %v", err)
+	}
+	webhooksRepo := repos.NewWebhooksRepo(pool, repos.WithWebhookSecretVault(vault))
 	deliveriesRepo := repos.NewWebhookDeliveriesRepo(pool)
-	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo)
+	dispatcher := webhook.NewDispatcher(webhooksRepo, deliveriesRepo, webhook.WithSecretResolver(secrets))
 	domainEvents := events.NewPublisher(events.NoopBus{}, dispatcher)
 
 	pipelineRunsRepo := repos.NewPipelineRunsRepo(pool)
 	hook := pipelineruns.NewSettlementHook(pipelineRunsRepo, domainEvents)
 
-	const projectID = "proj-pipeline-succeeded"
+	const projectID = "9201"
 	registered, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    server.URL,
 		Events: []string{"pipeline.run.succeeded"},
@@ -221,8 +235,10 @@ func TestPipelineRunSucceededReachesAWebhookReceiverSignedAndLogged(t *testing.T
 	if atomic.LoadInt32(&received) != 1 {
 		t.Fatalf("receiver saw %d requests, want 1", received)
 	}
-	if gotSignature == "" {
-		t.Fatal("delivery carried no signature header")
+	mac := hmac.New(sha256.New, []byte("pipeline-secret"))
+	mac.Write(gotBody)
+	if want := "sha256=" + hex.EncodeToString(mac.Sum(nil)); gotSignature != want {
+		t.Fatalf("signature header = %q, want the HMAC under the vault-held secret %q", gotSignature, want)
 	}
 	if gotEventType != "pipeline.run.succeeded" {
 		t.Errorf("event type header = %q, want pipeline.run.succeeded", gotEventType)
@@ -267,7 +283,6 @@ func TestPipelineRunFailedCarriesTheErrorSummaryToTheReceiver(t *testing.T) {
 	registered, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    server.URL,
 		Events: []string{"pipeline.run.failed"},
-		Secret: "s",
 		Active: true,
 	})
 	if err != nil {
@@ -332,7 +347,7 @@ func TestPipelineRunOutcomeIsNotEmittedTwiceForAReplayedSettlement(t *testing.T)
 
 	const projectID = "proj-pipeline-replay"
 	registered, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
-		URL: server.URL, Events: []string{"pipeline.run.succeeded"}, Secret: "s", Active: true,
+		URL: server.URL, Events: []string{"pipeline.run.succeeded"}, Active: true,
 	})
 	if err != nil {
 		t.Fatalf("create webhook: %v", err)

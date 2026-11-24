@@ -82,8 +82,9 @@ func approvalPolicySection() map[string]any {
 	})
 	fields = append(fields, untrustedReadThenActField())
 	return map[string]any{
-		"id":    section,
-		"title": "Approval Policy",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Approval Policy",
 		"description": "Which tool calls need a human approval, by the agent's risk tier and the tool's category " +
 			"(read, write, delete, external_send, payment, code_execution). The default asks for an approval of " +
 			"delete, external_send and payment tools at the high and critical tiers. Save this section only " +

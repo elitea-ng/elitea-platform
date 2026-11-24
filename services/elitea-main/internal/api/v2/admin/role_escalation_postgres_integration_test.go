@@ -22,10 +22,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/admin"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/rolepolicy"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
 )
 
@@ -102,7 +102,7 @@ func newEscalationEnvironment(t *testing.T) escalationEnvironment {
 // as mounts every role write for one caller, with the real resolver.
 func (e escalationEnvironment) as(email string) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := &auth.User{ID: id, UserID: id}
+	principal := &auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(e.pool)))
 	router := chi.NewRouter()
 	router.Mount("/m", rolesRouter(handler, nil, principal))
@@ -172,10 +172,10 @@ func TestAnAdminCannotMakeTheAdminRoleASuperAdmin(t *testing.T) {
 	router := env.as(escalationAdmin)
 
 	for _, role := range []string{"admin", "editor"} {
-		expectRefusal(t, saveCell(t, router, centralMatrix, rolepolicy.SuperAdminPermission, role, true),
-			rolepolicy.CodeReservedPermission)
-		if contains(grantsSQL(t, env.pool, "administration", role), rolepolicy.SuperAdminPermission) {
-			t.Fatalf("%s holds %s after the refusal", role, rolepolicy.SuperAdminPermission)
+		expectRefusal(t, saveCell(t, router, centralMatrix, adminaccess.SuperAdminPermission, role, true),
+			adminaccess.CodeReservedPermission)
+		if contains(grantsSQL(t, env.pool, "administration", role), adminaccess.SuperAdminPermission) {
+			t.Fatalf("%s holds %s after the refusal", role, adminaccess.SuperAdminPermission)
 		}
 	}
 }
@@ -183,17 +183,17 @@ func TestAnAdminCannotMakeTheAdminRoleASuperAdmin(t *testing.T) {
 func TestAnAdminCannotStripTheSuperAdminPermissionFromSuperAdmin(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	// Revoking it would leave nobody able to grant it back, short of SQL.
-	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, rolepolicy.SuperAdminPermission, "super_admin", false),
-		rolepolicy.CodePermissionNotHeld)
-	if !contains(grantsSQL(t, env.pool, "administration", "super_admin"), rolepolicy.SuperAdminPermission) {
+	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, adminaccess.SuperAdminPermission, "super_admin", false),
+		adminaccess.CodePermissionNotHeld)
+	if !contains(grantsSQL(t, env.pool, "administration", "super_admin"), adminaccess.SuperAdminPermission) {
 		t.Fatal("the refused revoke was written")
 	}
 }
 
 func TestASuperAdminCannotPutTheSuperAdminPermissionOnAnotherRole(t *testing.T) {
 	env := newEscalationEnvironment(t)
-	expectRefusal(t, saveCell(t, env.as(escalationSuper), centralMatrix, rolepolicy.SuperAdminPermission, "admin", true),
-		rolepolicy.CodeReservedPermission)
+	expectRefusal(t, saveCell(t, env.as(escalationSuper), centralMatrix, adminaccess.SuperAdminPermission, "admin", true),
+		adminaccess.CodeReservedPermission)
 }
 
 func TestANarrowMatrixEditorCannotWidenItselfOrAnotherRole(t *testing.T) {
@@ -202,10 +202,10 @@ func TestANarrowMatrixEditorCannotWidenItselfOrAnotherRole(t *testing.T) {
 
 	// Its own role: locked, even for a permission it would hold.
 	expectRefusal(t, saveCell(t, router, centralMatrix, "admin.auth.users", "matrix_editor", true),
-		rolepolicy.CodeOwnRoleLocked)
+		adminaccess.CodeOwnRoleLocked)
 	// Another role: only what it holds.
 	expectRefusal(t, saveCell(t, router, centralMatrix, "admin.auth.users", "editor", true),
-		rolepolicy.CodePermissionNotHeld)
+		adminaccess.CodePermissionNotHeld)
 	if contains(grantsSQL(t, env.pool, "administration", "editor"), "admin.auth.users") {
 		t.Fatal("editor holds admin.auth.users after the refusal")
 	}
@@ -219,7 +219,7 @@ func TestANarrowMatrixEditorCannotWidenItselfOrAnotherRole(t *testing.T) {
 func TestAnAdminCannotEditTheAdminRoleItHolds(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	expectRefusal(t, saveCell(t, env.as(escalationAdmin), centralMatrix, "admin.auth.users", "admin", false),
-		rolepolicy.CodeOwnRoleLocked)
+		adminaccess.CodeOwnRoleLocked)
 	if !contains(grantsSQL(t, env.pool, "administration", "admin"), "admin.auth.users") {
 		t.Fatal("the refused revoke was written")
 	}
@@ -247,15 +247,15 @@ func TestAMatrixEditCannotWidenTheCallersOwnProjectRole(t *testing.T) {
 	// The admin is a viewer of the public project, which inherits the
 	// template: granting `viewer` more would widen the admin there.
 	expectRefusal(t, saveCell(t, router, template, "models.beta.edit", "viewer", true),
-		rolepolicy.CodeSelfEscalation)
+		adminaccess.CodeSelfEscalation)
 	if contains(grantsSQL(t, env.pool, "default", "viewer"), "models.beta.edit") {
 		t.Fatal("the refused template grant was written")
 	}
 	// A role the admin does not hold anywhere is the admin's to edit.
 	expectStatus(t, saveCell(t, router, template, "models.beta.edit", "editor", true), http.StatusOK)
 	// The reserved permission goes on no project role.
-	expectRefusal(t, saveCell(t, router, template, rolepolicy.SuperAdminPermission, "editor", true),
-		rolepolicy.CodeReservedPermission)
+	expectRefusal(t, saveCell(t, router, template, adminaccess.SuperAdminPermission, "editor", true),
+		adminaccess.CodeReservedPermission)
 	// Apply to Projects writes the template into the public project too, but
 	// the public project is excluded from the sync, so it widens nobody here.
 	expectStatus(t, adminDo(t, router, http.MethodPost, template, nil), http.StatusOK)
@@ -266,7 +266,7 @@ func TestAMatrixEditCannotWidenTheCallersOwnProjectRole(t *testing.T) {
 func TestRoleCreateIgnoresAPermissionListInTheBody(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	recorder := adminDo(t, env.as(escalationMatrix), http.MethodPost, "/r/admin/roles/administration/administration",
-		map[string]any{"name": "fresh_role", "permissions": []string{rolepolicy.SuperAdminPermission, "admin.auth.users"}})
+		map[string]any{"name": "fresh_role", "permissions": []string{adminaccess.SuperAdminPermission, "admin.auth.users"}})
 	expectStatus(t, recorder, http.StatusCreated)
 	if grants := grantsSQL(t, env.pool, "administration", "fresh_role"); len(grants) != 0 {
 		t.Fatalf("a new role holds %v, want nothing", grants)
@@ -282,22 +282,24 @@ func TestTheModesRouteAppliesTheSubsetRule(t *testing.T) {
 
 	// Assigning `admin` needs every permission of `admin`.
 	expectRefusal(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
-		map[string]any{"user_id": plain, "mode": "administration", "role": "admin"}), rolepolicy.CodePermissionNotHeld)
-	// Assigning itself a wider custom role, too.
+		map[string]any{"user_id": plain, "mode": "administration", "role": "admin"}), adminaccess.CodePermissionNotHeld)
+	// Assigning itself a wider custom role, too. Since ADR-0059 R0.8a the
+	// not-yourself rule decides first, so the code is the more specific one
+	// (role_self_assignment_test.go covers the rule itself).
 	expectRefusal(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": env.ids[escalationModes], "mode": "administration", "role": "matrix_editor"}),
-		rolepolicy.CodePermissionNotHeld)
+		adminaccess.CodeSelfAssignment)
 	if names := adminRoleNamesSQL(t, env.pool, plain); len(names) != 0 {
 		t.Fatalf("the refused assignment was written: %v", names)
 	}
 	// Removing an admin needs every permission of `admin` as well.
 	expectRefusal(t, adminDo(t, router, http.MethodDelete,
 		fmt.Sprintf("/o/admin/modes/administration?id=%d:administration:admin", env.ids[escalationTarget]), nil),
-		rolepolicy.CodePermissionNotHeld)
+		adminaccess.CodePermissionNotHeld)
 	// super_admin keeps its own guard and code.
 	expectRefusal(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": plain, "mode": "administration", "role": "super_admin"}),
-		rolepolicy.CodeSuperAdminRequired)
+		adminaccess.CodeSuperAdminRequired)
 	// A role within its own set is assignable.
 	expectStatus(t, adminDo(t, router, http.MethodPost, "/o/admin/modes/administration",
 		map[string]any{"user_id": plain, "mode": "administration", "role": "empty_role"}), http.StatusOK)
@@ -327,11 +329,11 @@ func TestSetAdminRoleAppliesTheSubsetRule(t *testing.T) {
 
 	expectRefusal(t, adminDo(t, env.as(escalationUsersAdmin), http.MethodPost, "/u/admin/auth_users/administration",
 		map[string]any{"action": "set_admin_role", "user_id": plain, "role_name": "admin"}),
-		rolepolicy.CodePermissionNotHeld)
+		adminaccess.CodePermissionNotHeld)
 	// Demoting an admin takes `admin` away, so it needs all of `admin` too.
 	expectRefusal(t, adminDo(t, env.as(escalationUsersAdmin), http.MethodPost, "/u/admin/auth_users/administration",
 		map[string]any{"action": "set_admin_role", "user_id": env.ids[escalationTarget], "role_name": nil}),
-		rolepolicy.CodePermissionNotHeld)
+		adminaccess.CodePermissionNotHeld)
 	if names := adminRoleNamesSQL(t, env.pool, env.ids[escalationTarget]); fmt.Sprint(names) != "[admin]" {
 		t.Fatalf("roles after the refused demotion = %v, want [admin]", names)
 	}
@@ -341,7 +343,7 @@ func TestSetAdminRoleAppliesTheSubsetRule(t *testing.T) {
 	// And super_admin stays guarded by its own rule.
 	expectRefusal(t, adminDo(t, env.as(escalationAdmin), http.MethodPost, "/u/admin/auth_users/administration",
 		map[string]any{"action": "set_admin_role", "user_id": plain, "role_name": "super_admin"}),
-		rolepolicy.CodeSuperAdminRequired)
+		adminaccess.CodeSuperAdminRequired)
 	expectStatus(t, adminDo(t, env.as(escalationSuper), http.MethodPost, "/u/admin/auth_users/administration",
 		map[string]any{"action": "set_admin_role", "user_id": plain, "role_name": "super_admin"}), http.StatusOK)
 }
@@ -362,18 +364,18 @@ SELECT 3, $1, id FROM public.auth_core__project_role WHERE project_id = 3 AND na
 	const path = "/p/admin/user_project_permissions/administration"
 
 	expectRefusal(t, adminDo(t, router, http.MethodPut, path,
-		map[string]any{"viewer": []string{"models.gamma.delete", "models.beta.edit"}}), rolepolicy.CodeSelfEscalation)
+		map[string]any{"viewer": []string{"models.gamma.delete", "models.beta.edit"}}), adminaccess.CodeSelfEscalation)
 	if contains(projectGrantsSQL(t, env.pool, 3, "viewer"), "models.beta.edit") {
 		t.Fatal("the refused grant was written")
 	}
 	expectRefusal(t, adminDo(t, router, http.MethodPut, path,
-		map[string]any{"editor": []string{rolepolicy.SuperAdminPermission}}), rolepolicy.CodeReservedPermission)
+		map[string]any{"editor": []string{adminaccess.SuperAdminPermission}}), adminaccess.CodeReservedPermission)
 	expectStatus(t, adminDo(t, router, http.MethodPut, path,
 		map[string]any{"editor": []string{"models.beta.edit"}}), http.StatusOK)
 	// `append_user_role` gives the roles to every member of every personal
 	// project, which no subset of the caller's own set can cover.
 	expectRefusal(t, adminDo(t, router, http.MethodPut, path+"?append_user_role",
-		map[string]any{"editor": []string{"models.beta.edit"}}), rolepolicy.CodeSuperAdminRequired)
+		map[string]any{"editor": []string{"models.beta.edit"}}), adminaccess.CodeSuperAdminRequired)
 }
 
 func TestABulkInviteCannotGiveTheCallerAProjectRole(t *testing.T) {
@@ -385,7 +387,7 @@ func TestABulkInviteCannotGiveTheCallerAProjectRole(t *testing.T) {
 	// refuses the whole batch.
 	expectRefusal(t, adminDo(t, router, http.MethodPost, path, map[string]any{
 		"users": []int{env.ids[escalationAdmin], env.ids[escalationPlainTarget]}, "projects": []int{2}, "role": "admin",
-	}), rolepolicy.CodeSelfEscalation)
+	}), adminaccess.CodeSelfEscalation)
 	var members int
 	if err := env.pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM public.auth_core__project_user_role WHERE project_id = 2`).Scan(&members); err != nil {
@@ -424,7 +426,7 @@ func TestARenameCannotWidenTheCallerThroughTheTemplateFallback(t *testing.T) {
 		}
 	}
 	expectRefusal(t, adminDo(t, env.as(escalationAdmin), http.MethodPut, "/r2/admin/roles/public/default",
-		map[string]any{"name": "helper", "new_name": "power"}), rolepolicy.CodeSelfEscalation)
+		map[string]any{"name": "helper", "new_name": "power"}), adminaccess.CodeSelfEscalation)
 	if roles := projectRoleNamesSQL(t, env.pool, 1); !contains(roles, "helper") || contains(roles, "power") {
 		t.Fatalf("project roles after the refused rename = %v", roles)
 	}
@@ -455,7 +457,7 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 		router := chi.NewRouter()
 		router.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: id, UserID: id})))
+				next.ServeHTTP(w, r.WithContext(auth.ContextWithUser(r.Context(), auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession})))
 			})
 		})
 		router.Post("/bindings", handler.SCIMGroupBindingCreate)
@@ -471,7 +473,7 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 
 	// A group the caller is in, or a second account of its own, would carry
 	// the role: binding `admin` is assigning it.
-	expectRefusal(t, adminDo(t, router, http.MethodPost, "/bindings", bind("admin")), rolepolicy.CodePermissionNotHeld)
+	expectRefusal(t, adminDo(t, router, http.MethodPost, "/bindings", bind("admin")), adminaccess.CodePermissionNotHeld)
 	// `viewer` is the caller's own role there.
 	created := adminDo(t, router, http.MethodPost, "/bindings", bind("viewer"))
 	expectStatus(t, created, http.StatusCreated)
@@ -485,13 +487,13 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 	}
 	path := "/bindings/" + body.Binding.ID
 	// Moving it to `admin` is assigning `admin`.
-	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("admin")), rolepolicy.CodePermissionNotHeld)
+	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("admin")), adminaccess.CodePermissionNotHeld)
 
 	// A super admin moves it to `admin`. The admin can then neither move nor
 	// delete it, because both take `admin` away from its members.
 	expectStatus(t, adminDo(t, bindingsAs(escalationSuper), http.MethodPut, path, bind("admin")), http.StatusOK)
-	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("viewer")), rolepolicy.CodePermissionNotHeld)
-	expectRefusal(t, adminDo(t, router, http.MethodDelete, path, nil), rolepolicy.CodePermissionNotHeld)
+	expectRefusal(t, adminDo(t, router, http.MethodPut, path, bind("viewer")), adminaccess.CodePermissionNotHeld)
+	expectRefusal(t, adminDo(t, router, http.MethodDelete, path, nil), adminaccess.CodePermissionNotHeld)
 	expectStatus(t, adminDo(t, bindingsAs(escalationSuper), http.MethodDelete, path, nil), http.StatusNoContent)
 }
 
@@ -502,7 +504,7 @@ func TestAGroupBindingAssignsOnlyARoleTheCallerHolds(t *testing.T) {
 func TestARoleWriteWaitsForTheHoldOfAnother(t *testing.T) {
 	env := newEscalationEnvironment(t)
 	ctx := context.Background()
-	_, release, err := rolepolicy.HoldRoleWrites(ctx, env.pool)
+	_, release, err := adminaccess.HoldRoleWrites(ctx, env.pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +516,7 @@ func TestARoleWriteWaitsForTheHoldOfAnother(t *testing.T) {
 	defer func() { _ = second.Rollback(ctx) }()
 	waiting, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
-	if err := rolepolicy.LockRoleWrites(waiting, second); err == nil {
+	if err := adminaccess.LockRoleWrites(waiting, second); err == nil {
 		t.Fatal("a second role write took the lock while another write held it")
 	}
 	_ = second.Rollback(ctx)
@@ -525,7 +527,7 @@ func TestARoleWriteWaitsForTheHoldOfAnother(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = third.Rollback(ctx) }()
-	if err := rolepolicy.LockRoleWrites(ctx, third); err != nil {
+	if err := adminaccess.LockRoleWrites(ctx, third); err != nil {
 		t.Fatalf("the lock is still held after release: %v", err)
 	}
 }

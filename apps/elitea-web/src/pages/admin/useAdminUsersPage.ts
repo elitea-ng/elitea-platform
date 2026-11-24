@@ -228,15 +228,16 @@ export function useAdminUsersPage(): AdminUsersPageState {
   const handleSetAdminRole = useCallback(
     (userId: number, roleName: AdminRole | null) => {
       setErrorMessage('');
+      const heldRoles = listing.rows.find((row) => row.id === userId)?.admin_roles ?? [];
       setAdminRole.mutate(
-        { userId, roleName },
+        { userId, roleName, heldRoles },
         {
           onError: (error) =>
             reportFailure(t('pages.admin.users.error.role', 'Failed to change the admin role.'), error),
         },
       );
     },
-    [setAdminRole, reportFailure],
+    [setAdminRole, reportFailure, listing.rows],
   );
 
   const handleToggleSuspended = useCallback(

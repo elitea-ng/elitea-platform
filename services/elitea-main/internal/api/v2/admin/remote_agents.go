@@ -17,8 +17,9 @@ func remoteAgentsSection() map[string]any {
 	const section = platformconfig.SectionRemoteAgents
 	defaults := platformconfig.DefaultRemoteAgentSettings()
 	return map[string]any{
-		"id":    section,
-		"title": "Remote Agents",
+		"id":     section,
+		"access": agentGovernanceAccess(),
+		"title":  "Remote Agents",
 		"description": "How agents authenticate calls to agents outside the run. Outbound: a call a run makes to a " +
 			"remote MCP server can carry a short-lived assertion signed with the agent assertion key " +
 			"(header Elitea-Agent-Assertion; keys at /.well-known/elitea-agent-jwks.json). The assertion tells the " +

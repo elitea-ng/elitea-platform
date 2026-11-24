@@ -102,11 +102,13 @@ type AuthCoreScope struct {
 }
 
 type AuthCoreToken struct {
-	ID      int32            `db:"id" json:"id"`
-	Uuid    *string          `db:"uuid" json:"uuid"`
-	Expires pgtype.Timestamp `db:"expires" json:"expires"`
-	UserID  *int32           `db:"user_id" json:"user_id"`
-	Name    *string          `db:"name" json:"name"`
+	ID          int32            `db:"id" json:"id"`
+	Uuid        *string          `db:"uuid" json:"uuid"`
+	Expires     pgtype.Timestamp `db:"expires" json:"expires"`
+	UserID      *int32           `db:"user_id" json:"user_id"`
+	Name        *string          `db:"name" json:"name"`
+	AdminAccess string           `db:"admin_access" json:"admin_access"`
+	AdminScopes []string         `db:"admin_scopes" json:"admin_scopes"`
 }
 
 type AuthCoreUser struct {

@@ -79,6 +79,10 @@ var baseGates = map[string]int{
 	// Both must be granted, and the any-of check below accepts the gate when
 	// either is.
 	"RequireResolvedPermissionOrPersonalProject": 3,
+	// ADR-0059 R0.6b: the project gate with a central fallback. Its arguments
+	// from index 3 on are the project permissions; the fallback decides on
+	// the central override's allowlist (adminaccess/central_override.go).
+	"RequireResolvedPermissionsOrCentral": 3,
 }
 
 // modeArgIndex maps a gate to the index of its permission-mode argument.
@@ -98,6 +102,7 @@ var modeArgIndex = map[string]int{
 	"RequireResolvedPermissionsForProject":       1,
 	"RequireResolvedMembershipPermissions":       1,
 	"RequireResolvedPermissionOrPersonalProject": 1,
+	"RequireResolvedPermissionsOrCentral":        1,
 }
 
 // grantModes are the role modes a migration can grant to.
@@ -613,6 +618,11 @@ func (index *sourceIndex) helpersIn(dir string) map[string]helperSignature {
 						}
 						_, calledTakesMode := modeArgIndex[called]
 						derived := helperSignature{permissionIndex: at, takesMode: calledTakesMode || inner.takesMode}
+						// A helper that spreads its own variadic parameter into
+						// the gate (`central(permissions ...string)` forwarding
+						// `permissions...`) is variadic too: every argument at
+						// its call site is a permission the gate accepts.
+						derived.variadic = call.Ellipsis.IsValid() && i == len(call.Args)-1 && inner.variadic
 						// The derived helper fixes the mode, because the mode
 						// is written at the middleware call inside its body.
 						// Resolve it against the file that DEFINES the helper.

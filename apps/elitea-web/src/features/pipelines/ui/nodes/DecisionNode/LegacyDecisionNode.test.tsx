@@ -6,7 +6,7 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { ReactFlow, ReactFlowProvider } from '@xyflow/react';
 
 import { buildFlowEditorContextValue } from '../../../__tests__/testUtils';
-import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
+import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { FlowNode } from '../../../lib/flow-editor/reactFlowTypes';
 import { LegacyDecisionNode, type LegacyDecisionNodeProps } from './LegacyDecisionNode';
@@ -49,7 +49,16 @@ function renderLegacyDecisionNode(
         <ReactFlow
           nodes={[flowNode]}
           edges={[]}
-          nodeTypes={{ testNode: () => <LegacyDecisionNode {...fullProps} /> }}
+          nodeTypes={{
+            testNode: () => (
+              <>
+                <LegacyDecisionNode {...fullProps} />
+                <NodeConfigPanelContext.Provider value={{ isEntrypoint: false, isLegacyLayout: true }}>
+                  <LegacyDecisionNode {...fullProps} />
+                </NodeConfigPanelContext.Provider>
+              </>
+            ),
+          }}
         />
       </FlowEditorContext.Provider>
     </ReactFlowProvider>,

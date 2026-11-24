@@ -109,7 +109,19 @@ The toolchain is pinned in `rust-toolchain.toml`; `rustup` picks it up automatic
 
 Every permission that `elitea-main` resolves in the `administration` mode is a row of the permission table in `services/elitea-main/internal/adminaccess` (ADR-0059). A row holds the name, the console area (one of six: people and access, projects, models and spend, agents and governance, security, platform), the class (`read`, `write` or `approve`), the legacy permission it narrows, `legacy`, `grantable` (`any` or `seeded_only`), `token`, `native_client` and `maintenance`. The table is built once at start-up by `adminaccess.NewTable`, which refuses a name longer than 64 characters (the width of `auth_core__role_permission.permission`), a duplicate, and a row with no area or class. The Roles matrix catalogue reads the table, so every registered name can be granted even when no role holds it. A `seeded_only` name is the exception: only a migration grants it, so the matrix lists it only where a role holds it. `token` is `false` unless a row opts in; no row is a token scope yet.
 
-Danger, whether a reason is required, the elevation rule and refusing tokens are never fields of a permission row. One permission covers actions of different danger, so these belong to the action table, keyed by route and action. The action table is added by a later ADR-0059 story.
+Danger, whether a reason is required, the elevation rule and refusing tokens are never fields of a permission row. One permission covers actions of different danger, so these belong to the action table, keyed by route and action (see [Add an action entry](#add-an-action-entry)).
+
+### The administration surface
+
+The administration surface is every route whose decision resolves the `administration` mode, wherever it is mounted and whether the check is a route gate or in a handler. It is wider than the `/admin` block of the router: budgets and the audit routes live under `/elitea_core`, project create and delete under `/projects`, the administration secrets under `/secrets` and the tracing status under `/tracing`, and a Configuration section's own permission is checked inside the value handler, after it has found the section.
+
+The surface is found by running the router, not by reading it. `internal/api/adminsurface` builds the composed production router with a recording permission resolver (`RouterConfig.PermissionResolver`), sends an authenticated request to every mounted route and probes each `administration`-mode resolution: it grants nothing, every registered name, or one name at a time, and records the names whose grant gives the same answer as granting everything. A route the helper cannot route to a decision (a missing store answers 503 first) is reported as unreached, never as outside the surface. The tests in `internal/api/administration_surface_test.go` fail on:
+
+- a check that accepts no registered name: it names a permission outside the registry, or its effect cannot be seen. A check of the second kind that a test router cannot show is listed in `invisibleChecks`, with the reason.
+- a route under `/api/v2/admin`, with an `administration` segment or with a `{mode}` segment that made no permission decision, and a route under `/api/v2/admin` or with an `administration` segment that decided in other modes only. A route that is open on purpose, or gated per project on purpose, is listed in `declaredWithoutDecision`, with the reason.
+- a request that did not answer within the timeout, or a route that answers the same request two ways.
+
+A route that takes several actions in its body, or reads something from its path before it checks, is driven once per variant (`adminsurface.Variant`). The Configuration value routes are driven once per section; the sections come from the router's own schema list. A variant also reaches a check the default request never meets: `Variant.Maintenance` opens a maintenance window for its own requests (the helper reads the window through `RouterConfig.MaintenanceState`, since its pool reaches no database), `Variant.Authenticate` signs in another way (the token mint asks the `administration` mode of a native device session only), and `Variant.OtherModes` passes a project gate in front of an in-handler check (the Marketplace moderation check). `TestAdministrationSurfaceReachesSessionAndWindowChecks` holds these checks to the surface. A write whose every check only asks whether the caller holds any administration permission names no permission, so it needs no action entry; that list is pinned in the same test. The recording resolver must never reach production: in `cmd/elitea-main`, `TestBinaryDoesNotLinkTheRecordingResolver` fails if a main package links the helper, and `TestNoProductionCodeOverridesThePermissionResolver` fails if non-test code sets `RouterConfig.PermissionResolver` or `RouterConfig.MaintenanceState`.
 
 ### Add a permission
 
@@ -136,7 +148,61 @@ r.With(requireBranding).Put("/branding/administration", adminHandler.BrandingSav
 
 `TestNoAdministrationPermissionLiteralOutsideTheRegistry` (`internal/api/admin_permission_literal_test.go`) follows every permission argument of an administration-mode gate, and every name a function tests after its own `ResolvePermissions` call in the `administration` mode (with `==`, `!=`, a `case`, `Contains`, `Index` or a map index), to the string literal it ends at. It fails unless that literal is in `internal/adminaccess`, and it fails on a gate whose permission or mode it cannot resolve. A constant declared in another package counts as a literal: alias the registry constant instead (`const Permission = adminaccess.ConfigurationGovernance`). A Configuration section's `required_permission` must also be a registry name (`TestEveryConfigSectionGateIsARegistryName`).
 
+### Add an action entry
+
+Every route of the administration surface that can change something (every method but GET and HEAD) has an entry in the action table, `internal/adminaccess/action_rows.go`. A route is classed by its effect, not by the class of the permission that gates it: a GET has no entry whatever gates it, and a POST that changes nothing (a validation, a connection check) has one with no danger. `TestEveryWriteRouteOfTheSurfaceHasAnActionEntry` (`internal/api/administration_surface_test.go`) drives the composed router and fails on such a route with no entry, on an entry whose route or variant the surface does not have, and on an entry whose permission none of the route's checks accept. So a new write route fails CI until it has its entry.
+
+An entry is keyed by method, chi route pattern and action name, and `adminaccess.ActionFor(method, pattern, action)` looks it up. The pattern may be the one `chi.Walk` lists or the one `RoutePattern()` answers during a request (a sub-router mounted at `/` leaves `/*/` in the first, and a trailing `/` is dropped in the second); `adminaccess.RoutePattern` maps one to the other. On a pattern with a `{mode}` segment the entry describes the `administration` mode only: a gate that has read the mode calls `adminaccess.ActionForRequest(administrationMode, …)`, which answers no entry in another mode, so the user-facing project delete is not marked. Its fields:
+
+| Field | Meaning |
+| --- | --- |
+| `Permission` | The registry permission the action requires. Where a route gate and an in-handler check both decide, the narrower one. |
+| `Danger` | None, `dangerous` or `critical`: the first list of ADR-0059 decision 6. |
+| `Reason` | Whether the action asks for a reason. Every `dangerous` and `critical` action does, so the table sets it. |
+| `Elevation` | What an elevation may do (decision 5): `allow`, `flag` (allowed, marked for the review), `deny` or `sealed` (only a sealed elevation at the `super_admin` level). A `critical` action must declare one; any other defaults to `allow`. |
+| `Token` | `allowed` or `never`. A `critical` action defaults to `never`; `allowed` on a `critical` action needs a written `TokenReason` (the `.tokenAllowed(reason)` builder). |
+| `Selector` | On a route that takes several actions, the part of the request that picks one: a body field (`action` of `POST /admin/auth_users/{mode}`) or a path placeholder (`{plugin}`, the Configuration section). The surface test drives the route once per value. |
+| `Classifier` | When the danger depends on what the request changes, one entry per outcome of a classifier in `action_classifiers.go`: shortening or lengthening a retention policy, changing a global provider's endpoint, credential or keyless identity or only its settings, an identity provider trust change, turning it off or only its settings, a guardrail rule or another governance row, maintenance turned on, a platform-wide kill switch, suspending or unsuspending a user. Do not mark a whole route `critical` when only one outcome is. |
+
+To add one:
+
+1. Add the entry next to its console area in `actionRows()`. A route with one action takes `post`, `put` or `del` with its permission, then `.dangerous()`, `.critical(elevation)`, `.elevation(value)` or `.tokenAllowed(reason)` where the defaults do not hold.
+2. If the route multiplexes actions on its body, give each action a `Selector` and list the handler in `multiplexed` (`internal/adminaccess/actions_test.go`): that test reads the action names from the handler's `switch` and fails when the two lists differ.
+3. Regenerate the golden file with `UPDATE_GOLDEN=1 go test ./internal/adminaccess/` and review `internal/adminaccess/testdata/actions.golden`. It lists method, route, action, danger, reason, elevation and token for every entry, so a change of danger shows in review.
+
+Nothing enforces the table yet. The token refusal, the elevation restriction, the reason and recent authentication for a `critical` action read it in later ADR-0059 stories.
+
 The two sunset date constants of ADR-0059 decision 2, `adminaccess.ReplacementShippedOn` and `adminaccess.SunsetAfter`, are in the same package. They stay empty until the last replacement of the legacy names ships.
+
+### The sunset check
+
+The legacy administration items end on a date, not at a version: the names `runtime.plugins` and `configuration.governance`, `inherit` token administration access, and the period in which a request without a reason is still served. `scripts/ci/check-sunset.mjs` holds the code to that date. It reads two constants in `services/elitea-main/internal/adminaccess/registry.go`:
+
+- `ReplacementShippedOn`: the day the later of the two replacements merged (the sealed sign-in route of R2.7 and the reason handling of R3.8);
+- `SunsetAfter`: the first day the removal may merge, at least 90 days later.
+
+Both are `YYYY-MM-DD` and are set together, in one pull request (R3.15). The check reads the commit under test, never the working tree or the clock: the constants, whether each legacy item and each replacement is in the tree, the commit's committer date (as a UTC day) and the stable release tags (`vX.Y.Z`, no nightlies) reachable from it. A rebuild of an old tag therefore gives the answer it gave on the day the tag was cut. It fails in four cases:
+
+1. `ReplacementShippedOn` is set and `SunsetAfter` is empty or less than 90 days later (or `SunsetAfter` is set alone).
+2. Both replacements are in the code and `ReplacementShippedOn` is empty.
+3. A legacy item is gone (any one of them), and the commit is dated before `SunsetAfter` (or no date is set), or fewer than two stable minor releases follow the first release that holds both replacements.
+4. A legacy item is still in the code and the commit is dated more than 14 days after `SunsetAfter`. From then on only the removal merges.
+
+The removal is therefore one pull request that removes every legacy item (R4.2, R4.7 and R4.8 on one branch): removing one early fails case 3, and keeping one past the grace period fails case 4.
+
+The detection table at the top of the script lists the marker of each item and each replacement: the declaration of a constant the owning story adds (name and value, so a comment that quotes a removed name does not count), found over the package's non-test Go files. A story that owes a marker (R2.7, R3.8) adds the constant the table names and sets its row's `landed` to `true`. A landed legacy row that finds nothing is a removal. While `SunsetAfter` is empty the test requires every landed row to match the real tree, so a rename cannot read as a removal. A commit whose tree has no `registry.go` predates the rule and passes.
+
+The date is the committer date of the commit under test. On a pull request that is the merge commit GitHub made when the branch or its base last moved, so re-running an old run gives the old answer; a push or a change on `main` gives a new date. On the nightly run it is the last merge on `main`.
+
+Run it locally from the repository root (the release floor needs the full history and the tags, so a shallow clone is refused when the legacy items are gone):
+
+```bash
+node scripts/ci/check-sunset.mjs              # HEAD
+node scripts/ci/check-sunset.mjs --sha v7.6.0 # any commit or tag
+node --test scripts/ci/check-sunset.test.mjs
+```
+
+CI runs it in the `history-gates` job of `.github/workflows/no-binaries.yml`, on every pull request and on the nightly run on `main`, once on the commit under test and once on `v7.6.0`. `.github/workflows/sunset-reminder.yml` runs every day on `main` and opens one tracking issue for the removal from 30 days before `SunsetAfter`. It reads the clock and gates nothing.
 
 ## Add a new service
 

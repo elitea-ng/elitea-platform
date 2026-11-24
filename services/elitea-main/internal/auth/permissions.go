@@ -38,6 +38,23 @@ type PermissionResolution struct {
 	// Permissions may be empty. Empty means "this principal holds none in this
 	// mode", which is an ANSWER; a refusal is ErrPermissionDenied instead.
 	Permissions []string
+	// ElevationSessionRef is the browser session an elevation may be bound
+	// to (auth.Credential.ElevationSessionRef), 0 when the credential that
+	// was resolved can hold none. Only the administration mode sets it; the
+	// elevation union (ADR-0059 R2.1) reads it.
+	ElevationSessionRef int64
+	// Roles is the caller's STANDING administration roles, by name, read by
+	// the same query as Permissions: the owner's roles for every kind whose
+	// set the owner's roles decide (session, form, native, and a scoped or
+	// inherit token), and empty for a kind that acts with none. Only the
+	// administration mode sets it; the admin audit row records it as
+	// acting_roles (ADR-0059 R1.4a).
+	Roles []string
+	// TokenAdminAccess is the admin_access of the personal access token
+	// behind the principal (none, scoped, inherit; shared 0265), "" for every
+	// other credential. Only the administration mode sets it; the token rule
+	// of the action table reads it (ADR-0059 R1.2b).
+	TokenAdminAccess string
 }
 
 // PermissionResolver resolves the permissions of a principal in one mode.

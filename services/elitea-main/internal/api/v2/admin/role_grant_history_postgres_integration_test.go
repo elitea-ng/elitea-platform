@@ -77,7 +77,7 @@ func (e escalationEnvironment) asBrowser(email string) chi.Router {
 // `shape` adjusts.
 func (e escalationEnvironment) asPrincipal(email string, shape func(*auth.User)) chi.Router {
 	id := fmt.Sprint(e.ids[email])
-	principal := &auth.User{ID: id, UserID: id}
+	principal := &auth.User{ID: id, UserID: id, CredentialKind: auth.CredentialKindSession}
 	shape(principal)
 	handler := admin.NewHandler(e.pool, admin.WithPermissionResolver(legacyrbac.NewPostgresResolver(e.pool)))
 	router := chi.NewRouter()
@@ -114,9 +114,11 @@ func TestTheUsersRouteRecordsAGrantAndARevocation(t *testing.T) {
 	expectStatus(t, adminDo(t, env.as(escalationSuper), http.MethodPost, "/u/admin/auth_users/administration",
 		map[string]any{"action": "set_admin_role", "user_id": plain, "role_name": nil}), http.StatusOK)
 
+	// env.as is a browser session with no server-side row (the credential
+	// kind decides, ADR-0059 R1.2a): `console`.
 	want := []grantRow{
-		{user: plain, actor: actor, role: "editor", mode: "administration", action: "granted", source: "api"},
-		{user: plain, actor: actor, role: "editor", mode: "administration", action: "revoked", source: "api"},
+		{user: plain, actor: actor, role: "editor", mode: "administration", action: "granted", source: "console"},
+		{user: plain, actor: actor, role: "editor", mode: "administration", action: "revoked", source: "console"},
 	}
 	if got := grantHistory(t, env.pool, plain); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("history = %+v, want %+v", got, want)
@@ -163,29 +165,43 @@ func TestTheModesRouteRecordsAGrantAndARevocation(t *testing.T) {
 	}
 }
 
-// The source by credential: the Form plane and the session cookie carry
-// AuthType "session" and no session ref, and are a browser; a token is not.
+// The source by credential kind (ADR-0059 R1.2a): a Form session, a
+// server-side session and the legacy signed cookie are a browser; a token is
+// not. The token is `inherit`, so it reaches the route at all.
 func TestTheSourceFollowsTheCredential(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		shape  func(p *auth.User, tokenID string)
 		source string
 	}{
-		{"form session", func(p *auth.User, _ string) { p.AuthType = "session" }, "console"},
+		{"form session", func(p *auth.User, _ string) {
+			p.AuthType = "session"
+			p.CredentialKind = auth.CredentialKindForm
+			p.BrowserSessionRef = 8
+		}, "console"},
 		{"server-side session", func(p *auth.User, _ string) {
 			p.AuthType = "session"
+			p.CredentialKind = auth.CredentialKindSession
 			p.BrowserSessionRef = 9
 		}, "console"},
-		{"token", func(p *auth.User, token string) { p.AuthType = "token"; p.TokenID = token }, "api"},
-		{"session-typed token", func(p *auth.User, token string) { p.AuthType = "session"; p.TokenID = token }, "api"},
+		{"legacy signed cookie", func(p *auth.User, _ string) {
+			p.AuthType = "session"
+			p.CredentialKind = auth.CredentialKindSession
+			p.BrowserSessionRef = 0
+		}, "console"},
+		{"token", func(p *auth.User, token string) {
+			p.AuthType = "token"
+			p.TokenID = token
+			p.CredentialKind = auth.CredentialKindToken
+		}, "api"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := newEscalationEnvironment(t)
 			plain := env.ids[escalationPlainTarget]
 			var tokenID string
 			if err := env.pool.QueryRow(context.Background(), `
-INSERT INTO public.auth_core__token (user_id, name, uuid)
-VALUES ($1, 'history-source', '6f1c1a52-2499-4d0a-9c1e-000000002499')
+INSERT INTO public.auth_core__token (user_id, name, uuid, admin_access)
+VALUES ($1, 'history-source', '6f1c1a52-2499-4d0a-9c1e-000000002499', 'inherit')
 RETURNING id::text`, env.ids[escalationSuper]).Scan(&tokenID); err != nil {
 				t.Fatalf("seed the caller's token: %v", err)
 			}

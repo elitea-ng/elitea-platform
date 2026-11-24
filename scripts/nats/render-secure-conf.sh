@@ -35,7 +35,7 @@ trap 'rm -f "$rendered"' EXIT
   --set main.runtime.enabled=false --set worker.enabled=false --set vector.enabled=false \
   --set qdrant.enabled=false --set deepwiki.enabled=false --set inventory.enabled=false \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
-  --set-string llmGateway.egressPosture=public-unrestricted \
+  --set-string llmGateway.egressPosture=public-unrestricted -f "${root}/deploy/helm/tests/fixtures/network-peers.yaml" \
   --set networkPolicies.main.noExternalIngress=true \
   --show-only charts/nats/templates/config-map.yaml > "$rendered"
 

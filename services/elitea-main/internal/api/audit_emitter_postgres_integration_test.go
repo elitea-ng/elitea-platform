@@ -116,16 +116,30 @@ func TestAdministrativeWriteLandsInTheAuditTrailTheAdminPageReads(t *testing.T) 
 		}
 	})
 
-	router := NewRouter(RouterConfig{
+	router := asConsoleSession(NewRouter(RouterConfig{
 		Pool:               pool,
+		SessionSecret:      consoleTestSessionSecret,
 		AuthValidator:      testTokenValidator{user: privilegedAuditTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
 		AuditRecorder:      recorder,
-	})
+	}), privilegedAuditTestUser())
 
 	// 001_initial.sql seeds user 1 with the administration `admin` role, and
 	// privilegedAuditTestUser() IS user 1 — so this request is authorised and
 	// actually suspends a user, rather than testing the refusal path twice.
+	// User 1 is the only administrator in this database, and the last
+	// administrator cannot be suspended (ADR-0059 R0.11): a second holder of
+	// `admin` keeps the suspension a successful write.
+	if _, err := pool.Exec(t.Context(), `
+WITH spare AS (
+    INSERT INTO public.auth_core__user (email, name)
+    VALUES ('spare-admin@test.local', 'spare-admin@test.local') RETURNING id
+)
+INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT spare.id, role.id FROM spare, public.auth_core__role role
+WHERE role.mode = 'administration' AND role.name = 'admin'`); err != nil {
+		t.Fatalf("seed a second administrator: %v", err)
+	}
 	response := httptest.NewRecorder()
 	request := testAuthHeader(httptest.NewRequest(
 		http.MethodPut, "/api/v2/admin/user_suspend/administration/1",
@@ -226,12 +240,13 @@ func TestRefusedAdministrativeRequestIsRecorded(t *testing.T) {
 
 	// User 9001 exists in no auth_core__user_role row, so the central
 	// permission gate denies. Nothing else about the request changes.
-	router := NewRouter(RouterConfig{
+	router := asConsoleSession(NewRouter(RouterConfig{
 		Pool:               pool,
+		SessionSecret:      consoleTestSessionSecret,
 		AuthValidator:      testTokenValidator{user: unprivilegedAuditTestUser()},
 		PrincipalValidator: testPrincipalValidator{},
 		AuditRecorder:      recorder,
-	})
+	}), unprivilegedAuditTestUser())
 
 	response := httptest.NewRecorder()
 	request := testAuthHeader(httptest.NewRequest(
@@ -406,7 +421,11 @@ func newAuditEmitterPool(t *testing.T) *pgxpool.Pool {
 	// A suspension revokes the account's browser sessions and native device
 	// sessions in the same transaction (ADR-0025 WP3), so their tables exist
 	// here as they do on every migrated deployment.
-	for _, migration := range []string{"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql", "0141_native_auth.sql"} {
+	// 0268 adds the role-use columns the recorder writes (ADR-0059 R1.4a).
+	for _, migration := range []string{
+		"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql", "0141_native_auth.sql",
+		"0268_admin_audit_role_use.sql",
+	} {
 		file := filepath.Join("..", "..", "migrations", "shared", migration)
 		sql, err := os.ReadFile(file)
 		if err != nil {
