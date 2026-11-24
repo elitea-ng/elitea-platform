@@ -14,9 +14,10 @@
  *     `auth_core__user` has no `status` column and no response has ever carried
  *     one, so the reference's chip was permanently "Active" and its toggle
  *     permanently computed "suspend".
- *  2. The role `<select>` disables only what the SERVER will refuse
- *     (`super_admin` without the super-admin permission). It is a hint; the
- *     server re-checks the same rule and answers 403 regardless.
+ *  2. The roles picker (`./AdminUserRolesSelect`) shows every administration
+ *     role of a person and assigns a set (ADR-0059 R0.8c). It disables
+ *     nothing for the caller's permissions: the server refuses a role the
+ *     caller may not give or take, and the page shows its message.
  */
 import { memo, useMemo } from 'react';
 
@@ -28,8 +29,6 @@ import TimelineOutlinedIcon from '@mui/icons-material/TimelineOutlined';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
-import MenuItem from '@mui/material/MenuItem';
-import Select from '@mui/material/Select';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useTheme } from '@mui/material/styles';
@@ -38,13 +37,9 @@ import { DataGrid } from '@mui/x-data-grid';
 
 import { t } from '@/shared/i18n';
 
-import type { AdminRole, AdminUserRow } from './api/adminUsersApi';
-
-/** `''` is the DOM value for "no administration role"; the wire value is `null`. */
-const NO_ROLE = '' as const;
-
-/** What the role `<Select>` holds: an administration role, or the empty "None" value. */
-type RoleSelectValue = AdminRole | typeof NO_ROLE;
+import { AdminUserRolesSelect } from './AdminUserRolesSelect';
+import type { AdministrationRole } from './api/adminRoleOptionsApi';
+import type { AdminUserRow } from './api/adminUsersApi';
 
 /**
  * The per-row controls. `undefined` ⇒ that control is not rendered at all —
@@ -52,7 +47,8 @@ type RoleSelectValue = AdminRole | typeof NO_ROLE;
  * representation and so cannot disagree with each other.
  */
 export interface AdminUserRowActions {
-  readonly onSetAdminRole: ((userId: number, roleName: AdminRole | null) => void) | undefined;
+  /** Saves the person's whole set of administration roles (`role_names`). */
+  readonly onSetAdminRoles: ((userId: number, roleNames: string[]) => void) | undefined;
   readonly onToggleSuspended: ((user: AdminUserRow) => void) | undefined;
   readonly onDelete: ((userIds: number[]) => void) | undefined;
   /** Always present: activity is a READ, so it exists on every tab. */
@@ -83,11 +79,8 @@ export interface AdminUsersTableProps {
    * defeat both.
    */
   rowActions: AdminUserRowActions;
-  /**
-   * Presentation-only: `false` disables the `super_admin` option. The server
-   * enforces the same rule and refuses regardless of what this says.
-   */
-  canAssignSuperAdmin: boolean;
+  /** The administration roles of the mode, from the roles API. */
+  roleOptions: readonly AdministrationRole[];
   /** Ids whose mutation is in flight — their per-row controls are disabled. */
   pendingIds: ReadonlySet<number>;
 }
@@ -107,21 +100,10 @@ export const AdminUsersTable = memo(function AdminUsersTable({
   sortDirection,
   onSort,
   rowActions,
-  canAssignSuperAdmin,
+  roleOptions,
   pendingIds,
 }: AdminUsersTableProps) {
   const theme = useTheme();
-
-  const roleOptions = useMemo(
-    () => [
-      { value: NO_ROLE, label: t('pages.admin.users.role.none', 'None') },
-      { value: 'viewer', label: t('pages.admin.users.role.viewer', 'Viewer') },
-      { value: 'editor', label: t('pages.admin.users.role.editor', 'Editor') },
-      { value: 'admin', label: t('pages.admin.users.role.admin', 'Admin') },
-      { value: 'super_admin', label: t('pages.admin.users.role.superAdmin', 'Super Admin') },
-    ],
-    [],
-  );
 
   const sortModel: GridSortModel = useMemo(
     () => (sortField ? [{ field: sortField, sort: sortDirection }] : []),
@@ -185,47 +167,23 @@ export const AdminUsersTable = memo(function AdminUsersTable({
       },
     ];
 
-    const { onSetAdminRole, onToggleSuspended, onDelete, onOpenActivity, onOpenDevices } = rowActions;
+    const { onSetAdminRoles, onToggleSuspended, onDelete, onOpenActivity, onOpenDevices } = rowActions;
 
-    if (onSetAdminRole) {
+    if (onSetAdminRoles) {
       definitions.push({
-        field: 'admin_role',
-        headerName: t('pages.admin.users.column.adminRole', 'Admin Role'),
-        width: 170,
+        field: 'admin_roles',
+        headerName: t('pages.admin.users.column.adminRoles', 'Administration roles'),
+        flex: 1.2,
+        minWidth: 220,
         sortable: false,
-        renderCell: (params: GridRenderCellParams<AdminUserRow>) => {
-          const row = params.row;
-          const rowIsSuperAdmin = row.admin_role === 'super_admin';
-          // Changing a super-admin's role at all requires the permission — the
-          // server refuses the REVOKE just as it refuses the grant.
-          const locked = rowIsSuperAdmin && !canAssignSuperAdmin;
-          return (
-            <Box onClick={(event) => event.stopPropagation()}>
-              <Select<RoleSelectValue>
-                size="small"
-                displayEmpty
-                value={row.admin_role ?? NO_ROLE}
-                disabled={locked || pendingIds.has(row.id)}
-                inputProps={{ 'aria-label': t('pages.admin.users.column.adminRole', 'Admin Role') }}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  onSetAdminRole(row.id, next === NO_ROLE ? null : next);
-                }}
-                sx={{ minWidth: 140 }}
-              >
-                {roleOptions.map((option) => (
-                  <MenuItem
-                    key={option.value}
-                    value={option.value}
-                    disabled={option.value === 'super_admin' && !canAssignSuperAdmin}
-                  >
-                    {option.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </Box>
-          );
-        },
+        renderCell: (params: GridRenderCellParams<AdminUserRow>) => (
+          <AdminUserRolesSelect
+            held={params.row.admin_roles}
+            roles={roleOptions}
+            disabled={pendingIds.has(params.row.id)}
+            onSave={(roleNames) => onSetAdminRoles(params.row.id, roleNames)}
+          />
+        ),
       });
     }
 
@@ -324,7 +282,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
     });
 
     return definitions;
-  }, [rowActions, canAssignSuperAdmin, pendingIds, roleOptions]);
+  }, [rowActions, pendingIds, roleOptions]);
 
   if (!isLoading && users.length === 0) {
     return (

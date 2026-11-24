@@ -15,6 +15,12 @@ Sign in to Elitea, open the account menu at the bottom of the sidebar, and selec
 
 The sidebar has two groups. In a short window the links scroll, and your account stays at the bottom.
 
+## What a narrow role sees
+
+A person whose administration roles hold only narrow permissions (for example the built-in `llm_manager` or `security_auditor` role) sees the same console, with only the pages their permissions open. A page is in the menu when the person holds any permission its routes accept, so an LLM manager sees **Configuration**, **LLM Governance**, **Budgets** and **Projects**, and a holder of `platform.email.manage` alone sees **E-mail**. Inside Configuration, only the sections the person can read are listed. This is an interim arrangement: a console built around the narrow roles replaces it in a later release.
+
+The menu only decides what to show. The server checks every request, so a page opened by its URL without the permission says that you do not have access, and a control on a page you can open may still be refused.
+
 ## Account menu
 
 Select your name at the bottom of the sidebar, or your picture when the sidebar is collapsed, to open the same account menu as in the Elitea app. It has **Back to Elitea**, which returns you to the app, the version line (the console's version and the server's; select it to copy it) and **Sign out**.

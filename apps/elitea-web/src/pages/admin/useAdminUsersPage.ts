@@ -13,19 +13,21 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
+import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
 import type { AdminUserRowActions } from './AdminUsersTable';
 import { adminUiShowsControlFor } from './adminUiConfig';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminUsersCsv } from './adminUsersCsv';
+import { useAdministrationRoles, type AdministrationRole } from './api/adminRoleOptionsApi';
+import { permissionMatrixFailureReason } from './api/adminRolesApi';
 import {
   fetchAdminUsersPage,
   useAdminUsers,
   useDeleteAdminUsers,
-  useSetAdminRole,
+  useSetAdminRoles,
   useSuspendAdminUser,
-  type AdminRole,
   type AdminUserRow,
   type AdminUsersPage,
   type AdminUserType,
@@ -35,9 +37,11 @@ import {
 const USER_TYPES: readonly AdminUserType[] = ['platform', 'system'];
 export const ADMIN_USERS_PAGE_SIZE = 20;
 
-/** The permissions the (hardcoded) admin-panel config advertises for this surface. */
+/** The permission the admin-panel config advertises for this surface's writes. */
 const PERMISSION_USERS = 'admin.auth.users';
-const PERMISSION_SUPER_ADMIN = 'admin.auth.users.super_admin';
+
+/** No roles while the roles API has not answered (the picker then lists what each person holds). */
+const NO_ROLES: readonly AdministrationRole[] = [];
 
 export interface AdminUsersPageState {
   readonly activeTab: number;
@@ -57,12 +61,14 @@ export interface AdminUsersPageState {
   readonly counts: { readonly platform: number; readonly system: number };
   readonly isFetching: boolean;
   readonly isError: boolean;
+  /** What the failed listing says: the server's refusal, or that it failed. */
+  readonly loadErrorMessage: string;
   readonly isDeleting: boolean;
   readonly isExporting: boolean;
   readonly pendingIds: ReadonlySet<number>;
 
-  /** Presentation only — the server authorises every write on its own. */
-  readonly canAssignSuperAdmin: boolean;
+  /** The administration roles of the mode, from the roles API (ADR-0059 R0.8c). */
+  readonly roleOptions: readonly AdministrationRole[];
 
   readonly onTabChange: (event: unknown, next: number) => void;
   readonly onSearchChange: (value: string) => void;
@@ -116,6 +122,18 @@ function readListing(data: AdminUsersPage | undefined): {
   };
 }
 
+/**
+ * A 403 on the listing is the server saying no, not a failure: a person with
+ * a narrow administration role who types this page's URL (ADR-0059 R0.16)
+ * is told so.
+ */
+function listingErrorMessage(error: unknown): string {
+  if (error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 403) {
+    return t('pages.admin.users.error.forbidden', 'You do not have the permission to see the users.');
+  }
+  return t('pages.admin.users.error.load', 'Failed to load users.');
+}
+
 interface InFlight<TVariables> {
   readonly isPending: boolean;
   readonly variables: TVariables | undefined;
@@ -149,7 +167,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
   const userType = USER_TYPES[activeTab] ?? 'platform';
 
   const showsUserControls = adminUiShowsControlFor(PERMISSION_USERS);
-  const canAssignSuperAdmin = adminUiShowsControlFor(PERMISSION_SUPER_ADMIN);
+  const rolesQuery = useAdministrationRoles({ enabled: showsUserControls });
 
   const listQuery = useAdminUsers({
     limit: ADMIN_USERS_PAGE_SIZE,
@@ -161,7 +179,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
   });
 
   const deleteUsers = useDeleteAdminUsers();
-  const setAdminRole = useSetAdminRole();
+  const setAdminRole = useSetAdminRoles();
   const suspendUser = useSuspendAdminUser();
 
   const listing = useMemo(() => readListing(listQuery.data), [listQuery.data]);
@@ -225,19 +243,23 @@ export function useAdminUsersPage(): AdminUsersPageState {
     setSelectedIds([]);
   }, []);
 
-  const handleSetAdminRole = useCallback(
-    (userId: number, roleName: AdminRole | null) => {
+  const handleSetAdminRoles = useCallback(
+    (userId: number, roleNames: string[]) => {
       setErrorMessage('');
-      const heldRoles = listing.rows.find((row) => row.id === userId)?.admin_roles ?? [];
       setAdminRole.mutate(
-        { userId, roleName, heldRoles },
+        { userId, roleNames },
         {
+          // The no-escalation refusals carry a stable code (role_self_assignment,
+          // role_permission_not_held, …); the page says what it means.
           onError: (error) =>
-            reportFailure(t('pages.admin.users.error.role', 'Failed to change the admin role.'), error),
+            setErrorMessage(
+              permissionMatrixFailureReason(error) ??
+                t('pages.admin.users.error.roles', 'Failed to change the administration roles.'),
+            ),
         },
       );
     },
-    [setAdminRole, reportFailure, listing.rows],
+    [setAdminRole],
   );
 
   const handleToggleSuspended = useCallback(
@@ -323,7 +345,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
 
   const rowActions = useMemo<AdminUserRowActions>(
     () => ({
-      onSetAdminRole: writable ? handleSetAdminRole : undefined,
+      onSetAdminRoles: writable ? handleSetAdminRoles : undefined,
       onToggleSuspended: writable ? handleToggleSuspended : undefined,
       onDelete: writable ? setDeleteIds : undefined,
       // Not gated on `writable`: activity is a READ, so it exists on the
@@ -331,7 +353,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
       // authorises the audit query itself.
       onOpenActivity: handleOpenActivity,
     }),
-    [writable, handleSetAdminRole, handleToggleSuspended, handleOpenActivity],
+    [writable, handleSetAdminRoles, handleToggleSuspended, handleOpenActivity],
   );
 
   return {
@@ -351,11 +373,12 @@ export function useAdminUsersPage(): AdminUsersPageState {
     counts: listing.counts,
     isFetching: listQuery.isFetching,
     isError: listQuery.isError,
+    loadErrorMessage: listingErrorMessage(listQuery.error),
     isDeleting: deleteUsers.isPending,
     isExporting,
     pendingIds,
 
-    canAssignSuperAdmin,
+    roleOptions: rolesQuery.data ?? NO_ROLES,
 
     onTabChange,
     onSearchChange,

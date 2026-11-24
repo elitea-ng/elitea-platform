@@ -202,7 +202,9 @@ export function AdminUsers() {
       ) : null}
 
       {state.isError ? (
-        <Alert severity="error">{t('pages.admin.users.error.load', 'Failed to load users.')}</Alert>
+        <Alert severity="error" data-testid="admin-users-load-error">
+          {state.loadErrorMessage}
+        </Alert>
       ) : (
         <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <AdminUsersTable
@@ -214,7 +216,7 @@ export function AdminUsers() {
             sortDirection={state.sortDirection}
             onSort={state.onSort}
             rowActions={rowActions}
-            canAssignSuperAdmin={state.canAssignSuperAdmin}
+            roleOptions={state.roleOptions}
             pendingIds={state.pendingIds}
           />
 
