@@ -10,6 +10,10 @@ import (
 )
 
 func pipelineWithNode(id, nodeType string) string {
+	if nodeType == "http" {
+		return "entry_point: " + id + "\nstate:\n  records: dict\nnodes:\n" +
+			"  - id: " + id + "\n    type: http\n    revision: 2\n    operation: sample.get\n    request: {}\n    response: {mode: json}\n    output: [records]\n    transition: END\n"
+	}
 	return "entry_point: " + id + "\nstate:\n  records: list\nnodes:\n" +
 		"  - id: " + id + "\n    type: " + nodeType + "\n    transition: END\n"
 }
@@ -26,7 +30,7 @@ func refusal(t *testing.T, doc string) *apierr.APIError {
 func TestCheckAdmitsEveryNodeTypeTheCompilerAdmits(t *testing.T) {
 	for _, nodeType := range []string{
 		"code", "decision", "map", "parallel", "agent", "toolkit", "mcp",
-		"hitl", "llm", "printer", "router", "state_modifier", "split_out", "aggregate",
+		"hitl", "http", "llm", "printer", "router", "state_modifier", "split_out", "aggregate",
 	} {
 		if err := pipelinelimits.Check(pipelineWithNode("n1", nodeType)); err != nil {
 			t.Errorf("type %s: got %v, want admitted (the compiler has an arm for it)", nodeType, err)

@@ -136,13 +136,14 @@ func settleExisting(ctx context.Context, tx sqlExecutor, admitted app.Admission,
 		if err != nil || receipt.EffectID != row.effect || receipt.State != row.state {
 			return app.Receipt{}, app.ErrUnavailable
 		}
+		receipt.Retryable = rowRetryable(row)
 		return receipt, nil
 	case "dispatching":
 		if row.claimID == admitted.ClaimID && !row.expired {
 			return app.Receipt{}, app.ErrDispatchInFlight
 		}
 		failure := "reconciliation_required"
-		receipt := app.Receipt{SchemaVersion: app.ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: row.requestDigest, BindingDigest: row.bindingDigest, EffectID: row.effect, State: "uncertain", FailureCode: &failure}
+		receipt := app.Receipt{SchemaVersion: app.ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: row.requestDigest, BindingDigest: row.bindingDigest, EffectID: row.effect, State: "uncertain", FailureCode: &failure, Retryable: rowRetryable(row)}
 		wire, err := json.Marshal(receipt)
 		if err != nil {
 			return app.Receipt{}, app.ErrUnavailable
@@ -158,6 +159,18 @@ func settleExisting(ctx context.Context, tx sqlExecutor, admitted app.Admission,
 	default:
 		return app.Receipt{}, app.ErrUnavailable
 	}
+}
+
+func rowRetryable(row httpEffectRow) bool {
+	prevRule, err := app.DecodePolicyWire(row.ruleWire)
+	if err != nil {
+		return false
+	}
+	var prevReq app.Request
+	if app.Decode(row.requestBytes, &prevReq) != nil {
+		return false
+	}
+	return prevRule.Retryable(prevReq)
 }
 
 // Begin persists the intent once, inside one transaction that rechecks every

@@ -43,6 +43,12 @@ use super::direct_tool::{
     DirectToolNode, DirectToolNodeDefinition, DirectToolSelection, PipelineDirectToolResolver,
 };
 use super::hitl::{HITL_RESUME_STATE_KEY, HitlConfigurationError, HitlNode, HitlNodeDefinition};
+use super::http_action::{
+    HttpActionConfigurationError, HttpActionFrozenSnapshotV2, HttpActionNodeDefinition,
+};
+use super::http_action_runtime::{
+    HttpActionAttempt, HttpActionCommittedProjector, PipelineHttpActionExecutor,
+};
 use super::llm::{
     LLM_TOOL_RESUME_STATE_KEY, LlmConfigurationError, LlmNode, LlmNodeDefinition,
     LlmToolkitSelection, PARALLEL_LLM_INPUTS_STATE_KEY, PipelineLlmAgentFactory,
@@ -335,25 +341,51 @@ pub(crate) struct PipelineNodeRuntimes {
     /// invocation only. A saved child pipeline has none: its parent maps
     /// what it reads.
     context_view: Option<Arc<Vec<serde_json::Value>>>,
-    /// The Main execution id and deadline this graph runs for (5b-1/5b-2/5b-3):
-    /// a settled node failure's support reference names the id, and timeouts/
-    /// retry waits are clamped by the run deadline.
+    /// The Main execution id, generation, and deadline this graph runs for
+    /// (5b-1/5b-2/5b-3/5d-2): a settled node failure's support reference names
+    /// the id, HTTP `effect_id`s bind id + generation, and timeouts/retry waits
+    /// are clamped by the run deadline.
     // One thin pointer: the runtimes ride inside participant enums.
     execution: Option<Arc<PipelineExecutionContext>>,
 }
 
 struct PipelineExecutionContext {
     id: Option<Arc<String>>,
+    generation: Option<u64>,
     deadline: Option<tokio::time::Instant>,
+    http_action: Option<Arc<PipelineHttpActionBinding>>,
+}
+
+struct PipelineHttpActionBinding {
+    executor: Arc<dyn PipelineHttpActionExecutor>,
+    snapshot: Arc<HttpActionFrozenSnapshotV2>,
 }
 
 impl PipelineNodeRuntimes {
     /// 5b-1: bind the run's Main execution id for node settings.
     pub(crate) fn with_execution_id(mut self, execution_id: &str) -> Self {
+        let generation = self.execution_generation();
         let deadline = self.execution_deadline();
+        let http_action = self.http_action_binding();
         self.execution = Some(Arc::new(PipelineExecutionContext {
             id: Some(Arc::new(execution_id.to_owned())),
+            generation,
             deadline,
+            http_action,
+        }));
+        self
+    }
+
+    /// 5d-2: bind the run's Main claim generation for HTTP `effect_id` v3.
+    pub(crate) fn with_execution_generation(mut self, generation: u64) -> Self {
+        let id = self.execution_id();
+        let deadline = self.execution_deadline();
+        let http_action = self.http_action_binding();
+        self.execution = Some(Arc::new(PipelineExecutionContext {
+            id,
+            generation: Some(generation),
+            deadline,
+            http_action,
         }));
         self
     }
@@ -362,15 +394,47 @@ impl PipelineNodeRuntimes {
     /// timeouts and retry clamping.
     pub(crate) fn with_execution_deadline(mut self, deadline: tokio::time::Instant) -> Self {
         let id = self.execution_id();
+        let generation = self.execution_generation();
+        let http_action = self.http_action_binding();
         self.execution = Some(Arc::new(PipelineExecutionContext {
             id,
+            generation,
             deadline: Some(deadline),
+            http_action,
         }));
         self
     }
 
+    /// 5d-2: bind the claim-scoped HTTP action executor and Main-frozen snapshot.
+    pub(crate) fn with_http_action(
+        mut self,
+        executor: Arc<dyn PipelineHttpActionExecutor>,
+        snapshot: Arc<HttpActionFrozenSnapshotV2>,
+    ) -> Self {
+        let id = self.execution_id();
+        let generation = self.execution_generation();
+        let deadline = self.execution_deadline();
+        self.execution = Some(Arc::new(PipelineExecutionContext {
+            id,
+            generation,
+            deadline,
+            http_action: Some(Arc::new(PipelineHttpActionBinding { executor, snapshot })),
+        }));
+        self
+    }
+
+    fn http_action_binding(&self) -> Option<Arc<PipelineHttpActionBinding>> {
+        self.execution
+            .as_ref()
+            .and_then(|ctx| ctx.http_action.clone())
+    }
+
     fn execution_id(&self) -> Option<Arc<String>> {
         self.execution.as_ref().and_then(|ctx| ctx.id.clone())
+    }
+
+    fn execution_generation(&self) -> Option<u64> {
+        self.execution.as_ref().and_then(|ctx| ctx.generation)
     }
 
     fn execution_deadline(&self) -> Option<tokio::time::Instant> {
@@ -909,6 +973,7 @@ enum PipelineNodeDefinition {
     Decision(DecisionNodeDefinition),
     DirectTool(DirectToolNodeDefinition),
     Hitl(HitlNodeDefinition),
+    Http(HttpActionNodeDefinition),
     Llm(LlmNodeDefinition),
     Printer(PrinterNodeDefinition),
     Router(RouterNodeDefinition),
@@ -927,6 +992,7 @@ impl PipelineNodeDefinition {
             Self::Decision(node) => node.id(),
             Self::DirectTool(node) => node.id(),
             Self::Hitl(node) => node.id(),
+            Self::Http(node) => node.id(),
             Self::Llm(node) => node.id(),
             Self::Printer(node) => node.id(),
             Self::Router(node) => node.id(),
@@ -944,6 +1010,7 @@ impl PipelineNodeDefinition {
             Self::Decision(node) => node.input_keys(),
             Self::DirectTool(node) => node.input_keys(),
             Self::Hitl(node) => node.input_keys(),
+            Self::Http(node) => node.input_keys(),
             Self::Llm(node) => node.input_keys(),
             Self::Router(node) => node.input_keys(),
             Self::StateModifier(node) => node.input_keys(),
@@ -960,6 +1027,7 @@ impl PipelineNodeDefinition {
             Self::Map(node) => node.output_keys(),
             Self::DirectTool(node) => node.output_keys(),
             Self::Decision(_) | Self::Hitl(_) | Self::Printer(_) | Self::Router(_) => &[],
+            Self::Http(node) => node.output_keys(),
             Self::Llm(node) => node.output_keys(),
             Self::StateModifier(node) => node.output_keys(),
             Self::SplitOut(node) => node.output_keys(),
@@ -976,6 +1044,7 @@ impl PipelineNodeDefinition {
             | Self::Decision(_)
             | Self::DirectTool(_)
             | Self::Hitl(_)
+            | Self::Http(_)
             | Self::Llm(_)
             | Self::Printer(_)
             | Self::Router(_)
@@ -994,6 +1063,7 @@ impl PipelineNodeDefinition {
             | Self::Map(_)
             | Self::Decision(_)
             | Self::DirectTool(_)
+            | Self::Http(_)
             | Self::Llm(_)
             | Self::Printer(_)
             | Self::Router(_)
@@ -1012,6 +1082,7 @@ impl PipelineNodeDefinition {
             Self::Decision(node) => node.route_targets().collect(),
             Self::DirectTool(node) => node.transition().into_iter().collect(),
             Self::Hitl(node) => node.route_targets().collect(),
+            Self::Http(node) => node.transition().into_iter().collect(),
             Self::Llm(node) => node.transition().into_iter().collect(),
             Self::Printer(node) => [node.transition()].into_iter().collect(),
             Self::Router(node) => node.route_targets().collect(),
@@ -1030,6 +1101,7 @@ impl PipelineNodeDefinition {
             Self::Decision(node) => node.config_digest(),
             Self::DirectTool(node) => node.config_digest(),
             Self::Hitl(node) => node.config_digest(),
+            Self::Http(node) => node.config_digest(),
             Self::Llm(node) => node.config_digest(),
             Self::Printer(node) => node.config_digest(),
             Self::Router(node) => node.config_digest(),
@@ -1286,6 +1358,7 @@ impl PipelineDefinition {
                             node,
                             PipelineNodeDefinition::Llm(_)
                                 | PipelineNodeDefinition::Code(_)
+                                | PipelineNodeDefinition::Http(_)
                                 | PipelineNodeDefinition::StateModifier(_)
                                 | PipelineNodeDefinition::SplitOut(_)
                                 | PipelineNodeDefinition::Aggregate(_)
@@ -1461,6 +1534,8 @@ impl PipelineDefinition {
             {
                 Some((node.config_digest(), settings_policy()))
             }
+            // 5d-2: HTTP Request nodes always journal behind RecoverableNode.
+            PipelineNodeDefinition::Http(node) => Some((node.config_digest(), settings_policy())),
             _ => None,
         }
     }
@@ -1509,6 +1584,21 @@ impl PipelineDefinition {
                 .map_err(|_| {
                     PipelineConfigurationError::Invalid(
                         "The original direct-tool result contract is invalid.",
+                    )
+                })?;
+                Ok(Some(Arc::new(projector)))
+            }
+            // 5d-2: read-only owning result projector for HTTP Request recovery cards.
+            Some(PipelineNodeDefinition::Http(node)) => {
+                let projector = HttpActionCommittedProjector::new(
+                    node.clone(),
+                    self.declared_variable_types(),
+                    execution_id.to_owned(),
+                    generation,
+                )
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "The original HTTP action result contract is invalid.",
                     )
                 })?;
                 Ok(Some(Arc::new(projector)))
@@ -1587,6 +1677,7 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Map(_)
                 | PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::Hitl(_)
+                | PipelineNodeDefinition::Http(_)
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_)
                 | PipelineNodeDefinition::Code(_)
@@ -1607,6 +1698,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Decision(_)
             | PipelineNodeDefinition::DirectTool(_)
             | PipelineNodeDefinition::Hitl(_)
+            | PipelineNodeDefinition::Http(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
@@ -1625,6 +1717,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Map(_)
             | PipelineNodeDefinition::Decision(_)
             | PipelineNodeDefinition::Hitl(_)
+            | PipelineNodeDefinition::Http(_)
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
@@ -1688,6 +1781,7 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Map(_)
             | PipelineNodeDefinition::DirectTool(_)
             | PipelineNodeDefinition::Hitl(_)
+            | PipelineNodeDefinition::Http(_)
             | PipelineNodeDefinition::Llm(_)
             | PipelineNodeDefinition::Printer(_)
             | PipelineNodeDefinition::Router(_)
@@ -1727,6 +1821,13 @@ impl PipelineDefinition {
         self.nodes
             .iter()
             .any(|node| matches!(node, PipelineNodeDefinition::Code(_)))
+    }
+
+    #[must_use]
+    pub(crate) fn has_http_nodes(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| matches!(node, PipelineNodeDefinition::Http(_)))
     }
 
     /// The ids of the Code nodes this definition declares (W3-2b).
@@ -2144,6 +2245,7 @@ impl PipelineDefinition {
                 next
             }
             PipelineNodeDefinition::Hitl(node) => builder.node(HitlNode::new(node.clone())),
+            PipelineNodeDefinition::Http(node) => self.bind_http_node(builder, node, runtimes)?,
             PipelineNodeDefinition::Llm(node) => {
                 let Some(factory) = runtimes.llm.clone() else {
                     return Err(PipelineConfigurationError::Unsupported(
@@ -2367,6 +2469,82 @@ impl PipelineDefinition {
         Ok(next)
     }
 
+    fn bind_http_node(
+        &self,
+        builder: PipelineGraphBuilder,
+        node: &HttpActionNodeDefinition,
+        runtimes: &PipelineNodeRuntimes,
+    ) -> Result<PipelineGraphBuilder, PipelineConfigurationError> {
+        let binding =
+            runtimes
+                .http_action_binding()
+                .ok_or(PipelineConfigurationError::Unsupported(
+                    "HTTP Request execution requires a claim-scoped HTTP action runtime",
+                ))?;
+        let authority = runtimes
+            .node_recovery
+            .clone()
+            .or_else(|| runtimes.direct_tool_recovery.clone())
+            .ok_or(PipelineConfigurationError::Unsupported(
+                "HTTP Request execution requires a current fenced durable writer",
+            ))?;
+        let execution_id =
+            runtimes
+                .execution_id()
+                .ok_or(PipelineConfigurationError::Unsupported(
+                    "HTTP Request execution requires an execution identifier",
+                ))?;
+        let generation =
+            runtimes
+                .execution_generation()
+                .ok_or(PipelineConfigurationError::Unsupported(
+                    "HTTP Request execution requires an execution generation",
+                ))?;
+        let (binding_digest_bytes, binding_digest_hex) = binding
+            .snapshot
+            .binding_digest_for_node(node)
+            .map_err(|_| {
+                PipelineConfigurationError::Invalid(
+                    "the HTTP Request node does not match the frozen snapshot",
+                )
+            })?;
+        let admitted_settings = self.settings.get(node.id());
+        let policy = match admitted_settings {
+            Some(admitted) => admitted.settings.to_recovery_policy().map_err(|_| {
+                PipelineConfigurationError::Invalid(
+                    "HTTP Request node settings could not compile to a recovery policy",
+                )
+            })?,
+            None => super::node_recovery::NodeRecoveryPolicy::default(),
+        };
+        let settings_timeout_ms = admitted_settings.and_then(|s| s.settings.timeout_ms);
+        let retries_enabled = admitted_settings.is_some_and(|s| s.settings.retry_on_fail);
+        let attempt = HttpActionAttempt::new(
+            node.clone(),
+            binding_digest_bytes,
+            binding_digest_hex,
+            self.state.clone(),
+            Arc::clone(&binding.executor),
+            (*execution_id).clone(),
+            generation,
+            settings_timeout_ms,
+            retries_enabled,
+            runtimes.execution_deadline(),
+        );
+        let mut wrapper = super::node_recovery_runtime::RecoverableNode::new(
+            Arc::new(attempt),
+            node.config_digest(),
+            policy,
+            authority,
+            None,
+        );
+        if let Some(admitted) = admitted_settings {
+            wrapper = wrapper.with_settings(admitted.clone(), Some(execution_id));
+        }
+        let next = builder.node(wrapper);
+        Ok(bind_transition(next, node.id(), node.transition()))
+    }
+
     fn bind_application_node(
         &self,
         builder: PipelineGraphBuilder,
@@ -2491,6 +2669,8 @@ impl PipelineDefinition {
     pub(crate) fn durable_tool_refusal(&self) -> Option<ToolPipelineCause> {
         if self.has_code_nodes() {
             Some(ToolPipelineCause::Code)
+        } else if self.has_http_nodes() {
+            Some(ToolPipelineCause::Http)
         } else if self.has_application_nodes() {
             Some(ToolPipelineCause::Agent)
         } else {
@@ -2521,6 +2701,7 @@ impl PipelineDefinition {
                 PipelineNodeDefinition::Map(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Code(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::DirectTool(node) => (node.transition(), node.output_keys()),
+                PipelineNodeDefinition::Http(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Llm(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::StateModifier(node) => {
                     (node.transition(), node.output_keys())
@@ -3387,6 +3568,7 @@ fn parse_pipeline_node(
                 HitlConfigurationError::ResourceExhausted => node_limit(PipelineNodeLimit::Hitl),
                 _ => PipelineConfigurationError::Invalid("a HITL node is invalid"),
             }),
+        "http" => parse_http_pipeline_node(&encoded),
         "llm" => LlmNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::Llm)
             .map_err(|error| match error {
@@ -3431,6 +3613,17 @@ fn parse_pipeline_node(
 
 const fn node_limit(family: PipelineNodeLimit) -> PipelineConfigurationError {
     PipelineConfigurationError::LimitExceeded(PipelineLimit::Node(family))
+}
+
+fn parse_http_pipeline_node(
+    encoded: &str,
+) -> Result<PipelineNodeDefinition, PipelineConfigurationError> {
+    HttpActionNodeDefinition::from_yaml(encoded)
+        .map(PipelineNodeDefinition::Http)
+        .map_err(|error| match error {
+            HttpActionConfigurationError::ResourceExhausted => node_limit(PipelineNodeLimit::Http),
+            _ => PipelineConfigurationError::Invalid("an HTTP Request node is invalid"),
+        })
 }
 
 #[allow(clippy::too_many_lines)] // One exhaustive arm per node family keeps each rule visible.
@@ -3539,6 +3732,16 @@ fn validate_node_state(
                 ));
             }
         }
+        PipelineNodeDefinition::Http(node) => {
+            if let Some(output_key) = node.output_keys().first()
+                && let Some(kind) = state.get(output_key)
+                && !matches!(kind.as_str(), "dict" | "str")
+            {
+                return Err(PipelineConfigurationError::Invalid(
+                    "an HTTP Request node output must target a dict or str state variable",
+                ));
+            }
+        }
         PipelineNodeDefinition::Decision(_)
         | PipelineNodeDefinition::Hitl(_)
         | PipelineNodeDefinition::Router(_)
@@ -3573,6 +3776,7 @@ fn validate_shaping_channels(
         | PipelineNodeDefinition::Decision(_)
         | PipelineNodeDefinition::DirectTool(_)
         | PipelineNodeDefinition::Hitl(_)
+        | PipelineNodeDefinition::Http(_)
         | PipelineNodeDefinition::Llm(_)
         | PipelineNodeDefinition::Printer(_)
         | PipelineNodeDefinition::Router(_)
@@ -3732,6 +3936,7 @@ fn validate_overwrite_channels(
                 | PipelineNodeDefinition::Application(_)
                 | PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::DirectTool(_)
+                | PipelineNodeDefinition::Http(_)
                 | PipelineNodeDefinition::Llm(_)
                 | PipelineNodeDefinition::Printer(_)
                 | PipelineNodeDefinition::Router(_) => Vec::new(),
@@ -3951,6 +4156,7 @@ fn definition_digest(
                 node.selection().kind().wire_name().as_bytes()
             }
             PipelineNodeDefinition::Hitl(_) => b"hitl".as_slice(),
+            PipelineNodeDefinition::Http(_) => b"http".as_slice(),
             PipelineNodeDefinition::Llm(_) => b"llm".as_slice(),
             PipelineNodeDefinition::Printer(_) => b"printer".as_slice(),
             PipelineNodeDefinition::Router(_) => b"router".as_slice(),
@@ -4013,6 +4219,7 @@ pub(crate) enum PipelineNodeLimit {
     Decision,
     DirectTool,
     Hitl,
+    Http,
     Llm,
     Parallel,
     Printer,
@@ -4031,6 +4238,7 @@ impl PipelineLimit {
             Self::Node(PipelineNodeLimit::Decision) => "nodes[].decision",
             Self::Node(PipelineNodeLimit::DirectTool) => "nodes[].direct_tool",
             Self::Node(PipelineNodeLimit::Hitl) => "nodes[].hitl",
+            Self::Node(PipelineNodeLimit::Http) => "nodes[].http",
             Self::Node(PipelineNodeLimit::Llm) => "nodes[].llm",
             Self::Node(PipelineNodeLimit::Parallel) => "nodes[].parallel",
             Self::Node(PipelineNodeLimit::Printer) => "nodes[].printer",
@@ -4136,6 +4344,9 @@ pub(crate) enum FanoutChildRefusal {
     /// A Router as the direct child: it routes inside a child pipeline
     /// (W3-2, brief D1). The same code as [`Self::Kind`], its own text.
     Router,
+    /// An HTTP Request node inside a Parallel branch or Map worker (5d-2):
+    /// fan-out child execution arrives with 5d-3; never silently falls back to root.
+    Http,
     /// A saved child pipeline contains a Parallel node, which binds its
     /// checkpoint authority to the started root only (FU-249).
     ContainsParallel,
@@ -4152,6 +4363,8 @@ pub(crate) enum FanoutChildRefusal {
 pub(crate) enum ToolPipelineCause {
     /// A Code node in the pipeline (FU-319: Main needs its tool-lineage edge).
     Code,
+    /// An HTTP Request node in the pipeline (5d-3 adds fan-out child support).
+    Http,
     /// An Agent node in the pipeline (a scoped ordinary descendant).
     Agent,
     /// The pipeline is reached through another Agent (tier 2 or deeper).
@@ -4165,7 +4378,7 @@ impl FanoutChildRefusal {
     #[must_use]
     pub(crate) const fn code(self) -> &'static str {
         match self {
-            Self::Kind | Self::Router => "graph.fanout.child_kind_unsupported",
+            Self::Kind | Self::Router | Self::Http => "graph.fanout.child_kind_unsupported",
             Self::ContainsParallel => "graph.fanout.parallel_in_child_pipeline",
             Self::CodeBelowRoot => elitea_faults::codes::GRAPH_FANOUT_CODE_BELOW_ROOT.as_str(),
             Self::AgentToolPipeline(_) => {
@@ -4180,6 +4393,7 @@ impl FanoutChildRefusal {
         [
             Self::Kind,
             Self::Router,
+            Self::Http,
             Self::ContainsParallel,
             Self::CodeBelowRoot,
             Self::AgentToolPipeline(ToolPipelineCause::Code),
@@ -4196,6 +4410,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             Self::Router => {
                 "a Router runs inside a child pipeline, not as a Parallel branch or Map worker"
             }
+            Self::Http => {
+                "HTTP Request nodes inside Parallel or Map fan-out children are not supported yet (arrives with 5d-3)"
+            }
             Self::ContainsParallel => {
                 "a saved pipeline with a Parallel node runs only as the started pipeline"
             }
@@ -4204,6 +4421,9 @@ impl std::fmt::Display for FanoutChildRefusal {
             }
             Self::AgentToolPipeline(ToolPipelineCause::Code) => {
                 "the Agent's saved pipeline tool holds a Code node, which a Map item or Parallel branch cannot run yet"
+            }
+            Self::AgentToolPipeline(ToolPipelineCause::Http) => {
+                "the Agent's saved pipeline tool holds an HTTP Request node, which a Map item or Parallel branch cannot run yet (arrives with 5d-3)"
             }
             Self::AgentToolPipeline(ToolPipelineCause::Agent) => {
                 "the Agent's saved pipeline tool holds an Agent node, which a Map item or Parallel branch cannot run yet"
@@ -4255,10 +4475,14 @@ impl PipelineConfigurationError {
             Self::FanoutChildUnsupported { refusal, .. } => Some(match refusal {
                 FanoutChildRefusal::Kind => "fanout_child_kind",
                 FanoutChildRefusal::Router => "fanout_child_router",
+                FanoutChildRefusal::Http => "fanout_child_http",
                 FanoutChildRefusal::ContainsParallel => "parallel_in_child_pipeline",
                 FanoutChildRefusal::CodeBelowRoot => "fanout_code_below_root",
                 FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Code) => {
                     "fanout_agent_tool_pipeline_code"
+                }
+                FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Http) => {
+                    "fanout_agent_tool_pipeline_http"
                 }
                 FanoutChildRefusal::AgentToolPipeline(ToolPipelineCause::Agent) => {
                     "fanout_agent_tool_pipeline_agent"

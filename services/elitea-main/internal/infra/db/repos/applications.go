@@ -985,6 +985,9 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 		if err := pipelinelimits.Check(v.Instructions); err != nil {
 			return applications.Version{}, err
 		}
+		if err := checkHTTPActionOperationsForSchema(ctx, q, s, v.Instructions); err != nil {
+			return applications.Version{}, err
+		}
 	}
 	llmJSON, err := encodeJSONObject(v.LLMSettings)
 	if err != nil {
@@ -1285,7 +1288,8 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q relationReader, 
 // over-bound text for a version that does not exist is a 404, not a guess.
 func checkPipelineInstructions(ctx context.Context, q querier, schema, applicationID, versionID string, v applications.Version) error {
 	refusal := pipelinelimits.Check(v.Instructions)
-	if refusal == nil {
+	httpOps, httpOpsErr := pipelinelimits.HTTPNodeOperations(v.Instructions)
+	if refusal == nil && httpOpsErr == nil && len(httpOps) == 0 {
 		return nil
 	}
 	agentType := v.AgentType
@@ -1303,7 +1307,65 @@ func checkPipelineInstructions(ctx context.Context, q querier, schema, applicati
 	if agentType != pipelineAgentType {
 		return nil
 	}
-	return refusal
+	if refusal != nil {
+		return refusal
+	}
+	if httpOpsErr != nil {
+		return httpOpsErr
+	}
+	return checkHTTPActionOperationRefs(ctx, q, schema, httpOps)
+}
+
+// CheckHTTPActionOperations verifies that every `type: http` node in a
+// pipeline references an existing, enabled rule in the owning project.
+// Pipelines without HTTP nodes make zero database queries.
+func CheckHTTPActionOperations(ctx context.Context, q querier, projectID int64, instructions string) error {
+	ops, err := pipelinelimits.HTTPNodeOperations(instructions)
+	if err != nil || len(ops) == 0 {
+		return err
+	}
+	return checkHTTPActionOperationRefsForProject(ctx, q, projectID, ops)
+}
+
+func checkHTTPActionOperationsForSchema(ctx context.Context, q querier, schema, instructions string) error {
+	ops, err := pipelinelimits.HTTPNodeOperations(instructions)
+	if err != nil || len(ops) == 0 {
+		return err
+	}
+	return checkHTTPActionOperationRefs(ctx, q, schema, ops)
+}
+
+func checkHTTPActionOperationRefs(ctx context.Context, q querier, schema string, ops []pipelinelimits.HTTPNodeOperation) error {
+	projectID, err := strconv.ParseInt(strings.TrimPrefix(schema, "p_"), 10, 64)
+	if err != nil || projectID <= 0 {
+		return apierr.BadRequest("invalid project id")
+	}
+	return checkHTTPActionOperationRefsForProject(ctx, q, projectID, ops)
+}
+
+func checkHTTPActionOperationRefsForProject(ctx context.Context, q querier, projectID int64, ops []pipelinelimits.HTTPNodeOperation) error {
+	seen := make(map[string]bool, len(ops))
+	for _, ref := range ops {
+		if seen[ref.Operation] {
+			continue
+		}
+		var enabled bool
+		err := q.QueryRow(ctx,
+			`SELECT enabled FROM elitea_runtime.http_action_rules WHERE project_id = $1 AND name = $2`,
+			projectID, ref.Operation,
+		).Scan(&enabled)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pipelinelimits.UnknownHTTPOperationRefusal(ref.NodeID, ref.Operation)
+		}
+		if err != nil {
+			return fmt.Errorf("applications: check http action rule %q: %w", ref.Operation, err)
+		}
+		if !enabled {
+			return pipelinelimits.DisabledHTTPOperationRefusal(ref.NodeID, ref.Operation)
+		}
+		seen[ref.Operation] = true
+	}
+	return nil
 }
 
 // CheckVersionComposition is checkVersionComposition for the other writers of
@@ -1382,7 +1444,13 @@ func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, app
 	if size > pipelinelimits.MaxInstructionsBytes {
 		return "", pipelinelimits.ErrInstructionsTooLarge
 	}
-	return instructions, pipelinelimits.Check(instructions)
+	if err := pipelinelimits.Check(instructions); err != nil {
+		return "", err
+	}
+	if err := checkHTTPActionOperationsForSchema(ctx, q, schema, instructions); err != nil {
+		return "", err
+	}
+	return instructions, nil
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {

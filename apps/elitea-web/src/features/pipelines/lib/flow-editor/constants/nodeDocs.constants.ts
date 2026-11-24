@@ -20,6 +20,7 @@ const NODE_DOCS_PATHS: Readonly<Partial<Record<PipelineNodeType, string>>> = {
   [PipelineNodeTypes.Toolkit]: `${DOCS_NODES_PREFIX}/execution-nodes#toolkit-node`,
   [PipelineNodeTypes.Mcp]: `${DOCS_NODES_PREFIX}/execution-nodes#mcp-node`,
   [PipelineNodeTypes.Code]: `${DOCS_NODES_PREFIX}/execution-nodes#code-node`,
+  [PipelineNodeTypes.Http]: `${DOCS_NODES_PREFIX}/execution-nodes#http-request-node`,
   [PipelineNodeTypes.Router]: `${DOCS_NODES_PREFIX}/control-flow-nodes#router-node`,
   [PipelineNodeTypes.Decision]: `${DOCS_NODES_PREFIX}/control-flow-nodes#decision-node`,
   [PipelineNodeTypes.Hitl]: `${DOCS_NODES_PREFIX}/control-flow-nodes#human-in-the-loop-node`,

@@ -107,4 +107,35 @@ describe('node settings helpers', () => {
       expect(issues[0]?.message).toBe(`Node a: ${NodeSettingsRefusalTexts['family_not_yet']}`);
     }
   });
+
+  it('admits settings on http nodes and enforces the 30s HTTP timeout ceiling', () => {
+    expect(nodeSettingsFamilyKeys('http')).toContain('retry_on_fail');
+    expect(nodeSettingsFamilyKeys('http')).toContain('timeout_ms');
+    const okDoc: YamlPipelineDocument = {
+      state: { fx: 'dict' },
+      entry_point: 'fetch',
+      nodes: [{
+        id: 'fetch',
+        type: 'http',
+        revision: 2,
+        operation: 'fx_reference.rates',
+        request: {},
+        response: { mode: 'json' },
+        settings: { retry_on_fail: true, max_tries: 3, timeout_ms: 30_000 },
+        output: ['fx'],
+        transition: 'END',
+      }],
+    };
+    expect(graphNodeSettingsIssues(okDoc)).toEqual([]);
+    const overDoc: YamlPipelineDocument = {
+      ...okDoc,
+      nodes: [{
+        ...(okDoc.nodes?.[0] as YamlPipelineNode),
+        settings: { timeout_ms: 30_001 },
+      }],
+    };
+    const issues = graphNodeSettingsIssues(overDoc);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toBe(`Node fetch: ${NodeSettingsRefusalTexts['http_timeout_range']}`);
+  });
 });

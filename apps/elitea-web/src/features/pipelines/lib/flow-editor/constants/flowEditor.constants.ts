@@ -93,6 +93,7 @@ export const PipelineNodeTypes = {
   Aggregate: 'aggregate',
   Printer: 'printer',
   Hitl: 'hitl',
+  Http: 'http',
   Custom: 'custom',
   Ghost: 'ghost',
   End: 'END',
@@ -122,6 +123,7 @@ export const PipelineNodeDisplayNames: Readonly<Record<PipelineNodeType, string>
   [PipelineNodeTypes.Aggregate]: 'Aggregate',
   [PipelineNodeTypes.Printer]: 'Printer',
   [PipelineNodeTypes.Hitl]: 'Human-in-the-loop',
+  [PipelineNodeTypes.Http]: 'HTTP Request',
   [PipelineNodeTypes.Custom]: 'Custom',
   [PipelineNodeTypes.Ghost]: 'Ghost',
   [PipelineNodeTypes.End]: 'End',
@@ -152,6 +154,7 @@ export const NodeHeightMap: Readonly<Record<string, number>> = {
   [PipelineNodeTypes.Aggregate]: 750,
   [PipelineNodeTypes.Router]: 550,
   [PipelineNodeTypes.Hitl]: 550,
+  [PipelineNodeTypes.Http]: 650,
   [PipelineNodeTypes.StateModifier]: 400,
   [PipelineNodeTypes.Ghost]: 60,
 };
@@ -182,6 +185,7 @@ export const NodeDisplayLabels: Readonly<Record<PipelineNodeType, string>> = {
   [PipelineNodeTypes.Aggregate]: 'Aggregate',
   [PipelineNodeTypes.Printer]: 'Printer',
   [PipelineNodeTypes.Hitl]: PipelineNodeDisplayNames[PipelineNodeTypes.Hitl],
+  [PipelineNodeTypes.Http]: 'HTTP Request',
   [PipelineNodeTypes.Custom]: 'Custom',
   [PipelineNodeTypes.Ghost]: 'Ghost',
   [PipelineNodeTypes.End]: 'END',
@@ -246,4 +250,5 @@ export const InitialNodeId: Readonly<Record<string, string>> = {
   [PipelineNodeTypes.Mcp]: 'MCP',
   [PipelineNodeTypes.Printer]: 'Printer',
   [PipelineNodeTypes.Hitl]: 'HITL',
+  [PipelineNodeTypes.Http]: 'HTTP',
 };

@@ -3330,6 +3330,7 @@ pub(super) async fn assemble_pipeline_native(
         None => node_runtimes,
     }
     .with_execution_id(&plan.execution_id)
+    .with_execution_generation(plan.generation)
     .with_execution_deadline(plan.execution_deadline()?);
     let printer_catalog = definition.printer_pause_catalog();
     let static_catalog = definition.static_pause_catalog();

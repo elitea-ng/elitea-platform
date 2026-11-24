@@ -195,8 +195,39 @@ impl<'a> PipelineApplicationRuntime<'a> {
 pub(crate) struct PipelineExecutionProfile {
     shell: OrdinaryNoToolProfile,
     definition: PipelineDefinition,
+    http_action_snapshot: Option<Arc<super::graph::http_action::HttpActionFrozenSnapshotV2>>,
     sensitive_direct_tools: BTreeMap<(String, String), SensitiveToolPolicy>,
     sensitive_llm_tools: BTreeMap<(String, String), SensitiveToolPolicy>,
+}
+
+fn parse_http_action_snapshot(
+    definition: &PipelineDefinition,
+    version_details: Option<&Value>,
+) -> Result<
+    Option<Arc<super::graph::http_action::HttpActionFrozenSnapshotV2>>,
+    NativeAgentAssemblyError,
+> {
+    if !definition.has_http_nodes() {
+        return Ok(None);
+    }
+    let raw = version_details
+        .and_then(|details| details.get("http_action_snapshot"))
+        .ok_or_else(|| {
+            NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                "pipeline contains HTTP Request nodes without a Main-frozen http_action_snapshot",
+            )
+            .with_cause("graph.pipeline.http_action_snapshot_missing", None)
+        })?;
+    let snapshot =
+        super::graph::http_action::HttpActionFrozenSnapshotV2::from_value(raw).map_err(|_| {
+            NativeAgentAssemblyError::new(
+                NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                "pipeline http_action_snapshot is malformed",
+            )
+            .with_cause("graph.pipeline.http_action_snapshot_invalid", None)
+        })?;
+    Ok(Some(Arc::new(snapshot)))
 }
 
 impl PipelineExecutionProfile {
@@ -208,9 +239,14 @@ impl PipelineExecutionProfile {
         let shell = OrdinaryNoToolProfile::validate_pipeline_shell(request, resume)?;
         let definition = PipelineDefinition::from_yaml(shell.instructions())
             .map_err(|error| pipeline_configuration_error(&error))?;
+        let http_action_snapshot = parse_http_action_snapshot(
+            &definition,
+            request.payload.application.get("version_details"),
+        )?;
         Ok(Self {
             shell,
             definition,
+            http_action_snapshot,
             sensitive_direct_tools: BTreeMap::new(),
             sensitive_llm_tools: BTreeMap::new(),
         })
@@ -222,9 +258,14 @@ impl PipelineExecutionProfile {
         let shell = OrdinaryNoToolProfile::validate_pipeline_mcp_authorization_shell(request)?;
         let definition = PipelineDefinition::from_yaml(shell.instructions())
             .map_err(|error| pipeline_configuration_error(&error))?;
+        let http_action_snapshot = parse_http_action_snapshot(
+            &definition,
+            request.payload.application.get("version_details"),
+        )?;
         Ok(Self {
             shell,
             definition,
+            http_action_snapshot,
             sensitive_direct_tools: BTreeMap::new(),
             sensitive_llm_tools: BTreeMap::new(),
         })
@@ -237,9 +278,14 @@ impl PipelineExecutionProfile {
             OrdinaryNoToolProfile::validate_pipeline_guardrail_authorization_shell(request)?;
         let definition = PipelineDefinition::from_yaml(shell.instructions())
             .map_err(|error| pipeline_configuration_error(&error))?;
+        let http_action_snapshot = parse_http_action_snapshot(
+            &definition,
+            request.payload.application.get("version_details"),
+        )?;
         Ok(Self {
             shell,
             definition,
+            http_action_snapshot,
             sensitive_direct_tools: BTreeMap::new(),
             sensitive_llm_tools: BTreeMap::new(),
         })
@@ -252,9 +298,17 @@ impl PipelineExecutionProfile {
         let shell = OrdinaryNoToolProfile::from_nested_pipeline_version(version, fallback)?;
         let definition = PipelineDefinition::from_yaml(shell.instructions())
             .map_err(|error| pipeline_configuration_error(&error))?;
+        let http_action_snapshot = version
+            .get("http_action_snapshot")
+            .filter(|_| definition.has_http_nodes())
+            .and_then(|raw| {
+                super::graph::http_action::HttpActionFrozenSnapshotV2::from_value(raw).ok()
+            })
+            .map(Arc::new);
         Ok(Self {
             shell,
             definition,
+            http_action_snapshot,
             sensitive_direct_tools: BTreeMap::new(),
             sensitive_llm_tools: BTreeMap::new(),
         })
@@ -689,10 +743,37 @@ impl PipelineNativeAgentAssembler {
         let has_llm_nodes = profile.definition().has_llm_nodes();
         let has_direct_tool_nodes = profile.definition().has_direct_tool_nodes();
         let has_application_nodes = profile.definition().has_application_nodes();
+        let http_action_binding = if profile.definition().has_http_nodes() {
+            let platform = self
+                .platform
+                .as_ref()
+                .ok_or_else(unsupported_pipeline_runtime)?;
+            let snapshot = profile.http_action_snapshot.clone().ok_or_else(|| {
+                NativeAgentAssemblyError::new(
+                    NativeAgentAssemblyErrorCode::InvalidConfiguration,
+                    "pipeline contains HTTP Request nodes without a Main-frozen http_action_snapshot",
+                )
+                .with_cause("graph.pipeline.http_action_snapshot_missing", None)
+            })?;
+            let executor: Arc<dyn super::graph::http_action_runtime::PipelineHttpActionExecutor> =
+                Arc::new(
+                    super::graph::http_action_runtime::ClaimHttpActionExecutor::new(
+                        Arc::clone(platform),
+                        Arc::clone(runtime_context),
+                    ),
+                );
+            Some((executor, snapshot))
+        } else {
+            None
+        };
         let (node_event_sender, node_events) = pipeline_node_event_channel();
         if !has_llm_nodes && !has_direct_tool_nodes && !has_application_nodes {
+            let mut nodes = PipelineNodeRuntimes::default().with_events(node_event_sender);
+            if let Some((executor, snapshot)) = http_action_binding {
+                nodes = nodes.with_http_action(executor, snapshot);
+            }
             return Ok(PipelineRuntimeBindings {
-                nodes: PipelineNodeRuntimes::default().with_events(node_event_sender),
+                nodes,
                 applications: ApplicationRuntimeProjection::default(),
                 node_events: Some(node_events),
                 skipped_application_children: Vec::new(),
@@ -1003,6 +1084,9 @@ impl PipelineNativeAgentAssembler {
                     profile.definition(),
                     &composition.children,
                 ));
+        if let Some((executor, snapshot)) = http_action_binding {
+            nodes = nodes.with_http_action(executor, snapshot);
+        }
         if let Some(scopes) = application_scopes {
             let catalog = scopes.checkpoint_catalog()?;
             scopes.validate_catalog(profile.definition(), &catalog)?;

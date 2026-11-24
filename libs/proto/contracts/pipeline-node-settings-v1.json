@@ -23,6 +23,7 @@
     "default_wait_between_tries_ms": 1000,
     "min_node_timeout_ms": 1000,
     "max_node_timeout_ms": 900000,
+    "max_http_timeout_ms": 30000,
     "max_node_errors": 64,
     "max_node_error_entry_bytes": 1024,
     "max_node_error_object_bytes": 512,
@@ -31,6 +32,16 @@
   "families": {
     "aggregate": ["on_error", "error_transition", "always_output_data", "execute_once"],
     "code": [
+      "retry_on_fail",
+      "max_tries",
+      "wait_between_tries_ms",
+      "on_error",
+      "error_transition",
+      "always_output_data",
+      "execute_once",
+      "timeout_ms"
+    ],
+    "http": [
       "retry_on_fail",
       "max_tries",
       "wait_between_tries_ms",
@@ -86,6 +97,7 @@
     "max_tries_range": "Max tries must be between 2 and 5.",
     "wait_range": "Wait between tries must be between 100 and 300000 ms.",
     "timeout_range": "Timeout must be between 1000 and 900000 ms.",
+    "http_timeout_range": "HTTP timeout must be between 1000 and 30000 ms.",
     "retry_fields_need_retry": "Max tries and wait between tries need Retry on fail.",
     "error_transition_required": "On error 'error output' needs an error transition.",
     "error_transition_unexpected": "An error transition needs On error 'error output'.",

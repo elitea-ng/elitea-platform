@@ -31,6 +31,7 @@
  * app's neutral/secondary gray), sourced from the token system rather than
  * a duplicated literal.
  */
+import LanguageIcon from '@mui/icons-material/Language';
 import RepeatIcon from '@mui/icons-material/Repeat';
 import RepeatOneIcon from '@mui/icons-material/RepeatOne';
 import type { Theme } from '@mui/material/styles';
@@ -93,6 +94,7 @@ const ICON_BY_NODE_TYPE: Readonly<Record<string, ComponentType<IconProps>>> = {
   [PipelineNodeTypes.Code]: CodeIcon,
   [PipelineNodeTypes.Printer]: PrinterIcon,
   [PipelineNodeTypes.Hitl]: HumanIcon,
+  [PipelineNodeTypes.Http]: LanguageIcon,
   [PipelineNodeTypes.Custom]: JsonIcon,
   [PipelineNodeTypes.End]: FlagIcon,
 };

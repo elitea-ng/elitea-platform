@@ -75,6 +75,12 @@ pub(super) fn validate_map_ownership(
                     refusal: FanoutChildRefusal::Router,
                 });
             }
+            PipelineNodeDefinition::Http(_) => {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: worker.id().to_owned(),
+                    refusal: FanoutChildRefusal::Http,
+                });
+            }
             _ => {
                 return Err(PipelineConfigurationError::FanoutChildUnsupported {
                     node: worker.id().to_owned(),

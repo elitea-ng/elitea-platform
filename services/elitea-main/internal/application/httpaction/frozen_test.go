@@ -155,3 +155,49 @@ func TestParseInvocationBoundsAndIdentity(t *testing.T) {
 		t.Fatalf("attempt 15 refused: %v", err)
 	}
 }
+
+func TestFreezeSnapshotAdmitsInputAndSettingsTimeout(t *testing.T) {
+	const pipelineWithSettings = `entry_point: extract
+nodes:
+  - id: extract
+    type: http
+    revision: 2
+    operation: etl.extract_orders
+    input: [run_id, page_size]
+    request:
+      query:
+        run_id: {from: run_id}
+        page_size: {from: page_size}
+    response:
+      mode: json
+      accepted_statuses:
+        - {first: 200, last: 200}
+      max_bytes: 1048576
+    output: [raw_orders]
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 500
+      timeout_ms: 15000
+      on_error: stop
+      always_output_data: false
+      execute_once: false
+    transition: END
+`
+	snapshot, err := FreezeSnapshot(31, 41, pipelineWithSettings)
+	if err != nil || snapshot == nil || len(snapshot.Nodes) != 1 {
+		t.Fatalf("freeze with input+settings: %v %v", snapshot, err)
+	}
+	wire, err := base64.StdEncoding.DecodeString(snapshot.Nodes[0].TemplateWireB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(wire), `"timeout_ms":15000`) {
+		t.Fatalf("expected settings.timeout_ms=15000 frozen into template wire, got %s", wire)
+	}
+	// settings.timeout_ms above 30s must be refused.
+	overTimeout := strings.Replace(pipelineWithSettings, "timeout_ms: 15000", "timeout_ms: 30001", 1)
+	if _, err := FreezeSnapshot(31, 41, overTimeout); err == nil {
+		t.Fatal("settings.timeout_ms > 30000 was admitted")
+	}
+}

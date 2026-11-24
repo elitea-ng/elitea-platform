@@ -62,6 +62,10 @@ const (
 	PipelineCodeSupervisorBusy Code = "pipeline.code.supervisor_busy"
 	// The Code node exceeded its execution timeout.
 	PipelineCodeTimeout Code = "pipeline.code.timeout"
+	// The HTTP Request node could not complete this call.
+	PipelineHttpFailed Code = "pipeline.http.failed"
+	// The HTTP Request node exceeded its execution timeout.
+	PipelineHttpTimeout Code = "pipeline.http.timeout"
 	// The LLM node could not complete this model call.
 	PipelineLlmFailed Code = "pipeline.llm.failed"
 	// The model gateway rate limit stopped the LLM node.

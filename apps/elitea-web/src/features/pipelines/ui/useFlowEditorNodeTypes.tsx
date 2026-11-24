@@ -52,6 +52,7 @@ import { DefaultNode } from './nodes/DefaultNode';
 import { EndNode } from './nodes/EndNode';
 import { GhostNode } from './nodes/GhostNode';
 import { HITLNode } from './nodes/HITLNode';
+import { HttpNode } from './nodes/HttpNode';
 import { LLMNode } from './nodes/LLMNode';
 import { McpNode } from './nodes/McpNode';
 import { PrinterNode } from './nodes/PrinterNode';
@@ -163,6 +164,7 @@ function buildNodeTypes(versionTools: readonly PipelineToolEntry[] | undefined, 
     [types.Map]: MapNode,
     [types.SplitOut]: SplitOutNode,
     [types.Aggregate]: AggregateNode,
+    [types.Http]: HttpNode,
     [types.Tool]: withVersionTools(asAnyNodeComponent(ToolNode), versionTools),
     [types.Agent]: withVersionTools(asAnyNodeComponent(AgentNode), versionTools),
     [types.Pipeline]: withVersionTools(asAnyNodeComponent(SubgraphNode), versionTools),

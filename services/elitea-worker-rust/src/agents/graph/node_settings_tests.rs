@@ -649,6 +649,7 @@ fn the_admitted_families_are_the_contracts() {
                         | SettingsFamily::Llm
                         | SettingsFamily::Toolkit
                         | SettingsFamily::Mcp
+                        | SettingsFamily::Http
                 ),
                 "{node_type}"
             );

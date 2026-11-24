@@ -710,6 +710,14 @@ fn reject_nested_parallel(
                     refusal: FanoutChildRefusal::ContainsParallel,
                 });
             }
+            if definitions.iter().any(|(key, definition)| {
+                (key == &path || key.starts_with(&descendants)) && definition.has_http_nodes()
+            }) {
+                return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                    node: node.id().to_owned(),
+                    refusal: FanoutChildRefusal::Http,
+                });
+            }
         }
     }
     Ok(())
@@ -760,6 +768,12 @@ pub(super) fn validate_parallel_ownership(
                     });
                 }
                 // Other kinds run as branches once Wave 3 admits them one by one.
+                Some(PipelineNodeDefinition::Http(node)) => {
+                    return Err(PipelineConfigurationError::FanoutChildUnsupported {
+                        node: node.id().to_owned(),
+                        refusal: FanoutChildRefusal::Http,
+                    });
+                }
                 Some(other) => {
                     return Err(PipelineConfigurationError::FanoutChildUnsupported {
                         node: other.id().to_owned(),

@@ -132,6 +132,10 @@ type Receipt struct {
 	State         string      `json:"state"`
 	FailureCode   *string     `json:"failure_code"`
 	Result        *Projection `json:"result"`
+	// Retryable carries the rule's effect class (D2: safe method or
+	// replay=idempotency_key + bound key) in memory for Main's gRPC response
+	// metadata header; it is never serialized into the 8-field receipt wire.
+	Retryable bool `json:"-"`
 }
 
 func Decode(data []byte, target any) error {

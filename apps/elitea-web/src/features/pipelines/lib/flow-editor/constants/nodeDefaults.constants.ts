@@ -226,6 +226,26 @@ const createHitlNodeData = () => ({
 });
 
 /**
+ * `type: http` (`revision: 2`, `http_action.rs`).
+ *
+ * `revision: 2`, `operation`, `request`, `response.mode`, and one `output` key
+ * are required by both Main's save check and the Worker compiler. Never seeds
+ * raw URLs, HTTP methods, or credentials — those live strictly on admin rules.
+ */
+const createHttpNodeData = () => ({
+  revision: 2,
+  operation: '',
+  request: {} as Record<string, unknown>,
+  response: {
+    mode: 'json',
+    accepted_statuses: [{ first: 200, last: 299 }],
+    max_bytes: 1_048_576,
+  },
+  output: [] as unknown[],
+  transition: PipelineNodeTypes.End as string,
+});
+
+/**
  * Default `data` payload seeded onto a freshly-created YAML node, keyed by
  * `PipelineNodeTypes`. Heterogeneous by design (baseline lines 285-302) — see
  * this module's doc comment.
@@ -249,4 +269,5 @@ export const InitialNodeData: Readonly<Record<string, Record<string, unknown>>> 
   [PipelineNodeTypes.Code]: createCodeNodeData(),
   [PipelineNodeTypes.Printer]: createPrinterNodeData(),
   [PipelineNodeTypes.Hitl]: createHitlNodeData(),
+  [PipelineNodeTypes.Http]: createHttpNodeData(),
 };

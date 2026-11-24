@@ -258,8 +258,10 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		return Receipt{}, err
 	}
 	if !dispatch {
+		receipt.Retryable = retryable
 		return receipt, nil
 	}
+	receipt.Retryable = retryable
 	// No retry or redirect occurs beyond this durable dispatch fence.
 	response, callErr := s.transport.RoundTrip(outbound)
 	if callErr != nil {

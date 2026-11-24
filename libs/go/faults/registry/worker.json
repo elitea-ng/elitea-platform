@@ -330,6 +330,22 @@
       "owner": "elitea-worker-rust"
     },
     {
+      "code": "pipeline.http.failed",
+      "sentence": "The HTTP Request node could not complete this call.",
+      "action": "Check the HTTP action rule, inputs, and target service response, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "no",
+      "owner": "elitea-worker-rust"
+    },
+    {
+      "code": "pipeline.http.timeout",
+      "sentence": "The HTTP Request node exceeded its execution timeout.",
+      "action": "Increase the node timeout within the 30 second limit or check the target service response time, then run the pipeline again.",
+      "audience": "user",
+      "retryable": "yes",
+      "owner": "elitea-worker-rust"
+    },
+    {
       "code": "pipeline.mcp.failed",
       "sentence": "The MCP tool node could not complete this call.",
       "action": "Check the MCP server connection and tool inputs, then run the pipeline again.",

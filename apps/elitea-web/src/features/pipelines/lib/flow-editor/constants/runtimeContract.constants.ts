@@ -82,6 +82,7 @@ export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
   PipelineNodeTypes.Toolkit, // compiler.rs:2358 "toolkit"
   PipelineNodeTypes.Mcp, // compiler.rs:2358 "mcp"
   PipelineNodeTypes.Hitl, // compiler.rs:2366 "hitl"
+  PipelineNodeTypes.Http, // compiler.rs "http" (revision: 2, 5d-2)
   PipelineNodeTypes.LLM, // compiler.rs:2372 "llm"
   PipelineNodeTypes.Printer, // compiler.rs:2378 "printer"
   PipelineNodeTypes.Router, // compiler.rs:2386 "router"

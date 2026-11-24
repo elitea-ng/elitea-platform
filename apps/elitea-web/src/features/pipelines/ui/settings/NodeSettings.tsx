@@ -107,6 +107,7 @@ function SettingNumberField({ label, value, min, max, placeholder, helperText, d
 }
 
 interface ExecutionTimingControlsProps {
+  readonly nodeType: string;
   readonly settings: ParsedNodeSettings;
   readonly supportsRetry: boolean;
   readonly supportsTimeout: boolean;
@@ -114,8 +115,13 @@ interface ExecutionTimingControlsProps {
   readonly onChange: (key: string, value: unknown) => void;
 }
 
-function ExecutionTimingControls({ settings, supportsRetry, supportsTimeout, disabled, onChange }: ExecutionTimingControlsProps): ReactNode {
+function ExecutionTimingControls({ nodeType, settings, supportsRetry, supportsTimeout, disabled, onChange }: ExecutionTimingControlsProps): ReactNode {
   if (!supportsRetry && !supportsTimeout) return null;
+  const isHttp = nodeType === 'http';
+  const maxTimeoutMs = isHttp ? NodeSettingsLimits.max_http_timeout_ms : NodeSettingsLimits.max_node_timeout_ms;
+  const timeoutHelp = isHttp
+    ? t('pipelines.nodeSettings.httpTimeoutMsHelp', '1000 to 30000 ms')
+    : t('pipelines.nodeSettings.timeoutMsHelp', '1000 to 900000 ms (clamped to sandbox profile limit)');
   return (
     <>
       {supportsRetry && (
@@ -155,8 +161,8 @@ function ExecutionTimingControls({ settings, supportsRetry, supportsTimeout, dis
           label={t('pipelines.nodeSettings.timeoutMs', 'Timeout (ms)')}
           value={settings.timeout_ms}
           min={NodeSettingsLimits.min_node_timeout_ms}
-          max={NodeSettingsLimits.max_node_timeout_ms}
-          helperText={t('pipelines.nodeSettings.timeoutMsHelp', '1000 to 900000 ms (clamped to sandbox profile limit)')}
+          max={maxTimeoutMs}
+          helperText={timeoutHelp}
           disabled={disabled}
           onChange={(value) => onChange('timeout_ms', value)}
         />
@@ -222,6 +228,7 @@ export function NodeSettings({ id, type, disabled }: NodeSettingsProps): ReactNo
             />
           </Box>
           <ExecutionTimingControls
+            nodeType={type}
             settings={settings}
             supportsRetry={supportsRetry}
             supportsTimeout={supportsTimeout}
