@@ -63,6 +63,21 @@ func (h *Handler) requireOrSettingsOverride(pattern, permission string) func(htt
 
 // settingsOverride is the fallback of the route gate on one route pattern.
 func (h *Handler) settingsOverride(pattern string) middleware.CentralFallback {
+	return settingsOverrideGate{resolver: h.permissionResolver, storedType: h.overrideStoredType}.fallback(pattern)
+}
+
+// settingsOverrideGate is the central branch of one implementation of the
+// project configurations routes: the compatibility Handler here, and the
+// reviewed read and mutation routes (read.go, mutation.go) that cmd/elitea-main
+// mounts on the same mode-less patterns and that serve them where they are
+// composed (#3024). storedType answers the stored type of the request's
+// `{configID}` row, "" when there is no such row.
+type settingsOverrideGate struct {
+	resolver   auth.PermissionResolver
+	storedType func(*http.Request) (string, error)
+}
+
+func (g settingsOverrideGate) fallback(pattern string) middleware.CentralFallback {
 	return func(r *http.Request) (*http.Request, bool, error) {
 		permissions := adminaccess.OverrideRoutePermissions(r.Method, pattern)
 		if len(permissions) == 0 {
@@ -70,11 +85,11 @@ func (h *Handler) settingsOverride(pattern string) middleware.CentralFallback {
 		}
 		// The central permission first: a caller without it is refused
 		// before anything of the project is read.
-		userID, held, err := middleware.ResolveCentralPermission(r.Context(), h.permissionResolver, permissions...)
+		userID, held, err := middleware.ResolveCentralPermission(r.Context(), g.resolver, permissions...)
 		if err != nil || !held {
 			return r, false, err
 		}
-		next, types, ok, err := h.overrideTypes(r)
+		next, types, ok, err := g.types(r)
 		if err != nil || !ok || !adminaccess.OverrideAllows(r.Method, pattern, types...) {
 			return next, false, err
 		}
@@ -102,28 +117,34 @@ func admittedCentrally(ctx context.Context) bool {
 	return admitted
 }
 
-// overrideTypes reads the configuration types a request reaches, and the
-// request to continue with (its body restored). ok is false when the request
-// reaches no type the override can decide on: an unknown row, a create with
-// no type, a list with no `type` filter, or a body over the bound.
-func (h *Handler) overrideTypes(r *http.Request) (*http.Request, []string, bool, error) {
+// types reads the configuration types a request reaches, and the request to
+// continue with (its body restored). ok is false when the request reaches no
+// type the override can decide on: an unknown row, a create with no type, a
+// list with no `type` filter, or a body over the bound.
+func (g settingsOverrideGate) types(r *http.Request) (*http.Request, []string, bool, error) {
+	stored := func() (string, error) {
+		if g.storedType == nil {
+			return "", nil
+		}
+		return g.storedType(r)
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if chi.URLParam(r, "configID") == "" {
 			types := parseConfigurationListQuery(r.URL.Query()).types
 			return r, types, len(types) > 0, nil
 		}
-		stored, err := h.overrideStoredType(r)
-		return r, []string{stored}, err == nil && stored != "", err
+		storedType, err := stored()
+		return r, []string{storedType}, err == nil && storedType != "", err
 	case http.MethodDelete:
-		stored, err := h.overrideStoredType(r)
-		return r, []string{stored}, err == nil && stored != "", err
+		storedType, err := stored()
+		return r, []string{storedType}, err == nil && storedType != "", err
 	case http.MethodPost:
 		next, requested, ok := overrideBodyType(r)
 		return next, []string{requested}, ok && requested != "", nil
 	case http.MethodPut:
-		stored, err := h.overrideStoredType(r)
-		if err != nil || stored == "" {
+		storedType, err := stored()
+		if err != nil || storedType == "" {
 			return r, nil, false, err
 		}
 		next, requested, ok := overrideBodyType(r)
@@ -132,9 +153,9 @@ func (h *Handler) overrideTypes(r *http.Request) (*http.Request, []string, bool,
 		}
 		// An update that names no type keeps the stored one.
 		if requested == "" {
-			return next, []string{stored}, true, nil
+			return next, []string{storedType}, true, nil
 		}
-		return next, []string{stored, requested}, true, nil
+		return next, []string{storedType, requested}, true, nil
 	}
 	return r, nil, false, nil
 }
@@ -192,6 +213,12 @@ func overrideBodyType(r *http.Request) (*http.Request, string, bool) {
 // types of the allowlist's write pairs) and the caller holds
 // projects.settings.manage centrally. It marks the request when it may.
 func (h *Handler) centralSettingsWrite(ctx context.Context, typeNames []string) bool {
+	return centralSettingsWrite(ctx, h.permissionResolver, typeNames)
+}
+
+// centralSettingsWrite is (*Handler).centralSettingsWrite for any
+// implementation of the routes.
+func centralSettingsWrite(ctx context.Context, resolver auth.PermissionResolver, typeNames []string) bool {
 	named := 0
 	for _, name := range typeNames {
 		if name == "" {
@@ -205,7 +232,7 @@ func (h *Handler) centralSettingsWrite(ctx context.Context, typeNames []string) 
 	if named == 0 {
 		return false
 	}
-	held, err := middleware.HoldsCentralPermission(ctx, h.permissionResolver, adminaccess.ProjectsSettingsManage)
+	held, err := middleware.HoldsCentralPermission(ctx, resolver, adminaccess.ProjectsSettingsManage)
 	if err != nil || !held {
 		return false
 	}

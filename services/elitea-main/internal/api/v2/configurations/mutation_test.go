@@ -17,6 +17,25 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
+// currentMutationReader answers the stored type of a row by its id, and
+// not found for an id it does not name: the mutation route reads the stored
+// type for the guarded-type rule and the central branch (#3024).
+type currentMutationReader struct{ types map[int32]string }
+
+func (currentMutationReader) List(
+	context.Context, configurationapp.CurrentConfigurationListRequest,
+) (configurationapp.CurrentConfigurationListResult, error) {
+	return configurationapp.CurrentConfigurationListResult{}, nil
+}
+
+func (r currentMutationReader) Get(_ context.Context, projectID, id int32) (configurationapp.CurrentConfiguration, error) {
+	typeName, ok := r.types[id]
+	if !ok {
+		return configurationapp.CurrentConfiguration{}, configurationapp.ErrCurrentConfigurationNotFound
+	}
+	return configurationapp.CurrentConfiguration{ID: id, ProjectID: projectID, Type: typeName}, nil
+}
+
 type currentConfigurationMutatorStub struct {
 	create func(context.Context, configurationapp.CurrentConfigurationCreateRequest) (configurationapp.CurrentConfiguration, error)
 	update func(context.Context, configurationapp.CurrentConfigurationUpdateRequest) (configurationapp.CurrentConfiguration, error)
@@ -76,6 +95,7 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 	}
 
 	mutator := &currentConfigurationMutatorStub{}
+	reader := currentMutationReader{}
 	principal := currentReadPrincipalValidatorFunc(func(_ context.Context, user auth.User) (auth.User, error) {
 		return user, nil
 	})
@@ -86,17 +106,20 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 
 	for name, test := range map[string]struct {
 		mutator     handler.CurrentConfigurationMutator
+		reader      handler.CurrentConfigurationReader
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
 	}{
-		"missing mutator":      {authConfig: authConfig, permissions: permissions},
-		"missing principal":    {mutator: mutator, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
-		"no credential reader": {mutator: mutator, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
-		"missing permissions":  {mutator: mutator, authConfig: authConfig},
+		"missing mutator":      {reader: reader, authConfig: authConfig, permissions: permissions},
+		"missing reader":       {mutator: mutator, authConfig: authConfig, permissions: permissions},
+		"missing principal":    {mutator: mutator, reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
+		"no credential reader": {mutator: mutator, reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
+		"missing permissions":  {mutator: mutator, reader: reader, authConfig: authConfig},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := handler.NewCurrentConfigurationMutationRoute(
 				test.mutator,
+				test.reader,
 				test.authConfig,
 				test.permissions,
 			); !errors.Is(err, handler.ErrInvalidCurrentConfigurationMutationRoute) {
@@ -459,6 +482,7 @@ func newCurrentConfigurationMutationRoute(
 	})
 	route, err := handler.NewCurrentConfigurationMutationRoute(
 		mutator,
+		currentMutationReader{},
 		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
 	)

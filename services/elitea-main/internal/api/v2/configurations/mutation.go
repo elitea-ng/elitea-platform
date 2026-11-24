@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -49,33 +50,46 @@ type CurrentConfigurationMutationRoute struct {
 	handler http.Handler
 }
 
+// reader reads the stored type of the row an update or a delete reaches: the
+// route gate's central branch and the guarded-type rule decide on it, as they
+// do on the compatibility routes this route shadows (#3024).
 func NewCurrentConfigurationMutationRoute(
 	mutator CurrentConfigurationMutator,
+	reader CurrentConfigurationReader,
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
 ) (*CurrentConfigurationMutationRoute, error) {
-	if mutator == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
+	if mutator == nil || reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
 		return nil, ErrInvalidCurrentConfigurationMutationRoute
 	}
 
-	handler := &currentConfigurationMutationHandler{mutator: mutator}
+	override := currentSettingsOverride(reader, permissions)
+	handler := &currentConfigurationMutationHandler{
+		mutator: mutator, permissions: permissions, storedType: currentStoredType(reader),
+	}
 	post := currentConfigurationMutationEndpoint(
 		handler.create,
+		CurrentConfigurationListPath,
 		CurrentConfigurationCreatePermission,
 		authConfig,
 		permissions,
+		override,
 	)
 	put := currentConfigurationMutationEndpoint(
 		handler.update,
+		CurrentConfigurationDetailsPath,
 		CurrentConfigurationUpdatePermission,
 		authConfig,
 		permissions,
+		override,
 	)
 	deleteEndpoint := currentConfigurationMutationEndpoint(
 		handler.delete,
+		CurrentConfigurationDetailsPath,
 		CurrentConfigurationDeletePermission,
 		authConfig,
 		permissions,
+		override,
 	)
 
 	router := chi.NewRouter()
@@ -87,18 +101,41 @@ func NewCurrentConfigurationMutationRoute(
 
 func currentConfigurationMutationEndpoint(
 	handler http.HandlerFunc,
+	pattern string,
 	permission string,
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
+	override settingsOverrideGate,
 ) http.Handler {
 	endpoint := http.Handler(handler)
-	endpoint = apimw.RequireResolvedPermissionsForProject(
-		permissions,
-		CurrentConfigurationMutationMode,
-		currentConfigurationProjectID,
-		permission,
-	)(endpoint)
+	endpoint = currentConfigurationGate(permissions, override, pattern, permission)(endpoint)
 	return apimw.Auth(authConfig)(endpoint)
+}
+
+// settingsWriteForbidden is the guarded-type rule of the compatibility routes
+// (projectSettingsWriteForbidden): a guarded project setting is written by a
+// member who holds models.project_settings.edit, or through the central
+// branch, and a request the central branch admitted writes nothing else.
+func (h *currentConfigurationMutationHandler) settingsWriteForbidden(
+	w http.ResponseWriter, r *http.Request, projectID int32, typeNames ...string,
+) bool {
+	if !projectSettingsWriteForbidden(r.Context(), h.permissions, strconv.FormatInt(int64(projectID), 10), typeNames...) {
+		return false
+	}
+	writeCurrentConfigurationMutationError(w, http.StatusForbidden, projectSettingsPermissionMessage, "type")
+	return true
+}
+
+// storedRowType is the stored type of the row an update or a delete reaches,
+// for the guarded-type rule. A row that is not there is left to the mutator,
+// which answers 404; a failed read answers 500 here.
+func (h *currentConfigurationMutationHandler) storedRowType(w http.ResponseWriter, r *http.Request) (string, bool) {
+	stored, err := h.storedType(r)
+	if err != nil {
+		writeCurrentConfigurationMutationError(w, http.StatusInternalServerError, "Unexpected error", "unknown")
+		return "", false
+	}
+	return stored, true
 }
 
 func (route *CurrentConfigurationMutationRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +147,9 @@ func (route *CurrentConfigurationMutationRoute) ServeHTTP(w http.ResponseWriter,
 }
 
 type currentConfigurationMutationHandler struct {
-	mutator CurrentConfigurationMutator
+	mutator     CurrentConfigurationMutator
+	permissions auth.PermissionResolver
+	storedType  func(*http.Request) (string, error)
 }
 
 func (h *currentConfigurationMutationHandler) create(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +184,9 @@ func (h *currentConfigurationMutationHandler) create(w http.ResponseWriter, r *h
 	configurationType, requestError := requiredCurrentConfigurationString(fields, "type")
 	if requestError != nil {
 		writeCurrentConfigurationMutationError(w, requestError.status, requestError.message, requestError.field)
+		return
+	}
+	if h.settingsWriteForbidden(w, r, projectID, configurationType) {
 		return
 	}
 	data, requestError := requiredCurrentConfigurationObject(fields, "data")
@@ -191,6 +233,12 @@ func (h *currentConfigurationMutationHandler) update(w http.ResponseWriter, r *h
 	fields, requestError := decodeCurrentConfigurationMutationObject(w, r, currentConfigurationUpdateField)
 	if requestError != nil {
 		writeCurrentConfigurationMutationError(w, requestError.status, requestError.message, requestError.field)
+		return
+	}
+	// An update keeps the stored type (the body has no `type` field), so the
+	// stored type is the type it writes.
+	stored, ok := h.storedRowType(w, r)
+	if !ok || h.settingsWriteForbidden(w, r, projectID, stored) {
 		return
 	}
 	request := configurationapp.CurrentConfigurationUpdateRequest{
@@ -257,6 +305,10 @@ func (h *currentConfigurationMutationHandler) delete(w http.ResponseWriter, r *h
 	authorID, ok := currentConfigurationMutationAuthorID(r.Context())
 	if !ok {
 		writeCurrentConfigurationMutationError(w, http.StatusUnauthorized, "authentication required", "author_id")
+		return
+	}
+	stored, ok := h.storedRowType(w, r)
+	if !ok || h.settingsWriteForbidden(w, r, projectID, stored) {
 		return
 	}
 	if err := h.mutator.Delete(r.Context(), configurationapp.CurrentConfigurationDeleteRequest{

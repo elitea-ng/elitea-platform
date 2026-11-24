@@ -2398,6 +2398,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			}
 			currentConfigurationMutation, mutationErr = configurationapi.NewCurrentConfigurationMutationRoute(
 				mutationService,
+				currentConfigurationsRoot.Reader(),
 				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
 			)

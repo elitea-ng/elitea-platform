@@ -60,21 +60,20 @@ func NewCurrentConfigurationReadRoute(
 		publicProjectID: publicProjectID,
 	}
 
+	// The same gate as the compatibility routes at these patterns, central
+	// branch included (ADR-0059 R0.6b): where this route is composed it
+	// shadows them, so it is what serves these paths (#3024).
+	override := currentSettingsOverride(reader, permissions)
+
 	list := http.Handler(http.HandlerFunc(handler.list))
-	list = apimw.RequireResolvedPermissionsForProject(
-		permissions,
-		CurrentConfigurationReadMode,
-		currentConfigurationProjectID,
-		CurrentConfigurationListPermission,
+	list = currentConfigurationGate(
+		permissions, override, CurrentConfigurationListPath, CurrentConfigurationListPermission,
 	)(list)
 	list = apimw.Auth(authConfig)(list)
 
 	details := http.Handler(http.HandlerFunc(handler.get))
-	details = apimw.RequireResolvedPermissionsForProject(
-		permissions,
-		CurrentConfigurationReadMode,
-		currentConfigurationProjectID,
-		CurrentConfigurationGetPermission,
+	details = currentConfigurationGate(
+		permissions, override, CurrentConfigurationDetailsPath, CurrentConfigurationGetPermission,
 	)(details)
 	details = apimw.Auth(authConfig)(details)
 
@@ -191,6 +190,50 @@ func currentConfigurationVisibleToViewer(configuration configurationapp.CurrentC
 		return true
 	default:
 		return *configuration.AuthorID == *viewerID
+	}
+}
+
+// currentConfigurationGate is the route gate of one reviewed Configurations
+// route: the permission in the project, or the central branch of the guarded
+// project settings for an allowlisted (route, configuration type) pair.
+func currentConfigurationGate(
+	permissions auth.PermissionResolver, override settingsOverrideGate, pattern, permission string,
+) func(http.Handler) http.Handler {
+	return apimw.RequireResolvedPermissionsForProjectOrCentral(
+		permissions,
+		CurrentConfigurationReadMode,
+		currentConfigurationProjectID,
+		override.fallback(pattern),
+		permission,
+	)
+}
+
+// currentSettingsOverride is the central branch of the reviewed routes. The
+// stored type of a `{configID}` row is read through the reader, which reads it
+// whoever wrote it (the visibility rule of #922 is the handler's, after the
+// gate).
+func currentSettingsOverride(reader CurrentConfigurationReader, permissions auth.PermissionResolver) settingsOverrideGate {
+	return settingsOverrideGate{resolver: permissions, storedType: currentStoredType(reader)}
+}
+
+// currentStoredType answers the stored type of the request's `{configID}`
+// row through reader, "" for an absent row or an id that is not one.
+func currentStoredType(reader CurrentConfigurationReader) func(*http.Request) (string, error) {
+	return func(r *http.Request) (string, error) {
+		projectID, projectOK := currentConfigurationID(chi.URLParam(r, "projectID"))
+		configurationID, configurationOK := currentConfigurationID(chi.URLParam(r, "configID"))
+		if reader == nil || !projectOK || !configurationOK {
+			return "", nil
+		}
+		configuration, err := reader.Get(r.Context(), projectID, configurationID)
+		switch {
+		case errors.Is(err, configurationapp.ErrCurrentConfigurationNotFound),
+			errors.Is(err, configurationapp.ErrInvalidCurrentConfigurationRequest):
+			return "", nil
+		case err != nil:
+			return "", err
+		}
+		return configuration.Type, nil
 	}
 }
 

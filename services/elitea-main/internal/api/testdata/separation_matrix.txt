@@ -316,10 +316,10 @@ pending #2587                                   write   PUT /api/v2/configuratio
 pending #2587                                   write   DELETE /api/v2/configurations/configuration/{projectID}/{configID} -
 pending #2587                                   read    GET /api/v2/configurations/configuration/{projectID}/{configID} -
 pending #2587                                   write   PUT /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{projectID} -
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configurations/{mode}/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused write   POST /api/v2/configurations/configurations/{mode}/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configurations/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused write   POST /api/v2/configurations/configurations/{projectID} type=cloud_executor
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin_published_agents/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/applications/prompt_lib/{projectID} maintenance_window
