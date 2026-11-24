@@ -205,6 +205,14 @@ type RouterConfig struct {
 	SAMLHandler        *v2auth.SAMLHandler
 	HealthDeps         health.Deps
 	Pool               *pgxpool.Pool
+	// MaintenanceState reads the maintenance window in place of the
+	// platform_settings rows of Pool, for the maintenance gate, the
+	// platform_settings flag read and GET /admin/maintenance alike, on every
+	// request and uncached. Nil,
+	// which cmd/elitea-main always leaves it, reads Pool. It is the seam the
+	// administration surface helper (internal/api/adminsurface) opens a
+	// window through, because its pool reaches no database.
+	MaintenanceState func(context.Context) (platformconfig.Maintenance, error)
 	// BrandPackPath is the brand pack's file layer (BRAND_PACK_PATH, read in
 	// cmd/elitea-main/brand_pack_config.go). Empty means no file layer. Used
 	// only when Branding is nil.
@@ -2223,10 +2231,17 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	if cfg.NativeAccess != nil {
 		nativeClientForToken = cfg.NativeAccess.ClientID
 	}
+	// The routes an administration-mode gate decides, which a holder of a
+	// narrow administration permission keeps during a maintenance window
+	// (ADR-0059 R0.4b). Marked from the finished router, at the end of this
+	// function.
+	administrationRoutes := &administrationGatedRoutes{}
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
-			Pool:     cfg.Pool,
-			Resolver: permissionResolver,
+			Pool:                cfg.Pool,
+			State:               cfg.MaintenanceState,
+			Resolver:            permissionResolver,
+			AdministrationRoute: administrationRoutes.decides,
 		}),
 		apimw.ClientVersion(apimw.ClientVersionConfig{
 			MinimumFor:           nativePolicy.MinimumFor,
@@ -2342,6 +2357,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
 		v2core.WithMemoryUserJournal(memoryUserJournal),
 		v2core.WithPermissionResolver(permissionResolver),
+		v2core.WithMaintenanceState(cfg.MaintenanceState),
 		v2core.WithObjectStore(cfg.ObjectStore),
 		v2core.WithInviteMailer(inviteMailer),
 		v2core.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
@@ -2743,6 +2759,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				append([]admin.Option{
 					admin.WithMemoryUserJournal(memoryUserJournal),
 					admin.WithPermissionResolver(permissionResolver),
+					admin.WithMaintenanceState(cfg.MaintenanceState),
 					admin.WithToolkitRegistry(cfg.ToolkitRegistry),
 					admin.WithPrebuiltMCPCatalogue(prebuiltMCPStore, prebuiltMCPVault),
 					admin.WithIdentityProviders(identityProviderStore, prebuiltMCPVault),
@@ -2835,11 +2852,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			}
 			// auth_users.py, user_suspend.py
 			requireAdminUsers := central(adminaccess.AdminAuthUsers)
-			// Plugin config and maintenance declare ["runtime.plugins"].
-			// System info, e-mail, background jobs, the prebuilt MCP catalogue
-			// and the identity providers declared it too, and now accept a
-			// narrow name beside it (below).
-			requireRuntimePlugins := central(adminaccess.RuntimePlugins)
+			// Maintenance, system info, e-mail, background jobs, the prebuilt
+			// MCP catalogue and the identity providers declared
+			// ["runtime.plugins"], and now accept a narrow name beside it
+			// (below). Plugin config has its own gate (R0.5).
+			//
 			// The narrow names of ADR-0059 decision 2 for the low-risk
 			// platform subjects (R0.4a). Each gate accepts the narrow name OR
 			// runtime.plugins, so a holder of the legacy name sees no change
@@ -2848,6 +2865,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			requireOperationsView := central(adminaccess.PlatformOperationsView, adminaccess.RuntimePlugins)
 			requireOperationsManage := central(adminaccess.PlatformOperationsManage, adminaccess.RuntimePlugins)
 			requireMCPCatalogue := central(adminaccess.MCPCatalogueManage, adminaccess.RuntimePlugins)
+			requireMaintenance := central(adminaccess.PlatformMaintenanceManage, adminaccess.RuntimePlugins)
 			// moderation_status.py / moderation_statuses.py. The queue itself is
 			// registered further down, next to the three other moderation routes
 			// this unit added, so all four read as one surface.
@@ -3267,8 +3285,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// resurrect the stub for every other mode — and since legacy
 				// reaches this surface only through its `administration` AdminAPI,
 				// the only thing that would answer is a constant nobody asked for.
-				r.With(requireRuntimePlugins).Get("/maintenance/{mode}", adminHandler.Maintenance)
-				r.With(requireRuntimePlugins).Put("/maintenance/{mode}", adminHandler.Maintenance)
+				// platform.maintenance.manage or runtime.plugins (ADR-0059
+				// R0.4b). The window itself is authored in the Maintenance
+				// section of Configuration; the PUT answers 405.
+				r.With(requireMaintenance).Get("/maintenance/{mode}", adminHandler.Maintenance)
+				r.With(requireMaintenance).Put("/maintenance/{mode}", adminHandler.Maintenance)
 				// Admin › Tasks — the platform's own background jobs, read
 				// from this platform's tables.
 				//
@@ -5309,7 +5330,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Get("/marketplace_listings/prompt_lib/{projectID}", coreHandler.MarketplaceSearch)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListing)
-				r.With(requireMarketplaceRead).
+				// Featuring and delisting are a platform administrator's alone:
+				// the handler refuses anyone without the moderation
+				// permission, so the route keeps its moderators during a
+				// maintenance window (ADR-0059 R0.4b).
+				r.With(requireMarketplaceRead, apimw.MarkAdministrationRoute).
 					Patch("/marketplace_listing/prompt_lib/{projectID}/{listingID}", coreHandler.MarketplaceListingUpdate)
 				r.With(requireMarketplaceRead).
 					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
@@ -6368,6 +6393,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder))
 	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
+	administrationRoutes.mark(r)
 	return r
 }
 
