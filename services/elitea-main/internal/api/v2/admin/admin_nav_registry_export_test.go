@@ -8,6 +8,12 @@ package admin
 // so a drift fails on both sides: here when the registry, the sections or a
 // built-in role's set change without the file, there when an item names a
 // string the file lacks.
+//
+// The file is interim. The console capability document (GET
+// /api/v2/admin/console, ADR-0059 R3.1a, internal/adminaccess/console.go)
+// supersedes it: the server computes the areas and items a caller opens, so
+// the navigation of R3.2 matches no permission name. This file and this test
+// go with the anyPermission lists when the navigation reads the document.
 
 import (
 	"bytes"
