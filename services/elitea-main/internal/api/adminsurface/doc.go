@@ -76,7 +76,10 @@
 //     asks the same function.
 //   - A route cmd/elitea-main adds through a RouterConfig field that the
 //     composed router leaves unset. The admin SPA shell (adminui) is one; it
-//     is presentation only and makes no decision.
+//     is presentation only and makes no decision. The cmd/elitea-main test
+//     TestTheSurfaceRouterSetsEveryRouteGroupMainSets lists every handler or
+//     store field main.go sets and ComposedRouter does not, each with its
+//     reason, so such a field is a reviewed decision (ADR-0059 #2985).
 //   - A check that accepts a registered name and an unregistered one: probing
 //     the registry sees only the registered one. The source test
 //     TestNoAdministrationPermissionLiteralOutsideTheRegistry covers it.

@@ -18,9 +18,14 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 	v2adminconsole "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/adminaccess"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
+	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
+	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
+	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
+	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
@@ -85,6 +90,10 @@ func ComposedRouter() (Composed, error) {
 	if err != nil {
 		return Composed{}, err
 	}
+	suspensionHandler, err := v2safety.NewHandler(refusedSuspensions{})
+	if err != nil {
+		return Composed{}, err
+	}
 	router := api.NewRouter(api.RouterConfig{
 		Pool:                   pool,
 		AppsRepo:               dbrepos.NewApplicationsRepo(pool),
@@ -119,6 +128,24 @@ func ComposedRouter() (Composed, error) {
 		MandateAttachments:         &v2mandateattachments.Handler{},
 		CredentialReferencesAdmin:  &v2credentialreferences.Handler{},
 		ConsoleRoles:               noConsoleRoles{},
+
+		// Route groups cmd/elitea-main sets that need no external service
+		// here (ADR-0059 #2985; cmd/elitea-main surface_router_fields_test.go
+		// lists every field production sets and this literal does not, each
+		// with a reason). The credential use grants, the probe and the consent
+		// flow decide in the default mode against {projectID}: set, Drive sees
+		// that they make no administration decision instead of not seeing them.
+		CredentialGrantsAdmin: &v2credentialgrants.Handler{},
+		CredentialProbe:       &v2credentialprobe.Handler{},
+		CredentialConsent:     &v2credentialconsent.Handler{},
+		// The kill switch: the admin routes are mounted either way, but a nil
+		// handler answers 503 where production's reaches its service.
+		ExecutionSuspensions: suspensionHandler,
+		// The gateway status reader: production reads elitea-llm-gateway over
+		// gRPC; this one answers that the gateway is unreachable, which the
+		// status route reports as a result. Set, the budget defaults answer
+		// with cost budgets on, as production does.
+		GatewayStatus: unreachableGateway{},
 
 		// The Postgres recorder writes from a goroutine of its own, which
 		// panics on the unconnected pool.
@@ -316,6 +343,30 @@ func (noConsoleRoles) HeldRoles(context.Context, int64) ([]v2adminconsole.Role, 
 func (noConsoleRoles) GrantingRoles(context.Context, []string) ([]v2adminconsole.GrantingRole, error) {
 	return nil, nil
 }
+
+// errNoService is what the stand-ins for an external service answer.
+var errNoService = errors.New("adminsurface: no such service in the composed router")
+
+// refusedSuspensions is the kill switch service with nothing behind it: every
+// call fails, as a store whose database refuses does.
+type refusedSuspensions struct{}
+
+func (refusedSuspensions) Create(context.Context, safetyapp.Actor, safetyapp.CreateRequest) (safetyapp.Suspension, error) {
+	return safetyapp.Suspension{}, errNoService
+}
+
+func (refusedSuspensions) Resume(context.Context, safetyapp.Actor, safetyapp.ResumeRequest) (safetyapp.Suspension, error) {
+	return safetyapp.Suspension{}, errNoService
+}
+
+func (refusedSuspensions) List(context.Context, safetyapp.Actor, safetyapp.ListFilter) ([]safetyapp.Suspension, error) {
+	return nil, errNoService
+}
+
+// unreachableGateway is a gateway status reader whose gateway never answers.
+type unreachableGateway struct{}
+
+func (unreachableGateway) Status(context.Context) (json.RawMessage, error) { return nil, errNoService }
 
 type discardAudit struct{}
 
