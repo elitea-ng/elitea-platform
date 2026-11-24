@@ -114,12 +114,19 @@ const separationMatrixHeader = `# The separation matrix of the administration su
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
-#   pending #N  the row belongs to issue N, which pins it (R0.9b, #2587: the
-#               role write paths, the project plane, the central-override
-#               pairs and the per-action identity rows).
+#   pending #N  the row belongs to issue N, which pins it against a database.
+#               R0.9b (#2587) owns: role assignment (the set_admin_role
+#               action, the mode role writes), the Roles matrix save and sync,
+#               role create, rename and delete, the project member writes (both
+#               routes), the bulk invite, the project matrix, the SCIM group
+#               binding writes, the identity provider writes, and every route
+#               of the central project settings (/configurations, reads too).
 #
 # The class column: read for GET and HEAD; for a write, the class of the
 # permission its action table entry names (write or approve), write without one.
+# A write whose entry names a read permission reads read: an effect-free check
+# (validate-cel), and the entitlement_export section (#3026). The assertion
+# tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
 # security_auditor emergency_access, then class, method, route and action.
@@ -166,11 +173,14 @@ func classify(role, full, none adminsurface.Answer) (string, error) {
 	if refusal(full) {
 		if !refusal(none) {
 			baseline = none
-		} else if full.Status == none.Status {
+		} else if full.Status == none.Status && full.Body == none.Body {
 			return "", fmt.Errorf("every grant answers %d: no role's answer can be read", full.Status)
 		}
 	}
-	if refusal(role) && role.Status != baseline.Status {
+	// A refusal is the baseline's only when it is the same answer: a 403 of
+	// the administration check and a 403 of a later project gate share the
+	// status, not the body.
+	if refusal(role) && (role.Status != baseline.Status || role.Body != baseline.Body) {
 		return classRefused, nil
 	}
 	return classAllowed, nil
@@ -527,7 +537,7 @@ func (r matrixRow) isWrite() bool {
 
 // rowsMatching answers the rows of file whose "method route action"
 // contains any of markers, the writes only when writes is set. Pending rows
-// are kept: assertRefused counts them as matched and skips their answers.
+// are kept: roleAssertion.refused reads them from the router.
 func rowsMatching(file []matrixRow, writes bool, markers ...string) []matrixRow {
 	var out []matrixRow
 	for _, row := range file {
@@ -541,29 +551,77 @@ func rowsMatching(file []matrixRow, writes bool, markers ...string) []matrixRow 
 	return out
 }
 
-// assertRefused fails on a pinned row of rows where role is not refused, and
-// when rows is empty: an assertion over no row proves nothing. A pending row
-// is matched but not read: the story that owns it pins and asserts it.
-func assertRefused(t *testing.T, role, category string, rows []matrixRow) {
-	t.Helper()
-	if len(rows) == 0 {
-		t.Errorf("%s: no row of %s matches; the assertion would prove nothing", category, separationMatrixFile)
+// actionArea answers the console area of the permission the action table
+// names for a write row, "" for a read or a write without an entry.
+func actionArea(row matrixRow) adminaccess.Area {
+	selector := ""
+	if row.Action != noAction {
+		_, selector, _ = strings.Cut(row.Action, " ")
 	}
-	for _, row := range rows {
-		if row.Pending != 0 {
+	for _, action := range adminaccess.ActionTable().Route(row.Method, row.Pattern) {
+		if action.Selector.Value != selector {
 			continue
 		}
-		if row.answer(role) != classRefused {
-			t.Errorf("%s: %s is %s on %s", category, role, row.answer(role), row.key())
+		if permission, ok := adminaccess.Lookup(action.Permission); ok {
+			return permission.Area
 		}
+	}
+	return ""
+}
+
+// roleAssertion reads the file and, for a pending row, the router: a pending
+// row has no answers in the file, but its gate is still the role's. A row
+// whose answer the router cannot read either (the central-override pairs) is
+// R0.9b's alone.
+type roleAssertion struct {
+	t      *testing.T
+	file   []matrixRow
+	router map[string]matrixRow
+}
+
+func newRoleAssertion(t *testing.T) roleAssertion {
+	t.Helper()
+	m := composedMatrix(t)
+	router := map[string]matrixRow{}
+	for _, row := range m.rows {
+		if _, unreadable := m.unreadable[row.key()]; !unreadable {
+			router[row.key()] = row
+		}
+	}
+	return roleAssertion{t: t, file: readSeparationMatrix(t), router: router}
+}
+
+// refused fails on a row of rows where role is not refused, and when no row
+// of rows could be read: an assertion over no row proves nothing.
+func (a roleAssertion) refused(role, category string, rows []matrixRow) {
+	a.t.Helper()
+	checked := 0
+	for _, row := range rows {
+		source := "the file"
+		if row.Pending != 0 {
+			pinned, ok := a.router[row.key()]
+			if !ok {
+				continue
+			}
+			row, source = pinned, "the router (the row is pending on #"+strconv.Itoa(row.Pending)+")"
+		}
+		checked++
+		if row.answer(role) != classRefused {
+			a.t.Errorf("%s: %s is %s on %s in %s", category, role, row.answer(role), row.key(), source)
+		}
+	}
+	if checked == 0 {
+		a.t.Errorf("%s: no row of %s could be read; the assertion would prove nothing", category, separationMatrixFile)
 	}
 }
 
 // TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend: llm_manager is
 // refused on every identity, role, user, agent registry, delegation review,
-// worker egress, kill switch, retention and guardrail write route.
+// worker egress, kill switch, retention and guardrail write route. A row of
+// these that is pending on R0.9b is read from the router: llm_manager holds no
+// permission their gates accept, so the gate answer is the whole answer.
 func TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend(t *testing.T) {
-	file := readSeparationMatrix(t)
+	a := newRoleAssertion(t)
 	for category, markers := range map[string][]string{
 		"identity": {"/identity_providers/", "/scim_clients/", "/native_clients/", "/native_devices/",
 			"/microsoft_oauth_apps", "section auth"},
@@ -576,42 +634,52 @@ func TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend(t *testing.T) 
 		"retention":         {"/retention/", "/legal_holds"},
 		"guardrail":         {"section guardrails"},
 	} {
-		assertRefused(t, adminaccess.RoleLLMManager, category, rowsMatching(file, true, markers...))
+		a.refused(adminaccess.RoleLLMManager, category, rowsMatching(a.file, true, markers...))
 	}
 }
 
 // TestSeparationMatrixProjectAdministratorIsRefusedOnPlatformAndLLMWrites:
 // project_administrator is refused on every platform configuration route and
-// every LLM write route. The project-role matrix edit and the SCIM group
-// bindings are R0.9b's.
+// every LLM write route: the writes whose action names a models and spend
+// permission, wherever they are mounted. The project-role matrix edit and the
+// SCIM group bindings are asserted in R0.9b.
 func TestSeparationMatrixProjectAdministratorIsRefusedOnPlatformAndLLMWrites(t *testing.T) {
-	file := readSeparationMatrix(t)
-	assertRefused(t, adminaccess.RoleProjectAdministrator, "platform configuration",
-		rowsMatching(file, false, "/plugin_config_values/", "/plugin_config_schemas/", "/plugin_config_suggestions/",
-			"/admin/branding/", "/admin/email/", "/admin/maintenance/", "/admin/platform_routines/",
-			"/admin/native_clients/", "/admin/toolkit_types/", "/admin/mcp_prebuilt_servers/"))
-	assertRefused(t, adminaccess.RoleProjectAdministrator, "LLM write",
-		rowsMatching(file, true, "/admin/gateway/", "/project_budget/", "/user_budget/"))
+	a := newRoleAssertion(t)
+	platform := rowsMatching(a.file, false, "/plugin_config_values/", "/plugin_config_schemas/",
+		"/plugin_config_suggestions/", "/admin/branding/", "/admin/email/", "/admin/maintenance/",
+		"/admin/platform_routines/", "/admin/native_clients/", "/admin/toolkit_types/", "/admin/mcp_prebuilt_servers/")
+	llm := rowsMatching(a.file, true, "/admin/gateway/", "/project_budget/", "/user_budget/")
+	for _, row := range a.file {
+		switch actionArea(row) {
+		case adminaccess.AreaPlatform:
+			platform = append(platform, row)
+		case adminaccess.AreaModelsSpend:
+			llm = append(llm, row)
+		}
+	}
+	a.refused(adminaccess.RoleProjectAdministrator, "platform configuration", platform)
+	a.refused(adminaccess.RoleProjectAdministrator, "LLM write", llm)
 }
 
 // TestSeparationMatrixSecurityAuditorIsRefusedOnEveryWrite: security_auditor
-// is refused on every route classed write or approve (the break-glass review
+// is refused on every route that writes or approves (the break-glass review
 // attestation is the exception R2.9 adds with its route) and on the run
 // evidence routes until #2429 adds the central read.
 func TestSeparationMatrixSecurityAuditorIsRefusedOnEveryWrite(t *testing.T) {
-	file := readSeparationMatrix(t)
+	a := newRoleAssertion(t)
 	var writes []matrixRow
-	for _, row := range file {
-		if row.Pending == 0 && row.isWrite() {
+	for _, row := range a.file {
+		if row.isWrite() {
 			writes = append(writes, row)
 		}
 	}
-	assertRefused(t, adminaccess.RoleSecurityAuditor, "write or approve", writes)
+	a.refused(adminaccess.RoleSecurityAuditor, "write or approve", writes)
 	// No route of the surface reads run evidence yet (#2429); a row that does
 	// must refuse the auditor until that story pins it.
-	for _, row := range rowsMatching(file, false, "evidence") {
+	for _, row := range rowsMatching(a.file, false, "evidence") {
 		if row.Pending == 0 && row.answer(adminaccess.RoleSecurityAuditor) != classRefused {
-			t.Errorf("run evidence: security_auditor is %s on %s before #2429", row.answer(adminaccess.RoleSecurityAuditor), row.key())
+			t.Errorf("run evidence: security_auditor is %s on %s before #2429",
+				row.answer(adminaccess.RoleSecurityAuditor), row.key())
 		}
 	}
 }

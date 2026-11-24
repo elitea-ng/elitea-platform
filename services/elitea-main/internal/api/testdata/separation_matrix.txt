@@ -24,12 +24,19 @@
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
-#   pending #N  the row belongs to issue N, which pins it (R0.9b, #2587: the
-#               role write paths, the project plane, the central-override
-#               pairs and the per-action identity rows).
+#   pending #N  the row belongs to issue N, which pins it against a database.
+#               R0.9b (#2587) owns: role assignment (the set_admin_role
+#               action, the mode role writes), the Roles matrix save and sync,
+#               role create, rename and delete, the project member writes (both
+#               routes), the bulk invite, the project matrix, the SCIM group
+#               binding writes, the identity provider writes, and every route
+#               of the central project settings (/configurations, reads too).
 #
 # The class column: read for GET and HEAD; for a write, the class of the
 # permission its action table entry names (write or approve), write without one.
+# A write whose entry names a read permission reads read: an effect-free check
+# (validate-cel), and the entitlement_export section (#3026). The assertion
+# tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
 # security_auditor emergency_access, then class, method, route and action.

@@ -259,15 +259,23 @@ func surfaceRouterFieldFailures(production, surface []string, unset map[string]s
 }
 
 // routerConfigKeys answers the top-level keys of the api.RouterConfig literal
-// a file passes to api.NewRouter.
+// a file passes to api.NewRouter, except a key whose value is the literal
+// `nil`: that sets nothing. Both files pass the literal itself, never a
+// variable (routerConfigLiteral fails otherwise), so no field can be set
+// after it.
 func routerConfigKeys(t *testing.T, file *ast.File) []string {
 	t.Helper()
 	var keys []string
 	for _, element := range routerConfigLiteral(t, file).Elts {
-		if kv, ok := element.(*ast.KeyValueExpr); ok {
-			if key, ok := kv.Key.(*ast.Ident); ok {
-				keys = append(keys, key.Name)
-			}
+		kv, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		if value, ok := kv.Value.(*ast.Ident); ok && value.Name == "nil" {
+			continue
+		}
+		if key, ok := kv.Key.(*ast.Ident); ok {
+			keys = append(keys, key.Name)
 		}
 	}
 	slices.Sort(keys)
@@ -299,6 +307,12 @@ func run() { api.NewRouter(api.RouterConfig{Pool: pool, Mailer: m, PublicOrigin:
 			`package adminsurface
 func ComposedRouter() { api.NewRouter(api.RouterConfig{Pool: pool}) }`)
 		withMailer := append(slices.Clone(surface), "Mailer")
+		// A key set to nil in the surface sets nothing.
+		if nilMailer := parseRouterConfigKeys(t, "composed.go",
+			`package adminsurface
+func ComposedRouter() { api.NewRouter(api.RouterConfig{Pool: pool, Mailer: nil}) }`); !slices.Equal(nilMailer, surface) {
+			t.Errorf("a key set to nil: read %v, want %v", nilMailer, surface)
+		}
 
 		// A field set in production only fails; the scalar PublicOrigin is
 		// not a route group.

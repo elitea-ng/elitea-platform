@@ -159,7 +159,18 @@ The console hides what a role cannot use. The server refuses it as well, and the
 - `project_administrator` is refused on every platform configuration route and on every LLM write route.
 - `security_auditor` is refused on every route that writes or approves.
 
-The file does not yet pin the routes that change who holds what: role assignment, the Roles matrix, role definitions, project members, bulk invites, the project matrix, SCIM group bindings, the identity provider actions and the central project settings. Those lines are marked `pending #2587`, and a later release pins them against a database.
+The file does not yet pin the routes that change who holds what. Those lines are marked `pending #2587`, and a later release pins them against a database:
+
+- role assignment on the Users page and under `/admin/modes`
+- saving the Roles matrix and syncing it to projects
+- creating, renaming and deleting roles
+- adding, changing and removing project members, on both member routes
+- the bulk invite and the project matrix
+- writes to SCIM group bindings
+- writes to identity providers
+- every route of the central project settings under `/configurations`, reads included
+
+The narrow-role checks above still read the router's own answer for the pending routes where only the role's gate decides.
 
 The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
 
