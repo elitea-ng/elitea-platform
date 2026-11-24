@@ -12,6 +12,7 @@ import type { ReactElement } from 'react';
 
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import JSZip from 'jszip';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -637,6 +638,92 @@ describe('import', () => {
       toolkits: [{ name: 'GitHub' }],
       skills: [{ name: 'Reviewer' }],
     });
+  });
+
+  // Issue 3010: a zip with team.yaml goes to the team route with its team,
+  // and a refusal stays in the dialog in the server's words.
+  async function teamZipFile(): Promise<File> {
+    const zip = new JSZip();
+    zip.file('team.yaml', 'kind: team\nname: Dev team\nmembers: [lead.agent.md, impl.agent.md]\nlead: lead.agent.md\n');
+    zip.file('lead.agent.md', '---\nname: Coordinator\n---\nLead.');
+    zip.file('impl.agent.md', '---\nname: Implementer\n---\nBuild.');
+    return new File([await zip.generateAsync({ type: 'arraybuffer' })], 'dev.team.zip');
+  }
+
+  function teamImportButton(run: ReturnType<typeof useEntityImport>['run']): ReactElement {
+    return (
+      <EntityImportButton
+        testIdPrefix="agents"
+        isImporting={false}
+        onImport={async (request) => {
+          await run.mutateAsync(request);
+        }}
+      />
+    );
+  }
+
+  it('posts a team zip to the team import with the team and its lead', async () => {
+    server.use(
+      http.post(`${BASE}/elitea_core/team_import/prompt_lib/:projectId`, async ({ request }) => {
+        record(request, await request.json());
+        return HttpResponse.json({ team: { id: 1 }, result: {}, errors: {} }, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup({ applyAccept: false });
+    const { result } = renderHookWithProviders(() => useEntityImport(PROJECT));
+    renderWithProviders(teamImportButton(result.current.run));
+    await user.upload(screen.getByTestId('agents-import-input'), await teamZipFile());
+
+    expect(await screen.findByTestId('agents-import-team')).toHaveTextContent('Dev team');
+    expect(screen.getByTestId('agents-import-team')).toHaveTextContent('Coordinator');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+
+    await waitFor(() => expect(recorded.some((call) => call.url.includes('/team_import/'))).toBe(true));
+    const sent = recorded.find((call) => call.url.includes('/team_import/'))?.body as {
+      team: { name: string; lead: string; members: string[] };
+      applications: { import_uuid: string; name: string }[];
+    };
+    expect(sent.team.name).toBe('Dev team');
+    expect(sent.applications.map((entry) => entry.name)).toEqual(['Coordinator', 'Implementer']);
+    expect(sent.team.members).toEqual(sent.applications.map((entry) => entry.import_uuid));
+    expect(sent.team.lead).toBe(sent.applications[0]?.import_uuid);
+    expect(recorded.some((call) => call.url.includes('/import_wizard/'))).toBe(false);
+  });
+
+  it("shows the team import's refusal inside the dialog", async () => {
+    server.use(
+      http.post(`${BASE}/elitea_core/team_import/prompt_lib/:projectId`, () =>
+        HttpResponse.json(
+          { code: 'agent_name_taken', error: 'These agents already exist in this project: Implementer.', names: ['Implementer'] },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup({ applyAccept: false });
+    const { result } = renderHookWithProviders(() => useEntityImport(PROJECT));
+    renderWithProviders(teamImportButton(result.current.run));
+    await user.upload(screen.getByTestId('agents-import-input'), await teamZipFile());
+    await screen.findByTestId('agents-import-team');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+
+    expect(await screen.findByTestId('agents-import-refusal')).toHaveTextContent('already exist in this project: Implementer');
+    expect(screen.getByTestId('agents-import-dialog')).toBeInTheDocument();
+  });
+
+  it('refuses a team zip on the Pipelines list and posts nothing', async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    renderWithProviders(
+      <EntityImportButton
+        testIdPrefix="pipelines"
+        acceptsTeams={false}
+        isImporting={false}
+        onImport={vi.fn()}
+      />,
+    );
+    await user.upload(screen.getByTestId('pipelines-import-input'), await teamZipFile());
+    expect(await screen.findByRole('alert')).toHaveTextContent('Import it from the Agents list');
+    expect(screen.queryByTestId('pipelines-import-team')).toBeNull();
+    expect(recorded).toHaveLength(0);
   });
 
   it('refuses a file that is not an export and posts nothing', async () => {

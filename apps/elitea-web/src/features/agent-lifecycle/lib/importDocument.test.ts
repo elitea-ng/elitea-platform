@@ -211,3 +211,60 @@ describe('import size limits (#2032)', () => {
     expect(document.applications).toHaveLength(2);
   });
 });
+
+// Issue 3010: a zip with a team.yaml imports its agents AS a saved team.
+describe('team zips', () => {
+  const agent = (n: string): string => `---\nname: ${n}\nmodel: gpt-5\n---\nWork as ${n}.`;
+
+  async function teamZip(manifest: string, files: Record<string, string>): Promise<File> {
+    const zip = new JSZip();
+    zip.file('team.yaml', manifest);
+    for (const [path, text] of Object.entries(files)) zip.file(path, text);
+    return new File([await zip.generateAsync({ type: 'arraybuffer' })], 'team.zip');
+  }
+
+  it('reads the members in roster order, maps the lead and skips other markdown', async () => {
+    const file = await teamZip(
+      'kind: team\nname: Dev team\ndescription: Builds it\nmembers:\n  - agents/impl.agent.md\n  - agents/lead.agent.md\nlead: agents/lead.agent.md\n',
+      { 'agents/impl.agent.md': agent('Implementer'), 'agents/lead.agent.md': agent('Coordinator'), 'README.md': '# not an agent' },
+    );
+    const { document, team } = await readImportFile(file);
+    const names = (document.applications ?? []).map((entry) => (entry as { name: string }).name);
+    expect(names).toEqual(['Implementer', 'Coordinator']);
+    const uuids = (document.applications ?? []).map((entry) => (entry as { import_uuid: string }).import_uuid);
+    expect(team).toMatchObject({ name: 'Dev team', description: 'Builds it', members: uuids, lead: uuids[1], leadName: 'Coordinator' });
+    expect(summarizeImportDocument(document, [], team).team).toEqual({ name: 'Dev team', lead: 'Coordinator' });
+  });
+
+  it('resolves member paths relative to the team.yaml folder', async () => {
+    const zip = new JSZip();
+    zip.file('export/team.yaml', 'name: T\nmembers: [members/a.agent.md]\n');
+    zip.file('export/members/a.agent.md', agent('A'));
+    const file = new File([await zip.generateAsync({ type: 'arraybuffer' })], 'nested.zip');
+    const { team } = await readImportFile(file);
+    expect(team?.members).toHaveLength(1);
+  });
+
+  it('names a member file the zip does not hold', async () => {
+    const file = await teamZip('name: T\nmembers: [a.agent.md, gone.agent.md]\n', { 'a.agent.md': agent('A') });
+    await expect(readImportFile(file)).rejects.toThrow(/does not hold: gone\.agent\.md/);
+  });
+
+  it('refuses a lead that is not a member', async () => {
+    const file = await teamZip('name: T\nmembers: [a.agent.md]\nlead: b.agent.md\n', { 'a.agent.md': agent('A'), 'b.agent.md': agent('B') });
+    await expect(readImportFile(file)).rejects.toThrow(/not one of the members/);
+  });
+
+  it('refuses a manifest without a name or members', async () => {
+    await expect(readImportFile(await teamZip('members: [a.agent.md]\n', { 'a.agent.md': agent('A') }))).rejects.toThrow(/no team name/);
+    await expect(readImportFile(await teamZip('name: T\n', { 'a.agent.md': agent('A') }))).rejects.toThrow(/must list its members/);
+  });
+
+  it('keeps a zip without a team.yaml a plain set of agents', async () => {
+    const zip = new JSZip();
+    zip.file('a.md', agent('A'));
+    const result = await readImportFile(new File([await zip.generateAsync({ type: 'arraybuffer' })], 'plain.zip'));
+    expect(result.team).toBeUndefined();
+    expect(result.document.applications).toHaveLength(1);
+  });
+});

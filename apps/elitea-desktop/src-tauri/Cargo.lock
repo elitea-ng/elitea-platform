@@ -2040,6 +2040,7 @@ dependencies = [
  "elitea-content-source",
  "elitea-doc-extract",
  "elitea-workspace-store",
+ "getrandom 0.3.4",
  "globset",
  "grep-regex",
  "grep-searcher",

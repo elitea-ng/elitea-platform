@@ -14,6 +14,9 @@ export interface TeamRowProps {
   readonly team: AgentTeam;
   readonly starting: boolean;
   readonly onStart: () => void;
+  /** Saves the team as a zip that Workshop › Agents › Import reads back (issue 3010). */
+  readonly onExport: () => void;
+  readonly exporting: boolean;
   /** Absent for a caller who may not edit teams. */
   readonly onEdit?: (() => void) | undefined;
   /** Absent for a caller who may not delete teams. */
@@ -25,7 +28,7 @@ function memberLabel(member: AgentTeamMember, isLead: boolean): string {
   return isLead ? t('features.agentTeams.leadMember', '{{name}} (lead)', { name }) : name;
 }
 
-export function TeamRow({ team, starting, onStart, onEdit, onDelete }: TeamRowProps): ReactNode {
+export function TeamRow({ team, starting, onStart, onExport, exporting, onEdit, onDelete }: TeamRowProps): ReactNode {
   return (
     <Paper variant="outlined" sx={{ p: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem' }} data-testid={`agent-team-${team.id}`}>
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -50,6 +53,9 @@ export function TeamRow({ team, starting, onStart, onEdit, onDelete }: TeamRowPr
       <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
         <Button size="small" variant="contained" disabled={starting} onClick={onStart} data-testid={`agent-team-start-${team.id}`}>
           {t('features.agentTeams.start', 'Start conversation')}
+        </Button>
+        <Button size="small" disabled={exporting} onClick={onExport} data-testid={`agent-team-export-${team.id}`}>
+          {t('features.agentTeams.exportAction', 'Export')}
         </Button>
         {onEdit !== undefined && (
           <Button size="small" onClick={onEdit} data-testid={`agent-team-edit-${team.id}`}>

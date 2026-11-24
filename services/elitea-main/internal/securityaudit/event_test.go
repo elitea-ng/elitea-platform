@@ -431,3 +431,31 @@ func TestAccessChangeHasNoReasonText(t *testing.T) {
 			len(access.Properties), typ.NumField())
 	}
 }
+
+/* ── admin.elevation (ADR-0059 R2.3) ──────────────────────────────────── */
+
+// The new type has an OCSF class (User Access Management, like its sibling
+// admin.access.changed) and passes the outbox's event_type check. Its export
+// mapping is elevationStep of the export schema
+// (TestElevationChangeHasNoFreeTextField, elevation_test.go) and
+// details.elevation of elitea.audit.v1 (internal/auditexport).
+func TestAdminElevationIsAKnownTypeWithItsOCSFClass(t *testing.T) {
+	class, ok := OCSFClassUID(TypeAdminElevation)
+	if !ok || class != OCSFClassUserAccessManagement {
+		t.Fatalf("OCSF class = %d, %v; want User Access Management", class, ok)
+	}
+	if sibling, _ := OCSFClassUID(TypeAdminAccessChanged); sibling != class {
+		t.Fatalf("admin.elevation is class %d, its sibling admin.access.changed %d", class, sibling)
+	}
+	if !regexp.MustCompile(`^ai\.elitea\.security\.v1\.[a-z.]{1,64}$`).MatchString(string(TypeAdminElevation)) {
+		t.Fatalf("%s does not match the outbox event_type check (shared 0183)", TypeAdminElevation)
+	}
+	if len(ElevationActions()) != 15 {
+		t.Fatalf("the action list has %d actions, decision 8 lists 15", len(ElevationActions()))
+	}
+	for _, action := range ElevationActions() {
+		if !action.Valid() {
+			t.Errorf("%s is listed but not valid", action)
+		}
+	}
+}

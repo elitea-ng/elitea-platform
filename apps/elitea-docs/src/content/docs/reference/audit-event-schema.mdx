@@ -65,6 +65,26 @@ A change of who holds what on the administration surface is one `security_audit`
 
 A change that changes nothing (assigning a role already held, a settings-only edit) appends no event.
 
+### `admin.elevation`
+
+Each step of a break-glass elevation is one `security_audit` event of type `ai.elitea.security.v1.admin.elevation` (OCSF 3005 User Access Management, the class of its sibling `admin.access.changed`). The event is appended in the same transaction as the ledger write in `elitea_auth.admin_elevations`. If the event cannot be written, the step does not happen: no elevation starts and none ends. `action` is `admin.elevation.<action>`. `actor` is the person who took the step, or none for the platform and an operator command. `target` is the elevation, or the sealed credential or person for a step about no elevation. `effect` is `deny` for `denied` and `allow` otherwise. `details.elevation` carries the step:
+
+| Field | Meaning |
+|---|---|
+| `action` | One of the actions below. |
+| `source` | How the step was taken: `console`, `api`, `operator` (a process command) or `system` (the platform: an expiry, a session or account event). |
+| `elevation_id` | The elevation. Present on every action except `credential_issued`, `credential_revoked` and `local_admin_signin`. `credential_used` carries it when the credential started one. |
+| `user_id` | The person elevated, or the person who signed in. |
+| `level` | `admin` or `super_admin`. |
+| `path` | `approved`, `self` or `sealed`. |
+| `reason_code` | `incident`, `identity_outage`, `recovery` or `other`. The event never carries the reason text: that stays in the elevation ledger. |
+| `expires_at` | The elevation's expiry, once it has started. |
+| `end_reason` | On `ended` and `expired`: why access stopped (`holder`, `approver`, `operator`, `expired`, `logout`, `session_revoked`, `user_suspended`, `user_deleted`, `scim_deactivated`). An end asked for after the expiry is `expired`; the reason that was asked for is the reason code `requested_end_reason:<reason>`, and the actor and source stay those of the person who asked. |
+| `note_id`, `note_length` | On `note_added`: the note's id and its length in characters, never its text. |
+| `credential_id` | On the credential actions: the sealed credential. |
+
+The actions are `requested`, `approved`, `denied`, `request_expired`, `started`, `ended`, `expired`, `critical_change`, `reviewed`, `unreviewed`, `note_added`, `credential_issued`, `credential_used`, `credential_revoked` and `local_admin_signin`. In this release the ledger writes `started`, `ended` and `expired`. The other actions are written by the request, review, sealed-credential and local sign-in features as they arrive. An end that changes nothing (the elevation had already ended) appends no event.
+
 ### `details` for `admin_audit`
 
 `row_id` (`centry.audit_events.id`), `is_error`, and, when recorded: `http_method`, `http_route` (the matched route pattern, never the raw URL), `status_code`, `duration_ms`.

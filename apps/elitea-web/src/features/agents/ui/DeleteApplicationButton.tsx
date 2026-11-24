@@ -10,6 +10,7 @@ import { t } from '@/shared/i18n';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
+import { applicationServerErrorMessage } from '../lib/errorMessage';
 
 /** @public */
 export interface DeleteApplicationButtonProps {
@@ -72,19 +73,28 @@ export function DeleteApplicationButton({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // The server's reason for a refusal, shown inside the dialog. The dialog
+  // stays open on a refusal, so a message only on the page behind it read as
+  // "nothing happened".
+  const [refusal, setRefusal] = useState<string>();
 
-  const openModal = useCallback(() => setOpen(true), []);
+  const openModal = useCallback(() => {
+    setRefusal(undefined);
+    setOpen(true);
+  }, []);
   const closeModal = useCallback(() => setOpen(false), []);
 
   const confirmDelete = useCallback(async () => {
     if (projectId === undefined) return;
     setIsDeleting(true);
+    setRefusal(undefined);
     try {
       const options = getDeleteApplicationQueryOptions(projectId, Number(applicationId));
       await queryClient.query(options);
       setOpen(false);
       onDeleted?.();
     } catch (error) {
+      setRefusal(applicationServerErrorMessage(error, t('agents.deleteApplicationButton.failed', 'The agent could not be deleted.')));
       onError?.(error);
     } finally {
       setIsDeleting(false);
@@ -113,6 +123,7 @@ export function DeleteApplicationButton({
         }}
         shouldRequestInputName
         confirming={isDeleting}
+        {...(refusal === undefined ? {} : { errorMessage: refusal })}
         {...(name !== undefined ? { name } : {})}
       />
     </>

@@ -156,6 +156,7 @@ use serde_json::{Value, json};
 
 use crate::classify::{Place, Risk, assess};
 use crate::command::{CommandPattern, CommandShape, analyse, search_path};
+use crate::credentials::CommandGrant;
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::execpolicy::{
     Example, PrefixRule, ResolveCache, Resolver, RuleDecision, RuleOrigin, RuleScope, RuleSet,
@@ -790,6 +791,10 @@ pub struct ToolCall {
     /// running past the turn (`keep_alive: "session"`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_alive: bool,
+    /// For [`ToolKind::RunCommand`]: it runs as a background process or on
+    /// a terminal (a rule's grant applies to foreground commands only).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub background: bool,
     /// For [`ToolKind::McpStart`] and [`ToolKind::McpCall`]: the server and
     /// tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -827,6 +832,7 @@ impl ToolCall {
             runner: None,
             loopback: false,
             keep_alive: false,
+            background: false,
             mcp: None,
             argv: None,
             computer: None,
@@ -1246,6 +1252,9 @@ pub struct RulesEngine {
     computer_threads: Mutex<HashMap<String, ThreadComputer>>,
     /// The thread the running turn belongs to ([`Self::set_thread`]).
     thread: RwLock<Option<String>>,
+    /// Whether the host runs a granted command with its grant
+    /// ([`Self::set_credential_grants`]); off, no rule grants anything.
+    grants: AtomicBool,
 }
 
 fn path_glob(glob: &str) -> Option<GlobMatcher> {
@@ -1350,6 +1359,7 @@ impl RulesEngine {
             unattended: RwLock::new(None),
             answers: RwLock::new(None),
             host_intel_session: AtomicBool::new(false),
+            grants: AtomicBool::new(false),
             computer_threads: Mutex::default(),
             thread: RwLock::new(None),
             confined: true,
@@ -1431,6 +1441,14 @@ impl RulesEngine {
             .into_iter()
             .filter(|choice| choice.tool.is_computer())
             .collect()
+    }
+
+    /// Whether the host runs a granted command with its hosts and login
+    /// ([`crate::shell::ShellConfig::credential_grants`]). Off (the
+    /// default), a rule's `hosts` and `credential` grant nothing: the rule
+    /// covers only what its own bounds say, so a network call is asked.
+    pub fn set_credential_grants(&self, on: bool) {
+        self.grants.store(on, Ordering::Relaxed);
     }
 
     /// Switch the permission profile (a turn's start, or the person
@@ -2053,14 +2071,18 @@ impl RulesEngine {
         }
     }
 
-    /// The command prefix rules' decision (workspace file, then the
-    /// person's; the strongest wins, the first of equals).
-    fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
+    /// The prefix rule that decides `call` (workspace file, then the
+    /// person's; the strongest wins, the first of equals): its scope, its
+    /// 1-based index and the rule.
+    fn winning_prefix_rule(
+        &self,
+        call: &ToolCall,
+        shape: &CommandShape,
+    ) -> Option<(RuleScope, usize, PrefixRule)> {
         let push = call.tool == ToolKind::GitPush;
         if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart || push) {
             return None;
         }
-        let shape = shape?;
         let segments = shape.segments();
         let (cwd, search) = self.resolution(call);
         // Each program is resolved once for this decision, outside the lock.
@@ -2093,9 +2115,15 @@ impl RulesEngine {
                     false
                 } else {
                     // An allow vouches for exactly one simple command,
-                    // within its sandbox and network bounds.
-                    matches!(shape, CommandShape::Simple(argv) if set.matches(rule, argv, Some(resolver)))
-                        && rule.covers(call.sandbox_mode(), call.network)
+                    // within its sandbox and network bounds. A rule that
+                    // limits the network to named hosts covers a call that
+                    // asks for the network only where its grant applies
+                    // (the command then runs with those hosts, no more).
+                    matches!(shape, CommandShape::Simple(argv)
+                        if set.matches(rule, argv, Some(resolver))
+                            && (rule.covers(call.sandbox_mode(), call.network)
+                                || (rule.covers(call.sandbox_mode(), false)
+                                    && self.grant_applies(call, argv, scope, rule))))
                 };
                 if hit
                     && best
@@ -2105,7 +2133,77 @@ impl RulesEngine {
                 }
             }
         }
-        let (scope, index, rule) = best?;
+        best.map(|(scope, index, rule)| (scope, index, rule.clone()))
+    }
+
+    /// Whether `rule` (an allow of `scope` matching `argv`) grants `call`
+    /// its hosts and credential (#3005, #3006): only a rule the person
+    /// wrote (the user's rules, or a workspace rule with no `origin`; never
+    /// a repository's or an older host's), for one foreground
+    /// `run_command` without the loopback, where the policy allows the
+    /// network and the platform can limit it to the hosts, and never for a
+    /// subcommand the credential profile refuses (`gh auth`).
+    fn grant_applies(
+        &self,
+        call: &ToolCall,
+        argv: &[String],
+        scope: RuleScope,
+        rule: &PrefixRule,
+    ) -> bool {
+        call.tool == ToolKind::RunCommand
+            && self.grants.load(Ordering::Relaxed)
+            && !call.background
+            && !call.loopback
+            && !call.keep_alive
+            && rule.decision == RuleDecision::Allow
+            && rule.trusted()
+            && scope != RuleScope::Legacy
+            && rule.scopes_network()
+            && crate::sandbox::scoped_network_supported()
+            && self.policy.network
+            && rule.credential.as_deref().is_none_or(|id| {
+                crate::credentials::profile(id).is_some_and(|profile| profile.admits(argv))
+            })
+    }
+
+    /// What a rule the person wrote grants `call`: the hosts its network
+    /// is limited to and, with a credential, its program's login
+    /// ([`crate::credentials`]). `None` unless the winning rule is an
+    /// allow whose grant applies (`grant_applies`) and no layer
+    /// above denies the call: the session runs a command with exactly what
+    /// this returns, and asks it again when the answer changed while the
+    /// person decided.
+    #[must_use]
+    pub fn command_grant(&self, call: &ToolCall) -> Option<CommandGrant> {
+        if call.tool != ToolKind::RunCommand
+            || self.policy_ceiling(call).is_some()
+            || self.plan_mode()
+        {
+            return None;
+        }
+        let shape = call.shape()?;
+        let CommandShape::Simple(argv) = &shape else {
+            return None;
+        };
+        let (scope, index, rule) = self.winning_prefix_rule(call, &shape)?;
+        self.grant_applies(call, argv, scope, &rule)
+            .then(|| CommandGrant {
+                rule: format!("{}#{index}", scope.as_str()),
+                credential: rule.credential.clone(),
+                hosts: rule.effective_hosts(),
+            })
+            .filter(|grant| !grant.hosts.is_empty())
+            // Only for a call the layers allow outright: a path rule, an
+            // unconfined sandbox or any other layer that asks keeps the
+            // grant out of the question (and the answer).
+            .filter(|_| self.decide_by_layers(call).verdict == Verdict::Allow)
+    }
+
+    /// The command prefix rules' decision (workspace file, then the
+    /// person's; the strongest wins, the first of equals).
+    fn prefix_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
+        let shape = shape?;
+        let (scope, index, rule) = self.winning_prefix_rule(call, shape)?;
         let verdict = match rule.decision {
             RuleDecision::Allow => Verdict::Allow,
             RuleDecision::Prompt => Verdict::Ask,
@@ -2121,7 +2219,7 @@ impl RulesEngine {
         };
         // The reason reaches the model; a repository's justification does
         // not (the person sees it as the rule's justification).
-        let reason = match (&rule.justification, rule.origin) {
+        let mut reason = match (&rule.justification, rule.origin) {
             (Some(justification), None) => justification.clone(),
             (_, Some(RuleOrigin::Repository)) => format!(
                 "{} rule {index} (imported from the repository)",
@@ -2129,6 +2227,17 @@ impl RulesEngine {
             ),
             (None, None) => format!("{} rule {index}", scope.as_str()),
         };
+        if verdict == Verdict::Allow
+            && let CommandShape::Simple(argv) = shape
+            && self.grant_applies(call, argv, scope, &rule)
+        {
+            let grant = CommandGrant {
+                rule: format!("{}#{index}", scope.as_str()),
+                credential: rule.credential.clone(),
+                hosts: rule.effective_hosts(),
+            };
+            reason = format!("{reason} (sandboxed with {})", grant.describe());
+        }
         Some(Decision {
             verdict,
             source: scope.into(),
@@ -3358,6 +3467,9 @@ mod browser_tests;
 
 #[cfg(test)]
 mod computer_tests;
+
+#[cfg(test)]
+mod grant_tests;
 
 #[cfg(all(test, unix))]
 mod tests {
