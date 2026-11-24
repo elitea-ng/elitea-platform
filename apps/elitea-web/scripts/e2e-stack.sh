@@ -237,6 +237,30 @@ case "$CMD" in
       -d '{"email":"e2e-viewer@autotest.local","name":"E2E Viewer"}' >/dev/null
     echo "  ✓ oidc-mock user: e2e-viewer@autotest.local"
 
+    # personas: one per built-in administration role (ADR-0059 R3.13a). Each
+    # holds exactly that role and nothing else (the SQL block "built-in role
+    # personas" below); auth.setup.ts signs each in once and saves a storage
+    # state. The project administrator is `e2e-project-administrator`, not
+    # `e2e-project-admin`: that address is the team-project admin of the admin
+    # Projects fixture (journey 31), a project member this persona must not be.
+    # The list is kept in step with that block, with
+    # e2e/fixtures/adminPersonas.ts and with auth.setup.ts by
+    # scripts/e2e-journey-shape.test.mjs ("ADR-0059 R3.13a").
+    for persona in \
+      'e2e-global-admin@autotest.local|E2E Global Admin' \
+      'e2e-platform-admin@autotest.local|E2E Platform Admin' \
+      'e2e-llm-manager@autotest.local|E2E LLM Manager' \
+      'e2e-project-administrator@autotest.local|E2E Project Administrator' \
+      'e2e-auditor@autotest.local|E2E Auditor' \
+      'e2e-emergency@autotest.local|E2E Emergency'; do
+      persona_email="${persona%%|*}"
+      persona_name="${persona#*|}"
+      curl -sf -X PUT "${OIDC_BASE}/users/${persona_email}" \
+        -H "Content-Type: application/json" \
+        -d "{\"email\":\"${persona_email}\",\"name\":\"${persona_name}\"}" >/dev/null
+      echo "  ✓ oidc-mock user: ${persona_email}"
+    done
+
     # ── 2. Insert matching DB rows ─────────────────────────────────────────
     # DB: elitea (local compose default), user: elitea, host: postgres.
     # Write SQL to a temp file — avoids bash 3.x heredoc-in-subshell limits.
@@ -389,11 +413,12 @@ ON CONFLICT (email) DO NOTHING;
 -- and project-member ones below) and one it grants only to `super_admin`. Every
 -- statement is ON CONFLICT DO NOTHING, so the overlap is inert.
 --
--- `admin.auth.users.super_admin` is the deliberate divergence: the legacy
--- runtime and the migrations both make it super_admin-only, and it is granted
--- to `admin` here so the journey can exercise the role-assignment path. The
--- escalation guard it gates is covered by the Go integration tests, which can
--- revoke it.
+-- Since ADR-0059 `admin` is a built-in role with a declared set, and this
+-- block may only repeat names of that set: the platform-admin persona holds
+-- `admin` alone and must resolve exactly what a deployment's `admin` does
+-- (e2e_seed_grant_parity_test.go fails on a name outside the set). The two
+-- names the journeys need beyond it live on the custom role
+-- `e2e_admin_extras` below, which only the admin persona holds.
 --
 -- Note what none of this changes: `window.admin_ui_config.permissions` is
 -- hardcoded by adminui/handler.go and was always present. The rows below are
@@ -404,7 +429,6 @@ SELECT r.id, p.permission
 FROM auth_core__role r
 CROSS JOIN (VALUES
     ('admin.auth.users'),
-    ('admin.auth.users.super_admin'),
     -- Unit A14, Audit Trail: all four `/elitea_core/audit*` READS are gated on
     -- this, matching the legacy originals. Unlike the user LISTING, the audit
     -- listing is gated rather than open — an audit row names the user, the
@@ -434,11 +458,10 @@ CROSS JOIN (VALUES
     -- it is a different grant from `.list` — the admin SPA's sidebar has always
     -- gated the page on `.list` while the server checks `.view`, and on the
     -- reference deployment the administration-mode `editor` role holds the
-    -- first and not the second. Both are granted here so journey 32 exercises
-    -- the working path; the refusal path is covered by the Go integration
-    -- tests, which can withhold either.
+    -- first and not the second. Both are granted (`.list` on e2e_admin_extras
+    -- below) so journey 32 exercises the working path; the refusal path is
+    -- covered by the Go integration tests, which can withhold either.
     ('configuration.secrets.secret.view'),
-    ('configuration.secrets.secret.list'),
     ('configuration.secrets.secret.create'),
     ('configuration.secrets.secret.edit'),
     ('configuration.secrets.secret.delete'),
@@ -487,6 +510,115 @@ CROSS JOIN (VALUES
 ) AS p(permission)
 WHERE r.name = 'admin' AND r.mode = 'administration'
 ON CONFLICT (role_id, permission) DO NOTHING;
+
+-- ── the admin persona's two extra names (ADR-0059 R3.13a) ───────────────
+-- `admin.auth.users.super_admin` is the deliberate divergence: the legacy
+-- runtime and the migrations both make it super_admin-only, and the admin
+-- persona holds it so the journeys can exercise the role-assignment path (the
+-- escalation guard it gates is covered by the Go integration tests, which can
+-- revoke it). `configuration.secrets.secret.list` is the Secrets name above.
+-- Both were granted to the built-in `admin` role itself until the built-in
+-- role personas below needed `admin` to be exactly its declared set; they
+-- moved to this custom role, which the admin persona holds beside `admin`, so
+-- what that persona resolves is unchanged. The DELETE takes them back off
+-- `admin` on a database an earlier seed wrote.
+INSERT INTO auth_core__role (name, mode) VALUES ('e2e_admin_extras', 'administration')
+ON CONFLICT (name, mode) DO NOTHING;
+
+INSERT INTO auth_core__role_permission (role_id, permission)
+SELECT r.id, p.permission
+FROM auth_core__role r
+CROSS JOIN (VALUES
+    ('admin.auth.users.super_admin'),
+    ('configuration.secrets.secret.list')
+) AS p(permission)
+WHERE r.name = 'e2e_admin_extras' AND r.mode = 'administration'
+ON CONFLICT (role_id, permission) DO NOTHING;
+
+DELETE FROM auth_core__role_permission grant_row
+USING auth_core__role r
+WHERE r.id = grant_row.role_id
+  AND r.name = 'admin' AND r.mode = 'administration'
+  AND grant_row.permission IN ('admin.auth.users.super_admin', 'configuration.secrets.secret.list');
+
+INSERT INTO auth_core__user_role (user_id, role_id)
+SELECT u.id, r.id
+FROM auth_core__user u
+JOIN auth_core__role r ON r.name = 'e2e_admin_extras' AND r.mode = 'administration'
+WHERE u.email = 'e2e-admin@autotest.local'
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+-- ── built-in role personas (ADR-0059 R3.13a) ─────────────────────────────
+-- One user per built-in administration role with a declared set, each
+-- holding exactly that role: no other administration role, no default-mode
+-- role and no project membership (signing in provisions a personal project,
+-- and that is all). The persona journeys of the console (R3.4b, R3.5b,
+-- R3.10b, R3.13b) sign in as them through the storage states auth.setup.ts
+-- saves. The existing admin persona keeps its own roles and meaning.
+--
+-- Roles are found by NAME, after the migrations ran: shared 0263 creates the
+-- four narrow roles and records all six as built-in. A missing one stops the
+-- seed here (ON_ERROR_STOP) rather than seeding a persona that holds nothing,
+-- which every persona journey would then read as a refusal.
+--
+-- e2e_seed_grant_parity_test.go reads the VALUES list below; keep one row per
+-- line.
+CREATE TEMP TABLE IF NOT EXISTS e2e_admin_personas (email text PRIMARY KEY, name text NOT NULL, role text NOT NULL);
+TRUNCATE e2e_admin_personas;
+INSERT INTO e2e_admin_personas (email, name, role) VALUES
+    ('e2e-global-admin@autotest.local', 'E2E Global Admin', 'super_admin'),
+    ('e2e-platform-admin@autotest.local', 'E2E Platform Admin', 'admin'),
+    ('e2e-llm-manager@autotest.local', 'E2E LLM Manager', 'llm_manager'),
+    ('e2e-project-administrator@autotest.local', 'E2E Project Administrator', 'project_administrator'),
+    ('e2e-auditor@autotest.local', 'E2E Auditor', 'security_auditor'),
+    ('e2e-emergency@autotest.local', 'E2E Emergency', 'emergency_access');
+
+DO $personas$
+DECLARE
+    missing text;
+BEGIN
+    SELECT string_agg(persona.role, ', ' ORDER BY persona.role) INTO missing
+    FROM e2e_admin_personas persona
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM auth_core__role r
+        JOIN elitea_auth.admin_role_seeds seed ON seed.role_id = r.id
+        WHERE r.name = persona.role AND r.mode = 'administration'
+    );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'built-in administration role(s) missing or not recorded as built-in: %. '
+            'The persona seed runs after the migrations; shared 0263 creates them.', missing;
+    END IF;
+END
+$personas$;
+
+INSERT INTO auth_core__user (email, name)
+SELECT email, name FROM e2e_admin_personas
+ON CONFLICT (email) DO NOTHING;
+
+-- Exactly one role: take back any other role a journey or an earlier run left
+-- on a persona, in every mode, and any project membership.
+DELETE FROM auth_core__user_role assignment
+USING auth_core__user u, e2e_admin_personas persona, auth_core__role r
+WHERE assignment.user_id = u.id AND u.email = persona.email
+  AND r.id = assignment.role_id
+  AND NOT (r.name = persona.role AND r.mode = 'administration');
+
+DELETE FROM auth_core__project_user_role membership
+USING auth_core__user u, e2e_admin_personas persona, centry.project project
+WHERE membership.user_id = u.id AND u.email = persona.email
+  AND project.id = membership.project_id
+  AND project.name <> 'project_user_' || u.id;
+
+INSERT INTO auth_core__user_role (user_id, role_id)
+SELECT u.id, r.id
+FROM e2e_admin_personas persona
+JOIN auth_core__user u ON u.email = persona.email
+JOIN auth_core__role r ON r.name = persona.role AND r.mode = 'administration'
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+UPDATE auth_core__user SET suspended = false
+WHERE email IN (SELECT email FROM e2e_admin_personas);
 
 -- Schedules (#1369): one routine per browser project, for the journey to read,
 -- switch and re-time.
@@ -2082,6 +2214,58 @@ ENDSQL
 
     echo "  ✓ administration RBAC verified: admin persona resolves admin.auth.users"
     echo "    (member does not) and the roles-matrix view/edit pair."
+
+    # The built-in role personas (ADR-0059 R3.13a): six, each holding exactly
+    # one role, the built-in one its row names. Asserted on the end state, as
+    # the blocks above are: a persona with a second role, or none, would make
+    # every persona journey test the wrong role.
+    PERSONA_ROLES=$(stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
+      SELECT u.email || '=' || string_agg(r.name || '/' || r.mode, ',' ORDER BY r.name)
+      FROM auth_core__user u
+      LEFT JOIN auth_core__user_role ur ON ur.user_id = u.id
+      LEFT JOIN auth_core__role r ON r.id = ur.role_id
+      WHERE u.email IN ('e2e-global-admin@autotest.local', 'e2e-platform-admin@autotest.local',
+                        'e2e-llm-manager@autotest.local', 'e2e-project-administrator@autotest.local',
+                        'e2e-auditor@autotest.local', 'e2e-emergency@autotest.local')
+      GROUP BY u.email ORDER BY u.email;")
+    PERSONA_WANT='e2e-auditor@autotest.local=security_auditor/administration
+e2e-emergency@autotest.local=emergency_access/administration
+e2e-global-admin@autotest.local=super_admin/administration
+e2e-llm-manager@autotest.local=llm_manager/administration
+e2e-platform-admin@autotest.local=admin/administration
+e2e-project-administrator@autotest.local=project_administrator/administration'
+    if [ "$PERSONA_ROLES" != "$PERSONA_WANT" ]; then
+      echo "ERROR: the built-in role personas do not each hold exactly their role." >&2
+      echo "  got:" >&2
+      echo "$PERSONA_ROLES" | sed 's/^/    /' >&2
+      echo "  want:" >&2
+      echo "$PERSONA_WANT" | sed 's/^/    /' >&2
+      exit 1
+    fi
+    echo "  ✓ built-in role personas verified: six, one administration role each."
+
+    # The two names that moved off the built-in `admin` role onto
+    # e2e_admin_extras: the admin persona must still resolve both, and the
+    # platform-admin persona (built-in `admin` alone) neither.
+    resolves_extras() {
+      stack_psql "$POSTGRES_CONTAINER" -U elitea -d elitea -tAc "
+        SELECT COUNT(DISTINCT rp.permission)
+        FROM auth_core__user u
+        JOIN auth_core__user_role ur ON ur.user_id = u.id
+        JOIN auth_core__role r ON r.id = ur.role_id AND r.mode = 'administration'
+        JOIN auth_core__role_permission rp ON rp.role_id = r.id
+        WHERE u.email = '$1'
+          AND rp.permission IN ('admin.auth.users.super_admin', 'configuration.secrets.secret.list');"
+    }
+    ADMIN_EXTRAS=$(resolves_extras 'e2e-admin@autotest.local')
+    PLATFORM_EXTRAS=$(resolves_extras 'e2e-platform-admin@autotest.local')
+    if [ "${ADMIN_EXTRAS:-0}" -ne 2 ] || [ "${PLATFORM_EXTRAS:-0}" -ne 0 ]; then
+      echo "ERROR: e2e_admin_extras is not where it belongs: the admin persona resolves" >&2
+      echo "  ${ADMIN_EXTRAS:-0} of its two extra names (want 2), the platform-admin persona" >&2
+      echo "  ${PLATFORM_EXTRAS:-0} (want 0, the built-in admin role is its declared set)." >&2
+      exit 1
+    fi
+    echo "  ✓ admin persona keeps its two extra names; built-in admin holds neither."
 
     # The admin PROJECTS surface (unit A14). Its listing is gated, as the user
     # listing now is too, so a missing grant here is a 403 on the page itself

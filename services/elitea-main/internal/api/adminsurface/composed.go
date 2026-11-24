@@ -16,6 +16,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
+	v2adminconsole "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/adminaccess"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
 	v2credentialreferences "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialreferences"
 	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
@@ -117,6 +118,7 @@ func ComposedRouter() (Composed, error) {
 		ExternalAgentIdentityAdmin: &v2agentidentity.ExternalHandler{},
 		MandateAttachments:         &v2mandateattachments.Handler{},
 		CredentialReferencesAdmin:  &v2credentialreferences.Handler{},
+		ConsoleRoles:               noConsoleRoles{},
 
 		// The Postgres recorder writes from a goroutine of its own, which
 		// panics on the unconnected pool.
@@ -302,6 +304,18 @@ func authenticate(r *http.Request) { r.Header.Set("Authorization", "Bearer "+Tok
 // AuthenticateNative adds the native device session credential of the
 // synthetic principal.
 func AuthenticateNative(r *http.Request) { r.Header.Set("Authorization", "Bearer "+NativeToken) }
+
+// noConsoleRoles reads no role, so the console capability document answers
+// from the resolution alone, which the probe varies.
+type noConsoleRoles struct{}
+
+func (noConsoleRoles) HeldRoles(context.Context, int64) ([]v2adminconsole.Role, error) {
+	return nil, nil
+}
+
+func (noConsoleRoles) GrantingRoles(context.Context, []string) ([]v2adminconsole.GrantingRole, error) {
+	return nil, nil
+}
 
 type discardAudit struct{}
 

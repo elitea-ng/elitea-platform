@@ -1,0 +1,11 @@
+{
+  "areas": [],
+  "roles": [
+    {
+      "name": "emergency_access",
+      "display_name": "Emergency access",
+      "built_in": true
+    }
+  ],
+  "elevation": null
+}

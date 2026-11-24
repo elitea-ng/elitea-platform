@@ -150,12 +150,12 @@ test('SB02: the Applications row reads "Applications" — expanded label and col
   await assertBothModes();
 
   await checkA11y(page);
-
-  // Leave dark mode as this suite found it — other journeys assume the
-  // compiled default.
-  await page.goto(BASE_URL + '/app/settings/personalization', { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Dark', exact: true }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-el-scheme', 'dark');
+  // No "switch back to dark" step. `keepThemeOffTheServer` drops the PUT, so
+  // the Light click never reached the stored preference, and the scheme lives
+  // only in this test's own browser context, which closes with it. The step
+  // that used to be here changed nothing anyone else reads, and on webkit it
+  // cost the last seven seconds of a 30 s budget: both attempts in CI run
+  // 45347805744 timed out inside it, with Dark already pressed.
 });
 
 /**

@@ -103,13 +103,22 @@ const MAX_CHARS = 2500;
  * script-initiated reload was still in flight — two main-frame navigations
  * racing. Chromium tolerates it; webkit does not, and throws "WebKit
  * encountered an internal error" out of the second `page.goto` (measured, CI
- * run 35226848209). Waiting for the in-flight navigation's `load` first closes
- * the window: a no-op when there is nothing pending, the fix when there is.
+ * run 35226848209).
+ *
+ * Waiting for `load` alone closed that window only for the switch. When the
+ * project is ALREADY selected, nothing navigates: `/app/` has fired `load`,
+ * but its boot requests are still in flight, and webkit throws the same
+ * internal error out of a `goto` fired over them (measured, CI run
+ * 45347805744, PJC03a retry 2). `networkidle` waits for `load` and then for
+ * those requests, so it covers both cases. The sidebar's activity stream does
+ * not hold it open (`artifacts.permissions-scope.spec.ts`).
  */
 async function gotoProjectParams(page: Page, project: ScratchProject): Promise<void> {
   await page.goto(`${BASE_URL}/app/`, { waitUntil: 'domcontentloaded' });
   await ensureProjectSelected(page, project.name);
-  await page.waitForLoadState('load').catch(() => {});
+  // Bounded: a long-lived request that kept the network busy would otherwise
+  // spend the test's whole budget here before the swallowed timeout.
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
   await page.goto(PROJECT_PARAMS_PAGE, { waitUntil: 'domcontentloaded' });
 }
 
@@ -437,7 +446,12 @@ test.describe('project-context: settings/config coverage', () => {
     await expect(editorContent(page)).not.toContainText('Respond concisely');
 
     // A 0-byte .md file is accepted and clears the editor, with no error toast.
-    await openEditor(page, target);
+    // The reload above left the editor open, on this project and with the
+    // saved baseline in it, so this half needs no second `openEditor`. The
+    // second call used to spend about six of the 30 s on webkit on a fresh
+    // `/app/` boot and a second `goto`. Both attempts in CI run 45347805744
+    // ran out of time in the last assertion below, and the third died in
+    // that `goto`.
     const placeholder = 'placeholder before clearing';
     await typeContent(page, placeholder);
     await expect(editorContent(page)).toContainText(placeholder);
