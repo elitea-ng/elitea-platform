@@ -67,6 +67,8 @@ export interface FlowWrapperProps {
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
   readonly noBorder?: boolean | undefined;
   readonly disabled?: boolean | undefined;
+  readonly onCanvasNodeInteraction?: (() => void) | undefined;
+  readonly extraRightOffsetPx?: number | undefined;
 }
 
 export const FlowWrapper = forwardRef<FlowEditorHandle, FlowWrapperProps>(function FlowWrapper(props, ref): ReactNode {
@@ -85,6 +87,8 @@ export const FlowWrapper = forwardRef<FlowEditorHandle, FlowWrapperProps>(functi
     llmSettings,
     noBorder = false,
     disabled,
+    onCanvasNodeInteraction,
+    extraRightOffsetPx,
   } = props;
   const { isSmallWindow } = useIsSmallWindow();
 
@@ -104,6 +108,8 @@ export const FlowWrapper = forwardRef<FlowEditorHandle, FlowWrapperProps>(functi
         versionTools={versionTools}
         llmSettings={llmSettings}
         disabled={disabled}
+        onCanvasNodeInteraction={onCanvasNodeInteraction}
+        extraRightOffsetPx={extraRightOffsetPx}
         sx={computeFlowWrapperSx(isSmallWindow, noBorder, mode)}
       />
     </ReactFlowProvider>

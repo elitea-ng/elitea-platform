@@ -11,6 +11,7 @@ import { MAX_DRAWER_WIDTH, MIN_DRAWER_WIDTH } from '../constants/stateDrawer.con
 export interface UseResizableDrawerResult {
   readonly containerRef: React.RefObject<HTMLDivElement | null>;
   readonly drawerWidth: number;
+  readonly setDrawerWidth: React.Dispatch<React.SetStateAction<number>>;
   readonly isResizing: boolean;
   readonly isHoveringHandle: boolean;
   readonly setIsHoveringHandle: (hovering: boolean) => void;
@@ -111,6 +112,7 @@ export function useResizableDrawer(
   return {
     containerRef,
     drawerWidth,
+    setDrawerWidth,
     isResizing,
     isHoveringHandle,
     setIsHoveringHandle,

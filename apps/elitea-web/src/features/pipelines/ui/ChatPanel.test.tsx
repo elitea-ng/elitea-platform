@@ -246,4 +246,20 @@ describe('ChatPanel', () => {
     expect(getComputedStyle(container).height).toBe('auto');
     expect(getComputedStyle(content).overflowY).toBe('visible');
   });
+
+  it('supports on-demand resizable panel mode: stays mounted when closed, renders resize handle and close button when open', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const { unmount } = renderChatPanel({ panel: { isOpen: false, onClose } });
+
+    const closedPanel = await screen.findByTestId('pipeline-test-panel');
+    expect(closedPanel).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('chat-slot')).toBeInTheDocument();
+    unmount();
+
+    renderChatPanel({ panel: { isOpen: true, onClose } });
+    expect(await screen.findByTestId('pipeline-test-panel-resize-handle')).toBeInTheDocument();
+    await user.click(screen.getByTestId('pipeline-test-panel-close'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

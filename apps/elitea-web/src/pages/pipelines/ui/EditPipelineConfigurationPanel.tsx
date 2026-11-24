@@ -121,6 +121,23 @@ export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationP
               <AgentTagEditor projectId={projectId} value={tags} onChange={setTags} />
             </>
           ),
+          afterGeneral: (
+            <EditPipelineToolsPanel
+              projectId={projectId}
+              applicationId={applicationId}
+              activeVersion={activeVersion}
+              versionFields={versionFields}
+              isDirty={isDirty}
+              isReadOnly={isReadOnly}
+            />
+          ),
+          beforeAdvanced: (
+            <EditPipelineTriggersPanel
+              projectId={projectId}
+              versionId={activeVersion === undefined ? undefined : Number(activeVersion.id)}
+              isReadOnly={isReadOnly}
+            />
+          ),
         }}
         modelSettingsSlot={
           <AgentModelSettings
@@ -130,19 +147,6 @@ export function EditPipelineConfigurationPanel(props: EditPipelineConfigurationP
             disabled={isEditorDisabled}
           />
         }
-      />
-      <EditPipelineToolsPanel
-        projectId={projectId}
-        applicationId={applicationId}
-        activeVersion={activeVersion}
-        versionFields={versionFields}
-        isDirty={isDirty}
-        isReadOnly={isReadOnly}
-      />
-      <EditPipelineTriggersPanel
-        projectId={projectId}
-        versionId={activeVersion === undefined ? undefined : Number(activeVersion.id)}
-        isReadOnly={isReadOnly}
       />
       <ApplicationInformation
         id={applicationId === undefined ? undefined : String(applicationId)}

@@ -2,7 +2,7 @@ import type { ComponentProps } from 'react';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -243,23 +243,45 @@ describe('ConfigurationTab', () => {
     expect(screen.queryByTestId('configuration-form')).not.toBeInTheDocument();
   });
 
-  it('collapsing the chat pane (ChatPanel\'s own collapse button) exercises handleCollapsedChatPane', async () => {
+  it('opens the on-demand TestPanel via Test Pipeline button and closes it via Close button', async () => {
+    const user = userEvent.setup();
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+      initYamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      initYamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+    });
     renderConfigurationTab();
 
-    await screen.findByTestId('chat-slot');
-    // `ChatPanel`'s collapse button starts showing the "expand" (Right) icon since it
-    // starts uncollapsed — the config pane's own collapse button shows "Left" instead
-    // (`GeneralFormPanel`'s `!collapsed` ternary is inverted relative to `ChatPanel`'s),
-    // so this is how the two otherwise-identical, unlabelled icon buttons are told apart.
-    const chatCollapseIcon = document.querySelector('[data-testid="KeyboardDoubleArrowRightIcon"]');
-    expect(chatCollapseIcon).not.toBeNull();
-    fireEvent.click(chatCollapseIcon!.closest('button')!);
+    const panel = await screen.findByTestId('pipeline-test-panel');
+    expect(panel).toHaveAttribute('aria-hidden', 'true');
 
-    expect(screen.queryByTestId('chat-slot')).not.toBeInTheDocument();
+    const testBtn = screen.getByTestId('pipeline-test-button');
+    expect(testBtn).toBeEnabled();
+    await user.click(testBtn);
+
+    expect(panel).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('pipeline-test-panel-close'));
+    expect(panel).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('pipeline-test-button')).toBeInTheDocument();
   });
 
-  it('a real renderClearChatButton slot wires onClear through to handleHasRunsInProgress (editorPanelRef gone, so it safely resolves to false)', async () => {
+  it('disables Test Pipeline button when pipeline is unsaved or has no nodes connected to End', async () => {
+    renderConfigurationTab({ applicationId: undefined });
+    const testBtn = await screen.findByTestId('pipeline-test-button');
+    expect(testBtn).toBeDisabled();
+  });
+
+  it('a real renderClearChatButton slot wires onClear through to handleHasRunsInProgress once TestPanel is opened', async () => {
     const user = userEvent.setup();
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+      initYamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      initYamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+    });
     renderConfigurationTab({
       slots: {
         renderConfigurationForm: () => <div data-testid="configuration-form" />,
@@ -275,7 +297,7 @@ describe('ConfigurationTab', () => {
       },
     });
 
-    await screen.findByTestId('chat-slot');
+    await user.click(await screen.findByTestId('pipeline-test-button'));
     // Does not throw even though `editorPanelRef.current` is null (the `?? false` fallback).
     await user.click(screen.getByRole('button', { name: 'Clear' }));
   });

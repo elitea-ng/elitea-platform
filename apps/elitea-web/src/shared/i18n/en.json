@@ -7415,5 +7415,14 @@
   "entities.token.table.adminAccess": "Administration",
   "entities.token.table.adminInherit": "All your administration permissions",
   "entities.token.table.adminInheritEnds": "All your administration permissions, until {{date}}",
-  "entities.token.table.adminNone": "None"
+  "entities.token.table.adminNone": "None",
+  "features.pipelines.chatPanel.close": "Close",
+  "features.pipelines.chatPanel.closePanel": "Close test panel",
+  "features.pipelines.chatPanel.resize": "Resize test panel",
+  "features.pipelines.editorPanel.testPipeline": "Test Pipeline",
+  "features.pipelines.testPanel.blockReason.noEntryPoint": "Set an entry point to test the pipeline.",
+  "features.pipelines.testPanel.blockReason.noNodes": "Add and configure at least one node connected to End.",
+  "features.pipelines.testPanel.blockReason.noPathToEnd": "Connect the entry point to End to test the pipeline.",
+  "features.pipelines.testPanel.blockReason.nodeNotConfigured": "Configure node \"{{nodeId}}\": {{issue}}",
+  "features.pipelines.testPanel.blockReason.unsaved": "Save the pipeline to test it"
 }

@@ -418,4 +418,29 @@ describe('EditorPanel', () => {
     expect(usePipelineYamlStore.getState().initYamlCode).toBe(source);
     expect(usePipelineYamlStore.getState().stateKeyOrder).toEqual(['2', '10']);
   });
+
+  it('renders the Test Pipeline button with disabled-reason tooltip when empty, enables when connected to End, and hides while TestPanel is open', async () => {
+    const user = userEvent.setup();
+    const onTestPipeline = vi.fn();
+    const { unmount } = renderEditorPanel({ onTestPipeline, isTestPanelOpen: false });
+
+    const disabledBtn = await screen.findByTestId('pipeline-test-button');
+    expect(disabledBtn).toBeDisabled();
+    unmount();
+
+    usePipelineYamlStore.setState({
+      yamlCode: 'entry_point: Printer_1\nnodes:\n  - id: Printer_1\n    type: printer\n    transition: END\n',
+      yamlJsonObject: { entry_point: 'Printer_1', nodes: [{ id: 'Printer_1', type: 'printer', transition: 'END' }] },
+    });
+    const { unmount: unmountOpen } = renderEditorPanel({ onTestPipeline, isTestPanelOpen: false });
+    const enabledBtn = await screen.findByTestId('pipeline-test-button');
+    expect(enabledBtn).toBeEnabled();
+    await user.click(enabledBtn);
+    expect(onTestPipeline).toHaveBeenCalledTimes(1);
+    unmountOpen();
+
+    renderEditorPanel({ onTestPipeline, isTestPanelOpen: true });
+    await screen.findByRole('button', { name: 'Add node' });
+    expect(screen.queryByTestId('pipeline-test-button')).not.toBeInTheDocument();
+  });
 });

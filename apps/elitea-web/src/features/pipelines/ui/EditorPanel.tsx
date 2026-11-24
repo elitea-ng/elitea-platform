@@ -32,6 +32,7 @@ import { useIsPipelineYamlCodeDirty, isChatPath } from '../lib/hooks/useIsPipeli
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
 import { usePipelineYamlSerialization } from '../lib/hooks/usePipelineYamlSerialization';
 import { parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
+import { getTestBlockReason } from '../lib/flow-editor/helpers/pipelineReadiness.helpers';
 import type { RunSocketEvent } from '../lib/flow-editor/helpers/parseRunsByEvent.support';
 import type { FlowEdge, FlowNode, SetYamlJsonObject } from '../lib/flow-editor/reactFlowTypes';
 import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
@@ -41,47 +42,13 @@ import type { PipelineNodeType } from '../lib/flow-editor/constants/flowEditor.c
 import type { FlowEditorHandle } from './FlowEditor';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
 import { PipelineYamlSerializationAlert } from './PipelineYamlSerializationAlert';
+import { TestPipelineButton } from './TestPipelineButton';
 import { YamlCodeEditor } from './YamlCodeEditor';
 import type { PipelineEditorModeValue } from './FlowWrapper';
 
 const FlowWrapperLazy = lazy(() => import('./FlowWrapper').then((m) => ({ default: m.FlowWrapper })));
 
-/**
- * Ported from `apps/elitea-ui/src/pages/Pipelines/Components/EditorPanel.jsx`.
- *
- * **Real, load-bearing redesign of the yaml<->flow-graph plumbing, matching
- * the mission's own note that this sub-unit is "the LAST thing A2 builds"
- * and now transitively depends on sibling unit A2k's landed `FlowEditor.tsx`
- * — see `FlowWrapper.tsx`'s own doc comment for the full evidence trail on
- * why `FlowEditor` needs `yamlJsonObject`/`initialNodes`/`initialEdges`/
- * `layoutVersion`/`resetFlag`/`onResetHandled`/`onLayoutVersionChange` as
- * explicit props now, where the baseline read them off Redux.** This file
- * is the composition point that owns/computes all of them:
- *  - `yamlCode`/`yamlJsonObject`/`resetFlag`/`layoutVersion` are read
- *    directly from `../model/pipelineYamlStore.ts` (A2n's own store) —
- *    NOT via props, matching `PipelineEditor.tsx`'s own doc comment
- *    confirming this is the intended shape ("the zustand equivalent...
- *    `EditorPanel` reads them directly").
- *  - `initialNodes`/`initialEdges` are freshly derived from `yamlJsonObject`
- *    via `ParsePipelineHelpers.parseYaml` (real, landed, unit A2c) — the
- *    "nodes/edges freshly parsed from the current YAML" the baseline's own
- *    `FlowEditor.jsx` computed internally from Redux state.
- *
- * **Deprecated/dropped, disclosed:**
- *  - `StyledTooltip` (`@/ComponentsLib/Tooltip.jsx`) -> plain MUI `Tooltip`
- *    — the baseline's OWN `AddNodeMenu.jsx` already used plain MUI
- *    `Tooltip` for the identical "add node" affordance; no behavioural
- *    difference beyond default MUI tooltip chrome.
- *  - `ChunkHelpers.lazyWithRetry` (not ported) -> plain React `lazy()`; the
- *    error boundary's "Reload the page" action covers chunk-load failures.
- *  - `react-error-boundary` (not a dependency of this app) -> a small local
- *    class-component error boundary.
- *  - `data-tour={PIPELINE_TOUR_TARGET_IDS.workspace}` (baseline:
- *    `features/interactive-tours`) — dropped, same treatment this batch's
- *    other pipelines files already give that out-of-scope domain.
- *  - `useToast` — no toast primitive exists yet; the "code copied" toast is
- *    dropped, the copy action itself is real.
- */
+/** Ported from `EliteaUI` `pages/Pipelines/Components/EditorPanel.jsx` — Flow/YAML toolbar + lazy FlowWrapper + YamlCodeEditor. */
 export interface EditorPanelHandle {
   readonly onRcvAgentEvent: (event: unknown) => void;
   readonly deleteAllRunNodes: () => void;
@@ -98,6 +65,10 @@ export interface EditorPanelProps {
   readonly disabled?: boolean | undefined;
   readonly versionTools?: readonly PipelineToolEntry[] | undefined;
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
+  readonly onTestPipeline?: (() => void) | undefined;
+  readonly testDisabledReason?: string | undefined;
+  readonly isTestPanelOpen?: boolean | undefined;
+  readonly onCanvasNodeInteraction?: (() => void) | undefined;
 }
 
 interface FlowEditorErrorBoundaryProps {
@@ -200,7 +171,19 @@ const yamlEditorContainerSx = (isFromChat: boolean, isSmallWindow: boolean): SxP
 });
 
 export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(function EditorPanel(props, ref): ReactNode {
-  const { setYamlDirty, stopRun, display, sx, disabled, versionTools, llmSettings } = props;
+  const {
+    setYamlDirty,
+    stopRun,
+    display,
+    sx,
+    disabled,
+    versionTools,
+    llmSettings,
+    onTestPipeline,
+    testDisabledReason,
+    isTestPanelOpen = false,
+    onCanvasNodeInteraction,
+  } = props;
   const { isSmallWindow } = useIsSmallWindow();
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
   const isFromChat = isChatPath(pathname);
@@ -328,6 +311,12 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const initialNodes: readonly FlowNode[] = useMemo(() => parseYaml(yamlJsonObject).nodes as unknown as readonly FlowNode[], [yamlJsonObject]);
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
 
+  const flowTestDisabledReason = useMemo(
+    () => (onTestPipeline ? getTestBlockReason(yamlJsonObject) : ''),
+    [onTestPipeline, yamlJsonObject],
+  );
+  const effectiveTestDisabledReason = testDisabledReason || flowTestDisabledReason;
+
   const rootBaseSx: SxProps<Theme> = useMemo(() => ({ display: display ?? 'flex', flexDirection: 'column', height: '100%', minHeight: 0, flex: 1 }), [display]);
   const rootSx = combineSx(rootBaseSx, sx);
 
@@ -344,6 +333,12 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
             <AddNodeMenu
               onAddNode={onAddNode}
               disabled={disabled}
+            />
+          )}
+          {onTestPipeline && !isTestPanelOpen && (
+            <TestPipelineButton
+              onClick={onTestPipeline}
+              disabledReason={effectiveTestDisabledReason}
             />
           )}
         </Box>
@@ -368,6 +363,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
               disabled={disabled}
               versionTools={versionTools}
               llmSettings={llmSettings}
+              onCanvasNodeInteraction={onCanvasNodeInteraction}
             />
           </Suspense>
         </FlowEditorErrorBoundary>

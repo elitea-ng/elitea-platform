@@ -71,8 +71,8 @@ function editorIsLoading(isFetching: boolean, detail: unknown): boolean {
   return isFetching && detail === undefined;
 }
 
-/** The editor's controls (versions, chat, save) in the page toolbar. */
-const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: '0.5rem' };
+/** The editor's controls (versions, save/cancel, actions) in the page toolbar. */
+const actionsSx: SxProps<Theme> = { display: 'flex', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, gap: '0.75rem' };
 const contentSx: SxProps<Theme> = {
   flex: 1,
   minHeight: 0,
@@ -344,21 +344,19 @@ export function EditPipeline(): ReactNode {
               />
               {!isEditorLoading && !isReadOnlyView && (
                 <>
-                  {/* The Chat action — the only way to actually TALK to this
-                      pipeline; see `./ui/ChatWithPipelineButton.tsx` for the
-                      participant mapping and why it is writer-only. */}
+                  <EditPipelineSaveBar
+                    onSave={handleSave}
+                    canSave={form.formState.isValid && !isSaving}
+                    isSaving={isSaving}
+                    onDiscarded={handleDiscarded}
+                  />
+                  {/* Chat + kebab (Share, Fork, Export, Delete; Publish hidden) */}
                   <EditPipelineActions
                     applicationId={params.agentId}
                     detail={detail}
                     activeVersion={activeVersion}
                     projectId={projectId}
                     tab={params.tab}
-                  />
-                  <EditPipelineSaveBar
-                    onSave={handleSave}
-                    canSave={form.formState.isValid && !isSaving}
-                    isSaving={isSaving}
-                    onDiscarded={handleDiscarded}
                   />
                 </>
               )}

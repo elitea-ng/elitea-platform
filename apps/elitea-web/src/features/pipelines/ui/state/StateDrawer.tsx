@@ -15,7 +15,7 @@
  * this file has neither.
  */
 import type { ReactNode } from 'react';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 
 import CloseIcon from '@mui/icons-material/Close';
 import Box from '@mui/material/Box';
@@ -43,6 +43,8 @@ export interface StateDrawerProps {
   readonly disabled?: boolean | undefined;
   /** Horizontal offset in pixels from the right edge (e.g. `400` when `NodeConfigDrawer` is open). */
   readonly rightOffset?: number | undefined;
+  /** Reports the active drawer width in pixels while open (`0` when closed) so canvas overlays (minimap) dock beside it without overlap. */
+  readonly onWidthChange?: ((width: number) => void) | undefined;
 }
 
 type StateMap = Readonly<Record<string, unknown>>;
@@ -52,7 +54,7 @@ function stateOf(document: YamlPipelineDocument): StateMap {
 }
 
 export function StateDrawer(props: StateDrawerProps): ReactNode {
-  const { isOpen, onClose, setYamlJsonObject, yamlJsonObject, disabled, rightOffset = 0 } = props;
+  const { isOpen, onClose, setYamlJsonObject, yamlJsonObject, disabled, rightOffset = 0, onWidthChange } = props;
   const displayStates = useMemo(
     () => (yamlJsonObject.state === undefined ? undefined : stateVariableSpecsForDisplay(stateOf(yamlJsonObject))),
     [yamlJsonObject],
@@ -60,6 +62,10 @@ export function StateDrawer(props: StateDrawerProps): ReactNode {
 
   const { containerRef, drawerWidth, isResizing, isHoveringHandle, setIsHoveringHandle, handleResizeStart } =
     useResizableDrawer();
+
+  useEffect(() => {
+    onWidthChange?.(isOpen ? drawerWidth : 0);
+  }, [isOpen, drawerWidth, onWidthChange]);
 
   const handleToggleState = useCallback(
     (name: string, enabled: boolean) => {

@@ -1,13 +1,4 @@
-/**
- * Ported from `EliteaUI` `flow-editor/ui/FlowEditor.jsx` — canvas composition root.
- * Split across `./FlowEditor.styles.ts`, `./useFlowEditorLifecycle.ts`,
- * `./useFlowEditorNodeOperations.ts`, `./useFlowEditorNodeTypes.tsx`,
- * `./FlowEditorProvider.tsx`, `./FlowEditorCanvasControls.tsx`, and
- * `./FlowEditorStateToggle.tsx` to stay within §3.5 budgets.
- *
- * Uses zustand (`pipelineEditorStore`) + explicit props instead of Redux;
- * GA tracking and interactive-tour `data-tour` attributes are omitted.
- */
+/** Ported from `EliteaUI` `flow-editor/ui/FlowEditor.jsx` — canvas composition root (zustand + explicit props). */
 import type { ReactNode } from 'react';
 import { forwardRef, memo, useCallback, useImperativeHandle, useMemo, useState } from 'react';
 
@@ -58,6 +49,7 @@ import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
 import { ConnectionDropdown } from './settings/ConnectionDropdown';
 import { StateDrawer } from './state/StateDrawer';
 import {
+  computeDockingOffsets,
   extractSxDisplay,
   getCanvasInteractionFlags,
   getVisibleFlowNodes,
@@ -94,6 +86,8 @@ export interface FlowEditorProps {
   /** Bridged into every `llmSettings`-accepting node — see `./useFlowEditorNodeTypes.tsx`'s doc comment. */
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
   readonly disabled?: boolean | undefined;
+  readonly onCanvasNodeInteraction?: (() => void) | undefined;
+  readonly extraRightOffsetPx?: number | undefined;
   readonly sx?: SxProps<Theme> | undefined;
 }
 
@@ -119,13 +113,14 @@ export interface FlowEditorHandle {
 }
 
 const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function FlowEditor(props, ref): ReactNode {
-  const { yamlJsonObject, setYamlJsonObject, initialNodes, initialEdges, layoutVersion, resetFlag, onResetHandled, onLayoutVersionChange, stopRun, versionTools, llmSettings, disabled, sx } = props;
+  const { yamlJsonObject, setYamlJsonObject, initialNodes, initialEdges, layoutVersion, resetFlag, onResetHandled, onLayoutVersionChange, stopRun, versionTools, llmSettings, disabled, onCanvasNodeInteraction, extraRightOffsetPx, sx } = props;
 
   const { colorScheme } = useColorScheme();
   const [expandAll] = useState(true);
   const [isCanvasLocked, setIsCanvasLocked] = useState(false);
   const [orientation, setOrientation] = useState<CanvasArrangeOrientation>('TB');
   const [isStateDrawerOpen, setIsStateDrawerOpen] = useState(false);
+  const [stateDrawerWidth, setStateDrawerWidth] = useState(0);
 
   const { setNodes: persistNodes, setEdges: persistEdges } = useSaveNodesAndEdges();
   const cachedNodes = usePipelineEditorStore(state => state.nodes);
@@ -201,15 +196,24 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
     [versionTools],
   );
 
+  const handleAddNode = useCallback(
+    (type: string) => {
+      onCanvasNodeInteraction?.();
+      return onAddNode(type);
+    },
+    [onAddNode, onCanvasNodeInteraction],
+  );
+
   const handleDuplicateNode = useCallback(
     (nodeId: string): FlowNode | undefined => {
       if (safeDisabled) return undefined;
+      onCanvasNodeInteraction?.();
       return onDuplicateNode(nodeId, versionToolNames);
     },
-    [onDuplicateNode, safeDisabled, versionToolNames],
+    [onDuplicateNode, safeDisabled, versionToolNames, onCanvasNodeInteraction],
   );
 
-  const latest = useLatest({ fitViewVoid, flowNodes, onAddNode, handleDuplicateNode, onRcvAgentEvent, setFlowEdges, setFlowNodes, deleteAllRunNodes, calculateLayoutNodes, expandAll, orientation, onStopRun, pipelineRunNodes });
+  const latest = useLatest({ fitViewVoid, flowNodes, onAddNode: handleAddNode, handleDuplicateNode, onRcvAgentEvent, setFlowEdges, setFlowNodes, deleteAllRunNodes, calculateLayoutNodes, expandAll, orientation, onStopRun, pipelineRunNodes });
 
   useImperativeHandle(
     ref,
@@ -275,8 +279,8 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
   );
 
   const { nodeTypes, edgeTypes } = useFlowEditorNodeTypes({ versionTools, llmSettings });
-  const { selectedNodeId, isNodeDrawerOpen, handleSelectNode, handleCloseNodeDrawer } = useFlowEditorNodeSelection(visibleFlowNodes, setFlowNodes);
-  const drawerRightOffset = isNodeDrawerOpen ? 400 : 0;
+  const { selectedNodeId, isNodeDrawerOpen, handleSelectNode, handleCloseNodeDrawer } = useFlowEditorNodeSelection(visibleFlowNodes, setFlowNodes, onCanvasNodeInteraction);
+  const { drawerRightOffset, minimapRightOffset } = computeDockingOffsets(isNodeDrawerOpen, isStateDrawerOpen, stateDrawerWidth, extraRightOffsetPx);
 
   return (
     <Box
@@ -338,6 +342,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
           nodesDraggable={canEditCanvas}
           nodesConnectable={canEditCanvas}
           edgesReconnectable={canEditCanvas}
+          {...(onCanvasNodeInteraction ? { onNodeDragStop: onCanvasNodeInteraction } : {})}
           defaultViewport={FLOW_EDITOR_DEFAULT_VIEWPORT}
         >
           <FlowEditorBackground />
@@ -347,7 +352,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
             orientation={orientation}
             onArrange={onArrange}
             canArrange={canArrange}
-            rightOffsetPx={drawerRightOffset}
+            rightOffsetPx={minimapRightOffset}
           />
         </ReactFlow>
         <FlowNodeConfigDrawer
@@ -359,20 +364,8 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
           toolNames={versionToolNames}
         />
       </FlowEditorProvider>
-      {isEmptyPipeline && (
-        <FlowEmptyState
-          onAddNode={onAddNode}
-          disabled={safeDisabled}
-        />
-      )}
-      <StateDrawer
-        isOpen={isStateDrawerOpen}
-        onClose={onToggleStateDrawer}
-        setYamlJsonObject={setYamlJsonObject}
-        yamlJsonObject={yamlJsonObject}
-        disabled={disabled}
-        rightOffset={drawerRightOffset}
-      />
+      {isEmptyPipeline && <FlowEmptyState onAddNode={handleAddNode} disabled={safeDisabled} />}
+      <StateDrawer isOpen={isStateDrawerOpen} onClose={onToggleStateDrawer} setYamlJsonObject={setYamlJsonObject} yamlJsonObject={yamlJsonObject} disabled={disabled} rightOffset={drawerRightOffset} onWidthChange={setStateDrawerWidth} />
       <DeleteEntityModal
         open={showDeleteConfirmDlg}
         onClose={onCancelDelete}
@@ -381,15 +374,7 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
         alarm={false}
         copy={{ title: t('pipelines.flowEditor.deleteNode.title', 'Delete node?'), textContent: confirmContent, confirmText: t('pipelines.flowEditor.deleteNode.confirm', 'Remove') }}
       />
-      <ConnectionDropdown
-        open={showConnectionDropdown}
-        anchorPosition={dropdownPosition}
-        targetNodes={availableTargets}
-        availableNodeTypes={availableNodeTypes}
-        onNodeSelect={handleNodeSelect}
-        onNodeCreate={handleNodeCreate}
-        onClose={handleDropdownClose}
-      />
+      <ConnectionDropdown open={showConnectionDropdown} anchorPosition={dropdownPosition} targetNodes={availableTargets} availableNodeTypes={availableNodeTypes} onNodeSelect={handleNodeSelect} onNodeCreate={handleNodeCreate} onClose={handleDropdownClose} />
     </Box>
   );
 });
