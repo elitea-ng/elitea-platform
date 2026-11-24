@@ -35,11 +35,13 @@
 import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import { useEdges } from '@xyflow/react';
 
 import { AIAssistantInput } from '../../ui/AIAssistantInput';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import { PipelineNodeTypes } from '../../lib/flow-editor/constants/flowEditor.constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import type { YamlPipelineNode } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
@@ -50,6 +52,7 @@ import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
 import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputs } from '../settings/SimpleLLMInputs';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { t } from '@/shared/i18n';
 
 export interface PrinterNodeProps {
@@ -155,6 +158,7 @@ export const PrinterNode = memo(function PrinterNode({ id, data, selected, llmSe
     >
       <NodeConfigSection section="basic">
         <SimpleLLMInputs
+          nodeType={PipelineNodeTypes.Printer}
           inputMappings={inputMappings}
           values={yamlNode?.input_mapping ?? {}}
           onChangeMapping={onChangeMapping as never}
@@ -163,16 +167,25 @@ export const PrinterNode = memo(function PrinterNode({ id, data, selected, llmSe
           enableAIAssistant
           modelConfig={pipelineLLMConfig as never}
         />
-        <AIAssistantInput
-          disabled={Boolean(isRunningPipeline || disabled)}
-          label={finalMessageLabel}
-          placeholder={t('pipelines.flowEditor.printerNode.finalMessagePlaceholder', 'The message shown when the flow reaches this node')}
-          fieldName={finalMessageLabel}
-          value={finalMessageValue ?? ''}
-          fieldBinding={{ name: 'final_message', onInput: handleFinalMessageChange }}
-          language="text"
-          modelConfig={pipelineLLMConfig as never}
-        />
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', width: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <AIAssistantInput
+              disabled={Boolean(isRunningPipeline || disabled)}
+              label={finalMessageLabel}
+              placeholder={t('pipelines.flowEditor.printerNode.finalMessagePlaceholder', 'The message shown when the flow reaches this node')}
+              fieldName={finalMessageLabel}
+              value={finalMessageValue ?? ''}
+              fieldBinding={{ name: 'final_message', onInput: handleFinalMessageChange }}
+              language="text"
+              modelConfig={pipelineLLMConfig as never}
+            />
+          </Box>
+          <InfoTooltip
+            title={getNodeFieldInfo(PipelineNodeTypes.Printer, NODE_FIELD_KEYS.finalMessage)}
+            placement="top"
+            data-testid="pipeline-node-field-info"
+          />
+        </Box>
       </NodeConfigSection>
       {nodeSettingsFamilyKeys(PipelineNodeTypes.Printer) !== undefined ? (
         <NodeConfigSection section="advanced" defaultExpanded={false}>

@@ -20,13 +20,15 @@ import { useToolkitTypeSchemas } from '../../lib/flow-editor/hooks/useToolkitTyp
 import { useSelectedProjectId } from '../../lib/flow-editor/hooks/useSelectedProjectId';
 import type { PickerToolEntry, ToolkitListRow } from '../../lib/tool-picker/toolPicker.types';
 import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
-import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
-import { InputMapping } from '../settings/InputMappings/InputMapping';
-import { NodeSettings } from '../settings/NodeSettings';
-import { InputSelect } from '../select/InputSelect';
-import { OutputSelect } from '../select/OutputSelect';
+import type { InputMappingFieldsProps } from '../settings/InputMappings/InputMappingFields';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
 import { ProjectToolkitPicker } from '../tool-picker/ProjectToolkitPicker';
+import {
+  BaseToolNodeAdvancedSection,
+  BaseToolNodeBasicMappings,
+  McpDisconnectedHint,
+  useToolNodeParameterPartition,
+} from './BaseToolNode.parts';
 import { NodeCard } from './BaseNode/NodeCard';
 import { CustomHandle } from './CustomHandle';
 import { t } from '@/shared/i18n';
@@ -164,6 +166,7 @@ function BaseToolNodeHandles({ isRunningPipeline, disabled, isPerforming }: Base
 }
 
 interface ToolFunctionSelectProps {
+  readonly nodeType: string;
   readonly functionOptions: readonly FunctionOption[];
   readonly selectedTool: string;
   readonly onChangeTool: (newValue: string | undefined) => void;
@@ -178,24 +181,14 @@ interface ToolFunctionSelectProps {
   readonly onRetry: () => void;
 }
 
-/**
- * `BaseToolNode.jsx:149-161` (the conditional "Tool" select) as its own
- * named component -- split out purely to keep `BaseToolNode` under the §3.5
- * complexity ceiling.
- *
- * NO EMPTY LIST FOR A FAILED READ (#440). The node used to render nothing at
- * all when the option list was empty, whatever the cause. An empty list now
- * keeps one meaning — the toolkit offers no tools — and a failed read gets
- * its own visible state with a retry. A failed read that still produced
- * options (the toolkit carries its own `selected_tools`, and only the type
- * schemas were lost) keeps the working picker: the list on screen is real.
- */
-function ToolFunctionSelect({ functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, catalogueDiscoveryDisabled, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
+function ToolFunctionSelect({ nodeType, functionOptions, selectedTool, onChangeTool, onClearTool, disabled, catalogueReadFailed, catalogueDiscoveryDisabled, typeSchemasReadFailed, onRetry }: ToolFunctionSelectProps): ReactNode {
   if (functionOptions.length > 0) {
+    const toolLabel = t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool');
     return (
       <div className="nopan nodrag nowheel">
+        <NodeFieldHeading label={toolLabel} nodeType={nodeType} fieldKey={NODE_FIELD_KEYS.tool} />
         <SingleSelect
-          label={t('pipelines.flowEditor.baseToolNode.toolLabel', 'Tool')}
+          label={toolLabel}
           value={selectedTool}
           onChange={onChangeTool}
           options={[...functionOptions]}
@@ -220,11 +213,13 @@ function resolvePickerToolkitMeta(nodeType: string): {
   readonly isMcpNode: boolean;
   readonly tooltip: string | undefined;
   readonly testId: string;
+  readonly testIdPrefix: string;
 } {
   const isMcpNode = nodeType === PipelineNodeTypes.Mcp;
   const tooltip = getNodeFieldInfo(nodeType, isMcpNode ? NODE_FIELD_KEYS.mcp : NODE_FIELD_KEYS.toolkit) || undefined;
-  const testId = isMcpNode ? 'pipeline-mcp-node-picker' : 'pipeline-toolkit-node-picker';
-  return { isMcpNode, tooltip, testId };
+  const testIdPrefix = isMcpNode ? 'pipeline-mcp-node' : 'pipeline-toolkit-node';
+  const testId = `${testIdPrefix}-picker`;
+  return { isMcpNode, tooltip, testId, testIdPrefix };
 }
 
 function resolvePickerValue(
@@ -235,28 +230,7 @@ function resolvePickerValue(
   return selectedToolkit && customFilterTypes(selectedToolkit) ? (toolkit ?? '') : '';
 }
 
-function BaseToolNodeAdvancedSection({
-  id,
-  nodeType,
-  showStructuredOutput,
-  disabled,
-}: {
-  readonly id: string;
-  readonly nodeType: string;
-  readonly showStructuredOutput: boolean;
-  readonly disabled: boolean;
-}): ReactNode {
-  return (
-    <NodeConfigSection section="advanced" defaultExpanded={false}>
-      <NodeFieldHeading label={t('pipelines.flowEditor.baseToolNode.inputLabel', 'Input')} nodeType={nodeType} fieldKey={NODE_FIELD_KEYS.input} />
-      <InputSelect id={id} inputFieldName="input" disabled={disabled} />
-      <NodeFieldHeading label={t('pipelines.flowEditor.baseToolNode.outputLabel', 'Output')} nodeType={nodeType} fieldKey={NODE_FIELD_KEYS.output} />
-      <OutputSelect id={id} label={t('pipelines.flowEditor.baseToolNode.outputLabel', 'Output')} outputFieldName="output" disabled={disabled} />
-      <CommonInterruptSettings id={id} showStructuredOutput={showStructuredOutput} type={nodeType} disabled={disabled} />
-      <NodeSettings id={id} type={nodeType} disabled={disabled} />
-    </NodeConfigSection>
-  );
-}
+const EMPTY_MAPPING: Readonly<Record<string, import('../../lib/flow-editor/helpers/pipelineFlow.types').YamlInputMappingEntry>> = {};
 
 export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps): ReactNode {
   const { id, data, selected, nodeType, showStructuredOutput = false, customFilterTypes = defaultFilterTypes, versionTools } = props;
@@ -309,33 +283,21 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
     [getToolkitNameFromSchema, id, setYamlJsonObject, toolkitTypes, yamlJsonObject, yamlNode?.input_mapping],
   );
 
-  const onClearTool = useCallback(() => {
-    onChangeTool(undefined);
-  }, [onChangeTool]);
-
-  // Both reads feed the same picker, so one retry control must run both.
+  const onClearTool = useCallback(() => onChangeTool(undefined), [onChangeTool]);
   const onRetryToolList = useCallback(() => {
     retryDynamicToolsRead();
     retryTypeSchemasRead();
   }, [retryDynamicToolsRead, retryTypeSchemasRead]);
-
   const onSelectPickerToolkit = useCallback(
     (source: PickerToolEntry | ToolkitListRow, toolkitName: string) => {
       const matched = (versionTools ?? []).find(
         (entry) => (entry.toolkit_name || getToolkitNameFromSchema(entry)) === toolkitName,
       );
-      const nextToolkit: PipelineToolEntry = matched ?? {
-        ...(source as unknown as PipelineToolEntry),
-        toolkit_name: toolkitName,
-      };
-      onSelectToolkit(nextToolkit);
+      onSelectToolkit(matched ?? { ...(source as unknown as PipelineToolEntry), toolkit_name: toolkitName });
     },
     [getToolkitNameFromSchema, onSelectToolkit, versionTools],
   );
-
-  const onClearToolkit = useCallback(() => {
-    onSelectToolkit(null);
-  }, [onSelectToolkit]);
+  const onClearToolkit = useCallback(() => onSelectToolkit(null), [onSelectToolkit]);
 
   const pickerMeta = resolvePickerToolkitMeta(nodeType);
   const pickerContext = useMemo(
@@ -347,8 +309,27 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
     [customFilterTypes, projectId, versionTools, yamlJsonObject],
   );
   const isDisabled = Boolean(isRunningPipeline || disabled);
-
   const resolvedPickerValue = resolvePickerValue(selectedToolkit, toolkit, customFilterTypes);
+  const isDeprecatedLayout = nodeType === PipelineNodeTypes.Function;
+  const currentValues = yamlNode?.input_mapping ?? EMPTY_MAPPING;
+  const { requiredKeys, shownOptionalKeys, addableOptionalParameters, onRevealOptionalParameter } =
+    useToolNodeParameterPartition({
+      toolkit,
+      selectedTool,
+      inputMappings,
+      requiredInputs,
+      currentMappingValues: currentValues,
+    });
+
+  const mappingFieldsProps: Omit<InputMappingFieldsProps, 'keys'> = {
+    input_mapping: inputMappings as never,
+    mappingInfo: mappingInfo as never,
+    defaultValues,
+    values: currentValues,
+    onChangeMapping,
+    disabled: isDisabled,
+    nodeType,
+  };
 
   return (
     <NodeCard
@@ -373,7 +354,9 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
           pickerContext={pickerContext}
           data-testid={pickerMeta.testId}
         />
+        {pickerMeta.isMcpNode ? <McpDisconnectedHint mcp={selectedToolkit} /> : null}
         <ToolFunctionSelect
+          nodeType={nodeType}
           functionOptions={functionOptions}
           selectedTool={selectedTool}
           onChangeTool={onChangeTool}
@@ -384,17 +367,25 @@ export const BaseToolNode = memo(function BaseToolNode(props: BaseToolNodeProps)
           typeSchemasReadFailed={typeSchemasReadFailed}
           onRetry={onRetryToolList}
         />
-        <InputMapping
+        <BaseToolNodeBasicMappings
+          isDeprecatedLayout={isDeprecatedLayout}
+          requiredKeys={requiredKeys}
           requiredInputs={requiredInputs}
-          mappingInfo={mappingInfo as never}
-          input_mapping={inputMappings as never}
-          defaultValues={defaultValues}
-          values={yamlNode?.input_mapping ?? {}}
-          onChangeMapping={onChangeMapping}
-          disabled={isDisabled}
+          mappingProps={mappingFieldsProps}
         />
       </NodeConfigSection>
-      <BaseToolNodeAdvancedSection id={id} nodeType={nodeType} showStructuredOutput={showStructuredOutput} disabled={isDisabled} />
+      <BaseToolNodeAdvancedSection
+        id={id}
+        nodeType={nodeType}
+        showStructuredOutput={showStructuredOutput}
+        disabled={isDisabled}
+        isDeprecatedLayout={isDeprecatedLayout}
+        shownOptionalKeys={shownOptionalKeys}
+        addableOptionalParameters={addableOptionalParameters}
+        onRevealOptionalParameter={onRevealOptionalParameter}
+        mappingProps={mappingFieldsProps}
+        testIdPrefix={pickerMeta.testIdPrefix}
+      />
     </NodeCard>
   );
 });

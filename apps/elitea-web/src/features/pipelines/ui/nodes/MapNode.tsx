@@ -6,5 +6,11 @@ import { ExtensionNodeShell } from '../settings/graph-extensions/ExtensionNodeSh
 import { MapSettings } from '../settings/graph-extensions/MapSettings';
 
 export const MapNode = memo(function MapNode(props: NodeProps<FlowNode>): ReactNode {
-  return <ExtensionNodeShell {...props} renderSettings={(settings) => <MapSettings {...settings} />} />;
+  return (
+    <ExtensionNodeShell
+      {...props}
+      renderSettings={(settings) => <MapSettings {...settings} section="basic" />}
+      renderAdvancedSettings={(settings) => <MapSettings {...settings} section="advanced" />}
+    />
+  );
 });

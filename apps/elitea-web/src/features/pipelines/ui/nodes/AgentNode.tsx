@@ -68,11 +68,12 @@ import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
 import type { ApplicationListRow, PickerItem, PickerToolEntry } from '../../lib/tool-picker/toolPicker.types';
 import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { CommonInterruptSettings } from '../settings/CommonInterruptSettings';
-import { InputMapping, type InputMappingProps } from '../settings/InputMappings/InputMapping';
+import { InputMappingFields, type InputMappingFieldsProps } from '../settings/InputMappings/InputMappingFields';
 import { NodeSettings } from '../settings/NodeSettings';
 import { InputSelect } from '../select/InputSelect';
 import { OutputSelect } from '../select/OutputSelect';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
+import { AgentVersionSelect } from '../tool-picker/AgentVersionSelect';
 import { ProjectAgentPicker } from '../tool-picker/ProjectAgentPicker';
 import { CustomHandle } from './CustomHandle';
 import { NodeCard } from './BaseNode/NodeCard';
@@ -164,6 +165,66 @@ function resolveAgentTooltip(): string | undefined {
   return getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Agent, NODE_FIELD_KEYS.agent) || undefined;
 }
 
+function resolveVersionTooltip(): string | undefined {
+  return getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Agent, NODE_FIELD_KEYS.version) || undefined;
+}
+
+const TASK_KEY = 'task';
+const CHAT_HISTORY_KEY = 'chat_history';
+
+function partitionAgentMappingKeys(
+  inputMappings: Readonly<Record<string, unknown>> | undefined,
+  requiredInputs: readonly string[],
+): { readonly basicKeys: readonly string[]; readonly advancedKeys: readonly string[] } {
+  const allKeys = Object.keys(inputMappings ?? {});
+  const basicKeys = [TASK_KEY, ...requiredInputs.filter((key) => key !== TASK_KEY)];
+  const advancedKeys = [
+    CHAT_HISTORY_KEY,
+    ...allKeys.filter((key) => key !== CHAT_HISTORY_KEY && !basicKeys.includes(key)),
+  ];
+  return { basicKeys, advancedKeys };
+}
+
+function findAttachedAgentTool(
+  boundTool: string | undefined,
+  versionTools: readonly PipelineToolEntry[],
+): PickerToolEntry | undefined {
+  if (!boundTool) return undefined;
+  return versionTools.find((tool) => toolkitFilter(tool) && tool.name === boundTool);
+}
+
+function AgentNodeVersionAndBasicMappings({
+  isOrphan,
+  attachedTool,
+  projectId,
+  disabled,
+  basicKeys,
+  mappingFieldsProps,
+}: {
+  readonly isOrphan: boolean;
+  readonly attachedTool: PickerToolEntry | undefined;
+  readonly projectId: string | undefined;
+  readonly disabled: boolean;
+  readonly basicKeys: readonly string[];
+  readonly mappingFieldsProps: Omit<InputMappingFieldsProps, 'keys'>;
+}): ReactNode {
+  if (isOrphan) return null;
+  return (
+    <>
+      {attachedTool ? (
+        <AgentVersionSelect
+          tool={attachedTool}
+          tooltip={resolveVersionTooltip()}
+          projectId={projectId}
+          disabled={disabled}
+          data-testid="pipeline-agent-node-version-select"
+        />
+      ) : null}
+      <InputMappingFields keys={basicKeys} {...mappingFieldsProps} />
+    </>
+  );
+}
+
 export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNode {
   const { id, data, selected, type: nodeType = FlowEditorConstants.PipelineNodeTypes.Agent, versionTools } = props;
 
@@ -226,6 +287,20 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
 
   const selectedToolkitValue = boundTool ?? '';
   const inputMappingValues = yamlNode?.input_mapping ?? EMPTY_RECORD;
+  const attachedTool = useMemo(() => findAttachedAgentTool(boundTool, resolvedVersionTools), [boundTool, resolvedVersionTools]);
+  const { basicKeys, advancedKeys } = useMemo(
+    () => partitionAgentMappingKeys(inputMappings, requiredInputs),
+    [inputMappings, requiredInputs],
+  );
+  const mappingFieldsProps: Omit<InputMappingFieldsProps, 'keys'> = {
+    input_mapping: inputMappings as InputMappingFieldsProps['input_mapping'],
+    mappingInfo: mappingInfo as InputMappingFieldsProps['mappingInfo'],
+    defaultValues,
+    values: inputMappingValues,
+    onChangeMapping,
+    disabled: isFieldsDisabled,
+    nodeType: FlowEditorConstants.PipelineNodeTypes.Agent,
+  };
 
   return (
     <NodeCard
@@ -258,17 +333,14 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
           pickerContext={pickerContext}
           data-testid="pipeline-agent-node-picker"
         />
-        {!isOrphan && (
-          <InputMapping
-            requiredInputs={requiredInputs}
-            input_mapping={inputMappings as InputMappingProps['input_mapping']}
-            mappingInfo={mappingInfo as InputMappingProps['mappingInfo']}
-            defaultValues={defaultValues}
-            values={inputMappingValues}
-            onChangeMapping={onChangeMapping}
-            disabled={isFieldsDisabled}
-          />
-        )}
+        <AgentNodeVersionAndBasicMappings
+          isOrphan={isOrphan}
+          attachedTool={attachedTool}
+          projectId={projectId}
+          disabled={isFieldsDisabled}
+          basicKeys={basicKeys}
+          mappingFieldsProps={mappingFieldsProps}
+        />
       </NodeConfigSection>
       <NodeConfigSection section="advanced" defaultExpanded={false}>
         <NodeFieldHeading
@@ -293,6 +365,9 @@ export const AgentNode = memo(function AgentNode(props: AgentNodeProps): ReactNo
           outputFieldName="output"
           disabled={isFieldsDisabled}
         />
+        {!isOrphan && (
+          <InputMappingFields keys={advancedKeys} {...mappingFieldsProps} />
+        )}
         <CommonInterruptSettings
           id={id}
           type={FlowEditorConstants.PipelineNodeTypes.Agent}

@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event';
 import { cleanup } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -25,6 +26,7 @@ describe('the fixed Parallel card', () => {
   it('shows field-specific refusal for foreign Map configuration while retaining original data', async () => {
     const yaml = parallelYaml.replace('    wait: all', '    wait: any\n    reduction: ordered_collection\n    input_mapping: {task: {type: fixed, value: foreign}}');
     const screen = renderExtensionCard(ParallelNode, yaml);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Advanced' }));
     await screen.findByRole('combobox', { name: 'Wait policy' });
     expect(screen.getAllByText(/wait: Select all/u).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/reduction: This field/u).length).toBeGreaterThan(0);

@@ -165,4 +165,15 @@ describe('AgentNode', () => {
   it('renders without a versionTools prop at all (defaults to an empty list)', () => {
     expect(() => renderAgentNode({ versionTools: undefined })).not.toThrow();
   });
+
+  it('renders AgentVersionSelect in Basic when an attached agent tool is bound', async () => {
+    const yamlJsonObject: YamlPipelineDocument = {
+      nodes: [{ id: 'Node1', type: 'agent', tool: 'Researcher' }],
+    };
+    const versionTools = [
+      { id: '10', name: 'Researcher', type: 'application', settings: { application_id: 10, application_version_id: 1 } },
+    ];
+    const { findByTestId } = renderAgentNode({ versionTools }, { yamlJsonObject });
+    expect(await findByTestId('pipeline-agent-node-version-select')).toBeInTheDocument();
+  });
 });

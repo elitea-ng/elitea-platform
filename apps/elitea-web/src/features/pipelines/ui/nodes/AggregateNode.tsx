@@ -6,5 +6,11 @@ import { ExtensionNodeShell } from '../settings/graph-extensions/ExtensionNodeSh
 import { AggregateSettings } from '../settings/graph-extensions/AggregateSettings';
 
 export const AggregateNode = memo(function AggregateNode(props: NodeProps<FlowNode>): ReactNode {
-  return <ExtensionNodeShell {...props} renderSettings={(settings) => <AggregateSettings {...settings} />} />;
+  return (
+    <ExtensionNodeShell
+      {...props}
+      renderSettings={(settings) => <AggregateSettings {...settings} section="basic" />}
+      renderAdvancedSettings={(settings) => <AggregateSettings {...settings} section="advanced" />}
+    />
+  );
 });

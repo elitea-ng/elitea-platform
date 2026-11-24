@@ -14,6 +14,7 @@ export interface ParallelSettingsProps {
   readonly disabled: boolean;
   readonly change: (field: string, value: unknown) => void;
   readonly remove: (field: string) => void;
+  readonly section?: 'basic' | 'advanced' | 'all' | undefined;
 }
 /**
  * The stored On Error (`on_error`, contract v1.1 §8a). Absent means `continue`;
@@ -25,7 +26,9 @@ function onErrorOf(node: Readonly<Record<string, unknown>>): string {
 }
 
 /** Fixed branches own declared Agents. They have no Map bindings or reducer contract. */
-export function ParallelSettings({ node, disabled, change, remove }: ParallelSettingsProps): ReactNode {
+export function ParallelSettings({ node, disabled, change, remove, section = 'all' }: ParallelSettingsProps): ReactNode {
+  const showBasic = section === 'all' || section === 'basic';
+  const showAdvanced = section === 'all' || section === 'advanced';
   const context = useContext(FlowEditorContext);
   const guardedChange = (field: string, value: unknown): void => { if (!disabled) change(field, value); };
   const onError = onErrorOf(node);
@@ -40,27 +43,31 @@ export function ParallelSettings({ node, disabled, change, remove }: ParallelSet
   };
   const targets = ['END', ...(context?.yamlJsonObject.nodes ?? []).map((entry) => entry.id)];
   return <Stack spacing={2}>
-    <Typography variant="bodySmall">{t('pipelines.parallel.fixedOrder', 'Declare 2 to 16 fixed Agent branches. The list result follows branch order and keeps each branch result key.')}</Typography>
-    <ParallelBranches ownerId={extensionText(node['id'])} branches={node['branches']} disabled={disabled}
-      change={(branches) => guardedChange('branches', branches)} />
-    <ExtensionField label={t('pipelines.parallel.concurrency', 'Maximum concurrent branches')}
-      value={extensionNumberText(node['max_concurrency'])} number disabled={disabled}
-      change={(value) => guardedChange('max_concurrency', value === '' ? '' : Number(value))}
-      help={t('pipelines.parallel.concurrencyHelp', 'Use 1 to 8, within the declared branch count.')} />
-    <ExtensionChoice label={t('pipelines.parallel.wait', 'Wait policy')} value={extensionText(node['wait'])}
-      choices={['all']} disabled={disabled} change={(value) => guardedChange('wait', value)} />
-    <ExtensionChoice label={t('pipelines.parallel.onError', 'On Error')} value={onError}
-      choices={join === 'merge' ? ['stop'] : ['continue', 'stop']} disabled={disabled} change={changeOnError}
-      help={t('pipelines.parallel.onErrorHelp', 'Continue keeps the other branches and returns partial results. Stop fails the node after running branches finish.')} />
-    <ExtensionChoice label={t('pipelines.parallel.join', 'Join')} value={join}
-      choices={onError === 'stop' ? ['append', 'keyed', 'merge'] : ['append', 'keyed']} disabled={disabled}
-      change={(value) => guardedChange('join', value)}
-      help={t('pipelines.parallel.joinHelp', 'Append lists the results in branch order, Keyed maps them by result key, Merge combines their outputs and needs Stop.')} />
-    <StateChannelSelect label={t('pipelines.parallel.output', 'Ordered list output')}
-      value={extensionText(extensionValues(node['output'])[0])} types={['list']} disabled={disabled}
-      change={(value) => guardedChange('output', [value])} />
-    <Typography variant="bodySmall">{t('pipelines.parallel.resultEntry', 'Each result contains branch_id, node and status, with outputs from that Agent or a readable error.')}</Typography>
-    <ExtensionChoice label={t('pipelines.parallel.transition', 'Join transition')} value={extensionText(node['transition'])}
-      choices={['', ...targets]} disabled={disabled} change={(value) => guardedChange('transition', value === '' ? null : value)} />
+    {showBasic && <>
+      <Typography variant="bodySmall">{t('pipelines.parallel.fixedOrder', 'Declare 2 to 16 fixed Agent branches. The list result follows branch order and keeps each branch result key.')}</Typography>
+      <ParallelBranches ownerId={extensionText(node['id'])} branches={node['branches']} disabled={disabled}
+        change={(branches) => guardedChange('branches', branches)} />
+      <StateChannelSelect label={t('pipelines.parallel.output', 'Ordered list output')}
+        value={extensionText(extensionValues(node['output'])[0])} types={['list']} disabled={disabled}
+        change={(value) => guardedChange('output', [value])} />
+      <Typography variant="bodySmall">{t('pipelines.parallel.resultEntry', 'Each result contains branch_id, node and status, with outputs from that Agent or a readable error.')}</Typography>
+      <ExtensionChoice label={t('pipelines.parallel.transition', 'Join transition')} value={extensionText(node['transition'])}
+        choices={['', ...targets]} disabled={disabled} change={(value) => guardedChange('transition', value === '' ? null : value)} />
+    </>}
+    {showAdvanced && <>
+      <ExtensionField label={t('pipelines.parallel.concurrency', 'Maximum concurrent branches')}
+        value={extensionNumberText(node['max_concurrency'])} number disabled={disabled}
+        change={(value) => guardedChange('max_concurrency', value === '' ? '' : Number(value))}
+        help={t('pipelines.parallel.concurrencyHelp', 'Use 1 to 8, within the declared branch count.')} />
+      <ExtensionChoice label={t('pipelines.parallel.wait', 'Wait policy')} value={extensionText(node['wait'])}
+        choices={['all']} disabled={disabled} change={(value) => guardedChange('wait', value)} />
+      <ExtensionChoice label={t('pipelines.parallel.onError', 'On Error')} value={onError}
+        choices={join === 'merge' ? ['stop'] : ['continue', 'stop']} disabled={disabled} change={changeOnError}
+        help={t('pipelines.parallel.onErrorHelp', 'Continue keeps the other branches and returns partial results. Stop fails the node after running branches finish.')} />
+      <ExtensionChoice label={t('pipelines.parallel.join', 'Join')} value={join}
+        choices={onError === 'stop' ? ['append', 'keyed', 'merge'] : ['append', 'keyed']} disabled={disabled}
+        change={(value) => guardedChange('join', value)}
+        help={t('pipelines.parallel.joinHelp', 'Append lists the results in branch order, Keyed maps them by result key, Merge combines their outputs and needs Stop.')} />
+    </>}
   </Stack>;
 }

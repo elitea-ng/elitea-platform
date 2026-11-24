@@ -208,7 +208,7 @@ export function PrivatePipelinesList({ cardContentType }: PrivatePipelinesListPr
               ? t('pages.pipelines.privateList.emptyFound.description', 'Create yours now!')
               : t(
                   'pages.pipelines.privateList.empty.description',
-                  'Create your first pipeline to get started. Pipelines chain agents, skills and toolkits into one repeatable flow.',
+                  'Create your first pipeline to start automating tasks and workflows.',
                 )
           }
           onCreate={() => {

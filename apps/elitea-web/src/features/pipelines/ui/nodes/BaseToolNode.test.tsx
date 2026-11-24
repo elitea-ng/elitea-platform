@@ -11,6 +11,7 @@ import { buildFlowEditorContextValue, renderWithRouterAndProject } from '../../_
 import { FlowEditorContext, NodeConfigPanelContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import type { YamlPipelineDocument } from '../../lib/flow-editor/helpers/pipelineFlow.types';
 import type { PipelineToolEntry } from '../select/pipelineToolEntry.types';
+import { PipelineNodeTypes } from '../../lib/flow-editor/constants/flowEditor.constants';
 import { applyToolkitSelection, BaseToolNode, computeFunctionOptions, type BaseToolNodeProps } from './BaseToolNode';
 
 const BASE = '/api/v2';
@@ -371,5 +372,28 @@ describe('applyToolkitSelection', () => {
     expect(node?.toolkit_name).toBeUndefined();
     expect(node?.tool).toBeUndefined();
     expect(node?.input_mapping).toBeUndefined();
+  });
+});
+
+describe('BaseToolNode U3 polish (MCP disconnected hint)', () => {
+  it('shows the disconnected MCP hint when an offline MCP server is selected', async () => {
+    const mcpTools = [
+      {
+        id: 20,
+        name: 'OfflineMCP',
+        type: 'mcp',
+        toolkit_name: 'OfflineMCP',
+        online: false,
+        settings: { selected_tools: ['ping'] },
+      },
+    ];
+    const yamlJsonObject: YamlPipelineDocument = {
+      nodes: [{ id: 'Mcp1', type: 'mcp', toolkit_name: 'OfflineMCP', tool: 'ping' }],
+    };
+    const { findByTestId } = renderBaseToolNode(
+      { id: 'Mcp1', nodeType: PipelineNodeTypes.Mcp, versionTools: mcpTools as never },
+      { yamlJsonObject },
+    );
+    expect(await findByTestId('pipeline-mcp-node-disconnected-hint')).toBeInTheDocument();
   });
 });

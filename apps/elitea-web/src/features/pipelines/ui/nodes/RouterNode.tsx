@@ -40,12 +40,12 @@ import { useEdges, type NodeProps } from '@xyflow/react';
 
 import Box from '@mui/material/Box';
 
-import { HeadingChip } from '@/shared/ui/HeadingChip';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
-import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
@@ -221,24 +221,46 @@ export const RouterNode = memo(function RouterNode(props: RouterNodeProps): Reac
       )}
     >
       <NodeConfigSection section="basic">
-        <AIAssistantInput
-          value={conditionValue}
-          disabled={isFieldsDisabled}
-          label={t('pipelines.flowEditor.routerNode.condition', 'Condition')}
-          fieldName="Condition"
-          language="jinja"
-          modelConfig={resolvedLlmSettings}
-          fieldBinding={{ name: 'condition', onInput: handleConditionFilling }}
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', width: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <AIAssistantInput
+              value={conditionValue}
+              disabled={isFieldsDisabled}
+              label={t('pipelines.flowEditor.routerNode.condition', 'Condition')}
+              fieldName="Condition"
+              language="jinja"
+              modelConfig={resolvedLlmSettings}
+              fieldBinding={{ name: 'condition', onInput: handleConditionFilling }}
+            />
+          </Box>
+          <InfoTooltip
+            title={getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Router, NODE_FIELD_KEYS.condition)}
+            placement="top"
+            data-testid="pipeline-node-field-info"
+          />
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', width: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <RouteSelect
+              id={id}
+              label={t('pipelines.flowEditor.routerNode.routes', 'Routes')}
+              fieldName="routes"
+              disabled={isFieldsDisabled}
+              nodesFilter={(node: { readonly id: string }) => node.id !== id}
+              addEndNode
+            />
+          </Box>
+          <InfoTooltip
+            title={getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Router, NODE_FIELD_KEYS.routes)}
+            placement="top"
+            data-testid="pipeline-node-field-info"
+          />
+        </Box>
+        <NodeFieldHeading
+          label={t('pipelines.flowEditor.routerNode.defaultOutput', 'Default output')}
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Router}
+          fieldKey={NODE_FIELD_KEYS.defaultOutput}
         />
-        <RouteSelect
-          id={id}
-          label={t('pipelines.flowEditor.routerNode.routes', 'Routes')}
-          fieldName="routes"
-          disabled={isFieldsDisabled}
-          nodesFilter={(node: { readonly id: string }) => node.id !== id}
-          addEndNode
-        />
-        <HeadingChip label={t('pipelines.flowEditor.routerNode.defaultOutput', 'Default output')} />
         <Box className="nopan nodrag">
           <SingleSelect
             sx={{ marginBottom: 0 }}

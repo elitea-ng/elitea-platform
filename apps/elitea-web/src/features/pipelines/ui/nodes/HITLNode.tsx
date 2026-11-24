@@ -36,14 +36,14 @@ import Typography from '@mui/material/Typography';
 import type { NodeProps } from '@xyflow/react';
 
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
-import { HeadingChip } from '@/shared/ui/HeadingChip';
 import { SingleSelect } from '@/shared/ui/SingleSelect';
 import { t } from '@/shared/i18n';
 
 import { FlowEditorConstants } from '../../lib/flow-editor/constants';
+import { NODE_FIELD_KEYS } from '../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import type { AiAssistantLlmSettings } from '../../api/aiAssistantPredict';
 import type { FlowNode } from '../../lib/flow-editor/reactFlowTypes';
-import { NodeConfigSection } from '../node-config-drawer/NodeConfigSection';
+import { NodeConfigSection, NodeFieldHeading } from '../node-config-drawer/NodeConfigSection';
 import { LabelWithTooltip } from '../settings/InputMappings/LabelWithTooltip';
 import { NodeSettings } from '../settings/NodeSettings';
 import { SimpleLLMInputItem } from '../settings/SimpleLLMInputItem';
@@ -89,6 +89,7 @@ export const HITLNode = memo(function HITLNode(props: HITLNodeProps): ReactNode 
         <SimpleLLMInputItem
           variableName="user_message"
           variable="user_message"
+          nodeType={FlowEditorConstants.PipelineNodeTypes.Hitl}
           type={model.userMessageType}
           value={model.userMessageValue}
           defaultValue=""
@@ -132,7 +133,11 @@ export const HITLNode = memo(function HITLNode(props: HITLNodeProps): ReactNode 
           sx={styles.editStateKeyRow}
           className="nopan nodrag"
         >
-          <HeadingChip label={t('pipelines.flowEditor.hitlNode.editStateKey', 'Edit state key')} />
+          <NodeFieldHeading
+            label={t('pipelines.flowEditor.hitlNode.editStateKey', 'Edit state key')}
+            nodeType={FlowEditorConstants.PipelineNodeTypes.Hitl}
+            fieldKey={NODE_FIELD_KEYS.editStateKey}
+          />
           <SingleSelect
             sx={styles.routeSelect}
             label={t('pipelines.flowEditor.hitlNode.value', 'Value')}

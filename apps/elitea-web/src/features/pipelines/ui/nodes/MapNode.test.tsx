@@ -19,6 +19,7 @@ describe('MapNode authored YAML', () => {
     await screen.findByRole('combobox', { name: 'Owned worker' });
     expect(screen.getByLabelText('Child item channel')).toHaveValue('entity');
     expect(screen.getByLabelText('Child index channel')).toHaveValue('item_index');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Advanced' }));
     expect(screen.getByRole('combobox', { name: 'Reduction' })).toHaveTextContent('ordered_collection');
     expect(screen.getByLabelText('Maximum concurrent items')).toHaveValue(2);
     expect(usePipelineYamlStore.getState().yamlCode).toBe(yaml);
@@ -28,6 +29,7 @@ describe('MapNode authored YAML', () => {
     const screen = renderExtensionCard(MapNode, authoredExtensionYaml(mapNodeYaml));
     const before = currentExtensionDocument();
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     const field = await screen.findByLabelText('Maximum concurrent items');
     await user.clear(field); await user.type(field, '4');
     const saved = usePipelineYamlStore.getState();
@@ -65,6 +67,7 @@ describe('MapNode authored YAML', () => {
       .replace('outputs: [item_result]', 'outputs: [item_result, null]'));
     const screen = renderExtensionCard(MapNode, yaml);
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     expect(await screen.findByRole('combobox', { name: 'Reduction' })).toHaveTextContent('authored_unknown');
     await selectOption(user, screen, 'Worker output 1', 'item_result');
     expect(currentExtensionDocument().nodes?.find((node) => node.id === 'extension')?.['outputs']).toEqual(['item_result', null]);

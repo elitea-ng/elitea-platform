@@ -439,4 +439,12 @@ describe('CreatePipeline', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(refusal);
     expect(screen.queryByText('Failed to create the pipeline.')).not.toBeInTheDocument();
   });
+
+  it('renders the canvas-first workspace alongside the configuration panel and locked test pane', async () => {
+    renderPipelinesRoute(<CreatePipeline />, '/pipelines/create', { projectId: '1' });
+
+    expect(await screen.findByTestId('create-pipeline-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('create-pipeline-form-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('create-pipeline-chat-locked')).toHaveTextContent('Save the pipeline to test it.');
+  });
 });

@@ -14,12 +14,14 @@
 import type { ReactNode } from 'react';
 import { memo, useCallback, useContext, useMemo } from 'react';
 
+import Box from '@mui/material/Box';
 import { useEdges, type NodeProps } from '@xyflow/react';
 
 import { t } from '@/shared/i18n';
+import { InfoTooltip } from '@/shared/ui/InfoTooltip';
 
 import { FlowEditorConstants } from '../../../lib/flow-editor/constants';
-import { NODE_FIELD_KEYS } from '../../../lib/flow-editor/constants/nodeFieldInfo.constants';
+import { getNodeFieldInfo, NODE_FIELD_KEYS } from '../../../lib/flow-editor/constants/nodeFieldInfo.constants';
 import { updateYamlNode } from '../../../lib/flow-editor/helpers/flowEditor.helpers';
 import { FlowEditorContext, type FlowEditorContextValue } from '../../../lib/flow-editor/flowEditorContext';
 import { useNodeAiAssistantConfig } from '../../../lib/flow-editor/hooks/useNodeAiAssistantConfig';
@@ -153,14 +155,23 @@ export const NormalDecisionNode = memo(function NormalDecisionNode(props: Normal
       )}
     >
       <NodeConfigSection section="basic">
-        <AIAssistantInput
-          value={description}
-          disabled={isFieldsDisabled}
-          label={t('pipelines.flowEditor.decisionNode.description', 'Description')}
-          fieldName="description"
-          modelConfig={resolvedLlmSettings}
-          fieldBinding={{ name: 'description', id: 'description', onInput: onChangeDecisionDescription }}
-        />
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '0.25rem', width: '100%' }}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <AIAssistantInput
+              value={description}
+              disabled={isFieldsDisabled}
+              label={t('pipelines.flowEditor.decisionNode.decisionCriteria', 'Decision criteria')}
+              fieldName="description"
+              modelConfig={resolvedLlmSettings}
+              fieldBinding={{ name: 'description', id: 'description', onInput: onChangeDecisionDescription }}
+            />
+          </Box>
+          <InfoTooltip
+            title={getNodeFieldInfo(FlowEditorConstants.PipelineNodeTypes.Decision, NODE_FIELD_KEYS.decisionCriteria)}
+            placement="top"
+            data-testid="pipeline-node-field-info"
+          />
+        </Box>
         <DecisionOutputs
           id={id}
           decisionOutput={decisionOutput}

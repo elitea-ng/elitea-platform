@@ -14,8 +14,9 @@ import { NodeSettings } from '../NodeSettings';
 
 interface ExtensionNodeShellProps extends NodeProps<FlowNode> {
   readonly renderSettings: (props: ExtensionSettingsProps) => ReactNode;
+  readonly renderAdvancedSettings?: ((props: ExtensionSettingsProps) => ReactNode) | undefined;
 }
-export function ExtensionNodeShell({ id, type = '', data, selected, renderSettings }: ExtensionNodeShellProps): ReactNode {
+export function ExtensionNodeShell({ id, type = '', data, selected, renderSettings, renderAdvancedSettings }: ExtensionNodeShellProps): ReactNode {
   const context = useContext(FlowEditorContext);
   const edges = useEdges();
   if (!context) return null;
@@ -32,6 +33,11 @@ export function ExtensionNodeShell({ id, type = '', data, selected, renderSettin
   const remove = (field: string): void => {
     setYamlJsonObject(patchGraphExtensionNode(yamlJsonObject, id, field, undefined, true));
   };
+  const settingsProps: ExtensionSettingsProps = { node, disabled, change, remove };
+  const hasNodeSettings = nodeSettingsFamilyKeys(node.type ?? '') !== undefined;
+  const advancedContent = renderAdvancedSettings?.(settingsProps);
+  const showAdvanced = Boolean(advancedContent) || hasNodeSettings;
+
   return <NodeCard id={id} name={id} type={type} selected={selected} isEntrypoint={yamlJsonObject.entry_point === id}
     isPerforming={performing} handles={() => <>
       <CustomHandle type="target" id="target" isConnectable={!disabled} isRunningPipeline={running} isPerforming={performing} />
@@ -39,11 +45,12 @@ export function ExtensionNodeShell({ id, type = '', data, selected, renderSettin
       <NodeErrorOutputHandle id={id} isRunningPipeline={running} disabled={disabled} isPerforming={performing} />
     </>}>
     <NodeConfigSection section="basic">
-      {renderSettings({ node, disabled, change, remove })}
+      {renderSettings(settingsProps)}
     </NodeConfigSection>
-    {nodeSettingsFamilyKeys(node.type ?? '') !== undefined ? (
+    {showAdvanced ? (
       <NodeConfigSection section="advanced" defaultExpanded={false}>
-        <NodeSettings id={id} type={node.type ?? ''} disabled={disabled} />
+        {advancedContent}
+        {hasNodeSettings ? <NodeSettings id={id} type={node.type ?? ''} disabled={disabled} /> : null}
       </NodeConfigSection>
     ) : null}
   </NodeCard>;

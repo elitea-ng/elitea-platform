@@ -36,13 +36,14 @@ export function ParallelNode({ id, type = 'parallel', data, selected }: NodeProp
           isRunningPipeline={running} isPerforming={performing} />
       </>}>
       <NodeConfigSection section="basic">
-        <ParallelSettings node={node} disabled={disabled} change={change} remove={remove} />
+        <ParallelSettings node={node} disabled={disabled} change={change} remove={remove} section="basic" />
       </NodeConfigSection>
-      {nodeSettingsFamilyKeys(type) !== undefined ? (
-        <NodeConfigSection section="advanced" defaultExpanded={false}>
+      <NodeConfigSection section="advanced" defaultExpanded={false}>
+        <ParallelSettings node={node} disabled={disabled} change={change} remove={remove} section="advanced" />
+        {nodeSettingsFamilyKeys(type) !== undefined ? (
           <NodeSettings id={id} type={type} disabled={disabled} />
-        </NodeConfigSection>
-      ) : null}
+        ) : null}
+      </NodeConfigSection>
     </NodeCard>
   </FlowEditorContext.Provider>;
 }

@@ -77,6 +77,7 @@ describe('AggregateNode authored YAML', () => {
   it('offers regroup and collect_rows retention without none, with help text', async () => {
     const screen = renderExtensionCard(AggregateNode, authoredExtensionYaml(aggregateNodeYaml));
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
     const regroup = await screen.findByRole('combobox', { name: 'Regroup' });
     expect(regroup).toHaveTextContent('none');
     await selectOption(user, screen, 'Regroup', 'parent');
@@ -90,7 +91,9 @@ describe('AggregateNode authored YAML', () => {
   });
   it('offers groups limit for aggregate', async () => {
     const screen = renderExtensionCard(AggregateNode, authoredExtensionYaml(aggregateNodeYaml));
-    await userEvent.setup().click(await screen.findByText('Processing limits'));
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Advanced' }));
+    await user.click(await screen.findByText('Processing limits'));
     expect(screen.getByLabelText('groups')).toBeTruthy();
   });
   it('removes irrelevant fields only on an explicit operation change', async () => {
