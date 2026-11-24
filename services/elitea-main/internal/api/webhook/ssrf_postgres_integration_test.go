@@ -125,7 +125,6 @@ func TestWebhookSmuggledIntoTableIsRefusedAtDialAndLoggedBlocked(t *testing.T) {
 	smuggled, err := webhooksRepo.Create(ctx, projectID, webhook.Webhook{
 		URL:    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
 		Events: []string{"conversation.created"},
-		Secret: "s",
 		Active: true,
 	})
 	if err != nil {

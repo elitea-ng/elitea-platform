@@ -91,7 +91,7 @@ Separately from pipeline triggers, each project also has a generic outbound webh
 <Steps>
 1. Open **Settings › Webhooks** for the project.
 2. Select **Register a new webhook**, give it a destination URL, and pick one or more events from the picker below — leave it empty to fire on every event. You can also type a custom event type if you're watching for something outside the built-in catalog.
-3. Save. The new webhook's secret is shown once, in a dialog with a copy button — save it now, since your receiver verifies every request's `X-Webhook-Signature` header against it.
+3. Save. The new webhook's secret is shown once, in a dialog with a copy button — save it now, since your receiver verifies every request's `X-Webhook-Signature` header against it. Elitea stores the secret in the project's secret vault and never shows it again: not on this page, and not through the API. If you lose it, rotate it.
 4. Verify the signature on your receiving end: it's an HMAC-SHA256 of the raw request body, keyed with the secret, the same scheme the pipeline trigger's bearer token protects against.
 </Steps>
 
@@ -110,14 +110,14 @@ If your destination is refused, the form shows the reason inline, under the URL 
 
 From the same page you can:
 
-- **Show or hide** a webhook's secret inline (it stays visible to anyone who can read the row; the toggle is a display convenience, not an access boundary).
-- **Rotate** the secret — mints a fresh value and shows it once, exactly like creation.
+- **See whether a webhook signs its deliveries.** The Secret column shows a mask when a secret is set and **Not set** when it isn't. The value itself is write-only: nobody who reads the row, including project viewers, can see it.
+- **Rotate** the secret — Elitea generates a fresh value, shows it once, exactly like creation, and deletes the old one. Deliveries are signed with the new value from the next event on, so update your receiver straight away.
 - **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
 - **Delete** a webhook, with a confirmation step.
 - **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. A delivery's outcome is `success`, `failed` (the destination rejected it or didn't answer, retried up to three times), or `blocked` (the destination was refused by the platform's destination rules — see above — before any request was made; **Redeliver** is unavailable for a blocked delivery, since it would be refused identically). Each non-blocked delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
 
 <Note>
-The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with.
+The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with. The create response is the only one that returns the secret; reads return `has_secret` instead. `POST /webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret` replaces it and returns the new value once. An update that leaves out `secret`, or sends it empty, keeps the stored one.
 </Note>
 
 ### The event catalog

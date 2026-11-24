@@ -50,6 +50,7 @@ import type {
   ListWebhooks200,
   Webhook,
   WebhookDelivery,
+  WebhookWithSecret,
 } from "../model";
 
 export const getListWebhooksResponseMock = (
@@ -66,10 +67,7 @@ export const getListWebhooksResponseMock = (
       { length: faker.number.int({ min: 1, max: 10 }) },
       (_, i) => i + 1,
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-    secret: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      undefined,
-    ]),
+    has_secret: faker.datatype.boolean(),
     active: faker.datatype.boolean(),
     created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
     updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -77,24 +75,16 @@ export const getListWebhooksResponseMock = (
   ...overrideResponse,
 });
 
-export const getCreateWebhookResponseMock = (
-  overrideResponse: Partial<Extract<Webhook, object>> = {},
-): Webhook => ({
-  id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  project_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  url: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  events: Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
-  active: faker.datatype.boolean(),
-  created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
-  updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
-  ...overrideResponse,
+export const getCreateWebhookResponseMock = (): WebhookWithSecret => ({
+  id: "6f1c1d2e-7a1b-4c39-9d0e-2b6a5c4d3e21",
+  project_id: "1",
+  url: "https://hooks.example.com/elitea",
+  events: ["conversation.created"],
+  has_secret: true,
+  secret: "3q2-7wAAAAAexampleexampleexampleexampleexa",
+  active: true,
+  created_at: "2026-11-23T10:00:00Z",
+  updated_at: "2026-11-23T10:00:00Z",
 });
 
 export const getGetWebhookResponseMock = (
@@ -107,10 +97,7 @@ export const getGetWebhookResponseMock = (
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
+  has_secret: faker.datatype.boolean(),
   active: faker.datatype.boolean(),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
@@ -127,14 +114,23 @@ export const getUpdateWebhookResponseMock = (
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
   ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
-  secret: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    undefined,
-  ]),
+  has_secret: faker.datatype.boolean(),
   active: faker.datatype.boolean(),
   created_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   updated_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
+});
+
+export const getRotateWebhookSecretResponseMock = (): WebhookWithSecret => ({
+  id: "6f1c1d2e-7a1b-4c39-9d0e-2b6a5c4d3e21",
+  project_id: "1",
+  url: "https://hooks.example.com/elitea",
+  events: ["conversation.created"],
+  has_secret: true,
+  secret: "rotated-example-secret-value-0000000000000",
+  active: true,
+  created_at: "2026-11-23T10:00:00Z",
+  updated_at: "2026-11-23T11:00:00Z",
 });
 
 export const getListWebhookDeliveriesResponseMock = (
@@ -234,10 +230,10 @@ export const getListWebhooksMockHandler = (
 
 export const getCreateWebhookMockHandler = (
   overrideResponse?:
-    | Webhook
+    | WebhookWithSecret
     | ((
         info: Parameters<Parameters<typeof http.post>[1]>[0],
-      ) => Promise<Webhook> | Webhook),
+      ) => Promise<WebhookWithSecret> | WebhookWithSecret),
   options?: RequestHandlerOptions,
 ) => {
   return http.post(
@@ -332,6 +328,32 @@ export const getDeleteWebhookMockHandler = (
   );
 };
 
+export const getRotateWebhookSecretMockHandler = (
+  overrideResponse?:
+    | WebhookWithSecret
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<WebhookWithSecret> | WebhookWithSecret),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/webhooks/prompt_lib/:projectID/:webhookID/rotate_secret",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getRotateWebhookSecretResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListWebhookDeliveriesMockHandler = (
   overrideResponse?:
     | ListWebhookDeliveries200
@@ -389,6 +411,7 @@ export const getWebhooksMock = () => [
   getGetWebhookMockHandler(),
   getUpdateWebhookMockHandler(),
   getDeleteWebhookMockHandler(),
+  getRotateWebhookSecretMockHandler(),
   getListWebhookDeliveriesMockHandler(),
   getRedeliverWebhookDeliveryMockHandler(),
 ];

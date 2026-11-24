@@ -19,6 +19,7 @@ const BASE = '/api/v2';
 const PERMISSIONS_PATH = `${BASE}/auth/permissions/prompt_lib/:projectId`;
 const WEBHOOKS_PATH = `${BASE}/webhooks/prompt_lib/:projectID`;
 const WEBHOOK_PATH = `${BASE}/webhooks/prompt_lib/:projectID/:webhookID`;
+const ROTATE_PATH = `${BASE}/webhooks/prompt_lib/:projectID/:webhookID/rotate_secret`;
 
 function fullPermissions(): ReturnType<typeof http.get> {
   return http.get(PERMISSIONS_PATH, () =>
@@ -62,7 +63,7 @@ describe('WebhooksContent — happy path', () => {
               project_id: 'proj-1',
               url: 'https://example.com/hook',
               events: ['application.created'],
-              secret: 'sec-1',
+              has_secret: true,
               active: true,
               created_at: '2026-01-01T00:00:00Z',
               updated_at: '2026-01-01T00:00:00Z',
@@ -123,6 +124,7 @@ describe('WebhooksContent — create', () => {
             project_id: 'proj-1',
             url: createdBody!.url,
             events: createdBody!.events,
+            has_secret: true,
             secret: createdBody!.secret,
             active: createdBody!.active,
             created_at: '2026-01-01T00:00:00Z',
@@ -237,7 +239,7 @@ describe('WebhooksContent — enable/disable and rotate', () => {
               project_id: 'proj-1',
               url: 'https://example.com/hook',
               events: ['application.created'],
-              secret: 'sec-1',
+              has_secret: true,
               active: true,
               created_at: '2026-01-01T00:00:00Z',
               updated_at: '2026-01-01T00:00:00Z',
@@ -264,16 +266,18 @@ describe('WebhooksContent — enable/disable and rotate', () => {
       expect(updates).toHaveLength(1);
     });
     expect(updates[0]!.webhookID).toBe('wh-1');
+    // No `secret`: the page never holds the stored one (it is write-only,
+    // issue 2963), and an update that omits it keeps it server-side.
     expect(updates[0]!.body).toEqual({
       url: 'https://example.com/hook',
       events: ['application.created'],
-      secret: 'sec-1',
       active: false,
     });
   });
 
-  it('rotating mints a new secret and reveals it once', async () => {
-    const updates: { body: { secret: string } }[] = [];
+  it('rotating calls the rotate route and reveals the server-generated secret once', async () => {
+    const rotations: string[] = [];
+    let updates = 0;
     server.use(
       fullPermissions(),
       http.get(WEBHOOKS_PATH, () =>
@@ -284,7 +288,7 @@ describe('WebhooksContent — enable/disable and rotate', () => {
               project_id: 'proj-1',
               url: 'https://example.com/hook',
               events: ['application.created'],
-              secret: 'sec-1',
+              has_secret: true,
               active: true,
               created_at: '2026-01-01T00:00:00Z',
               updated_at: '2026-01-01T00:00:00Z',
@@ -292,10 +296,23 @@ describe('WebhooksContent — enable/disable and rotate', () => {
           ],
         }),
       ),
-      http.put(WEBHOOK_PATH, async ({ request }) => {
-        const body = (await request.json()) as { secret: string };
-        updates.push({ body });
+      http.put(WEBHOOK_PATH, () => {
+        updates += 1;
         return HttpResponse.json({});
+      }),
+      http.post(ROTATE_PATH, ({ params }) => {
+        rotations.push(String(params.webhookID));
+        return HttpResponse.json({
+          id: 'wh-1',
+          project_id: 'proj-1',
+          url: 'https://example.com/hook',
+          events: ['application.created'],
+          has_secret: true,
+          secret: 'server-generated-value',
+          active: true,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        });
       }),
     );
 
@@ -307,11 +324,107 @@ describe('WebhooksContent — enable/disable and rotate', () => {
     fireEvent.click(screen.getByTestId('webhook-rotate-wh-1'));
 
     await waitFor(() => {
-      expect(updates).toHaveLength(1);
+      expect(rotations).toEqual(['wh-1']);
     });
-    expect(updates[0]!.body.secret).not.toBe('sec-1');
+    expect(updates).toBe(0);
     await waitFor(() => {
-      expect(screen.getByTestId('webhook-secret-value')).toHaveValue(updates[0]!.body.secret);
+      expect(screen.getByTestId('webhook-secret-value')).toHaveValue('server-generated-value');
     });
+
+    // Once: after the dialog closes, the value is nowhere on the page.
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('webhook-secret-value')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('server-generated-value')).not.toBeInTheDocument();
+  });
+});
+
+describe('WebhooksContent — the secret is write-only', () => {
+  it('the table says whether a secret is set and offers no reveal or copy of it', async () => {
+    server.use(
+      fullPermissions(),
+      http.get(WEBHOOKS_PATH, () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 'wh-set',
+              project_id: 'proj-1',
+              url: 'https://example.com/set',
+              events: [],
+              has_secret: true,
+              active: true,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+            {
+              id: 'wh-unset',
+              project_id: 'proj-1',
+              url: 'https://example.com/unset',
+              events: [],
+              has_secret: false,
+              active: true,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        }),
+      ),
+    );
+
+    mount();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('webhook-secret-wh-set')).toBeInTheDocument();
+    });
+    expect(within(screen.getByTestId('webhook-secret-wh-unset')).getByText('Not set')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Toggle secret visibility' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy secret' })).not.toBeInTheDocument();
+  });
+
+  it('a rotate answer without a secret reports a failure instead of an empty dialog', async () => {
+    server.use(
+      fullPermissions(),
+      http.get(WEBHOOKS_PATH, () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: 'wh-1',
+              project_id: 'proj-1',
+              url: 'https://example.com/hook',
+              events: [],
+              has_secret: true,
+              active: true,
+              created_at: '2026-01-01T00:00:00Z',
+              updated_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        }),
+      ),
+      http.post(ROTATE_PATH, () =>
+        HttpResponse.json({
+          id: 'wh-1',
+          project_id: 'proj-1',
+          url: 'https://example.com/hook',
+          events: [],
+          has_secret: true,
+          active: true,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+        }),
+      ),
+    );
+
+    mount();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('webhook-rotate-wh-1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('webhook-rotate-wh-1'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to rotate the secret')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('webhook-secret-value')).not.toBeInTheDocument();
   });
 });

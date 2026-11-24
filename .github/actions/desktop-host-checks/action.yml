@@ -1,0 +1,103 @@
+name: Desktop host checks (macOS)
+description: >-
+  The body of ci-desktop.yml's macOS host job, shared by its first attempt
+  (`desktop`) and by the second attempt that runs only when GitHub never
+  acquired a runner for the first (`desktop-second-attempt`). The desktop web
+  bundle, the brand overlay, then the host's Rust format, Clippy and tests, the
+  serde_json guard and the document sidecar. The job keeps the steps a
+  composite action cannot hold or must run first: the checkout, the toolchain
+  assert (before rust-cache, which keys on `rustc -vV`), the rust-cache step
+  (one writer per key: only the first attempt saves) and the WebKit run (a
+  per-step timeout).
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: "26"
+        # No npm cache on macOS (.github/actions/npm-cache is Linux only).
+        package-manager-cache: false
+
+    # The desktop web build comes first: `tauri::generate_context!` embeds
+    # `frontendDist` (apps/elitea-web/dist-desktop) at compile time, so the
+    # Rust steps below cannot even compile without it. The macOS browser
+    # driver's build.rs compiles js/driver.ts with this install's tsc
+    # (apps/elitea-web/node_modules/.bin/tsc), so a type error there fails
+    # Clippy and the tests below; no JavaScript is committed to diff.
+    - name: Install web (locked)
+      shell: bash
+      working-directory: apps/elitea-web
+      # .github/actions/npm-cache sets these on Linux; macOS fetches cold, so
+      # it needs the same patience with the registry (as the Windows jobs).
+      env:
+        NPM_CONFIG_FETCH_RETRIES: "6"
+        NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: "20000"
+        NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: "120000"
+      run: npm ci
+
+    - name: Build the desktop web bundle
+      shell: bash
+      working-directory: apps/elitea-web
+      run: npm run build:desktop
+
+    # The ELITEA build (ADR-0052 decision 4): the brand overlay, exported as
+    # TAURI_CONFIG for every cargo step below (tauri-build and
+    # generate_context! read it). The pane-drivers job builds without it, so
+    # the neutral tauri.conf.json (brand/sample) compiles and passes too.
+    - name: Brand overlay (brand/elitea) and its tests
+      shell: bash
+      working-directory: apps/elitea-desktop
+      run: |
+        npm run test:scripts
+        node scripts/tauri-brand.mjs --github-env
+
+    - name: Check formatting
+      shell: bash
+      working-directory: apps/elitea-desktop/src-tauri
+      run: cargo fmt --all -- --check
+
+    - name: Run Clippy
+      shell: bash
+      working-directory: apps/elitea-desktop/src-tauri
+      # --workspace: the macOS browser driver (browser-driver-macos) is a
+      # member of this workspace, not the default member.
+      run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+    # The flow tests bind loopback ports and run an in-process deployment; the
+    # keychain is a mock, so a runner with no login keychain is fine.
+    # The same package set and features as Clippy (`--workspace --all-targets`),
+    # in the one target directory: build scripts and proc macros compile once
+    # for both, and the dependencies come from the cache.
+    - name: Run tests
+      shell: bash
+      working-directory: apps/elitea-desktop/src-tauri
+      run: cargo test --locked --workspace --all-targets
+
+    # The host never links the document extractor: xberg turns on
+    # serde_json `preserve_order` (ADR-0029 decision 2). A feature in the
+    # host's own graph would fail the guard test above at runtime; this
+    # fails it at the source, naming the dependent. `-e normal` leaves out
+    # build dependencies (tauri-build and a grammar's build script turn the
+    # feature on for themselves; none of that is linked into the app).
+    - name: The host does not turn on serde_json preserve_order
+      shell: bash
+      working-directory: apps/elitea-desktop/src-tauri
+      run: |
+        tree="$(cargo tree --locked -e normal,features -i serde_json)"
+        if printf '%s\n' "$tree" | grep -q 'preserve_order'; then
+          printf '%s\n' "$tree"
+          echo "::error::serde_json/preserve_order is enabled in the desktop host's graph; documents are extracted by apps/elitea-desktop/doc-extract-sidecar"
+          exit 1
+        fi
+
+    # The document sidecar (ADR-0029 decision 4): its own workspace and
+    # lockfile, so its xberg stays out of the host. Built and tested here;
+    # the release job bundles it as the app's externalBin.
+    - name: Document sidecar (fmt, clippy, tests)
+      shell: bash
+      working-directory: apps/elitea-desktop/doc-extract-sidecar
+      run: |
+        bash "${GITHUB_WORKSPACE}/scripts/ci/assert-rust-toolchain.sh"
+        cargo fmt --all -- --check
+        cargo clippy --locked --all-targets -- -D warnings
+        cargo test --locked --all-targets
