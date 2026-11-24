@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
@@ -50,6 +51,17 @@ type Token struct {
 	// server that does not know about bindings" (spec-llm-project-scope §4).
 	ProjectID *int64 `json:"project_id"`
 	Token     string `json:"token"`
+	// AdminAccess is the token's administration access (ADR-0059 decision 7,
+	// shared 0265): none, scoped or inherit.
+	AdminAccess string `json:"admin_access"`
+	// AdminScopes are the administration permissions of a `scoped` token,
+	// sorted; empty for none and inherit. A scope the owner no longer holds
+	// stays listed here and resolves nothing.
+	AdminScopes []string `json:"admin_scopes"`
+	// InheritEndsOn is the date an `inherit` token ends (the registry's
+	// sunset date, decision 2), absent while the date is not set and for
+	// every other access.
+	InheritEndsOn string `json:"inherit_ends_on,omitempty"`
 }
 
 type tokenRecord struct {
@@ -59,6 +71,7 @@ type tokenRecord struct {
 	UserID    int64
 	Name      *string
 	ProjectID *int64
+	Admin     tokenAdminAccess
 }
 
 // tokenCreateInput carries the create arguments as one value. ProjectID is nil
@@ -68,13 +81,25 @@ type tokenCreateInput struct {
 	Name      *string
 	Expires   *time.Time
 	ProjectID *int64
+	// Admin is the administration access the token is created with. The
+	// zero value is `none`, the column default (shared 0265).
+	Admin tokenAdminAccess
+	// OnAdminAccess runs in the creating transaction when Admin is not none,
+	// with the new row's id: the admin.access.changed event commits with the
+	// row or neither does.
+	OnAdminAccess tokenAdminAccessHook
 }
+
+// tokenAdminAccessHook records a change of a token's administration access in
+// the transaction that makes it.
+type tokenAdminAccessHook func(ctx context.Context, tx pgx.Tx, change tokenAdminAccessChange) error
 
 type tokenRepository interface {
 	List(context.Context, int64) ([]tokenRecord, error)
 	GetOwned(context.Context, int64, string) (tokenRecord, error)
 	Create(context.Context, tokenCreateInput) (tokenRecord, error)
 	DeleteOwned(context.Context, int64, string) error
+	SetAdminAccess(context.Context, tokenAdminAccessUpdate) (tokenRecord, error)
 }
 
 type postgresTokenRepository struct {
@@ -99,12 +124,21 @@ func (r *postgresTokenRepository) List(ctx context.Context, userID int64) ([]tok
 		return nil, err
 	}
 	records := make([]tokenRecord, 0, len(rows))
+	ids := make([]int32, 0, len(rows))
 	for _, row := range rows {
 		record, err := patRecord(row.ID, row.Uuid, row.Expires, row.UserID, row.Name, row.ProjectID)
 		if err != nil {
 			return nil, err
 		}
 		records = append(records, record)
+		ids = append(ids, row.ID)
+	}
+	admin, err := readTokenAdminAccess(ctx, r.pool, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range records {
+		records[i].Admin = admin[int32(records[i].ID)]
 	}
 	return records, nil
 }
@@ -124,7 +158,16 @@ func (r *postgresTokenRepository) GetOwned(ctx context.Context, userID int64, to
 	if err != nil {
 		return tokenRecord{}, err
 	}
-	return patRecord(row.ID, row.Uuid, row.Expires, row.UserID, row.Name, row.ProjectID)
+	record, err := patRecord(row.ID, row.Uuid, row.Expires, row.UserID, row.Name, row.ProjectID)
+	if err != nil {
+		return tokenRecord{}, err
+	}
+	admin, err := readTokenAdminAccess(ctx, r.pool, []int32{row.ID})
+	if err != nil {
+		return tokenRecord{}, err
+	}
+	record.Admin = admin[row.ID]
+	return record, nil
 }
 
 // Create issues a token and, when the request names a project, binds the token
@@ -208,6 +251,24 @@ func (r *postgresTokenRepository) Create(ctx context.Context, input tokenCreateI
 	record, err := patRecord(row.ID, row.Uuid, row.Expires, row.UserID, row.Name, boundProjectID)
 	if err != nil {
 		return tokenRecord{}, err
+	}
+	// The administration access goes in the SAME transaction, with its
+	// security audit event (ADR-0059 R1.3a): a scoped token never exists
+	// without its admin.access.changed event, nor the event without it.
+	record.Admin = tokenAdminAccess{Access: adminAccessNone, Scopes: []string{}}
+	if input.Admin.granted() {
+		if err := writeTokenAdminAccess(ctx, tx, row.ID, input.Admin); err != nil {
+			return tokenRecord{}, err
+		}
+		if input.OnAdminAccess == nil {
+			return tokenRecord{}, errNoAdminAccessHook
+		}
+		if err := input.OnAdminAccess(ctx, tx, tokenAdminAccessChange{
+			TokenID: int64(row.ID), Before: record.Admin, After: input.Admin, Created: true,
+		}); err != nil {
+			return tokenRecord{}, err
+		}
+		record.Admin = input.Admin
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return tokenRecord{}, err
@@ -378,6 +439,10 @@ type tokenCreateRequest struct {
 	// 400 invalid_project_id below, and not the generic "invalid request body"
 	// a failing UnmarshalJSON would produce.
 	ProjectID json.RawMessage `json:"project_id"`
+	// AdminAccess and AdminScopes are the administration access the token is
+	// created with (ADR-0059 R1.3a): absent is `none`.
+	AdminAccess *string   `json:"admin_access"`
+	AdminScopes *[]string `json:"admin_scopes"`
 }
 
 // resolveTokenProjectID reads the optional project binding out of the create
@@ -502,6 +567,17 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// The administration rules of ADR-0059 decision 7 (R1.3a): a token is
+	// created `none` unless the request asks for scopes, and scopes are set
+	// only by a recent browser sign-in, inside the caller's own set.
+	admin, adminErr := parseTokenAdminAccess(request.AdminAccess, request.AdminScopes)
+	if adminErr != nil {
+		writeTokenJSONError(w, http.StatusBadRequest, "invalid_request_error", adminErr.code, adminErr.message)
+		return
+	}
+	if admin.granted() && !h.authorizeAdminScopes(w, r, user, admin.Scopes, TokenMintRefusedAuditAction) {
+		return
+	}
 	if !request.Name.present {
 		apierr.Write(w, apierr.BadRequest("Name is required"))
 		return
@@ -519,10 +595,12 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	record, err := h.tokens.Create(r.Context(), tokenCreateInput{
-		OwnerID:   ownerID,
-		Name:      name,
-		Expires:   expires,
-		ProjectID: projectID,
+		OwnerID:       ownerID,
+		Name:          name,
+		Expires:       expires,
+		ProjectID:     projectID,
+		Admin:         admin,
+		OnAdminAccess: h.tokenAdminAccessEvent(r, ownerID),
 	})
 	if errors.Is(err, errTokenForbidden) {
 		apierr.Write(w, apierr.Unauthorized("authenticated principal is inactive"))
@@ -618,15 +696,22 @@ func (h *Handler) presentToken(record tokenRecord, reveal bool) (Token, error) {
 	if !reveal {
 		encoded = "..." + encoded[len(encoded)-7:]
 	}
-	return Token{
-		ID:        record.ID,
-		UUID:      record.UUID,
-		Expires:   record.Expires,
-		UserID:    record.UserID,
-		Name:      record.Name,
-		ProjectID: record.ProjectID,
-		Token:     encoded,
-	}, nil
+	admin := record.Admin.normalized()
+	token := Token{
+		ID:          record.ID,
+		UUID:        record.UUID,
+		Expires:     record.Expires,
+		UserID:      record.UserID,
+		Name:        record.Name,
+		ProjectID:   record.ProjectID,
+		Token:       encoded,
+		AdminAccess: admin.Access,
+		AdminScopes: admin.Scopes,
+	}
+	if admin.Access == adminAccessInherit {
+		token.InheritEndsOn = adminaccess.InheritEndsOn()
+	}
+	return token, nil
 }
 
 // tokenJSONError is the nested error envelope spec-llm-project-scope §8

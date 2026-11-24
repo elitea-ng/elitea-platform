@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "Власник розгортання.",
   "pages.admin.users.roles.superAdmin.label": "Глобальний адміністратор",
   "pages.admin.users.roles.viewer.description": "Застаріла роль. Вона зберігає дозволи, які мала під час оновлення.",
-  "pages.admin.users.roles.viewer.label": "Глядач"
+  "pages.admin.users.roles.viewer.label": "Глядач",
+  "entities.token.form.adminScopesHelp": "Виберіть адміністративні дозволи, які може використовувати цей токен. Не вибирайте жодного для токена без адміністративного доступу. Вибір будь-якого потребує нещодавнього входу.",
+  "entities.token.form.adminScopesTitle": "Адміністративний доступ",
+  "entities.token.form.recentSignInUnavailable": "Для адміністративних дозволів потрібен нещодавній вхід. Вийдіть, увійдіть знову й створіть токен протягом кількох хвилин.",
+  "entities.token.form.scopeBrowserRequired": "Адміністративні дозволи можна надати токену лише після входу з власним обліковим записом у вебзастосунку.",
+  "entities.token.form.scopeNotSettable": "Цей вхід не дає змоги надати токену адміністративні дозволи. Приберіть їх або увійдіть знову й повторіть спробу.",
+  "entities.token.form.scopeRefused": "Цей токен не може мати ці адміністративні дозволи: {{scopes}}. Приберіть їх і створіть токен знову.",
+  "entities.token.table.adminAccess": "Адміністрування",
+  "entities.token.table.adminInherit": "Усі ваші адміністративні дозволи",
+  "entities.token.table.adminInheritEnds": "Усі ваші адміністративні дозволи, до {{date}}",
+  "entities.token.table.adminNone": "Немає"
 }

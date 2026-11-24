@@ -45,6 +45,10 @@ import { TokenExpiration } from "./tokenExpiration.zod";
 
 export const personalAccessTokenCreateRequestNameMax = 128;
 
+export const personalAccessTokenCreateRequestAdminScopesItemMax = 64;
+
+export const personalAccessTokenCreateRequestAdminScopesMax = 128;
+
 export const PersonalAccessTokenCreateRequest = zod
   .object({
     name: zod
@@ -64,9 +68,27 @@ export const PersonalAccessTokenCreateRequest = zod
       .describe(
         "Absent or null mints an UNBOUND key, which is the default. Every other shape — a JSON string, a float, a boolean, zero, a negative number, a value the integer column cannot hold — is refused rather than falling back to unbound, because a caller that typed a project must not receive a key that bills somewhere else.\n",
       ),
+    admin_access: zod
+      .string()
+      .optional()
+      .describe(
+        "`none` (the default when absent) or `scoped`. `inherit` is a 400 (`invalid_admin_access`): no request sets it. `scoped` needs a browser sign-in of the last few minutes and scopes inside the caller's own administration set; see the 401 and 403 answers.\n",
+      ),
+    admin_scopes: zod
+      .array(
+        zod
+          .string()
+          .min(1)
+          .max(personalAccessTokenCreateRequestAdminScopesItemMax),
+      )
+      .max(personalAccessTokenCreateRequestAdminScopesMax)
+      .optional()
+      .describe(
+        "The administration permissions of a `scoped` token: between one and the registry's count of names, de-duplicated and stored sorted. Must be empty or absent unless `admin_access` is `scoped` (`invalid_admin_scopes`).\n",
+      ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/auth/tokens.go:360-368 (tokenCreateRequest) and :375-400 (resolveTokenProjectID).\n",
+    "NOTE(W2): internal/api/v2/auth/tokens.go (tokenCreateRequest, resolveTokenProjectID) and token_admin_scopes.go (parseTokenAdminAccess).\n",
   );
 
 export type PersonalAccessTokenCreateRequest = zod.input<

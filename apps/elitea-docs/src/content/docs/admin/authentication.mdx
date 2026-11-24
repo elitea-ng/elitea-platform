@@ -250,13 +250,12 @@ Some actions need proof that the person signed in a short time ago, not only tha
 
 ### What asks for it
 
-In this release, no action requires a recent sign-in yet. The check is ready for these upcoming features:
+In this release, one action requires a recent sign-in: giving a personal access token administration scopes (see [Administration scopes on a token](#administration-scopes-on-a-token)). The check is ready for these upcoming features:
 
-- Administration scopes on access tokens.
 - Starting a break-glass elevation.
 - Critical administrative actions.
 
-When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds. An OIDC, SAML or Form browser session can satisfy the check, as described below. A personal access token, a desktop or mobile session, and a run token never do.
+When an action needs a recent sign-in and the session is too old, the server answers 401 with the code `reauthentication_required`. The header `X-Elitea-Reauthentication-Max-Age` gives the limit in seconds, and the header `X-Elitea-Reauthentication-Method` names the sign-in that renews the session: `oidc`, `saml` or `form`. The web app reads both and opens the matching sign-in below. An OIDC, SAML or Form browser session can satisfy the check, as described below. A personal access token, a desktop or mobile session, and a run token never do.
 
 ### The limit
 
@@ -320,7 +319,29 @@ Each personal access token records which administration permissions it may use, 
 
 The upgrade that added these values set `inherit` on each existing personal access token whose owner held an administration permission at that time. Every other existing token got `none`, and keeps `none` when its owner gets an administration role later. Desktop and mobile device sessions and project system tokens always have `none`.
 
-The platform enforces the value. A `none` token gets `403` on every administration API, also when its owner is an administrator. Choosing administration scopes for a token comes in a later release.
+The platform enforces the value. A `none` token gets `403` on every administration API, also when its owner is an administrator.
+
+### Administration scopes on a token
+
+A person who holds administration permissions can give a personal access token exactly the administration permissions it needs: its **administration scopes**. In the web app, choose them under **Administration access** when you create the token (see [Create a personal access token](/getting-started/create-personal-access-token)). Through the API, send `admin_access` and `admin_scopes` on `POST /api/v2/auth/token/`, or change the scopes of an existing token with `PUT /api/v2/auth/token/{uuid}/admin_scopes`:
+
+```json
+{ "admin_access": "scoped", "admin_scopes": ["access.roles.view", "llm.usage.view"] }
+```
+
+`GET /api/v2/auth/token/admin_scopes` lists the scopes you may choose. These rules apply when you set scopes:
+
+- **From a browser sign-in only.** The request must come from an OIDC, SAML or Form browser session. A personal access token, a desktop or mobile session, an agent run token, a break-glass session, and a session under an elevation get `403`. A desktop or mobile session that may create a token at all creates a `none` token.
+- **A recent sign-in.** The person must have signed in within the limit of [Recent authentication](#recent-authentication), 15 minutes by default. Otherwise the answer is `401 reauthentication_required`, and the web app sends you through a fresh sign-in and back to the form, with what you typed kept.
+- **Only your own permissions.** Each scope must be an administration permission that your current sign-in holds (`403 token_scope_not_held`).
+- **Never some permissions.** These permissions can never be a token scope (`403 token_scope_not_allowed`): the global administrator's own permission (`admin.auth.users.super_admin`), identity trust (`identity.sso.trust.manage`), the four break-glass permissions (`access.breakglass.*`), and the two legacy names `runtime.plugins` and `configuration.governance`. Choose the narrow permissions that replace the legacy names instead.
+- **Never `inherit`.** `admin_access` takes `none` or `scoped`. No request sets `inherit`.
+
+Removing every scope (`{"admin_access": "none"}`) needs a browser sign-in but no recent one. Use it, or a `scoped` change, to move an `inherit` token off `inherit` before its sunset date. Each change of a token's scopes writes the security audit event `admin.access.changed` with the kind `token_scopes`. Refusals are recorded in the admin audit trail with the action `token.mint_refused` (create) or `token.admin_scopes_refused` (change).
+
+A scoped token still follows its owner: a scope that the owner loses stops working at the next request. And it still follows the [critical action rule](#tokens-and-critical-actions) below.
+
+The token responses carry `admin_access` and `admin_scopes`. An `inherit` token also carries `inherit_ends_on`, the date it ends, once the sunset date is set. A holder of `access.roles.view` lists every token with `scoped` or `inherit` access, with its owner, at `GET /api/v2/admin/access/tokens` (paged with `limit`, at most 200, and `offset`). The listing never shows a token value.
 
 ### Tokens and critical actions
 

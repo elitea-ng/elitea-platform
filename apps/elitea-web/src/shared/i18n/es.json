@@ -4954,5 +4954,15 @@
   "pages.admin.users.roles.superAdmin.description": "El propietario de la implementación.",
   "pages.admin.users.roles.superAdmin.label": "Administrador global",
   "pages.admin.users.roles.viewer.description": "Un rol heredado. Conserva los permisos que tenía en la actualización.",
-  "pages.admin.users.roles.viewer.label": "Lector"
+  "pages.admin.users.roles.viewer.label": "Lector",
+  "entities.token.form.adminScopesHelp": "Elija los permisos de administración que puede usar este token. No elija ninguno para un token sin acceso de administración. Elegir alguno requiere un inicio de sesión reciente.",
+  "entities.token.form.adminScopesTitle": "Acceso de administración",
+  "entities.token.form.recentSignInUnavailable": "Los permisos de administración requieren un inicio de sesión reciente. Cierre la sesión, vuelva a iniciarla y cree el token en unos minutos.",
+  "entities.token.form.scopeBrowserRequired": "Solo se pueden dar permisos de administración a un token después de iniciar sesión con su propia cuenta en la aplicación web.",
+  "entities.token.form.scopeNotSettable": "Este inicio de sesión no puede dar permisos de administración a un token. Quítelos, o vuelva a iniciar sesión e inténtelo de nuevo.",
+  "entities.token.form.scopeRefused": "Este token no puede tener estos permisos de administración: {{scopes}}. Quítelos y vuelva a crear el token.",
+  "entities.token.table.adminAccess": "Administración",
+  "entities.token.table.adminInherit": "Todos sus permisos de administración",
+  "entities.token.table.adminInheritEnds": "Todos sus permisos de administración, hasta el {{date}}",
+  "entities.token.table.adminNone": "Ninguno"
 }

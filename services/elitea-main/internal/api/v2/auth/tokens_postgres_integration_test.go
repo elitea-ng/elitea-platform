@@ -1,20 +1,27 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/authsvc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
@@ -594,4 +601,230 @@ func countTokens(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
 
 func int64Address(value int64) *int64 {
 	return &value
+}
+
+// newTokenScopesDatabase is an isolated database with auth_core (whose
+// baseline projection carries admin_access and admin_scopes, shared 0265),
+// the token migrations and the security audit outbox.
+func newTokenScopesDatabase(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	adminURL := testpg.DSN(os.Getenv("ELITEA_AUTH_TEST_DATABASE_URL"))
+	if adminURL == "" {
+		t.Skip("set ELITEA_AUTH_TEST_DATABASE_URL to an isolated PostgreSQL admin database")
+	}
+	ctx := t.Context()
+	adminConfig, err := pgxpool.ParseConfig(adminURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminPool, err := pgxpool.NewWithConfig(ctx, adminConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	databaseName := fmt.Sprintf("elitea_auth_scopes_test_%d", time.Now().UnixNano())
+	identifier := pgx.Identifier{databaseName}.Sanitize()
+	if _, err := adminPool.Exec(ctx, "CREATE DATABASE "+identifier); err != nil {
+		adminPool.Close()
+		t.Fatal(err)
+	}
+	testConfig := adminConfig.Copy()
+	testConfig.ConnConfig.Database = databaseName
+	pool, err := pgxpool.NewWithConfig(ctx, testConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		_, _ = adminPool.Exec(context.Background(), "DROP DATABASE IF EXISTS "+identifier+" WITH (FORCE)")
+		adminPool.Close()
+	})
+	for _, statements := range []string{
+		dbschema.AuthCoreBaselineSQLCProjection,
+		dbschema.CentryProjectsBaselineSQLCProjection,
+	} {
+		if _, err := pool.Exec(ctx, statements); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applyTokenMigrations(ctx, t, pool, 1)
+	outbox, err := platformmigrations.Files.ReadFile("shared/0183_security_audit_outbox.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(outbox)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO public.auth_core__user (id, email, suspended) VALUES (7, 'owner@example.test', false)`); err != nil {
+		t.Fatal(err)
+	}
+	return pool
+}
+
+// tokenScopeEvent is one admin.access.changed event of the outbox.
+type tokenScopeEvent struct {
+	subject, action, principal string
+	before, after, fields      []string
+}
+
+func tokenScopeEvents(t *testing.T, pool *pgxpool.Pool) []tokenScopeEvent {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), `
+SELECT event->>'subject', event->'data'->>'action', COALESCE(event->'data'->>'principal_ref', ''),
+       COALESCE(ARRAY(SELECT jsonb_array_elements_text(event->'data'->'access'->'before')), '{}'),
+       COALESCE(ARRAY(SELECT jsonb_array_elements_text(event->'data'->'access'->'after')), '{}'),
+       COALESCE(ARRAY(SELECT jsonb_array_elements_text(event->'data'->'access'->'fields')), '{}')
+FROM elitea_runtime.security_audit_outbox
+WHERE event_type = 'ai.elitea.security.v1.admin.access.changed' ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (tokenScopeEvent, error) {
+		var e tokenScopeEvent
+		err := row.Scan(&e.subject, &e.action, &e.principal, &e.before, &e.after, &e.fields)
+		return e, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
+
+func storedTokenAccess(t *testing.T, pool *pgxpool.Pool, id int64) (string, []string) {
+	t.Helper()
+	var access string
+	var scopes []string
+	if err := pool.QueryRow(t.Context(),
+		`SELECT admin_access, admin_scopes FROM public.auth_core__token WHERE id = $1`, id).Scan(&access, &scopes); err != nil {
+		t.Fatal(err)
+	}
+	return access, scopes
+}
+
+// Acceptance (DB integration): a created scoped token stores exactly the
+// scopes asked for, and the scope-change route replaces them under the same
+// rules; one admin.access.changed event is appended per change.
+func TestPostgresScopedTokenStoresItsScopesAndAppendsOneEventPerChange(t *testing.T) {
+	pool := newTokenScopesDatabase(t)
+	handler := NewHandler(pool,
+		WithTokenSigningKey("test-secret"),
+		WithPermissionResolver(scopeResolver{set: adminCallerSet}),
+		WithRecentAuthentication(apimw.RecentAuthentication{MaxAge: 15 * time.Minute, Now: func() time.Time { return scopeClock }}),
+	)
+	do := func(caller scopeCaller, method, target, body string) (int, Token) {
+		t.Helper()
+		req := httptest.NewRequest(method, target, bytes.NewBufferString(body))
+		req = req.WithContext(identity.ContextWithAuthenticatedUser(req.Context(), caller.user, caller.source))
+		rec := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(rec, req)
+		var token Token
+		if rec.Code == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), &token); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return rec.Code, token
+	}
+
+	status, created := do(freshSession, http.MethodPost, "/token/",
+		`{"name":"ci","admin_access":"scoped","admin_scopes":["admin.auth.users","access.roles.view"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("create: status %d", status)
+	}
+	access, scopes := storedTokenAccess(t, pool, created.ID)
+	if access != "scoped" || strings.Join(scopes, ",") != "access.roles.view,admin.auth.users" {
+		t.Fatalf("stored %s %v, want exactly the scopes asked for", access, scopes)
+	}
+	tokenSubject := fmt.Sprintf("token/%d", created.ID)
+	events := tokenScopeEvents(t, pool)
+	if len(events) != 1 || events[0].subject != tokenSubject || events[0].action != "admin.access.token_scopes" ||
+		events[0].principal != "user:7" || len(events[0].before) != 0 ||
+		strings.Join(events[0].after, ",") != "access.roles.view,admin.auth.users" ||
+		strings.Join(events[0].fields, ",") != "created" {
+		t.Fatalf("events after the create = %+v", events)
+	}
+
+	// A refused change writes nothing and appends nothing.
+	target := "/token/" + *created.UUID + "/admin_scopes"
+	if status, _ := do(freshSession, http.MethodPut, target,
+		`{"admin_access":"scoped","admin_scopes":["identity.sso.trust.manage"]}`); status != http.StatusForbidden {
+		t.Fatalf("a token: never scope: status %d, want 403", status)
+	}
+	if status, _ := do(staleSession, http.MethodPut, target,
+		`{"admin_access":"scoped","admin_scopes":["admin.auth.users"]}`); status != http.StatusUnauthorized {
+		t.Fatalf("a stale sign-in: status %d, want 401", status)
+	}
+
+	// The scope change replaces them; the same scopes again is no change.
+	for range 2 {
+		status, changed := do(freshSession, http.MethodPut, target,
+			`{"admin_access":"scoped","admin_scopes":["admin.auth.users"]}`)
+		if status != http.StatusOK || strings.Join(changed.AdminScopes, ",") != "admin.auth.users" {
+			t.Fatalf("change: status %d %+v", status, changed)
+		}
+	}
+	if _, scopes := storedTokenAccess(t, pool, created.ID); strings.Join(scopes, ",") != "admin.auth.users" {
+		t.Fatalf("stored %v after the change", scopes)
+	}
+	// Dropping every scope, from any browser sign-in.
+	if status, dropped := do(staleSession, http.MethodPut, target, `{"admin_access":"none"}`); status != http.StatusOK ||
+		dropped.AdminAccess != "none" {
+		t.Fatalf("drop: status %d %+v", status, dropped)
+	}
+	if access, scopes := storedTokenAccess(t, pool, created.ID); access != "none" || len(scopes) != 0 {
+		t.Fatalf("stored %s %v after the drop", access, scopes)
+	}
+	events = tokenScopeEvents(t, pool)
+	if len(events) != 3 {
+		t.Fatalf("events = %+v, want one for the create and one per change", events)
+	}
+	if strings.Join(events[1].before, ",") != "access.roles.view,admin.auth.users" ||
+		strings.Join(events[1].after, ",") != "admin.auth.users" || len(events[1].fields) != 0 {
+		t.Fatalf("the narrowing event = %+v", events[1])
+	}
+	if strings.Join(events[2].after, ",") != "" || strings.Join(events[2].fields, ",") != "admin_access" {
+		t.Fatalf("the drop event = %+v", events[2])
+	}
+
+	// The list and the read state the access.
+	status, listed := do(freshSession, http.MethodGet, "/token/"+*created.UUID, "")
+	if status != http.StatusOK || listed.AdminAccess != "none" || listed.AdminScopes == nil {
+		t.Fatalf("read: status %d %+v", status, listed)
+	}
+
+	// Another user's token is not found, and nothing changes.
+	other := freshSession
+	other.user.ID, other.user.UserID = "8", "8"
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.auth_core__user (id, email, suspended) VALUES (8, 'other@example.test', false)`); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := do(other, http.MethodPut, target, `{"admin_access":"scoped","admin_scopes":["admin.auth.users"]}`); status != http.StatusBadRequest {
+		t.Fatalf("another user's token: status %d, want 400", status)
+	}
+	if got := len(tokenScopeEvents(t, pool)); got != 3 {
+		t.Fatalf("events = %d after a refused change, want 3", got)
+	}
+}
+
+// A failed event append rolls the scoped token back: it never exists without
+// its evidence.
+func TestPostgresScopedTokenRollsBackWithoutItsEvent(t *testing.T) {
+	pool := newTokenScopesDatabase(t)
+	handler := NewHandler(pool,
+		WithTokenSigningKey("test-secret"),
+		WithPermissionResolver(scopeResolver{set: adminCallerSet}),
+		WithRecentAuthentication(apimw.RecentAuthentication{MaxAge: 15 * time.Minute, Now: func() time.Time { return scopeClock }}),
+		WithAccessAuditAppender(securityaudit.FailingAppender{Err: errors.New("injected append failure")}),
+	)
+	req := httptest.NewRequest(http.MethodPost, "/token/",
+		bytes.NewBufferString(`{"name":"ci","admin_access":"scoped","admin_scopes":["admin.auth.users"]}`))
+	req = req.WithContext(identity.ContextWithAuthenticatedUser(req.Context(), freshSession.user, freshSession.source))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500", rec.Code)
+	}
+	if total := countTokens(t.Context(), t, pool); total != 0 {
+		t.Fatalf("tokens = %d, want the create rolled back", total)
+	}
 }

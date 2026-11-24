@@ -48,6 +48,10 @@ func (f *fakeTokenRepository) DeleteOwned(_ context.Context, _ int64, tokenUUID 
 	return nil
 }
 
+func (f *fakeTokenRepository) SetAdminAccess(context.Context, tokenAdminAccessUpdate) (tokenRecord, error) {
+	return tokenRecord{}, errTokenNotFound
+}
+
 func minterOver(repository tokenRepository, signer TokenSigner, key []byte) *CallbackTokenMinter {
 	return &CallbackTokenMinter{tokens: repository, signer: signer, signingKey: key}
 }
