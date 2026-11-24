@@ -43,9 +43,9 @@ func TestImportSkillTakesAProjectAndAUserAndNotTwoInts(t *testing.T) {
 	signature := reflect.TypeOf(handler.importSkill)
 
 	// The method value drops the receiver, so the parameters are
-	// (context, schema, ownerID, authorID).
-	ownerParameter := signature.In(2)
-	authorParameter := signature.In(3)
+	// (context, querier, schema, ownerID, authorID).
+	ownerParameter := signature.In(3)
+	authorParameter := signature.In(4)
 
 	if ownerParameter != reflect.TypeOf(ownership.ProjectID(0)) {
 		t.Errorf("importSkill takes %s as the owner, want ownership.ProjectID", ownerParameter)

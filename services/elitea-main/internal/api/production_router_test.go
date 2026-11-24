@@ -2336,6 +2336,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/skill_version_restore/{mode}/{projectID}/{skillID}/{versionID}",
 		"POST /api/v2/elitea_core/skills/{mode}/{projectID}",
 		"POST /api/v2/elitea_core/tags/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/team_import/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/test_tool/prompt_lib/{projectID}/{toolID}",
 		"POST /api/v2/elitea_core/test_toolkit_tool/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/toolkit_discover_tools/prompt_lib/{projectID}/{toolkitType}",

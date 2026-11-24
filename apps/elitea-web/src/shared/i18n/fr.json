@@ -4954,5 +4954,20 @@
   "pages.admin.users.roles.superAdmin.description": "Le propriétaire du déploiement.",
   "pages.admin.users.roles.superAdmin.label": "Administrateur global",
   "pages.admin.users.roles.viewer.description": "Un rôle hérité. Il conserve les autorisations qu'il avait lors de la mise à niveau.",
-  "pages.admin.users.roles.viewer.label": "Lecteur"
+  "pages.admin.users.roles.viewer.label": "Lecteur",
+  "agents.deleteApplicationButton.failed": "L'agent n'a pas pu être supprimé.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} {{noun}} n'ont pas pu être supprimés.",
+  "features.agentLifecycle.import.failed": "L'importation a échoué. Rien n'a été importé.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} doit contenir kind: team.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} n'est pas un YAML valide.",
+  "features.agentLifecycle.import.team.leadNotMember": "Le responsable {{lead}} ne fait pas partie des membres de {{file}}.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} nomme des fichiers que le zip ne contient pas : {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} doit lister ses membres par les chemins de leurs fichiers .agent.md.",
+  "features.agentLifecycle.import.team.noName": "{{file}} n'a pas de nom d'équipe.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} liste un membre deux fois.",
+  "features.agentLifecycle.import.team.tooManyMembers": "Une équipe compte au plus {{limit}} agents.",
+  "features.agentLifecycle.import.teamLead": "Responsable : {{name}}",
+  "features.agentLifecycle.import.teamName": "Équipe : {{name}}",
+  "features.agentTeams.exportAction": "Exporter",
+  "features.agentTeams.exportMemberFailed": "L'équipe n'a pas pu être exportée : l'agent {{name}} n'a pas pu être lu."
 }

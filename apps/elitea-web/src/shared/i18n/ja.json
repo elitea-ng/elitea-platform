@@ -4954,5 +4954,20 @@
   "pages.admin.users.roles.superAdmin.description": "デプロイの所有者。",
   "pages.admin.users.roles.superAdmin.label": "グローバル管理者",
   "pages.admin.users.roles.viewer.description": "レガシーのロールです。アップグレード時に保持していた権限をそのまま保持します。",
-  "pages.admin.users.roles.viewer.label": "閲覧者"
+  "pages.admin.users.roles.viewer.label": "閲覧者",
+  "agents.deleteApplicationButton.failed": "エージェントを削除できませんでした。",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} 件の{{noun}}を削除できませんでした。",
+  "features.agentLifecycle.import.failed": "インポートに失敗しました。何もインポートされていません。",
+  "features.agentLifecycle.import.team.badKind": "{{file}} には kind: team が必要です。",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} は有効な YAML ではありません。",
+  "features.agentLifecycle.import.team.leadNotMember": "リーダー {{lead}} は {{file}} のメンバーではありません。",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} が指定するファイルが zip にありません: {{files}}。",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} はメンバーを .agent.md ファイルのパスで列挙する必要があります。",
+  "features.agentLifecycle.import.team.noName": "{{file}} にチーム名がありません。",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} に同じメンバーが 2 回記載されています。",
+  "features.agentLifecycle.import.team.tooManyMembers": "チームのエージェントは最大 {{limit}} 件です。",
+  "features.agentLifecycle.import.teamLead": "リーダー: {{name}}",
+  "features.agentLifecycle.import.teamName": "チーム: {{name}}",
+  "features.agentTeams.exportAction": "エクスポート",
+  "features.agentTeams.exportMemberFailed": "チームをエクスポートできませんでした: エージェント {{name}} を読み取れませんでした。"
 }

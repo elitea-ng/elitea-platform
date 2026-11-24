@@ -4954,5 +4954,20 @@
   "pages.admin.users.roles.superAdmin.description": "مالک استقرار.",
   "pages.admin.users.roles.superAdmin.label": "مدیر سراسری",
   "pages.admin.users.roles.viewer.description": "یک نقش قدیمی. مجوزهایی را که هنگام ارتقا داشت حفظ می‌کند.",
-  "pages.admin.users.roles.viewer.label": "بیننده"
+  "pages.admin.users.roles.viewer.label": "بیننده",
+  "agents.deleteApplicationButton.failed": "حذف عامل ممکن نشد.",
+  "features.agentLifecycle.bulk.deleteFailedCount": "حذف {{count}} {{noun}} ممکن نشد.",
+  "features.agentLifecycle.import.failed": "وارد کردن ناموفق بود. چیزی وارد نشد.",
+  "features.agentLifecycle.import.team.badKind": "{{file}} باید kind: team داشته باشد.",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} یک YAML معتبر نیست.",
+  "features.agentLifecycle.import.team.leadNotMember": "سرپرست {{lead}} جزو اعضای {{file}} نیست.",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} به فایل‌هایی اشاره می‌کند که در zip نیستند: {{files}}.",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} باید اعضایش را با مسیر فایل‌های .agent.md آن‌ها فهرست کند.",
+  "features.agentLifecycle.import.team.noName": "{{file}} نام تیم ندارد.",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} یک عضو را دو بار فهرست کرده است.",
+  "features.agentLifecycle.import.team.tooManyMembers": "یک تیم حداکثر {{limit}} عامل دارد.",
+  "features.agentLifecycle.import.teamLead": "سرپرست: {{name}}",
+  "features.agentLifecycle.import.teamName": "تیم: {{name}}",
+  "features.agentTeams.exportAction": "خروجی گرفتن",
+  "features.agentTeams.exportMemberFailed": "خروجی گرفتن از تیم ممکن نشد: عامل {{name}} خوانده نشد."
 }

@@ -4954,5 +4954,20 @@
   "pages.admin.users.roles.superAdmin.description": "ڈیپلائمنٹ کا مالک۔",
   "pages.admin.users.roles.superAdmin.label": "عالمی منتظم",
   "pages.admin.users.roles.viewer.description": "ایک پرانا کردار۔ یہ وہ اجازتیں برقرار رکھتا ہے جو اپ گریڈ کے وقت اس کے پاس تھیں۔",
-  "pages.admin.users.roles.viewer.label": "ناظر"
+  "pages.admin.users.roles.viewer.label": "ناظر",
+  "agents.deleteApplicationButton.failed": "ایجنٹ کو حذف نہیں کیا جا سکا۔",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} {{noun}} حذف نہیں کیے جا سکے۔",
+  "features.agentLifecycle.import.failed": "درآمد ناکام ہو گئی۔ کچھ بھی درآمد نہیں ہوا۔",
+  "features.agentLifecycle.import.team.badKind": "{{file}} میں kind: team ہونا ضروری ہے۔",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} درست YAML نہیں ہے۔",
+  "features.agentLifecycle.import.team.leadNotMember": "لیڈ {{lead}} {{file}} کے اراکین میں شامل نہیں ہے۔",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} ایسی فائلوں کا نام لیتی ہے جو zip میں نہیں ہیں: {{files}}۔",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} کو اپنے اراکین ان کی .agent.md فائلوں کے راستوں سے درج کرنے ہوں گے۔",
+  "features.agentLifecycle.import.team.noName": "{{file}} میں ٹیم کا نام نہیں ہے۔",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} ایک رکن کو دو بار درج کرتی ہے۔",
+  "features.agentLifecycle.import.team.tooManyMembers": "ایک ٹیم میں زیادہ سے زیادہ {{limit}} ایجنٹ ہوتے ہیں۔",
+  "features.agentLifecycle.import.teamLead": "لیڈ: {{name}}",
+  "features.agentLifecycle.import.teamName": "ٹیم: {{name}}",
+  "features.agentTeams.exportAction": "برآمد کریں",
+  "features.agentTeams.exportMemberFailed": "ٹیم برآمد نہیں کی جا سکی: ایجنٹ {{name}} پڑھا نہیں جا سکا۔"
 }

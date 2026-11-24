@@ -980,7 +980,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 583 -> 585 (issue 2531, ADR-0059 R3.1a): getAdminConsoleDocument and getAdminConsoleItem, the
 // console capability document and its item route. The web consumer is R3.1b (issue 2611), so
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 585;
+// 585 -> 586 (issue 3010): importTeam, the Workshop Import of a team zip (all agents and the
+// saved team in one transaction). The import dialog calls it, so MANIFEST_ENTRY_COUNT moves too.
+const GENERATED_OPERATION_COUNT = 586;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1320,8 +1322,10 @@ const GENERATED_OPERATION_COUNT = 585;
  *
  * 393 -> 394 (issue 2963): webhooks.rotateWebhookSecret, the Webhooks settings page's rotate action
  * now that the signing secret is write-only. Generated.
+ *
+ * 394 -> 395 (issue 3010): applications.importTeam, the Workshop Import of a team zip. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 394;
+const MANIFEST_ENTRY_COUNT = 395;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

@@ -107,6 +107,13 @@ Selecting **Save** again updates the current version. Use **Save As Version** to
 
 See [Import/export](/how-tos/agents-pipelines/import-export) and [Forking](/how-tos/agents-pipelines/forking) for full detail; toolkit credentials must be reconfigured manually after either operation.
 
+### Delete an agent
+
+**Delete** removes the agent with all its versions. An agent hired from the Marketplace, or one that uses sub-agents, carries a private copy of each sub-agent; those copies are listed as drafts and are deleted with the agent. When a delete is refused, the dialog says why:
+
+- **Unpublish first.** An agent with a published version must be unpublished before it can be deleted.
+- **This agent is the sub-agent copy of another agent.** Delete or unpublish that agent, and the copy goes with it. A copy whose parent is already gone can be deleted on its own.
+
 ## Evaluation
 
 A saved agent's editor includes an **Evaluation** tab to define what "good" looks like for that agent, run it against test cases, and see how it scored.

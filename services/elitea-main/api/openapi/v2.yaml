@@ -19869,11 +19869,20 @@ components:
             applications:
               type: array
               items: { $ref: '#/components/schemas/ImportEntity' }
+            toolkits:
+              type: array
+              items: { $ref: '#/components/schemas/ImportEntity' }
+            skills:
+              type: array
+              items: { $ref: '#/components/schemas/ImportEntity' }
       description: >
         NOTE(W2): the handler accepts a bare entity array (import_wizard) or a
         {"applications": [...]} envelope
-        (internal/api/v2/eliteacore/handler.go:2349-2378). An envelope with no
-        `applications` array is refused with 400 (:2372-2376).
+        (internal/api/v2/eliteacore/team_import.go:102, `importEntitiesFrom`).
+        An envelope with no `applications` array is refused with 400. The
+        envelope's top-level `toolkits` and `skills` arrays (the shape the
+        export writes) are imported beside the applications; an entry without
+        `entity` takes its array's (issue 3010).
 
     ImportError:
       type: object
@@ -20016,6 +20025,113 @@ components:
         this route can leave a channel out. The fast path used to carry the
         `agents` key alone. Status is 201 when all entities imported, 207 on
         partial failure, 400 when all failed (handler.go:2895-2905).
+
+    TeamImportTeam:
+      type: object
+      description: >
+        The team of a team import (issue 3010). `members` names the agent
+        entries of the document by their `import_uuid`, in roster order;
+        `lead`, when set, is one of them and makes the floor `lead`.
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:146 (`teamImportBody`).
+      required: [name, members]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, maxLength: 2000 }
+        floor_policy:
+          type: string
+          description: "`addressed` (the default without a lead) or `lead`."
+        lead:
+          type: string
+          description: The import_uuid of the lead member.
+        members:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { type: string }
+
+    TeamImportRequest:
+      type: object
+      description: >
+        An import document plus the team its agents form. NOTE(W2):
+        internal/api/v2/eliteacore/team_import.go:102 (`importEntitiesFrom`).
+      required: [team, applications]
+      properties:
+        team: { $ref: '#/components/schemas/TeamImportTeam' }
+        applications:
+          type: array
+          items: { $ref: '#/components/schemas/ImportEntity' }
+        toolkits:
+          type: array
+          items: { $ref: '#/components/schemas/ImportEntity' }
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/ImportEntity' }
+
+    TeamImportCreated:
+      type: object
+      description: >
+        The saved team a team import created: its id, floor and members, each
+        pinned to the first version of its imported agent. NOTE(W2):
+        internal/api/v2/eliteacore/team_import.go:472 (`teamImportJSON`).
+      required: [id, project_id, name, description, floor_policy, lead_position, members]
+      properties:
+        id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        name: { type: string }
+        description: { type: string }
+        floor_policy: { type: string }
+        lead_position:
+          type: integer
+          nullable: true
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/AgentTeamMember' }
+
+    TeamImportResponse:
+      description: >
+        The import envelope of every entity written, plus the team.
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:261.
+      allOf:
+        - $ref: '#/components/schemas/ImportWizardResponse'
+        - type: object
+          required: [team]
+          properties:
+            team: { $ref: '#/components/schemas/TeamImportCreated' }
+
+    TeamImportErrors:
+      type: object
+      description: The per-entity errors of a refused team import, by channel.
+      required: [agents, toolkits, skills]
+      properties:
+        agents:
+          type: array
+          items: { $ref: '#/components/schemas/ImportError' }
+        toolkits:
+          type: array
+          items: { $ref: '#/components/schemas/ImportError' }
+        skills:
+          type: array
+          items: { $ref: '#/components/schemas/ImportError' }
+
+    TeamImportRefusal:
+      type: object
+      description: >
+        A refused team import. Nothing of it was kept. `code` is
+        `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit"),
+        `agent_name_taken` (with `names`), `team_name_taken` or
+        `import_failed` (with `errors`, the import channels).
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:265 (`writeTeamImportRefusal`).
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+        names:
+          type: array
+          items: { type: string }
+        missing:
+          type: array
+          items: { type: string }
+        errors: { $ref: '#/components/schemas/TeamImportErrors' }
 
     Permission:
       type: object
@@ -44193,6 +44309,50 @@ paths:
                 $ref: '#/components/schemas/ImportWizardResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+
+  /elitea_core/team_import/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    post:
+      operationId: importTeam
+      summary: Import a set of agents as one saved team, all or nothing
+      description: |
+        NOTE(W2): internal/api/v2/eliteacore/team_import.go:155
+        (`TeamImportPost`), issue 3010. One transaction creates every agent,
+        version, toolkit, skill and link of the document, then the team
+        (ADR-0050 decision 8); any failure keeps nothing. Each member is
+        pinned to the first version of its agent. Gated by
+        `models.applications.export_import.import` AND `models.teams.create`.
+      tags: [applications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TeamImportRequest'
+      responses:
+        '201':
+          description: Every agent and the team were created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamImportResponse'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: An agent name or the team name is taken in the project; nothing was created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamImportRefusal'
+        '422':
+          description: The team is invalid, a toolkit is missing, or an entity could not be written; nothing was created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamImportRefusal'
 
   # APPLICATIONS — icons
   /elitea_core/upload_icon/prompt_lib/{project_id}/{version_id}:
