@@ -177,6 +177,23 @@ The body also names the `role` and the `permissions`. The Roles page shows that 
 Nobody can change the permissions of a built-in role through the console or the API, a super admin included (see [Built-in administration roles](#built-in-administration-roles)). The accounts in `identity.initial_global_admins` (`ELITEA_INITIAL_GLOBAL_ADMINS`) get `super_admin` on their first sign-in, but only while no active account holds `super_admin` (see [The first global administrator](/admin/authentication#the-first-global-administrator)).
 </Note>
 
+## The last administrator
+
+A deployment always keeps one administrator. The **last administrator** is the last active (unsuspended) account that holds `admin.auth.users.super_admin`, which in practice means the last `super_admin`. When nobody holds that permission, it is the last active account with the `admin` role. That second case is for a deployment upgraded from the legacy platform, where people can hold `admin` while nobody holds `super_admin`. On a new deployment nobody holds either role until the first administrator is added, and then there is nothing to protect.
+
+Nobody can demote, suspend, delete or deactivate the last administrator, a super admin included, on any path:
+
+- the Users page and `POST /api/v2/admin/auth_users/administration` (`set_admin_role` and `delete`),
+- `DELETE /api/v2/admin/modes/administration`,
+- `PUT /api/v2/admin/user_suspend/administration/{id}`,
+- SCIM deactivation and `DELETE` (see [Deprovision the last administrator](/admin/authentication#deprovision-the-last-administrator)).
+
+The server answers `409` with the code `last_administrator`, and the Users page shows the reason. A bulk delete that includes the last administrator is refused whole: no account of the selection is deleted. Each refusal is in the Audit Trail with the action `role.last_administrator_refused`.
+
+To replace the last administrator, give a second person the role first, then demote, suspend or delete the first one. If nobody else can give the role (the last administrator has left, or lost access), an operator with access to the `elitea-main` workload runs [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line). Only that command can override the rule, with `admin-role revoke --override-last-administrator`.
+
+The check runs under the same database lock as every role change, so two administrators who demote each other at the same moment cannot both succeed.
+
 ## Role changes are recorded
 
 Every change to a central role assignment that Elitea makes is recorded: on the Users page, under `/admin/modes`, and at the first sign-in of an initial administrator. A grant or a removal writes one record with the account, the role name and mode, what happened (`granted` or `revoked`), who did it, when, and the source of the change. Records cannot be edited or deleted. A record keeps the role name, so it stays readable after a custom role is deleted.

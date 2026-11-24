@@ -289,6 +289,20 @@ func newDirectoryPool(t *testing.T) *pgxpool.Pool {
 			role_id INTEGER NOT NULL REFERENCES auth_core__role(id) ON DELETE CASCADE,
 			UNIQUE (user_id, role_id)
 		);
+		-- The last-administrator rule (issue 2500) counts the holders of a
+		-- permission, and a refused deprovisioning deletes the tokens.
+		CREATE TABLE auth_core__role_permission (
+			role_id INTEGER NOT NULL REFERENCES auth_core__role(id) ON DELETE CASCADE,
+			permission TEXT,
+			UNIQUE (role_id, permission)
+		);
+		CREATE TABLE auth_core__token (
+			id SERIAL PRIMARY KEY,
+			uuid VARCHAR(36),
+			expires TIMESTAMP,
+			user_id INTEGER REFERENCES auth_core__user(id) ON DELETE CASCADE,
+			name TEXT
+		);
 		INSERT INTO auth_core__role (name, mode) VALUES
 			('admin', 'administration'), ('viewer', 'administration'), ('member', 'default')`)
 	require.NoError(t, err)

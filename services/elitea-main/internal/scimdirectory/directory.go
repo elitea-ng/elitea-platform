@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
@@ -359,6 +360,15 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 		return User{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// A create that states active:false can deactivate the account it adopts,
+	// so it takes the role-writes lock first (the last-administrator rule,
+	// issue 2500; adminaccess.HoldRoleWrites says why first).
+	deactivates := user.ActiveStated && !user.Active
+	if deactivates {
+		if err := adminaccess.LockRoleWrites(ctx, tx); err != nil {
+			return User{}, err
+		}
+	}
 
 	// ON THE ADOPTION BRANCH, `suspended` MOVES ONLY IF THE CLIENT SAID SO.
 	//
@@ -385,6 +395,11 @@ func (s *Store) Create(ctx context.Context, user User) (User, error) {
 		userName).Scan(&id)
 	switch {
 	case err == nil:
+		if deactivates {
+			if err := refuseLastAdministratorDeactivation(ctx, tx, id); err != nil {
+				return User{}, err
+			}
+		}
 		// An adoption is a write to an EXISTING row, and it is held to the
 		// same guard as every other write: an administrator's row or a
 		// platform principal's is never taken over by a directory push.
@@ -462,6 +477,11 @@ func (s *Store) Replace(ctx context.Context, id int, user User) (User, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if !user.Active {
+		if err := refuseLastAdministratorDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
 	if err := guardTarget(ctx, tx, id); err != nil {
 		return User{}, err
 	}
@@ -527,6 +547,13 @@ func (s *Store) SetActive(ctx context.Context, id int, active bool) (User, error
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// The last administrator first (issue 2500): its deactivation is refused,
+	// and its access ended anyway.
+	if !active {
+		if err := refuseLastAdministratorDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
 	// Suspension is held to the guard too: a directory client that could
 	// suspend the administrators could lock the operators out of the screen
 	// that undoes it.
@@ -585,6 +612,11 @@ func (s *Store) ApplyUserChanges(ctx context.Context, id int, changes UserChange
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if changes.Active != nil && !*changes.Active {
+		if err := refuseLastAdministratorDeactivation(ctx, tx, id); err != nil {
+			return User{}, err
+		}
+	}
 	if err := guardTarget(ctx, tx, id); err != nil {
 		return User{}, err
 	}
