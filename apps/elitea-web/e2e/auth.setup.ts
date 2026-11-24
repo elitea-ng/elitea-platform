@@ -83,7 +83,8 @@ setup.describe('Auth setup', () => {
   // project the sign-in provisions finish before the next sign-in takes the
   // provisioning slot.
   for (const persona of ADMIN_PERSONAS) {
-    setup(`authenticate as ${persona.role} persona`, async ({ page }) => {
+    // "built-in role": `admin` would otherwise repeat the admin persona's title.
+    setup(`authenticate as the built-in role ${persona.role} persona`, async ({ page }) => {
       setup.setTimeout(PERSONA_TIMEOUT_MS);
       await performOidcLogin(page, persona.email, STORAGE_STATE.personas[persona.role], 'console');
     });
