@@ -125,6 +125,10 @@ function useAdminProjectHandlers(): void {
       recorded.push({ method: 'PUT-member', url: request.url, body: await request.json() });
       return HttpResponse.json({ msg: 'roles updated' });
     }),
+    http.delete('*/admin/users/administration/*', ({ request }) => {
+      recorded.push({ method: 'DELETE-member', url: request.url, body: null });
+      return HttpResponse.json({ msg: 'users successfully removed' });
+    }),
     // Provisioning. NOT on the `/admin/...` family: create and delete belong to
     // the projects handler, which drives the step pipeline.
     http.post('*/projects/project/administration', async ({ request }) => {
@@ -745,6 +749,31 @@ describe('Admin › Projects', () => {
       await waitFor(() => expect(writes()).toHaveLength(1));
       expect(writes()[0]!.method).toBe('PUT-member');
       expect(writes()[0]!.body).toEqual({ id: '77', roles: ['admin'] });
+    });
+
+    it('removes an existing member through the central DELETE (ADR-0059 R0.6a)', async () => {
+      const user = userEvent.setup();
+      renderAdminRoute(<AdminProjects />);
+      await screen.findByText('atlas');
+      await user.click(screen.getAllByRole('button', { name: 'Manage project member' })[0]!);
+
+      // No Remove for an address that names no member.
+      await user.type(await screen.findByRole('textbox', { name: 'User email' }), 'new@example.com');
+      expect(screen.queryByRole('button', { name: 'Remove from project' })).not.toBeInTheDocument();
+
+      await user.clear(screen.getByRole('textbox', { name: 'User email' }));
+      await user.type(screen.getByRole('textbox', { name: 'User email' }), 'already@example.com');
+      // The first click arms the button and removes nothing.
+      await user.click(await screen.findByRole('button', { name: 'Remove from project' }));
+      expect(writes()).toHaveLength(0);
+      await user.click(screen.getByRole('button', { name: 'Click again to remove' }));
+
+      await waitFor(() => expect(writes()).toHaveLength(1));
+      expect(writes()[0]!.method).toBe('DELETE-member');
+      const url = new URL(writes()[0]!.url);
+      expect(url.pathname).toMatch(/\/admin\/users\/administration\/41$/);
+      expect(url.searchParams.get('id[]')).toBe('77');
+      expect(await screen.findByText('User removed from the project.')).toBeInTheDocument();
     });
 
     it('refuses to submit an address that is not one, without a server round trip', async () => {

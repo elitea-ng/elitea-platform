@@ -58,6 +58,7 @@ export * from "./administrationRoleHistory.zod";
 export * from "./administrationRoleHolder.zod";
 export * from "./administrationRoleHolderRole.zod";
 export * from "./administrationRoleHolders.zod";
+export * from "./administrationUserDeleteParams.zod";
 export * from "./agentAnalytics.zod";
 export * from "./agentAttestation.zod";
 export * from "./agentAttestationCreate.zod";

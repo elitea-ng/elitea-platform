@@ -60,6 +60,7 @@ import type {
   AdminRoleRefusal,
   AdministrationRoleHistory,
   AdministrationRoleHolders,
+  AdministrationUserDeleteParams,
   AgentIdentityBinding,
   AgentIdentityBindingCreate,
   AgentIdentityBindingListResponse,
@@ -2815,6 +2816,264 @@ export function useUserDelete<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getUserDeleteQueryOptions(projectId, params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type administrationUserDeleteResponse200 = {
+  data: MessageResponse;
+  status: 200;
+};
+
+export type administrationUserDeleteResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type administrationUserDeleteResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type administrationUserDeleteResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type administrationUserDeleteResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type administrationUserDeleteResponseSuccess =
+  administrationUserDeleteResponse200 & {
+    headers: Headers;
+  };
+export type administrationUserDeleteResponseError = (
+  | administrationUserDeleteResponse400
+  | administrationUserDeleteResponse401
+  | administrationUserDeleteResponse403
+  | administrationUserDeleteResponse404
+) & {
+  headers: Headers;
+};
+
+export type administrationUserDeleteResponse =
+  | administrationUserDeleteResponseSuccess
+  | administrationUserDeleteResponseError;
+
+export const getAdministrationUserDeleteUrl = (
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/users/administration/${projectId}?${stringifiedParams}`
+    : `/admin/users/administration/${projectId}`;
+};
+
+/**
+ * The central twin of `DELETE /admin/users/default/{project_id}`: an
+ * administrator removes members of a project it does not need to be a
+ * member of. Gated on `projects.members.manage` or
+ * `configuration.users.users.delete` in the administration mode.
+ *
+ * The accounts survive, as on the default route. Removing yourself is
+ * allowed: leaving a project widens nothing. A removal by a caller who
+ * is not a member of the project is recorded in the audit log with
+ * `central_override`.
+ * @summary Remove one or more users from any project
+ */
+export const administrationUserDelete = async (
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<administrationUserDeleteResponse> => {
+  return eliteaFetch<administrationUserDeleteResponse>(
+    getAdministrationUserDeleteUrl(projectId, params),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getAdministrationUserDeleteQueryKey = (
+  projectId: string,
+  params?: AdministrationUserDeleteParams,
+) => {
+  return [
+    "DELETE",
+    `/admin/users/administration/${projectId}`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getAdministrationUserDeleteQueryOptions = <
+  TData = Awaited<ReturnType<typeof administrationUserDelete>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationUserDelete>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAdministrationUserDeleteQueryKey(projectId, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof administrationUserDelete>>
+  > = ({ signal }) =>
+    administrationUserDelete(projectId, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof administrationUserDelete>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AdministrationUserDeleteQueryResult = NonNullable<
+  Awaited<ReturnType<typeof administrationUserDelete>>
+>;
+export type AdministrationUserDeleteQueryError =
+  N400Response | N401Response | N403Response | N404Response;
+
+export function useAdministrationUserDelete<
+  TData = Awaited<ReturnType<typeof administrationUserDelete>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationUserDelete>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof administrationUserDelete>>,
+          TError,
+          Awaited<ReturnType<typeof administrationUserDelete>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdministrationUserDelete<
+  TData = Awaited<ReturnType<typeof administrationUserDelete>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationUserDelete>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof administrationUserDelete>>,
+          TError,
+          Awaited<ReturnType<typeof administrationUserDelete>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAdministrationUserDelete<
+  TData = Awaited<ReturnType<typeof administrationUserDelete>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationUserDelete>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Remove one or more users from any project
+ */
+
+export function useAdministrationUserDelete<
+  TData = Awaited<ReturnType<typeof administrationUserDelete>>,
+  TError = N400Response | N401Response | N403Response | N404Response,
+>(
+  projectId: string,
+  params: AdministrationUserDeleteParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof administrationUserDelete>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAdministrationUserDeleteQueryOptions(
+    projectId,
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

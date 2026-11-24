@@ -3589,7 +3589,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// refuses EVERY caller reads as a pass.
 				r.With(projectPermission("configuration.users.users.view")).
 					Get("/users/{mode}/{projectID}", coreHandler.Users)
-				r.With(central(adminaccess.ConfigurationUsersUsersView)).
+				// The administration member routes accept projects.members.manage
+				// beside each legacy configuration.users.users.* name (ADR-0059
+				// R0.6a); a holder of the legacy names sees no change
+				// (testdata/central_project_admin_legacy.golden).
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersView)).
 					Get("/users/administration/{projectID}", coreHandler.Users)
 				r.With(apimw.RequireResolvedPermissions(
 					permissionResolver, platformauth.PermissionModeDefault,
@@ -3627,14 +3631,20 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// `404 {"error":"unknown mode"}`. The GET above never showed it,
 				// because Handler.Users reads no mode. See the header of
 				// internal/api/v2/eliteacore/users_write.go.
-				r.With(apimw.RequireCentralPermissions(
-					permissionResolver, platformauth.PermissionModeAdministration,
-					adminaccess.ConfigurationUsersUsersCreate,
-				)).Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
-				r.With(apimw.RequireCentralPermissions(
-					permissionResolver, platformauth.PermissionModeAdministration,
-					adminaccess.ConfigurationUsersUsersEdit,
-				)).Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
+				//
+				// The DELETE is the central removal of ADR-0059 R0.6a: the update
+				// refuses an empty role set, and the `{mode}` DELETE above needs a
+				// membership of the project. A static segment, like the other two,
+				// so chi prefers it over `{mode}`. Every write here is under the
+				// no-escalation rule of eliteacore/users_write_policy.go, and one
+				// into a project the caller is not a member of marks its audit
+				// record central_override.
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersCreate)).
+					Post("/users/administration/{projectID}", coreHandler.AdministrationUsersCreate)
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersEdit)).
+					Put("/users/administration/{projectID}", coreHandler.AdministrationUsersUpdate)
+				r.With(central(adminaccess.ProjectsMembersManage, adminaccess.ConfigurationUsersUsersDelete)).
+					Delete("/users/administration/{projectID}", coreHandler.AdministrationUsersDelete)
 				// The project ROLE listing, gated the same way and for the same
 				// reason as the member listing above: `coreHandler.Roles` reads
 				// auth_core__project_role for the named project, legacy

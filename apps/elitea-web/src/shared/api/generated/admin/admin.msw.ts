@@ -281,6 +281,10 @@ export const getUserDeleteResponseMock = (
   ...overrideResponse,
 });
 
+export const getAdministrationUserDeleteResponseMock = (): MessageResponse => ({
+  msg: "users successfully removed",
+});
+
 export const getListAdminAuthUsersResponseMock = (): AdminAuthUsersPage => ({
   rows: [
     {
@@ -4397,6 +4401,32 @@ export const getUserDeleteMockHandler = (
   );
 };
 
+export const getAdministrationUserDeleteMockHandler = (
+  overrideResponse?:
+    | MessageResponse
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<MessageResponse> | MessageResponse),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/admin/users/administration/:projectId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAdministrationUserDeleteResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListAdminAuthUsersMockHandler = (
   overrideResponse?:
     | AdminAuthUsersPage
@@ -7295,6 +7325,7 @@ export const getAdminMock = () => [
   getUserCreateMockHandler(),
   getUserUpdateMockHandler(),
   getUserDeleteMockHandler(),
+  getAdministrationUserDeleteMockHandler(),
   getListAdminAuthUsersMockHandler(),
   getAdminAuthUsersActionMockHandler(),
   getListAdministrationRoleHoldersMockHandler(),

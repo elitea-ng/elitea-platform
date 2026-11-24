@@ -1777,6 +1777,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /api/v2/admin/scim_clients/administration/{id}",
 		"DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
 		"DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID}",
+		"DELETE /api/v2/admin/users/administration/{projectID}",
 		"DELETE /api/v2/admin/users/{mode}/{projectID}",
 		"DELETE /api/v2/artifacts/bucket_permissions/{projectID}",
 		"DELETE /api/v2/artifacts/buckets/{projectID}/{bucket}",

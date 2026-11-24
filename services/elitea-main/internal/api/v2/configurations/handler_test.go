@@ -244,6 +244,15 @@ func TestEveryConfigurationRouteIsGated(t *testing.T) {
 		// project, including the `administration` twins. A gate that read the
 		// mode SEGMENT would ask for central permissions here and let an
 		// operator who is a member of no project read its credentials.
+		//
+		// The one central question is the R0.6b branch of the five row
+		// routes (project_settings_central.go): it asks the administration
+		// set, project-less, and admits only the guarded-setting pairs of the
+		// reviewed allowlist, never a credential
+		// (project_settings_central_test.go).
+		if mode == auth.PermissionModeAdministration && projectID == "" {
+			return auth.PermissionResolution{UserID: 1, Permissions: []string{}}, nil
+		}
 		if mode != auth.PermissionModeDefault || projectID != "7" {
 			t.Errorf("resolver called with mode=%q project=%q, want %q and \"7\"",
 				mode, projectID, auth.PermissionModeDefault)

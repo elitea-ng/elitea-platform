@@ -67,6 +67,7 @@ func usersWriteRouterAs(handler *eliteacore.Handler, principal auth.User) chi.Ro
 	})
 	router.Post("/admin/users/administration/{projectID}", handler.AdministrationUsersCreate)
 	router.Put("/admin/users/administration/{projectID}", handler.AdministrationUsersUpdate)
+	router.Delete("/admin/users/administration/{projectID}", handler.AdministrationUsersDelete)
 	router.Get("/admin/users/{mode}/{projectID}", handler.Users)
 	router.Post("/admin/users/{mode}/{projectID}", handler.UsersCreate)
 	router.Put("/admin/users/{mode}/{projectID}", handler.UsersUpdate)

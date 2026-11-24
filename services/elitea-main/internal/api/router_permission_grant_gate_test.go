@@ -79,6 +79,10 @@ var baseGates = map[string]int{
 	// Both must be granted, and the any-of check below accepts the gate when
 	// either is.
 	"RequireResolvedPermissionOrPersonalProject": 3,
+	// ADR-0059 R0.6b: the project gate with a central fallback. Its arguments
+	// from index 3 on are the project permissions; the fallback decides on
+	// the central override's allowlist (adminaccess/central_override.go).
+	"RequireResolvedPermissionsOrCentral": 3,
 }
 
 // modeArgIndex maps a gate to the index of its permission-mode argument.
@@ -98,6 +102,7 @@ var modeArgIndex = map[string]int{
 	"RequireResolvedPermissionsForProject":       1,
 	"RequireResolvedMembershipPermissions":       1,
 	"RequireResolvedPermissionOrPersonalProject": 1,
+	"RequireResolvedPermissionsOrCentral":        1,
 }
 
 // grantModes are the role modes a migration can grant to.

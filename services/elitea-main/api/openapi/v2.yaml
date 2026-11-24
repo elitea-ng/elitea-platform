@@ -21115,6 +21115,19 @@ components:
         project_id:
           type: integer
           description: The project of a `role_self_escalation` refusal.
+        ways_in:
+          type: array
+          items: { type: string }
+          description: >
+            How a `role_self_escalation` caller can be given the permissions
+            instead (ADR-0059 R0.6a): `project_member` (a member of the
+            project who manages its members) and `operator_command` (an
+            operator of the deployment).
+        operator_command:
+          type: string
+          description: >
+            The operator command named by `ways_in` (`elitea-main
+            admin-role`), when `operator_command` is one of them.
 
     # ---- Access reads (ADR-0059 R0.10b, issue 2588) ------------------------
 
@@ -24915,8 +24928,8 @@ paths:
   # contract (legacy/plugins/admin/api/v2/users.py) and are each gated on the
   # matching `configuration.users.users.*` permission.
   #
-  # This path template pins mode=default. `administration` mode addresses the
-  # global scope, not a project membership, and answers 501.
+  # This path template pins mode=default. The `administration` twin of the
+  # removal is described below (ADR-0059 R0.6a, issue 2495).
   # ==========================================================================
   /admin/users/default/{project_id}:
     parameters:
@@ -25041,6 +25054,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MessageResponse'
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+
+  # ==========================================================================
+  # ADMIN — the membership of any project, from the admin console (ADR-0059
+  # R0.6a, issue 2495). Only the removal is described here; the list, the
+  # invite and the role edit of the same path keep the legacy wire shape of
+  # the default twin above.
+  # ==========================================================================
+  /admin/users/administration/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+
+    delete:
+      operationId: administrationUserDelete
+      summary: Remove one or more users from any project
+      description: |
+        The central twin of `DELETE /admin/users/default/{project_id}`: an
+        administrator removes members of a project it does not need to be a
+        member of. Gated on `projects.members.manage` or
+        `configuration.users.users.delete` in the administration mode.
+
+        The accounts survive, as on the default route. Removing yourself is
+        allowed: leaving a project widens nothing. A removal by a caller who
+        is not a member of the project is recorded in the audit log with
+        `central_override`.
+      tags: [admin]
+      parameters:
+        - name: id[]
+          in: query
+          required: true
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+          description: >
+            IDs of the users to remove, comma-joined in one occurrence
+            (`?id[]=1,2,3`) or as repeated keys, as on the default route.
+          example: [42]
+      responses:
+        '200':
+          description: Users removed from the project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+              example:
+                msg: users successfully removed
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
