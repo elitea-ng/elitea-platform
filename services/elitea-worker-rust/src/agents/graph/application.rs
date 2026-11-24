@@ -519,10 +519,19 @@ impl ApplicationNode {
         self
     }
 
-    /// A saved Agent child refused its continuation. A typed "may have started"
-    /// refusal, or an approved call whose dispatch record could not be written,
-    /// keeps its registered reason; anything else stays a node failure.
+    /// A saved Agent child refused its continuation or failed with a typed
+    /// model-gateway error (`FU-343`). A typed "may have started" refusal, an
+    /// approved call whose dispatch record could not be written, or a
+    /// registered `model_gateway.*` failure keeps its registered reason;
+    /// anything else stays a node failure.
     async fn child_failure(&self, error: &adk_rust::AdkError) -> GraphError {
+        if let Some(graph_error) = super::agent::model_gateway_graph_error(self.name(), error.code)
+        {
+            if let Some(events) = &self.failure_events {
+                let _ = events.send_model_failure(error).await;
+            }
+            return graph_error;
+        }
         let Some(events) = &self.failure_events else {
             return node_failure(self.name());
         };

@@ -3001,3 +3001,115 @@ fn tool_schemas_reach_the_provider_in_its_accepted_form() {
     let q = &gemini[0]["function"]["parameters"]["properties"]["q"];
     assert_eq!(q, &serde_json::json!({"nullable": true, "type": "string"}));
 }
+
+#[test]
+fn retry_after_header_is_surfaced_bounded_on_429_and_503_responses() {
+    use super::openai_compatible_facade::{parse_retry_after_ms, validate_response_head};
+    use elitea_agent_runtime::graph::node_settings::MAX_WAIT_BETWEEN_TRIES_MS;
+
+    let now = chrono::DateTime::parse_from_rfc2822("Mon, 23 Nov 2026 10:00:00 GMT")
+        .expect("now")
+        .with_timezone(&chrono::Utc);
+
+    let headers_with = |pairs: &[(&str, &str)]| {
+        let mut map = http::HeaderMap::new();
+        for (name, value) in pairs {
+            map.append(
+                http::header::HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                http::HeaderValue::from_str(value).expect("header value"),
+            );
+        }
+        map
+    };
+
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after", "7")]), now),
+        Some(7_000)
+    );
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after-ms", "1500")]), now),
+        Some(1_500)
+    );
+    // SEC-5B2-06: retry-after-ms enforces ASCII digits only (rejects leading `+`)
+    // and saturates values > u64::MAX within the 64-byte header bound.
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after-ms", "+500")]), now),
+        None
+    );
+    assert_eq!(
+        parse_retry_after_ms(
+            &headers_with(&[("retry-after-ms", "999999999999999999999999")]),
+            now
+        ),
+        Some(MAX_WAIT_BETWEEN_TRIES_MS + 1)
+    );
+    // Exact cap (300s) vs cap + 1 (301s -> saturates to cap + 1 sentinel).
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after", "300")]), now),
+        Some(MAX_WAIT_BETWEEN_TRIES_MS)
+    );
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after", "301")]), now),
+        Some(MAX_WAIT_BETWEEN_TRIES_MS + 1)
+    );
+    assert_eq!(
+        parse_retry_after_ms(
+            &headers_with(&[("retry-after", "Mon, 23 Nov 2026 10:00:12 GMT")]),
+            now
+        ),
+        Some(12_000)
+    );
+    assert_eq!(
+        parse_retry_after_ms(
+            &headers_with(&[("retry-after", "Mon, 23 Nov 2026 09:59:50 GMT")]),
+            now
+        ),
+        Some(0)
+    );
+    // Malformed, duplicate, and oversized headers are ignored safely.
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after", "not-a-date")]), now),
+        None
+    );
+    assert_eq!(
+        parse_retry_after_ms(
+            &headers_with(&[("retry-after", "5"), ("retry-after", "10")]),
+            now
+        ),
+        None
+    );
+    let oversized = "9".repeat(65);
+    assert_eq!(
+        parse_retry_after_ms(&headers_with(&[("retry-after", &oversized)]), now),
+        None
+    );
+
+    // 429 and 503 surface retry_after_ms on AdkError; 401 ignores it.
+    for (status, expected_code, expected_ms) in [
+        (
+            http::StatusCode::TOO_MANY_REQUESTS,
+            "model_gateway.rate_limited",
+            Some(7_000),
+        ),
+        (
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            "model_gateway.unavailable",
+            Some(7_000),
+        ),
+        (
+            http::StatusCode::UNAUTHORIZED,
+            "model_gateway.unauthorized",
+            None,
+        ),
+    ] {
+        let response = http::Response::builder()
+            .version(http::Version::HTTP_2)
+            .status(status)
+            .header("retry-after", "7")
+            .body(Body::empty())
+            .expect("response");
+        let error = validate_response_head(&response).expect_err("refusal");
+        assert_eq!(error.code, expected_code);
+        assert_eq!(error.retry.retry_after_ms, expected_ms, "{status}");
+    }
+}

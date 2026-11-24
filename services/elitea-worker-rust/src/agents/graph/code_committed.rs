@@ -133,7 +133,13 @@ impl CodeCommittedProjector {
             (
                 WholeCodeRecoveryReceipt::VerifiedNoEffect { .. },
                 NodeRecoveryOwnerProofKind::VerifiedNoEffect,
-            ) => proof.matches_owner_receipt_bytes(wire),
+            ) => {
+                proof.matches_owner_receipt_bytes(wire)
+                    && proof
+                        .owner_receipt_ref
+                        .as_ref()
+                        .is_some_and(|r| r.required_grant_audience == CODE_RESULT_AUDIENCE)
+            }
             _ => false,
         };
         if !exact {

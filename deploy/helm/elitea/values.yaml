@@ -7285,6 +7285,14 @@ worker:
   # runs already pinned governed have drained (Main still publishes their
   # continuations on the governed subjects). "false" forces it off.
   governedContext: ""
+  # ELITEA_DB_EGRESS_ALLOWLIST (5e-1). Comma-separated egresslib entries that
+  # permit the SQL toolkit to reach private database hosts (CIDR, IP[:port], or
+  # localhost[:port]; bare hostnames do not lift private ranges). Empty allows
+  # public database hosts only and refuses all private, loopback, CGNAT, and
+  # ULA addresses. Link-local and metadata addresses are always refused. A
+  # malformed entry fails worker startup. See
+  # docs/upgrading/2026-11-23-078-sql-toolkit-egress-guard.md.
+  dbEgressAllowlist: ""
 
   # Scale-out is now CORRECT, and this stays at 1 because correct is not the
   # same as needed.

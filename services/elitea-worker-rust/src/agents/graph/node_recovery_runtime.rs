@@ -145,6 +145,26 @@ impl NodeAttemptAuthority {
     pub(crate) const fn recovery_receipt_sha256(&self) -> Option<[u8; 32]> {
         self.recovery_receipt_sha256
     }
+
+    #[cfg(test)]
+    pub(super) fn for_test_owner_projection(
+        activation: &NodeAttemptActivation,
+        scoped_activation: [u8; 32],
+        attempt: u16,
+        dispatch_activation: [u8; 32],
+        receipt_sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            node_id: activation.node_id.clone(),
+            node_digest: activation.node_digest,
+            step: activation.step,
+            attempt,
+            activation: scoped_activation,
+            dispatch_activation,
+            recovering_started: true,
+            recovery_receipt_sha256: Some(receipt_sha256),
+        }
+    }
 }
 
 /// Ephemeral safe diagnostics do not change the durable replay contract.
@@ -152,6 +172,9 @@ pub(crate) struct NodeAttemptReportedFailure {
     pub(crate) failure: NodeFailure,
     pub(crate) terminal_code: Option<&'static str>,
     pub(crate) failure_detail: Option<String>,
+    /// Optional server `Retry-After` hint in milliseconds (5b-2). Honored
+    /// within the policy's retry cap (`MAX_BACKOFF_MS`) and execution deadline.
+    pub(crate) retry_after_ms: Option<u64>,
 }
 
 impl From<NodeFailure> for NodeAttemptReportedFailure {
@@ -160,6 +183,7 @@ impl From<NodeFailure> for NodeAttemptReportedFailure {
             failure,
             terminal_code: None,
             failure_detail: None,
+            retry_after_ms: None,
         }
     }
 }
@@ -228,6 +252,23 @@ pub(crate) trait NodeAttemptBody: Node {
     /// clamping (`record_failure_within`, PLAN §3.3). Returns
     /// `Some((remaining_ms, required_ms))` when a run deadline is bound.
     fn retry_deadline_budget(&self) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// Optional typed `GraphError` returned after a committed, non-continued
+    /// terminal stop (e.g., FU-343 `model_gateway.*` code preservation for LLM).
+    fn terminal_stop_graph_error(
+        &self,
+        _: &'static str,
+        _: NodeFailureClass,
+    ) -> Option<GraphError> {
+        None
+    }
+
+    /// Optional typed `GraphError` returned when restoring a committed terminal
+    /// stop from the journal (SEC-5B2-05: preserves FU-343 `model_gateway.*`
+    /// classes across process replacement).
+    fn restored_stop_graph_error(&self, _: NodeFailureClass) -> Option<GraphError> {
         None
     }
 }
@@ -331,6 +372,16 @@ pub(crate) struct NodeJournalSnapshot {
     checkpoint: Option<Checkpoint>,
     ledger: NodeAttemptLedger,
     updates: Option<BTreeMap<String, Value>>,
+}
+
+#[cfg(test)]
+impl NodeJournalSnapshot {
+    pub(super) const fn ledger_for_tests(&self) -> &NodeAttemptLedger {
+        &self.ledger
+    }
+    pub(super) const fn updates_for_tests(&self) -> Option<&BTreeMap<String, Value>> {
+        self.updates.as_ref()
+    }
 }
 
 impl NodeAttemptJournal {
@@ -602,6 +653,23 @@ impl NodeAttemptJournal {
         self.lease
             .ensure_current()
             .map_err(|_| recovery_error("pipeline.node_recovery.writer_not_current"))
+    }
+    #[cfg(test)]
+    pub(super) const fn activation_id_for_tests(&self) -> [u8; 32] {
+        self.activation_id
+    }
+    #[cfg(test)]
+    pub(super) async fn load_for_tests(&self) -> Result<NodeJournalSnapshot, GraphError> {
+        self.load().await
+    }
+    #[cfg(test)]
+    pub(super) async fn append_for_tests(
+        &self,
+        parent: &NodeJournalSnapshot,
+        ledger: NodeAttemptLedger,
+        updates: Option<BTreeMap<String, Value>>,
+    ) -> Result<NodeJournalSnapshot, GraphError> {
+        self.append(parent, ledger, updates).await
     }
     async fn load(&self) -> Result<NodeJournalSnapshot, GraphError> {
         self.ensure_current()?;
@@ -962,6 +1030,10 @@ impl RecoverableNode {
         self.legacy_first_attempt = true;
         self
     }
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn NodeRecoveryClock>) -> Self {
+        self.clock = clock;
+        self
+    }
     pub(crate) fn with_settings(
         mut self,
         admitted: super::compiler::AdmittedNodeSettings,
@@ -1001,9 +1073,9 @@ impl RecoverableNode {
             && !class.deadline()
     }
 
-    /// Settle a committed Code `Stop` identically on both live and restore
+    /// Settle a committed `Stop` identically on both live and restore
     /// paths using only durable ledger facts (`class`, `history.len()`).
-    fn settle_code_failure(
+    fn settle_settings_failure(
         &self,
         context: &NodeContext,
         ledger: &NodeAttemptLedger,
@@ -1018,7 +1090,7 @@ impl RecoverableNode {
             settings.execution_id.as_deref().map(String::as_str),
             self.body.name(),
             context,
-            super::node_settings_runtime::code_failure_fault(class),
+            super::node_settings_runtime::settled_failure_fault(settings.admitted.family, class),
             class.retry_condition().is_some(),
             attempts,
         )
@@ -1126,12 +1198,19 @@ impl RecoverableNode {
                     let failure = snapshot.ledger.effective_failure().map_err(policy_error)?;
                     journal.ensure_current()?;
                     if self.can_settle_stop(reason, failure.class) {
-                        return self.settle_code_failure(context, &snapshot.ledger, failure.class);
+                        return self.settle_settings_failure(
+                            context,
+                            &snapshot.ledger,
+                            failure.class,
+                        );
                     }
                     if failure.class != NodeFailureClass::LeaseLost {
                         self.body
                             .report_restored_terminal_failure(context, failure.class)
                             .await?;
+                    }
+                    if let Some(graph_error) = self.body.restored_stop_graph_error(failure.class) {
+                        return Err(graph_error);
                     }
                     return Err(recovery_error("pipeline.node_recovery.failed"));
                 }
@@ -1223,15 +1302,29 @@ impl RecoverableNode {
                 }
                 Err(failure) => {
                     let now = self.clock.now_ms()?;
-                    let failed = if let Some((remaining_ms, required_ms)) =
-                        self.body.retry_deadline_budget()
-                    {
+                    let run_window =
+                        self.body
+                            .retry_deadline_budget()
+                            .map(|(remaining_ms, required_ms)| {
+                                (now.saturating_add(remaining_ms), required_ms)
+                            });
+                    let failed = if failure.retry_after_ms.is_some() {
+                        snapshot
+                            .ledger
+                            .record_failure_with_retry_after(
+                                failure.failure,
+                                now,
+                                failure.retry_after_ms,
+                                run_window,
+                            )
+                            .map_err(policy_error)?
+                    } else if let Some((run_deadline_ms, required_ms)) = run_window {
                         snapshot
                             .ledger
                             .record_failure_within(
                                 failure.failure,
                                 now,
-                                now.saturating_add(remaining_ms),
+                                run_deadline_ms,
                                 required_ms,
                             )
                             .map_err(policy_error)?
@@ -1247,7 +1340,7 @@ impl RecoverableNode {
                     {
                         if self.can_settle_stop(reason, failure.failure.class) {
                             journal.ensure_current()?;
-                            return self.settle_code_failure(
+                            return self.settle_settings_failure(
                                 context,
                                 &snapshot.ledger,
                                 failure.failure.class,
@@ -1255,20 +1348,29 @@ impl RecoverableNode {
                         }
                         if failure.failure.class != NodeFailureClass::LeaseLost
                             && reason != super::node_recovery::StopReason::OperatorApprovalRequired
-                            && let Some(code) = failure.terminal_code
                         {
                             journal.ensure_current()?;
-                            self.body
-                                .record_terminal_failure_detail(failure.failure_detail.as_deref())
-                                .await;
-                            self.body
-                                .report_terminal_failure_classified(
-                                    context,
-                                    &authority,
-                                    code,
-                                    failure.failure.class,
-                                )
-                                .await?;
+                            if let Some(code) = failure.terminal_code {
+                                self.body
+                                    .record_terminal_failure_detail(
+                                        failure.failure_detail.as_deref(),
+                                    )
+                                    .await;
+                                self.body
+                                    .report_terminal_failure_classified(
+                                        context,
+                                        &authority,
+                                        code,
+                                        failure.failure.class,
+                                    )
+                                    .await?;
+                                if let Some(graph_error) = self
+                                    .body
+                                    .terminal_stop_graph_error(code, failure.failure.class)
+                                {
+                                    return Err(graph_error);
+                                }
+                            }
                             return Err(recovery_error("pipeline.node_recovery.failed"));
                         }
                     }

@@ -106,6 +106,8 @@ assert env["ELITEA_RUST_TRACE"] == "info", env
 # ADR-0039 #1115: the worker serves governed commands exactly when Main
 # governs credentials; the default is off (the legacy worker).
 assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "false", env
+# 5e-1: private DB egress allowlist defaults to empty (public DBs only).
+assert env["ELITEA_DB_EGRESS_ALLOWLIST"] == "", env
 # The retired Python worker's SDK settings. Nothing in the Rust worker reads
 # these names; present, they are dead configuration that reads as governing
 # something — and ELITEA_SENSITIVE_TOOLS would look like the policy while the
@@ -142,6 +144,21 @@ dep = next(d for d in docs
 c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
 env = {e["name"]: e.get("value") for e in c["env"]}
 assert env["ELITEA_WORKER_GOVERNED_CONTEXT"] == "true", env
+PY
+
+echo "== worker.dbEgressAllowlist renders ELITEA_DB_EGRESS_ALLOWLIST =="
+"$HELM" template t "$CHART" "${RENDER[@]}" \
+  --set-string 'worker.dbEgressAllowlist=10.0.0.0/8\,192.168.1.5:5432' \
+  >"$TMP/db-egress.yaml" 2>"$TMP/db-egress.err" || true
+python3 - "$TMP/db-egress.yaml" <<'PY' && ok "worker.dbEgressAllowlist reaches ELITEA_DB_EGRESS_ALLOWLIST" || bad "db egress worker env: $(tail -1 "$TMP/db-egress.err")"
+import sys, yaml
+
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+dep = next(d for d in docs
+           if d["kind"] == "Deployment" and d["metadata"]["name"] == "elitea-worker")
+c = next(x for x in dep["spec"]["template"]["spec"]["containers"] if x["name"] == "worker")
+env = {e["name"]: e.get("value") for e in c["env"]}
+assert env["ELITEA_DB_EGRESS_ALLOWLIST"] == "10.0.0.0/8,192.168.1.5:5432", env
 PY
 
 echo "== runtime.json is complete =="

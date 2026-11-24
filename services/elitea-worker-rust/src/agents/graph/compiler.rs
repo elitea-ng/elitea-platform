@@ -335,17 +335,51 @@ pub(crate) struct PipelineNodeRuntimes {
     /// invocation only. A saved child pipeline has none: its parent maps
     /// what it reads.
     context_view: Option<Arc<Vec<serde_json::Value>>>,
-    /// The Main execution this graph runs for (5b-1): a settled node
-    /// failure's support reference and operator line name it.
-    // A thin pointer: the runtimes ride inside participant enums.
-    execution_id: Option<Arc<String>>,
+    /// The Main execution id and deadline this graph runs for (5b-1/5b-2/5b-3):
+    /// a settled node failure's support reference names the id, and timeouts/
+    /// retry waits are clamped by the run deadline.
+    // One thin pointer: the runtimes ride inside participant enums.
+    execution: Option<Arc<PipelineExecutionContext>>,
+}
+
+struct PipelineExecutionContext {
+    id: Option<Arc<String>>,
+    deadline: Option<tokio::time::Instant>,
 }
 
 impl PipelineNodeRuntimes {
     /// 5b-1: bind the run's Main execution id for node settings.
     pub(crate) fn with_execution_id(mut self, execution_id: &str) -> Self {
-        self.execution_id = Some(Arc::new(execution_id.to_owned()));
+        let deadline = self.execution_deadline();
+        self.execution = Some(Arc::new(PipelineExecutionContext {
+            id: Some(Arc::new(execution_id.to_owned())),
+            deadline,
+        }));
         self
+    }
+
+    /// 5b-2/5b-3: bind the run's execution deadline for LLM and direct-tool
+    /// timeouts and retry clamping.
+    pub(crate) fn with_execution_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        let id = self.execution_id();
+        self.execution = Some(Arc::new(PipelineExecutionContext {
+            id,
+            deadline: Some(deadline),
+        }));
+        self
+    }
+
+    fn execution_id(&self) -> Option<Arc<String>> {
+        self.execution.as_ref().and_then(|ctx| ctx.id.clone())
+    }
+
+    fn execution_deadline(&self) -> Option<tokio::time::Instant> {
+        self.execution.as_ref().and_then(|ctx| ctx.deadline)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn execution_deadline_for_tests(&self) -> Option<tokio::time::Instant> {
+        self.execution_deadline()
     }
 
     /// FU-250: the servers of the run's tokens, never the tokens themselves.
@@ -636,7 +670,7 @@ impl PipelineNodeRuntimes {
             parallel_authority_bound: false,
             application_scope_path: String::new(),
             context_view: None,
-            execution_id: None,
+            execution: None,
         }
     }
 
@@ -1014,6 +1048,14 @@ impl PipelineDefinition {
     ) -> Option<CodeNodeDefinition> {
         self.nodes.iter().find_map(|node| match node {
             PipelineNodeDefinition::Code(code) if code.id() == node_id => Some(code.clone()),
+            _ => None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn llm_definition_fixture(&self, node_id: &str) -> Option<LlmNodeDefinition> {
+        self.nodes.iter().find_map(|node| match node {
+            PipelineNodeDefinition::Llm(llm) if llm.id() == node_id => Some(llm.clone()),
             _ => None,
         })
     }
@@ -1396,19 +1438,29 @@ impl PipelineDefinition {
         if self.parallel_owned_nodes.contains(id) || self.map_owned_nodes.contains(id) {
             return None;
         }
+        let settings_policy = || {
+            self.settings
+                .get(id)
+                .and_then(|admitted| admitted.settings.to_recovery_policy().ok())
+                .unwrap_or_default()
+        };
         match self.nodes.iter().find(|node| node.id() == id)? {
             PipelineNodeDefinition::Code(node) => Some((
                 node.validated_digest(),
                 self.recovery
                     .get(id)
-                    .map(|binding| binding.policy.clone())
-                    .or_else(|| {
-                        self.settings
-                            .get(id)
-                            .and_then(|admitted| admitted.settings.to_recovery_policy().ok())
-                    })
-                    .unwrap_or_default(),
+                    .map_or_else(settings_policy, |binding| binding.policy.clone()),
             )),
+            // FU-067: effectful direct tool nodes journal behind RecoverableNode.
+            PipelineNodeDefinition::DirectTool(node) => {
+                Some((node.config_digest(), settings_policy()))
+            }
+            // 5b-2: tool-free LLM nodes with settings journal behind RecoverableNode.
+            PipelineNodeDefinition::Llm(node)
+                if node.tool_selections().is_empty() && self.settings.get(id).is_some() =>
+            {
+                Some((node.config_digest(), settings_policy()))
+            }
             _ => None,
         }
     }
@@ -1425,27 +1477,44 @@ impl PipelineDefinition {
         if self.parallel_owned_nodes.contains(id) || self.map_owned_nodes.contains(id) {
             return Ok(None);
         }
-        if let Some(PipelineNodeDefinition::Code(node)) =
-            self.nodes.iter().find(|node| node.id() == id)
-        {
-            let legacy_first_attempt = self.recovery.get(id).is_none()
-                && !self
-                    .settings
-                    .get(id)
-                    .is_some_and(|admitted| admitted.settings.retry_on_fail);
-            let projector = super::code_runtime::CodeCommittedProjector::new(
-                node.clone(),
-                self.declared_variable_types(),
-                execution_id.to_owned(),
-                generation,
-                legacy_first_attempt,
-            )
-            .map_err(|_| {
-                PipelineConfigurationError::Invalid("The original Code result contract is invalid.")
-            })?;
-            return Ok(Some(Arc::new(projector)));
+        match self.nodes.iter().find(|node| node.id() == id) {
+            Some(PipelineNodeDefinition::Code(node)) => {
+                let legacy_first_attempt = self.recovery.get(id).is_none()
+                    && !self
+                        .settings
+                        .get(id)
+                        .is_some_and(|admitted| admitted.settings.retry_on_fail);
+                let projector = super::code_runtime::CodeCommittedProjector::new(
+                    node.clone(),
+                    self.declared_variable_types(),
+                    execution_id.to_owned(),
+                    generation,
+                    legacy_first_attempt,
+                )
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "The original Code result contract is invalid.",
+                    )
+                })?;
+                Ok(Some(Arc::new(projector)))
+            }
+            // FU-067: read-only owning result projector for direct tool recovery cards.
+            Some(PipelineNodeDefinition::DirectTool(node)) => {
+                let projector = super::direct_tool::DirectToolCommittedProjector::new(
+                    node.clone(),
+                    self.declared_variable_types(),
+                    execution_id.to_owned(),
+                    generation,
+                )
+                .map_err(|_| {
+                    PipelineConfigurationError::Invalid(
+                        "The original direct-tool result contract is invalid.",
+                    )
+                })?;
+                Ok(Some(Arc::new(projector)))
+            }
+            _ => Ok(None),
         }
-        Ok(None)
     }
 
     pub(crate) fn entry_point(&self) -> &str {
@@ -2014,6 +2083,10 @@ impl PipelineDefinition {
         channels
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep node-family compilation dispatch in one exhaustive match."
+    )]
     fn bind_node(
         &self,
         builder: PipelineGraphBuilder,
@@ -2047,13 +2120,17 @@ impl PipelineDefinition {
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
                 let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
-                    .with_events(runtimes.events.clone());
+                    .with_events(runtimes.events.clone())
+                    .with_execution_deadline(runtimes.execution_deadline());
                 if let Some(authority) = runtimes
                     .node_recovery
                     .clone()
                     .or_else(|| runtimes.direct_tool_recovery.clone())
                 {
                     direct = direct.with_node_recovery(authority);
+                }
+                if let Some(admitted) = self.settings.get(node.id()) {
+                    direct = direct.with_settings(admitted.clone(), runtimes.execution_id());
                 }
                 let mut next = builder.node(direct);
                 if let Some(transition) = transition {
@@ -2075,8 +2152,19 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next =
-                    builder.node(LlmNode::new(node.clone(), self.state.clone(), factory));
+                let mut llm = LlmNode::new(node.clone(), self.state.clone(), factory)
+                    .with_execution_deadline(runtimes.execution_deadline());
+                if let Some(authority) = runtimes
+                    .node_recovery
+                    .clone()
+                    .or_else(|| runtimes.direct_tool_recovery.clone())
+                {
+                    llm = llm.with_node_recovery(authority);
+                }
+                if let Some(admitted) = self.settings.get(node.id()) {
+                    llm = llm.with_settings(admitted.clone(), runtimes.execution_id());
+                }
+                let mut next = builder.node(llm);
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END
@@ -2144,7 +2232,7 @@ impl PipelineDefinition {
                     super::node_settings_runtime::SettingsNode::new(
                         inner,
                         admitted.clone(),
-                        runtimes.execution_id.clone(),
+                        runtimes.execution_id(),
                     ),
                     transition.to_owned(),
                     sender.clone(),
@@ -2161,7 +2249,7 @@ impl PipelineDefinition {
                 builder.node(super::node_settings_runtime::SettingsNode::new(
                     inner,
                     admitted.clone(),
-                    runtimes.execution_id.clone(),
+                    runtimes.execution_id(),
                 ))
             }
             (None, _, _) => builder.node(inner),
@@ -2183,7 +2271,7 @@ impl PipelineDefinition {
             Some(admitted) => builder.node(super::node_settings_runtime::SettingsNode::new(
                 node,
                 admitted.clone(),
-                runtimes.execution_id.clone(),
+                runtimes.execution_id(),
             )),
             None => builder.node(node),
         }
@@ -2260,7 +2348,7 @@ impl PipelineDefinition {
                 wrapper = wrapper.with_legacy_first_attempt();
             }
             if let Some(admitted) = admitted_settings {
-                wrapper = wrapper.with_settings(admitted.clone(), runtimes.execution_id.clone());
+                wrapper = wrapper.with_settings(admitted.clone(), runtimes.execution_id());
             }
             builder.node(wrapper)
         } else if binding.is_some() || admitted_settings.is_some() {

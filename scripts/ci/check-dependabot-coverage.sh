@@ -57,6 +57,8 @@ libs/rust/vendor/agent-desktop/macos/Cargo.toml vendored agent-desktop-macos 1.2
 libs/rust/vendor/agent-desktop/windows/Cargo.toml vendored agent-desktop-windows 1.2.0, same source and rule as agent-desktop/core above
 libs/rust/vendor/agent-desktop/linux/Cargo.toml vendored agent-desktop-linux 1.2.0, same source and rule as agent-desktop/core above
 libs/rust/vendor/leiden-rs/Cargo.toml vendored leiden-rs 0.8.1, the crates.io archive minus its Cargo.lock, pinned by digest (libs/rust/vendor/README.md): each consuming service Cargo.lock scans its dependency closure; it moves by re-vendoring, never one pin at a time
+libs/rust/vendor/sqlx-mysql/Cargo.toml patched sqlx-mysql 0.9.0 source (libs/rust/vendor/README.md), patched into the libs/rust workspace and elitea-worker-rust: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
+libs/rust/vendor/sqlx-postgres/Cargo.toml patched sqlx-postgres 0.9.0 source (libs/rust/vendor/README.md), patched into the libs/rust workspace and elitea-worker-rust: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
 libs/rust/adk-gateway/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/agent-runtime/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/browser-session/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member

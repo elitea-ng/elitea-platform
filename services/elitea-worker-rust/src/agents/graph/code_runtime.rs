@@ -492,6 +492,7 @@ impl NodeAttemptBody for CodeNode {
             },
             terminal_code: terminal_failure_code(class, None),
             failure_detail: None,
+            retry_after_ms: None,
         };
         if !authority.matches(
             self.definition.id(),
@@ -558,6 +559,7 @@ impl NodeAttemptBody for CodeNode {
                     failure: failure.failure,
                     terminal_code,
                     failure_detail: failure.failure_detail,
+                    retry_after_ms: None,
                 }
             })?;
         let updates = project_code_receipt(
@@ -575,6 +577,7 @@ impl NodeAttemptBody for CodeNode {
             },
             terminal_code: terminal_failure_code(NodeFailureClass::InvalidResult, None),
             failure_detail: None,
+            retry_after_ms: None,
         })?;
         let mut output = NodeOutput::new();
         for (key, value) in updates {

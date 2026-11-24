@@ -644,7 +644,11 @@ fn the_admitted_families_are_the_contracts() {
             assert!(
                 matches!(
                     family,
-                    SettingsFamily::Deterministic(_) | SettingsFamily::Code
+                    SettingsFamily::Deterministic(_)
+                        | SettingsFamily::Code
+                        | SettingsFamily::Llm
+                        | SettingsFamily::Toolkit
+                        | SettingsFamily::Mcp
                 ),
                 "{node_type}"
             );
