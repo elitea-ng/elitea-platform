@@ -186,10 +186,25 @@ func actionRows() []Action {
 		del("/api/v2/projects/project/{mode}/{projectID}", ProjectsProjectDelete).critical(allow),
 		put(admin("/project_suspend/{mode}/{projectID}"), ProjectsProjectsEdit),
 		put(admin("/project_cloud_executor/administration/{projectID}"), ProjectsProjectsEdit).elevation(flag),
-		post(admin("/users/administration/{projectID}"), ConfigurationUsersUsersCreate).elevation(flag),
-		put(admin("/users/administration/{projectID}"), ConfigurationUsersUsersEdit).elevation(flag),
+		// The central member routes (ADR-0059 R0.6a): the gate accepts
+		// projects.members.manage beside each legacy name.
+		post(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
+		put(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
+		del(admin("/users/administration/{projectID}"), ProjectsMembersManage).elevation(flag),
 		post(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersCreate).elevation(flag),
 		put(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersEdit).elevation(flag),
+		// The `{mode}` pattern with mode `administration` reaches the static
+		// central removal route above (R0.6a).
+		del(admin("/users/{mode}/{projectID}"), ConfigurationUsersUsersDelete).elevation(flag),
+		// A guarded project setting of any project through the central
+		// override (ADR-0059 R0.6b): only the allowlisted pairs of
+		// central_override.go. Flagged under an elevation (decision 5).
+		post("/api/v2/configurations/configurations/{projectID}", ProjectsSettingsManage).elevation(flag),
+		post("/api/v2/configurations/configurations/{mode}/{projectID}", ProjectsSettingsManage).elevation(flag),
+		put("/api/v2/configurations/configuration/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		put("/api/v2/configurations/configuration/{mode}/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		del("/api/v2/configurations/configuration/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
+		del("/api/v2/configurations/configuration/{mode}/{projectID}/{configID}", ProjectsSettingsManage).elevation(flag),
 		put(admin("/moderation_status/administration"), AdminModerationEdit),
 
 		// Models and spend: budgets.

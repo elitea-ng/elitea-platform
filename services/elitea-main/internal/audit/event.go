@@ -120,9 +120,12 @@ type Event struct {
 	// CredentialKind is one of the CredentialKind* values below, "" when
 	// unknown.
 	CredentialKind string
-	// CentralOverride says the write went through the central override
-	// (R0.6).
-	CentralOverride *bool
+	// CentralOverride is true when a central (administration-mode)
+	// permission reached a project the caller is not a member of: a member
+	// write through the administration routes, a bulk invite, or a guarded
+	// project setting through the reviewed allowlist (ADR-0059 R0.6). The
+	// middleware keeps it only on a write that happened.
+	CentralOverride bool
 	// ReasonCode and Reason are the reason the caller gave (R3.8). The text
 	// is stored in this row only; a chained security event carries the code.
 	ReasonCode    string
@@ -198,9 +201,10 @@ type Annotation struct {
 	// carries no user principal.
 	ActorCredentialKind string
 
-	// CentralOverride is set by a handler whose write went through the
-	// central override (R0.6).
-	CentralOverride *bool
+	// CentralOverride marks the request as a central write into a project
+	// the caller is not a member of (Event.CentralOverride). Once set by any
+	// handler it stays set.
+	CentralOverride bool
 	// ReasonCode, Reason and ReasonMissing are set by the reason check of a
 	// dangerous or critical action (R3.8).
 	ReasonCode    string
@@ -283,8 +287,8 @@ func Annotate(ctx context.Context, a Annotation) {
 	if a.ActorCredentialKind != "" {
 		slot.annotation.ActorCredentialKind = a.ActorCredentialKind
 	}
-	if a.CentralOverride != nil {
-		slot.annotation.CentralOverride = a.CentralOverride
+	if a.CentralOverride {
+		slot.annotation.CentralOverride = true
 	}
 	if a.ReasonCode != "" {
 		slot.annotation.ReasonCode = a.ReasonCode

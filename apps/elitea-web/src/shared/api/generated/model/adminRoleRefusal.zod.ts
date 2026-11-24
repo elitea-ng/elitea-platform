@@ -67,6 +67,18 @@ export const AdminRoleRefusal = zod
       .int()
       .optional()
       .describe("The project of a `role_self_escalation` refusal."),
+    ways_in: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "How a `role_self_escalation` caller can be given the permissions instead (ADR-0059 R0.6a): `project_member` (a member of the project who manages its members) and `operator_command` (an operator of the deployment).\n",
+      ),
+    operator_command: zod
+      .string()
+      .optional()
+      .describe(
+        "The operator command named by `ways_in` (`elitea-main admin-role`), when `operator_command` is one of them.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/adminaccess/refusal.go:13-47 — a role change refused by a role rule (403). `error` is the message every admin client already shows; a client keys a translated message on `code`.\n",

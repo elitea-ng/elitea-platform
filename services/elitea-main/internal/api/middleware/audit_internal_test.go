@@ -432,7 +432,7 @@ func TestAuditRecordsRoleUseOnAnAdministrationModeRow(t *testing.T) {
 		audit.RecordAdministration(r.Context(), audit.Administration{ActingRoles: []string{"admin", "llm_manager"}})
 		audit.ContextWithElevationID(r.Context(), elevation)
 		audit.Annotate(r.Context(), audit.Annotation{
-			CentralOverride: &override, ReasonCode: "incident", Reason: "INC-1", ReasonMissing: &missing,
+			CentralOverride: override, ReasonCode: "incident", Reason: "INC-1", ReasonMissing: &missing,
 		})
 	})
 	router.ServeHTTP(httptest.NewRecorder(), roleUseRequest(auth.CredentialKindForm))
@@ -451,7 +451,7 @@ func TestAuditRecordsRoleUseOnAnAdministrationModeRow(t *testing.T) {
 	if event.ElevationID != elevation {
 		t.Errorf("elevation_id = %q, want %q", event.ElevationID, elevation)
 	}
-	if event.CentralOverride == nil || !*event.CentralOverride || event.ReasonCode != "incident" ||
+	if !event.CentralOverride || event.ReasonCode != "incident" ||
 		event.Reason != "INC-1" || event.ReasonMissing == nil || !*event.ReasonMissing {
 		t.Errorf("annotation fields = %+v", event)
 	}

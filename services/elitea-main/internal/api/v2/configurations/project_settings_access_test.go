@@ -59,3 +59,24 @@ func TestWorkerEgressSettingNeedsTheProjectSettingsPermission(t *testing.T) {
 		t.Fatalf("a project admin was refused the browser setting")
 	}
 }
+
+// A request the route gate admitted through the central override (ADR-0059
+// R0.6b) writes the guarded types only: the handler decides again on the
+// types it is about to write, so a body the gate read differently from the
+// handler cannot carry a credential in.
+func TestACentrallyAdmittedWriteIsHeldToTheGuardedTypes(t *testing.T) {
+	ctx := auth.ContextWithUser(context.Background(), auth.User{UserID: "3", AuthType: "token"})
+	ctx = context.WithValue(ctx, centralSettingsAdmittedKey{}, true)
+	central := &Handler{permissionResolver: grantedPermissions{"projects.settings.manage"}}
+	for _, typeName := range []string{"github", "open_ai", "jira", ""} {
+		if !central.projectSettingsWriteForbidden(ctx, "7", typeName) {
+			t.Errorf("a centrally admitted write of %q is allowed", typeName)
+		}
+	}
+	if central.projectSettingsWriteForbidden(ctx, "7", "cloud_executor") {
+		t.Error("a centrally admitted write of cloud_executor is refused")
+	}
+	if !central.projectSettingsWriteForbidden(ctx, "7", "cloud_executor", "github") {
+		t.Error("a centrally admitted change of cloud_executor into github is allowed")
+	}
+}

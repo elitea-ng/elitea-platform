@@ -339,7 +339,9 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 				event.CredentialKind = annotation.ActorCredentialKind
 			}
 		}
-		event.CentralOverride = annotation.CentralOverride
+		// Only a write that happened: a refused or failed request changed
+		// nothing in the project, so it is no central override.
+		event.CentralOverride = annotation.CentralOverride && status < http.StatusBadRequest
 		event.ReasonCode = annotation.ReasonCode
 		event.Reason = annotation.Reason
 		event.ReasonMissing = annotation.ReasonMissing

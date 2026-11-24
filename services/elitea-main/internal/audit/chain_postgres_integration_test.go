@@ -441,7 +441,7 @@ ALTER TABLE centry.audit_events
 		recorder.Record(ctx, Event{
 			EventType: "api", Action: fmt.Sprintf("PUT /after/%d", i), StatusCode: &status,
 			ActingRoles: []string{"admin", "llm_manager"}, CredentialKind: CredentialKindToken,
-			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: &override,
+			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: override,
 			ReasonCode: "incident", Reason: "INC-42", ReasonMissing: &missing,
 		})
 	}

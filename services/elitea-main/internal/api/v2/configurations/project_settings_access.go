@@ -22,32 +22,56 @@ import (
 // person's other apps to the platform.
 const ProjectSettingsEditPermission = "models.project_settings.edit"
 
+// guardedProjectSettingTypes are the five guarded settings. The central
+// override's allowlist (adminaccess.GuardedSettingTypes) names the same five;
+// project_settings_central_test.go fails when the two lists differ.
+var guardedProjectSettingTypes = []string{
+	configurationapp.CloudExecutorConfigurationType, configurationapp.WorkerEgressConfigurationType,
+	configurationapp.AIDisclosureConfigurationType, configurationapp.BrowserConfigurationType,
+	configurationapp.ComputerUseConfigurationType,
+}
+
 // projectSettingsWriteForbidden reports a write of a type that needs the
 // project settings permission by a caller who lacks it.
 func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID string, typeNames ...string) bool {
+	// A request the gate admitted through the central override writes the
+	// guarded types and nothing else, whatever the gate read: the decision is
+	// made again on the types the handler is about to write.
+	if admittedCentrally(ctx) {
+		return !h.centralSettingsWrite(ctx, typeNames)
+	}
 	guarded := false
 	for _, name := range typeNames {
-		switch strings.TrimSpace(name) {
-		case configurationapp.CloudExecutorConfigurationType, configurationapp.WorkerEgressConfigurationType,
-			configurationapp.AIDisclosureConfigurationType, configurationapp.BrowserConfigurationType,
-			configurationapp.ComputerUseConfigurationType:
+		if slices.Contains(guardedProjectSettingTypes, strings.TrimSpace(name)) {
 			guarded = true
 		}
 	}
 	if !guarded {
 		return false
 	}
+	if h.holdsProjectSettingsEdit(ctx, projectID) {
+		return false
+	}
+	// The central branch (ADR-0059 R0.6b, project_settings_central.go): a
+	// holder of projects.settings.manage writes the guarded types of any
+	// project, and only those.
+	return !h.centralSettingsWrite(ctx, typeNames)
+}
+
+// holdsProjectSettingsEdit reports whether the caller holds
+// models.project_settings.edit in the project.
+func (h *Handler) holdsProjectSettingsEdit(ctx context.Context, projectID string) bool {
 	permissions, ok := middleware.ResolvedProjectPermissions(ctx, auth.PermissionModeDefault, projectID)
 	if !ok {
 		user, hasUser := auth.UserFromContext(ctx)
 		if !hasUser || h.permissionResolver == nil {
-			return true
+			return false
 		}
 		resolution, err := h.permissionResolver.ResolvePermissions(ctx, user, auth.PermissionModeDefault, projectID)
 		if err != nil {
-			return true
+			return false
 		}
 		permissions = resolution.Permissions
 	}
-	return !slices.Contains(permissions, ProjectSettingsEditPermission)
+	return slices.Contains(permissions, ProjectSettingsEditPermission)
 }

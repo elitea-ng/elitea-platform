@@ -31,6 +31,11 @@ const (
 	ConfigurationUsersUsersView   = "configuration.users.users.view"
 	ConfigurationUsersUsersCreate = "configuration.users.users.create"
 	ConfigurationUsersUsersEdit   = "configuration.users.users.edit"
+	// ConfigurationUsersUsersDelete gates the central member removal route
+	// beside projects.members.manage (R0.6a). Shared 0076 grants it in the
+	// default mode only, so no administration role holds it from a migration
+	// (ungrantedByMigration); a deployment gives it to a custom role.
+	ConfigurationUsersUsersDelete = "configuration.users.users.delete"
 	AdminModeration               = "admin.moderation"
 	AdminModerationEdit           = "admin.moderation.edit"
 	RuntimeAdminPublishedAgents   = "runtime.admin.published_agents"
@@ -177,6 +182,7 @@ func rows() []Permission {
 		row(ConfigurationUsersUsersView, AreaProjects, ClassRead),
 		row(ConfigurationUsersUsersCreate, AreaProjects, ClassWrite),
 		row(ConfigurationUsersUsersEdit, AreaProjects, ClassWrite),
+		row(ConfigurationUsersUsersDelete, AreaProjects, ClassWrite),
 		row(AdminModeration, AreaProjects, ClassRead),
 		row(AdminModerationEdit, AreaProjects, ClassWrite),
 		publishedAgents,
@@ -280,13 +286,13 @@ func narrowRows() []Permission {
 		seeded(IdentitySSOTrustManage, AreaPeopleAccess, ClassWrite),
 
 		// Projects. projects.members.manage also narrows
-		// configuration.users.users.delete on the central removal route that
-		// R0.6 adds; that name joins the table with its gate. The two
-		// settings names are new capabilities, not narrowings: they let an
-		// administration permission reach the guarded settings of a project
+		// configuration.users.users.delete, on the central removal route of
+		// R0.6a. The two settings names are new capabilities, not narrowings:
+		// they let an administration permission reach the guarded settings of
+		// a project, through the reviewed allowlist of central_override.go
 		// (R0.6b).
 		narrow(ProjectsMembersManage, AreaProjects, ClassWrite,
-			ConfigurationUsersUsersCreate, ConfigurationUsersUsersEdit),
+			ConfigurationUsersUsersCreate, ConfigurationUsersUsersEdit, ConfigurationUsersUsersDelete),
 		narrow(ProjectsSettingsView, AreaProjects, ClassRead),
 		narrow(ProjectsSettingsManage, AreaProjects, ClassWrite),
 
