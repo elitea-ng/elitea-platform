@@ -10,16 +10,20 @@ Until then:
   `400` with `{"code": "permission_deprecated", "permissions": [...],
   "role": ..., "roles": [...]}`. It binds every caller, a super admin
   included, and every scope and mode. Nothing is written.
+- `PUT /api/v2/admin/user_project_permissions/administration` refuses the same
+  way when the save adds either name to a project role that does not hold it
+  in a target project.
 - Existing grants keep working. A save that keeps an existing grant answers
   `200`, and removing one is allowed (the matrix cannot add it back).
 - `GET /api/v2/admin/permissions/{scope}/{mode}` gains a `catalogue` array
   beside `rows`: `{"name": ..., "deprecated": true|false}` for each row. The
   two legacy names are `deprecated: true`. `rows` is unchanged.
-- The Roles page marks both names **Deprecated** and explains the refusal.
+- The Roles page marks both names **Deprecated**, disables the checkbox of a
+  role that does not hold one, and explains the refusal.
 
 **Who is affected.** Automation that grants `runtime.plugins` or
-`configuration.governance` to a role through the Roles matrix API, for
-example when it sets up a new custom role.
+`configuration.governance` to a role through either matrix API, for example
+when it sets up a new custom role.
 
 **What to do.** Grant the narrow permission that replaces the legacy one (see
 Users and roles, "Narrow administration permissions"). Roles that already hold

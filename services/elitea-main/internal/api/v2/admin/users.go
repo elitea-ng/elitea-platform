@@ -187,7 +187,7 @@ SELECT u.id,
        COALESCE(admin_roles.names, '{}'::text[])
 FROM public.auth_core__user u
 LEFT JOIN LATERAL (
-    SELECT array_agg(role.name ORDER BY role.name) AS names
+    SELECT array_agg(role.name ORDER BY role.name COLLATE "C") AS names
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
     WHERE assignment.user_id = u.id
@@ -791,7 +791,7 @@ func (h *Handler) userAdministrationRoles(ctx context.Context, userID int) ([]st
 	var roles []string
 	err := h.pool.QueryRow(ctx, `
 SELECT COALESCE((
-    SELECT array_agg(role.name ORDER BY role.name)
+    SELECT array_agg(role.name ORDER BY role.name COLLATE "C")
     FROM public.auth_core__user_role assignment
     JOIN public.auth_core__role role ON role.id = assignment.role_id
     WHERE assignment.user_id = u.id AND role.mode = 'administration'

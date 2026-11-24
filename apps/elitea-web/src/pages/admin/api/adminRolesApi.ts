@@ -29,6 +29,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
+import { PermissionCatalogueEntry } from '@/shared/api/generated/model/permissionCatalogueEntry.zod';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
@@ -185,16 +186,19 @@ function roleRefusalReason(body: RoleRefusalBody): string | undefined {
   return sentences.join(' ');
 }
 
-/** The names a matrix body's `catalogue` marks `deprecated: true`. */
+/**
+ * The names a matrix body's `catalogue` marks `deprecated: true`. The entry is
+ * the contract's `PermissionCatalogueEntry` (the schema the personal-project
+ * matrix shares); an entry that does not parse marks nothing.
+ */
 function deprecatedNames(response: unknown): string[] {
   const body = unwrapBody(response);
   if (typeof body !== 'object' || body === null) return [];
   const catalogue = (body as { catalogue?: unknown }).catalogue;
   if (!Array.isArray(catalogue)) return [];
   return catalogue.flatMap((entry: unknown) => {
-    if (typeof entry !== 'object' || entry === null) return [];
-    const { name, deprecated } = entry as { name?: unknown; deprecated?: unknown };
-    return typeof name === 'string' && deprecated === true ? [name] : [];
+    const parsed = PermissionCatalogueEntry.safeParse(entry);
+    return parsed.success && parsed.data.deprecated ? [parsed.data.name] : [];
   });
 }
 

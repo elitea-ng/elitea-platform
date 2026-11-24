@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -464,5 +465,49 @@ func TestUserProjectPermissionsPartialMatrixRevokesOnlyItsOwnRows(t *testing.T) 
 	if got := storedProjectGrants(t, pool, personalProjectID, "admin"); !equalStrings(
 		got, []string{"models.alpha.view"}) {
 		t.Fatalf("admin = %v after a role-map save, want only the submitted set", got)
+	}
+}
+
+// ADR-0059 R0.14a: this path adds no legacy name to a project role either.
+// A role that already holds one keeps it through a save that names it.
+func TestUserProjectPermissionsSaveRefusesANewLegacyGrant(t *testing.T) {
+	pool, router := newUserProjectPermissionsEnvironment(t)
+	const path = "/admin/user_project_permissions/administration"
+	for _, legacy := range []string{"runtime.plugins", "configuration.governance"} {
+		t.Run(legacy, func(t *testing.T) {
+			before := storedProjectGrants(t, pool, personalProjectID, "editor")
+			recorder := adminDo(t, router, http.MethodPut, path,
+				map[string][]string{"editor": {"models.alpha.view", legacy}})
+			if recorder.Code != http.StatusBadRequest ||
+				!strings.Contains(recorder.Body.String(), `"permission_deprecated"`) ||
+				!strings.Contains(recorder.Body.String(), legacy) {
+				t.Fatalf("PUT = %d %s, want 400 permission_deprecated naming %s",
+					recorder.Code, recorder.Body.String(), legacy)
+			}
+			if after := storedProjectGrants(t, pool, personalProjectID, "editor"); !equalStrings(after, before) {
+				t.Fatalf("editor grants moved from %v to %v on a refused save", before, after)
+			}
+		})
+	}
+
+	// Held already in every personal project: the save keeps it.
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
+SELECT role.project_id, role.id, 'runtime.plugins'
+FROM public.auth_core__project_role role
+WHERE role.project_id IN ($1, $2) AND role.name = 'editor'`,
+		personalProjectID, secondPersonalProjectID); err != nil {
+		t.Fatal(err)
+	}
+	recorder := adminDo(t, router, http.MethodPut, path,
+		map[string][]string{"editor": {"models.alpha.view", "runtime.plugins"}})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT keeping a held legacy grant = %d %s, want 200", recorder.Code, recorder.Body.String())
+	}
+	for _, project := range []int{personalProjectID, secondPersonalProjectID} {
+		if got := storedProjectGrants(t, pool, project, "editor"); !equalStrings(
+			got, []string{"models.alpha.view", "runtime.plugins"}) {
+			t.Fatalf("project %d editor = %v, want the held legacy grant kept", project, got)
+		}
 	}
 }

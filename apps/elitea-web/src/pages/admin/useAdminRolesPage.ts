@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { adminUiShowsControlFor } from './adminUiConfig';
+import { deprecatedGrants, type DeprecatedGrants } from './deprecatedGrants';
 import {
   permissionMatrixFailureReason,
   usePermissionMatrix,
@@ -65,8 +66,11 @@ interface AdminRolesMatrixState {
   readonly search: string;
   readonly rows: readonly PermissionMatrixRow[] | undefined;
   readonly roles: readonly string[];
-  /** The permission names the server marks deprecated (ADR-0059 R0.14a). */
-  readonly deprecated: ReadonlySet<string>;
+  /**
+   * The permission names the server marks deprecated (ADR-0059 R0.14a), each
+   * with the roles that hold it on the server: only those may keep it.
+   */
+  readonly deprecated: DeprecatedGrants;
   readonly isFetching: boolean;
   readonly isDirty: boolean;
   readonly isSaving: boolean;
@@ -163,7 +167,10 @@ export function useAdminRolesPage(): AdminRolesPageState {
 
   const serverRows = matrixQuery.data?.rows;
   const deprecatedList = matrixQuery.data?.deprecated;
-  const deprecated = useMemo(() => new Set(deprecatedList ?? []), [deprecatedList]);
+  const deprecated = useMemo(
+    () => deprecatedGrants(deprecatedList ?? [], serverRows ?? []),
+    [deprecatedList, serverRows],
+  );
 
   // Seed once per tab, and once more per role-definition write. See this
   // module's header: a background refetch must not discard an edit in progress,

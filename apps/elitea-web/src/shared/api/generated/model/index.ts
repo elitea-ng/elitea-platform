@@ -852,6 +852,7 @@ export * from "./participantCandidate.zod";
 export * from "./participantCandidatesPage.zod";
 export * from "./participantSettingsRequest.zod";
 export * from "./permission.zod";
+export * from "./permissionCatalogueEntry.zod";
 export * from "./permissionMatrix.zod";
 export * from "./permissionMatrixRow.zod";
 export * from "./permissionTrimmingItem.zod";

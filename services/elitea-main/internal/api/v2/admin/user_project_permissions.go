@@ -546,6 +546,11 @@ func dedupeSorted(values []string) []string {
 // (adminaccess.SeededOnly) is added to no project role. None grants anything
 // in a project, but the rule is absolute so that no path puts one on a role.
 //
+// The same walk refuses a NEW grant of a legacy name (adminaccess.IsLegacy,
+// ADR-0059 R0.14a) with permission_deprecated, so this path cannot add
+// runtime.plugins or configuration.governance to a project role the Roles
+// matrix would refuse it on.
+//
 // Only a NEW grant is refused. A legacy database whose project roles already
 // carry such a name can still save the matrix its own GET returned.
 func refuseReservedProjectGrant(
@@ -559,7 +564,8 @@ func refuseReservedProjectGrant(
 	sort.Strings(roles)
 	for _, role := range roles {
 		for _, permission := range dedupeSorted(roleMap[role]) {
-			if !adminaccess.SeededOnly(permission) {
+			reserved := adminaccess.SeededOnly(permission)
+			if !reserved && !adminaccess.IsLegacy(permission) {
 				continue
 			}
 			var added bool
@@ -574,9 +580,14 @@ SELECT EXISTS (
 )`, projects, role, permission).Scan(&added); err != nil {
 				return fmt.Errorf("check reserved permission for %s: %w", role, err)
 			}
-			if added {
-				return adminaccess.CheckReserved("", []adminaccess.Cell{{Role: role, Permission: permission}})
+			if !added {
+				continue
 			}
+			cell := []adminaccess.Cell{{Role: role, Permission: permission}}
+			if reserved {
+				return adminaccess.CheckReserved("", cell)
+			}
+			return adminaccess.CheckDeprecated(cell)
 		}
 	}
 	return nil

@@ -49,7 +49,7 @@ export const AdminRoleRefusal = zod
       .string()
       .optional()
       .describe(
-        "`role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation`, `role_caller_unresolved`, `role_self_assignment` or `role_set_locked`. Absent on a 403 of the route gate.\n",
+        "`role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation`, `role_caller_unresolved`, `role_self_assignment` or `role_set_locked` (403), or `permission_deprecated` (400: the save adds a legacy permission, `runtime.plugins` or `configuration.governance`, to a role that does not hold it; ADR-0059 R0.14a). Absent on a 403 of the route gate.\n",
       ),
     role: zod
       .string()

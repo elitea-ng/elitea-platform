@@ -21096,8 +21096,11 @@ components:
             `role_permission_not_held`, `role_own_set_locked`,
             `role_permission_reserved`, `role_super_admin_required`,
             `role_self_escalation`, `role_caller_unresolved`,
-            `role_self_assignment` or `role_set_locked`. Absent on a 403 of
-            the route gate.
+            `role_self_assignment` or `role_set_locked` (403), or
+            `permission_deprecated` (400: the save adds a legacy permission,
+            `runtime.plugins` or `configuration.governance`, to a role that
+            does not hold it; ADR-0059 R0.14a). Absent on a 403 of the route
+            gate.
         role:
           type: string
           description: The role the refusal is about, when there is one.
@@ -22327,13 +22330,34 @@ components:
       type: object
       required: [total, rows]
       description: >
-        NOTE(W2): internal/api/v2/admin/roles.go:148-152. `total` counts the
+        NOTE(W2): internal/api/v2/admin/roles.go:147-180. `total` counts the
         permission CATALOGUE; this endpoint is never paginated.
       properties:
         total: { type: integer }
         rows:
           type: array
           items: { $ref: '#/components/schemas/PermissionMatrixRow' }
+        catalogue:
+          type: array
+          items: { $ref: '#/components/schemas/PermissionCatalogueEntry' }
+          description: >
+            One entry per row, beside the rows rather than in them: every key
+            of a row other than `name` is a role column, and a client sends the
+            rows back on a save.
+
+    PermissionCatalogueEntry:
+      type: object
+      required: [name, deprecated]
+      description: >
+        NOTE(W2): internal/api/v2/admin/roles.go:160-180 (ADR-0059 R0.14a).
+      properties:
+        name: { type: string }
+        deprecated:
+          type: boolean
+          description: >
+            The permission ends on a sunset date. Existing grants keep
+            working; a save that adds it to a role that does not hold it is
+            refused with `permission_deprecated`.
 
     UserProjectPermissionsUpdate:
       description: >
@@ -29315,6 +29339,11 @@ paths:
         estate. An unknown permission name is always a 400. The `system` role is
         neither written nor rejected: it appears in every body the GET produces,
         so rejecting it would make that body unsavable.
+
+        A save that adds `runtime.plugins` or `configuration.governance` to a
+        role that does not hold it in a target project is a 400 with the code
+        `permission_deprecated`, and nothing is written (ADR-0059 R0.14a). A
+        role that holds it already keeps it.
       tags: [admin]
       parameters:
         - name: team_projects
@@ -29349,7 +29378,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProjectPermissionsResult'
-        '400': { $ref: '#/components/responses/400' }
+        '400':
+          description: >
+            An unknown role or permission, a role a target project does not
+            define, or a legacy permission newly granted
+            (`permission_deprecated`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRoleRefusal'
+              example:
+                error: runtime.plugins ends on the sunset date and can no longer be added to a role; grant the narrow permission that replaces it
+                code: permission_deprecated
+                role: editor
+                roles: [editor]
+                permissions: [runtime.plugins]
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }

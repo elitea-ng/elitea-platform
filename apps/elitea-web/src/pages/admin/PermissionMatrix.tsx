@@ -34,12 +34,13 @@ import { t } from '@/shared/i18n';
 
 import type { PermissionMatrixRow } from './api/adminRolesApi';
 import { PermissionCellRow, PermissionGroupRow, humaniseRole } from './PermissionMatrixRows';
+import { isLockedGrant, type DeprecatedGrants } from './deprecatedGrants';
 
 export interface PermissionMatrixProps {
   readonly rows: readonly PermissionMatrixRow[];
   readonly roles: readonly string[];
-  /** The permission names to mark deprecated (ADR-0059 R0.14a). */
-  readonly deprecated?: ReadonlySet<string>;
+  /** The permission names to mark deprecated, with their holders (ADR-0059 R0.14a). */
+  readonly deprecated?: DeprecatedGrants;
   readonly search: string;
   readonly readOnly: boolean;
   readonly onChange: (updater: (rows: readonly PermissionMatrixRow[]) => PermissionMatrixRow[]) => void;
@@ -131,13 +132,19 @@ export const PermissionMatrix = memo(function PermissionMatrix({
     [onChange],
   );
 
+  // A group toggle skips a deprecated cell the role does not hold: the save
+  // would be refused with permission_deprecated.
   const onToggleGroupRole = useCallback(
     (groupName: string, role: string, value: boolean) => {
       onChange((current) =>
-        current.map((row) => (groupKeyOf(row.name) === groupName ? { ...row, [role]: value } : row)),
+        current.map((row) =>
+          groupKeyOf(row.name) === groupName && !isLockedGrant(deprecated, row.name, role)
+            ? { ...row, [role]: value }
+            : row,
+        ),
       );
     },
-    [onChange],
+    [onChange, deprecated],
   );
 
   const expandAll = useCallback(
@@ -232,6 +239,7 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                 expanded={expanded.has(groupName)}
                 onToggleExpand={onToggleExpand}
                 onToggleGroupRole={onToggleGroupRole}
+                deprecated={deprecated}
                 readOnly={readOnly}
               />
               {expanded.has(groupName)
@@ -240,7 +248,7 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                       key={permission.name}
                       permission={permission}
                       roles={roles}
-                      deprecated={deprecated?.has(permission.name) ?? false}
+                      deprecatedHolders={deprecated?.get(permission.name)}
                       onToggle={onToggle}
                       readOnly={readOnly}
                     />

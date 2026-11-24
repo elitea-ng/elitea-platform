@@ -132,8 +132,8 @@ Six names are not a narrower part of an existing permission. `projects.settings.
 Both legacy names end on a sunset date, at least 90 days after the last replacement ships; a later release sets and announces the date. Until then:
 
 - An existing grant of either keeps working, and a role that holds one can be saved unchanged.
-- The Roles matrix marks both **Deprecated**.
-- A save that adds either to a role that does not hold it is refused with `400` and the code `permission_deprecated`, for every caller, a super admin included. Removing one is allowed, and cannot be undone from the matrix. Grant the narrow permission instead.
+- The Roles matrix marks both **Deprecated**, and the checkbox of a role that does not hold one is disabled.
+- A save that adds either to a role that does not hold it is refused with `400` and the code `permission_deprecated`, for every caller, a super admin included. This applies to the Roles matrix and to the personal and team project matrix (`/admin/user_project_permissions`). Removing one is allowed, and cannot be undone from the matrix. Grant the narrow permission instead.
 - No new route or section is gated on either name: a test holds the number of places that name them, and it may only go down.
 
 ## Built-in administration roles

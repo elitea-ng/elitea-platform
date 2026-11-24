@@ -356,8 +356,20 @@ describe('Admin › Roles', () => {
     expect(screen.getAllByTestId('admin-roles-deprecated-mark')).toHaveLength(1);
 
     // The group row of `runtime.plugins` has a checkbox of the same name;
-    // the cell is the one in the marked row.
-    await user.click(within(legacyRow as HTMLElement).getByRole('checkbox', { name: 'editor: runtime.plugins' }));
+    // the cell is the one in the marked row. A role that does not hold the
+    // deprecated name cannot be given it; the holder can still drop it.
+    const row = within(legacyRow as HTMLElement);
+    expect(row.getByRole('checkbox', { name: 'editor: runtime.plugins' })).toBeDisabled();
+    expect(row.getByRole('checkbox', { name: 'admin: runtime.plugins' })).toBeEnabled();
+    // The group toggle skips the locked cell rather than tick it.
+    const groupRow = screen
+      .getAllByTestId('admin-roles-group-row')
+      .find((candidate) => candidate.textContent?.includes('runtime.plugins')) as HTMLElement;
+    await user.click(within(groupRow).getByRole('checkbox', { name: 'editor: runtime.plugins' }));
+    expect(row.getByRole('checkbox', { name: 'editor: runtime.plugins' })).not.toBeChecked();
+
+    // A refusal still explains itself (another administrator's view was older).
+    await user.click(row.getByRole('checkbox', { name: 'admin: runtime.plugins' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
 
     const alert = await screen.findByRole('alert');
