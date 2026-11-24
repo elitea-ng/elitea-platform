@@ -90,12 +90,17 @@ SELECT (SELECT COUNT(*) FROM public.auth_core__role_permission p JOIN public.aut
 
 	// An active super_admin-level elevation of the user with no role, bound to
 	// the session the request comes from: permissions, not the role name.
-	const elevatedSession = 913001
-	var noneID, approverID int64
+	var noneID, approverID, elevatedSession int64
 	if err := pool.QueryRow(t.Context(), `
 SELECT (SELECT id FROM public.auth_core__user WHERE email = 'r013-none@autotest.local'),
        (SELECT id FROM public.auth_core__user WHERE email = 'r013-standing@autotest.local')`).Scan(&noneID, &approverID); err != nil {
 		t.Fatalf("read the elevated user: %v", err)
+	}
+	if err := pool.QueryRow(t.Context(), `
+INSERT INTO elitea_auth.browser_sessions (id, user_id, provider, expires_at, idle_timeout_seconds)
+VALUES (repeat('r013', 10), $1, 'oidc', now() + interval '1 day', 0)
+RETURNING ref`, noneID).Scan(&elevatedSession); err != nil {
+		t.Fatalf("open a browser session of the elevated user: %v", err)
 	}
 	appender, err := securityaudit.NewPostgresAppender("elitea-main/r013-test")
 	if err != nil {

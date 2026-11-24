@@ -55,6 +55,10 @@
 --   the review     review_state, forward only: NULL -> review_pending ->
 --                  reviewed | unreviewed_no_reviewer
 --
+-- A session holds at most one open elevation: the trigger refuses a start
+-- while another started, unended, unexpired row names the same session
+-- reference, under the transaction lock StartElevation also takes.
+--
 -- Every other column is frozen at INSERT: the person, the session reference,
 -- the path, the reason code and text, the ticket, the requester and the
 -- request time. The trigger compares the whole row (to_jsonb) minus the
@@ -129,8 +133,9 @@ CREATE TABLE IF NOT EXISTS elitea_auth.admin_elevations (
                 AND coalesce(decision IN ('approved', 'denied'), false) = (approver_user_id IS NOT NULL))
             OR (path IN ('self', 'sealed') AND approver_user_id IS NULL)
         ),
-    -- The super_admin level always needs a super_admin approver or the sealed
-    -- path: approval switched off gives the admin level only.
+    -- Approval switched off gives the admin level only. (That an approved
+    -- super_admin level comes from an approver who holds it is a check on
+    -- roles, which a CHECK cannot read: StartElevation makes it.)
     CONSTRAINT admin_elevations_self_is_admin_level
         CHECK (path <> 'self' OR level IS DISTINCT FROM 'super_admin'),
     CONSTRAINT admin_elevations_start_complete
@@ -196,6 +201,23 @@ BEGIN
             RAISE EXCEPTION 'elitea_auth.admin_elevations: a row cannot be inserted already reviewed (%)', NEW.review_state
                 USING ERRCODE = 'insufficient_privilege';
         END IF;
+        -- One open elevation per session: there is no extension, more time is a
+        -- new request after this one ends. StartElevation takes the same lock and
+        -- checks first; this repeats it for any other writer.
+        IF NEW.started_at IS NOT NULL AND NEW.ended_at IS NULL
+           AND (TG_OP = 'INSERT' OR OLD.started_at IS NULL) THEN
+            PERFORM pg_advisory_xact_lock(hashtextextended('admin_elevations:session:' || NEW.browser_session_ref::text, 0));
+            IF EXISTS (
+                SELECT 1 FROM elitea_auth.admin_elevations other
+                WHERE other.browser_session_ref = NEW.browser_session_ref
+                  AND other.id <> NEW.id
+                  AND other.started_at IS NOT NULL AND other.ended_at IS NULL
+                  AND other.expires_at > NEW.started_at
+            ) THEN
+                RAISE EXCEPTION 'elitea_auth.admin_elevations: session % already holds an open elevation', NEW.browser_session_ref
+                    USING ERRCODE = 'unique_violation';
+            END IF;
+        END IF;
         RETURN NEW;
     END IF;
     IF TG_OP <> 'UPDATE' THEN
@@ -249,6 +271,23 @@ BEGIN
         RAISE EXCEPTION 'elitea_auth.admin_elevations: the review state cannot move from % to %',
             coalesce(OLD.review_state, 'none'), coalesce(NEW.review_state, 'none')
             USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    -- One open elevation per session: there is no extension, more time is a
+    -- new request after this one ends. StartElevation takes the same lock and
+    -- checks first; this repeats it for any other writer.
+    IF NEW.started_at IS NOT NULL AND NEW.ended_at IS NULL
+       AND (TG_OP = 'INSERT' OR OLD.started_at IS NULL) THEN
+        PERFORM pg_advisory_xact_lock(hashtextextended('admin_elevations:session:' || NEW.browser_session_ref::text, 0));
+        IF EXISTS (
+            SELECT 1 FROM elitea_auth.admin_elevations other
+            WHERE other.browser_session_ref = NEW.browser_session_ref
+              AND other.id <> NEW.id
+              AND other.started_at IS NOT NULL AND other.ended_at IS NULL
+              AND other.expires_at > NEW.started_at
+        ) THEN
+            RAISE EXCEPTION 'elitea_auth.admin_elevations: session % already holds an open elevation', NEW.browser_session_ref
+                USING ERRCODE = 'unique_violation';
+        END IF;
     END IF;
     RETURN NEW;
 END;

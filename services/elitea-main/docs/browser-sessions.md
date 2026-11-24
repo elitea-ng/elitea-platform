@@ -44,8 +44,14 @@ break-glass elevation (ADR-0059 decision 5) is a row of
 `elitea_auth.admin_elevations` (shared 0269) that stores that reference: it
 applies to that one session, never to another session of the same person. The
 ledger has no foreign key to `browser_sessions`, because the sweeper deletes
-old session rows and the ledger must outlive them. It is append-only by
-trigger except its end and review columns, and access is the predicate
+old session rows and the ledger must outlive them. Instead,
+`adminaccess.StartElevation` refuses a reference that does not name a live
+session (`browser_sessions` or `form_sessions`) of the person, and the
+resolver matches an elevation on both `user_id` and the reference. The
+trigger makes the ledger append-only: the person, the session reference, the
+path, the reason and the request are fixed at insert, and the decision, the
+start, the end and the review are each written once (the review state only
+moves forward). Access is the predicate
 `started_at IS NOT NULL AND ended_at IS NULL AND expires_at > now()`, so an
 elevation stops at its expiry with no job running. The writers are
 `adminaccess.StartElevation` and `adminaccess.EndElevation`.

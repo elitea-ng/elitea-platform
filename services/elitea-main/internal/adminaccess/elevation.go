@@ -16,9 +16,17 @@ package adminaccess
 //
 // StartElevation and EndElevation are the writers. Both run in the caller's
 // transaction and take the security audit appender the `admin.elevation`
-// event will be written with: R2.3 (issue 2517) fills that in, so that the row
-// and its event commit together or not at all. No route calls either before
-// R2.2c (issue 2597) and R2.7b (issue 2600).
+// event will be written with. In THIS build they write no event: R2.3 (issue
+// 2517) adds the Append on the same transaction, so that the row and its
+// event commit together or not at all. Until then no production code calls
+// them (TestNoProductionCallerBeforeTheAuditEvent fails when one does); the
+// first callers are R2.2c (issue 2597) and R2.7b (issue 2600), which depend
+// on R2.3.
+//
+// The resolver (R2.1b) must match an elevation on BOTH user_id and
+// browser_session_ref, and must tolerate more than one open row for a
+// session (a writer outside StartElevation's lock under REPEATABLE READ could
+// produce one): the union of the levels' sets, never a pick of one row.
 
 import (
 	"context"
@@ -133,6 +141,17 @@ var (
 	// is no extension; more time is a new request after this one ends.
 	ErrSessionAlreadyElevated = errors.New("elevation refused: the session already holds an active elevation")
 	ErrElevationNotFound      = errors.New("elevation not found")
+	// ErrElevationPerson: the person is not an unsuspended account.
+	ErrElevationPerson = errors.New("elevation refused: the person is not an active account")
+	// ErrElevationSession: the session reference names no live session of
+	// the person.
+	ErrElevationSession = errors.New("elevation refused: the session reference is not a live session of the person")
+	// ErrElevationApproverLevel: a super_admin-level elevation on the
+	// approved path whose approver does not hold the super_admin permission
+	// through a standing role. The level is the approver's.
+	ErrElevationApproverLevel = errors.New("elevation refused: the approver does not hold the super_admin level")
+	// ErrElevationNotExpired: the end reason `expired` before the expiry.
+	ErrElevationNotExpired = errors.New("elevation end refused: the elevation has not expired")
 	// ErrElevationNotStarted: the row is a request that never started, so it
 	// has nothing to end.
 	ErrElevationNotStarted = errors.New("elevation has not started")
@@ -328,14 +347,28 @@ func scanElevation(row pgx.Row) (ElevationRecord, error) {
 // sealed path (R2.7b) and the tests of the R2 stories start one directly, and
 // the request routes (R2.2b, R2.2c) add the request-first writers beside it.
 //
-// It refuses an invalid start before it touches the database, and a session
-// that already holds an active elevation (under a transaction-scoped lock on
-// the session, so two concurrent starts cannot both pass).
+// It refuses, before it writes:
+//   - an invalid start (Validate), before it touches the database;
+//   - a person who is not an unsuspended account (ErrElevationPerson);
+//   - a session reference that does not name a live session OF THAT PERSON
+//     (ErrElevationSession): a browser_sessions row of the user that is not
+//     revoked, ended or expired at At, or a form_sessions row of the user
+//     that has not expired. The ledger has no foreign key to either table, so
+//     this is the check that one person's elevation is never bound to
+//     another person's session;
+//   - on the approved path at the super_admin level, an approver who does not
+//     hold admin.auth.users.super_admin through a STANDING administration
+//     role (ErrElevationApproverLevel): nobody hands out more than they hold,
+//     and an elevation never counts towards it;
+//   - a session that already holds an active elevation
+//     (ErrSessionAlreadyElevated), under a transaction-scoped lock on the
+//     session; the table's trigger repeats the check.
 //
 // appender is the security audit appender of the `admin.elevation` event.
-// It is required, so that no caller is written that starts an elevation
-// without one; R2.3 (issue 2517) writes the event through it on tx, and the
-// caller rolls back when that fails.
+// It is required, but THIS BUILD WRITES NO EVENT through it: R2.3 (issue
+// 2517) adds the Append on tx, after which a failing appender aborts the
+// start. Until then no production code may call this function
+// (TestNoProductionCallerBeforeTheAuditEvent).
 func StartElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, start ElevationStart) (ElevationRecord, error) {
 	if err := start.Validate(); err != nil {
 		return ElevationRecord{}, err
@@ -351,16 +384,42 @@ func StartElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appen
 		start.BrowserSessionRef); err != nil {
 		return ElevationRecord{}, fmt.Errorf("start elevation: lock the session: %w", err)
 	}
-	var elevated bool
+	var person, session, approverLevel, elevated bool
 	if err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM elitea_auth.admin_elevations
-    WHERE browser_session_ref = $1
-      AND started_at IS NOT NULL AND ended_at IS NULL AND expires_at > $2)`,
-		start.BrowserSessionRef, at).Scan(&elevated); err != nil {
-		return ElevationRecord{}, fmt.Errorf("start elevation: read the session's elevations: %w", err)
+SELECT
+    EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $2 AND suspended = false),
+    EXISTS (
+        SELECT 1 FROM elitea_auth.browser_sessions
+        WHERE ref = $1 AND user_id = $2
+          AND revoked_at IS NULL AND ended_at IS NULL AND expires_at > $3)
+    OR EXISTS (
+        SELECT 1 FROM elitea_auth.form_sessions
+        WHERE ref = $1 AND expires_at > $3
+          AND convert_from(record, 'UTF8')::jsonb ->> 'user_id' = $2::bigint::text),
+    $4::bigint = 0 OR EXISTS (
+        SELECT 1
+        FROM public.auth_core__user account
+        JOIN public.auth_core__user_role assignment ON assignment.user_id = account.id
+        JOIN public.auth_core__role role ON role.id = assignment.role_id AND role.mode = $5
+        JOIN public.auth_core__role_permission grant_row
+          ON grant_row.role_id = role.id AND grant_row.permission = $6
+        WHERE account.id = $4 AND account.suspended = false),
+    EXISTS (
+        SELECT 1 FROM elitea_auth.admin_elevations
+        WHERE browser_session_ref = $1
+          AND started_at IS NOT NULL AND ended_at IS NULL AND expires_at > $3)`,
+		start.BrowserSessionRef, start.UserID, at, start.superAdminApprover(),
+		ModeAdministration, SuperAdminPermission).Scan(&person, &session, &approverLevel, &elevated); err != nil {
+		return ElevationRecord{}, fmt.Errorf("start elevation: read the person, the session and the approver: %w", err)
 	}
-	if elevated {
+	switch {
+	case !person:
+		return ElevationRecord{}, ErrElevationPerson
+	case !session:
+		return ElevationRecord{}, ErrElevationSession
+	case !approverLevel:
+		return ElevationRecord{}, ErrElevationApproverLevel
+	case elevated:
 		return ElevationRecord{}, ErrSessionAlreadyElevated
 	}
 	elevation, err := scanElevation(tx.QueryRow(ctx, `
@@ -378,6 +437,17 @@ RETURNING `+elevationColumns,
 	return elevation, nil
 }
 
+// superAdminApprover is the approver whose standing super_admin permission
+// the start must check: the approver of a super_admin-level elevation on the
+// approved path, 0 otherwise (the admin level needs no such permission, and
+// on the sealed path the operator who issued the credential chose the level).
+func (s ElevationStart) superAdminApprover() int64 {
+	if s.Path == ElevationPathApproved && s.Level == ElevationLevelSuperAdmin {
+		return s.ApproverUserID
+	}
+	return 0
+}
+
 // ElevationEnd is what ends an elevation.
 type ElevationEnd struct {
 	ID     uuid.UUID
@@ -391,12 +461,15 @@ type ElevationEnd struct {
 // anything: a second end changes nothing and returns the row as it is, with
 // false.
 //
-// An elevation that had already expired at At ends at its expiry with the
-// reason `expired`, whatever reason the caller gave: access had stopped then,
-// and the ledger says why.
+// The stored end reason says why ACCESS stopped. An elevation that had
+// already expired at At ends at its expiry with the reason `expired`,
+// whatever reason the caller gave (the caller's own reason belongs in the
+// R2.3 event, not in the ledger). The reason `expired` before the expiry is
+// refused (ErrElevationNotExpired): it would record a clean timeout for an
+// elevation that something else ended.
 //
-// appender is as for StartElevation; R2.3 writes the `ended` event through
-// it, only when this call wrote the end.
+// appender is as for StartElevation: required, and not yet written through
+// (R2.3 adds the `ended` event, only when this call wrote the end).
 func EndElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, end ElevationEnd) (ElevationRecord, bool, error) {
 	switch end.Reason {
 	case ElevationEndHolder, ElevationEndApprover, ElevationEndOperator, ElevationEndExpired,
@@ -420,6 +493,7 @@ SET ended_at     = GREATEST(started_at, LEAST($2::timestamptz, expires_at)),
     end_reason   = CASE WHEN $2::timestamptz >= expires_at THEN 'expired' ELSE $3::text END,
     review_state = COALESCE(review_state, 'review_pending')
 WHERE id = $1 AND started_at IS NOT NULL AND ended_at IS NULL
+  AND ($3::text <> 'expired' OR $2::timestamptz >= expires_at)
 RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 	if err == nil {
 		return elevation, true, nil
@@ -433,6 +507,10 @@ RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 	}
 	if current.StartedAt.IsZero() {
 		return ElevationRecord{}, false, ErrElevationNotStarted
+	}
+	if current.EndedAt.IsZero() {
+		// Not ended, so the expired-before-the-expiry guard refused it.
+		return ElevationRecord{}, false, ErrElevationNotExpired
 	}
 	return current, false, nil
 }

@@ -30,7 +30,7 @@ import (
 func TestElevationLedgerIsAppendOnlyExceptTheEndAndTheReview(t *testing.T) {
 	pool := newElevationDatabase(t)
 	ctx := t.Context()
-	elevation := startElevation(t, pool, validElevationStart())
+	elevation := startElevation(t, pool, seededStart(t, pool))
 
 	for column, assignment := range map[string]string{
 		"reason":              `reason = 'something else'`,
@@ -153,9 +153,9 @@ func TestElevationLedgerConstraints(t *testing.T) {
 	// The control: the same statement with valid values is accepted, so each
 	// refusal below is the rule it names.
 	for _, values := range []string{
-		`(7, 41, 'admin', 'approved', 'incident', 'r', 7, 8, now(), 'approved', now(), now(), now() + interval '480 minutes', NULL)`,
-		`(7, 42, 'super_admin', 'sealed', 'identity_outage', 'r', 7, NULL, now(), 'approved', now(), now(), now() + interval '240 minutes', NULL)`,
-		`(7, 43, 'admin', 'self', 'recovery', 'r', 7, NULL, now(), 'approved', now(), now(), now() + interval '1 hour', NULL)`,
+		`(7, 1041, 'admin', 'approved', 'incident', 'r', 7, 8, now(), 'approved', now(), now(), now() + interval '480 minutes', NULL)`,
+		`(7, 1042, 'super_admin', 'sealed', 'identity_outage', 'r', 7, NULL, now(), 'approved', now(), now(), now() + interval '240 minutes', NULL)`,
+		`(7, 1043, 'admin', 'self', 'recovery', 'r', 7, NULL, now(), 'approved', now(), now(), now() + interval '1 hour', NULL)`,
 	} {
 		if _, err := pool.Exec(t.Context(), `INSERT INTO elitea_auth.admin_elevations `+columns+` VALUES `+values); err != nil {
 			t.Fatalf("the control row %s was refused: %v", values, err)
@@ -188,7 +188,7 @@ func TestElevationLedgerConstraints(t *testing.T) {
 // on a session with an active elevation is refused, another session is not.
 func TestStartElevationWritesOneRowBoundToTheSession(t *testing.T) {
 	pool := newElevationDatabase(t)
-	start := validElevationStart()
+	start := seededStart(t, pool)
 	start.Ticket = " INC-1 "
 	start.RequestedAt = elevationClock.Add(-20 * time.Minute)
 	start.DecidedAt = elevationClock.Add(-10 * time.Minute)
@@ -231,7 +231,8 @@ func TestStartElevationWritesOneRowBoundToTheSession(t *testing.T) {
 	}
 
 	// The same session again, while the first is active: no extension.
-	again := validElevationStart()
+	again := start
+	again.RequestedAt, again.DecidedAt = time.Time{}, time.Time{}
 	again.At = elevationClock.Add(30 * time.Minute)
 	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
 		_, err := adminaccess.StartElevation(t.Context(), tx, auditAppender(t), again)
@@ -241,19 +242,125 @@ func TestStartElevationWritesOneRowBoundToTheSession(t *testing.T) {
 	}
 	// Another session of the same person is a separate elevation.
 	other := again
-	other.BrowserSessionRef = start.BrowserSessionRef + 1
+	other.BrowserSessionRef = seedBrowserSession(t, pool, start.UserID)
 	startElevation(t, pool, other)
 	// After the expiry, the first session can start again.
-	later := validElevationStart()
+	later := again
 	later.At = elevationClock.Add(time.Hour)
 	startElevation(t, pool, later)
+
+	// The trigger holds the same rule for a writer that is not the ledger.
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO elitea_auth.admin_elevations
+    (user_id, browser_session_ref, level, path, reason_code, reason, requester_user_id,
+     approver_user_id, requested_at, decision, decided_at, started_at, expires_at)
+VALUES ($1, $2, 'admin', 'approved', 'incident', 'r', $1, $3, $4::timestamptz, 'approved', $4::timestamptz, $4::timestamptz, $4::timestamptz + interval '1 minute')`,
+		start.UserID, start.BrowserSessionRef, start.ApproverUserID, later.At.Add(time.Minute)); err == nil ||
+		!strings.Contains(err.Error(), "already holds an open elevation") {
+		t.Fatalf("a second open elevation written by hand was not refused by the trigger: %v", err)
+	}
+}
+
+// Start binds an elevation only to a live session of the person, refuses a
+// suspended person, and gives the super_admin level only when the approver
+// holds it through a standing role.
+func TestStartElevationChecksThePersonTheSessionAndTheApprover(t *testing.T) {
+	pool := newElevationDatabase(t)
+	ctx := t.Context()
+	base := seededStart(t, pool)
+	stranger := seedPerson(t, pool)
+	strangerSession := seedBrowserSession(t, pool, stranger)
+
+	revoked := seedBrowserSession(t, pool, base.UserID)
+	if _, err := pool.Exec(ctx, `UPDATE elitea_auth.browser_sessions SET revoked_at = $2 WHERE ref = $1`,
+		revoked, elevationClock.Add(-time.Minute)); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	expired := seedBrowserSession(t, pool, base.UserID)
+	if _, err := pool.Exec(ctx, `UPDATE elitea_auth.browser_sessions SET expires_at = $2 WHERE ref = $1`,
+		expired, elevationClock); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	suspended := seedPerson(t, pool)
+	suspendedSession := seedBrowserSession(t, pool, suspended)
+	if _, err := pool.Exec(ctx, `UPDATE public.auth_core__user SET suspended = true WHERE id = $1`, suspended); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	superAdmin := seedPerson(t, pool, adminaccess.RoleSuperAdmin)
+	plainAdmin := seedPerson(t, pool, adminaccess.RoleAdmin)
+
+	for name, test := range map[string]struct {
+		change func(*adminaccess.ElevationStart)
+		want   error
+	}{
+		"another person's session": {func(s *adminaccess.ElevationStart) { s.BrowserSessionRef = strangerSession }, adminaccess.ErrElevationSession},
+		"no such session":          {func(s *adminaccess.ElevationStart) { s.BrowserSessionRef = 987654321 }, adminaccess.ErrElevationSession},
+		"a revoked session":        {func(s *adminaccess.ElevationStart) { s.BrowserSessionRef = revoked }, adminaccess.ErrElevationSession},
+		"an expired session":       {func(s *adminaccess.ElevationStart) { s.BrowserSessionRef = expired }, adminaccess.ErrElevationSession},
+		"a suspended person": {func(s *adminaccess.ElevationStart) {
+			s.UserID, s.BrowserSessionRef = suspended, suspendedSession
+		}, adminaccess.ErrElevationPerson},
+		"super_admin from an admin approver": {func(s *adminaccess.ElevationStart) {
+			s.Level, s.ApproverUserID = adminaccess.ElevationLevelSuperAdmin, plainAdmin
+		}, adminaccess.ErrElevationApproverLevel},
+		"super_admin from an approver with no role": {func(s *adminaccess.ElevationStart) {
+			s.Level, s.ApproverUserID = adminaccess.ElevationLevelSuperAdmin, stranger
+		}, adminaccess.ErrElevationApproverLevel},
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := base
+			test.change(&start)
+			err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+				_, err := adminaccess.StartElevation(t.Context(), tx, auditAppender(t), start)
+				return err
+			})
+			if !errors.Is(err, test.want) {
+				t.Fatalf("StartElevation: %v, want %v", err, test.want)
+			}
+		})
+	}
+
+	// The controls: a super_admin approver gives the super_admin level, and a
+	// Form session of the person is a session too.
+	approved := base
+	approved.Level, approved.ApproverUserID = adminaccess.ElevationLevelSuperAdmin, superAdmin
+	if got := startElevation(t, pool, approved); got.Level != adminaccess.ElevationLevelSuperAdmin {
+		t.Fatalf("the super_admin-approved elevation has level %q", got.Level)
+	}
+	form := base
+	form.BrowserSessionRef = seedFormSession(t, pool, base.UserID)
+	startElevation(t, pool, form)
+}
+
+// The reason `expired` before the expiry is refused: the ledger would record
+// a clean timeout for an elevation that something else ended.
+func TestEndElevationRefusesExpiredBeforeTheExpiry(t *testing.T) {
+	pool := newElevationDatabase(t)
+	elevation := startElevation(t, pool, seededStart(t, pool))
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, _, err := adminaccess.EndElevation(t.Context(), tx, auditAppender(t), adminaccess.ElevationEnd{
+			ID: elevation.ID, Reason: adminaccess.ElevationEndExpired, At: elevationClock.Add(10 * time.Minute),
+		})
+		return err
+	}); !errors.Is(err, adminaccess.ErrElevationNotExpired) {
+		t.Fatalf("an `expired` end before the expiry: %v, want ErrElevationNotExpired", err)
+	}
+	if after := readElevation(t, pool, elevation.ID); !after.EndedAt.IsZero() {
+		t.Fatalf("the refused end wrote %+v", after)
+	}
+	ended, changed := endElevation(t, pool, adminaccess.ElevationEnd{
+		ID: elevation.ID, Reason: adminaccess.ElevationEndExpired, At: elevation.ExpiresAt,
+	})
+	if !changed || ended.EndReason != adminaccess.ElevationEndExpired || !ended.EndedAt.Equal(elevation.ExpiresAt) {
+		t.Fatalf("an `expired` end at the expiry: changed %v, %+v", changed, ended)
+	}
 }
 
 // End sets the end time and the end reason once and moves the elevation to
 // review; a second end changes nothing.
 func TestEndElevationEndsOnce(t *testing.T) {
 	pool := newElevationDatabase(t)
-	elevation := startElevation(t, pool, validElevationStart())
+	elevation := startElevation(t, pool, seededStart(t, pool))
 
 	first, changed := endElevation(t, pool, adminaccess.ElevationEnd{
 		ID: elevation.ID, Reason: adminaccess.ElevationEndHolder, At: elevationClock.Add(10 * time.Minute),
@@ -293,7 +400,7 @@ func TestEndElevationEndsOnce(t *testing.T) {
 // stopped then, with no job running.
 func TestEndElevationAfterTheExpiryRecordsTheExpiry(t *testing.T) {
 	pool := newElevationDatabase(t)
-	elevation := startElevation(t, pool, validElevationStart())
+	elevation := startElevation(t, pool, seededStart(t, pool))
 	if elevation.ActiveAt(elevation.ExpiresAt) {
 		t.Fatal("the elevation is active at its expiry")
 	}
@@ -306,6 +413,71 @@ func TestEndElevationAfterTheExpiryRecordsTheExpiry(t *testing.T) {
 }
 
 /* ── harness ───────────────────────────────────────────────────────────── */
+
+// seedPerson creates an account holding the given administration roles.
+func seedPerson(t *testing.T, pool *pgxpool.Pool, roles ...string) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(t.Context(), `
+INSERT INTO public.auth_core__user (email, name) VALUES ($1, 'Elevation test') RETURNING id`,
+		"elevation-"+uuid.NewString()+"@autotest.local").Scan(&id); err != nil {
+		t.Fatalf("seed a person: %v", err)
+	}
+	for _, role := range roles {
+		tag, err := pool.Exec(t.Context(), `
+INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT $1, id FROM public.auth_core__role WHERE name = $2 AND mode = 'administration'`, id, role)
+		if err != nil || tag.RowsAffected() != 1 {
+			t.Fatalf("give %s: %v (%d rows)", role, err, tag.RowsAffected())
+		}
+	}
+	return id
+}
+
+// seedBrowserSession creates a live browser session of the person, valid for
+// a day from the test clock, and returns its reference.
+func seedBrowserSession(t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
+	t.Helper()
+	var ref int64
+	if err := pool.QueryRow(t.Context(), `
+INSERT INTO elitea_auth.browser_sessions (id, user_id, provider, created_at, last_seen_at, expires_at, idle_timeout_seconds)
+VALUES ($1, $2, 'oidc', $3::timestamptz, $3::timestamptz, $3::timestamptz + interval '1 day', 0)
+RETURNING ref`, sessionID(), userID, elevationClock).Scan(&ref); err != nil {
+		t.Fatalf("seed a browser session: %v", err)
+	}
+	return ref
+}
+
+// seedFormSession creates a live Form session of the person and returns its
+// reference (from the same sequence as browser_sessions.ref, shared 0266).
+func seedFormSession(t *testing.T, pool *pgxpool.Pool, userID int64) int64 {
+	t.Helper()
+	var ref int64
+	if err := pool.QueryRow(t.Context(), `
+INSERT INTO elitea_auth.form_sessions (id_hash, record, expires_at)
+VALUES (encode(sha256(convert_to($1, 'UTF8')), 'hex'),
+        convert_to(json_build_object('schema_version', 1, 'done', true, 'user_id', $2::bigint)::text, 'UTF8'),
+        $3::timestamptz + interval '1 day')
+RETURNING ref`, sessionID(), userID, elevationClock).Scan(&ref); err != nil {
+		t.Fatalf("seed a Form session: %v", err)
+	}
+	return ref
+}
+
+func sessionID() string {
+	return strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
+}
+
+// seededStart is a valid approved admin-level start of a real person, in a
+// live session of theirs, approved by another real person.
+func seededStart(t *testing.T, pool *pgxpool.Pool) adminaccess.ElevationStart {
+	t.Helper()
+	start := validElevationStart()
+	start.UserID = seedPerson(t, pool)
+	start.ApproverUserID = seedPerson(t, pool, adminaccess.RoleAdmin)
+	start.BrowserSessionRef = seedBrowserSession(t, pool, start.UserID)
+	return start
+}
 
 func auditAppender(t *testing.T) securityaudit.Appender {
 	t.Helper()
