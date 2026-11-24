@@ -1,7 +1,6 @@
 package eliteacore
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -3140,29 +3139,10 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unable to read the request body"})
 		return
 	}
-	trimmed := bytes.TrimSpace(bodyBytes)
-	var entities []any
-	if len(trimmed) > 0 && trimmed[0] == '[' {
-		if err := json.Unmarshal(trimmed, &entities); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body: " + err.Error()})
-			return
-		}
-	} else {
-		var bodyMap map[string]any
-		if err := json.Unmarshal(trimmed, &bodyMap); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body: " + err.Error()})
-			return
-		}
-		// A body that carries no `applications` array names nothing to import.
-		// It used to answer 201 with an empty result, which the wizard reads as
-		// a completed import. An `applications` key that IS an array and IS
-		// empty keeps that answer: it asks for nothing and gets nothing.
-		apps, ok := bodyMap["applications"].([]any)
-		if !ok {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "the request body must carry an applications array"})
-			return
-		}
-		entities = apps
+	entities, _, parseRefusal := importEntitiesFrom(bodyBytes)
+	if parseRefusal != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": parseRefusal})
+		return
 	}
 
 	if len(entities) == 0 {
@@ -3179,6 +3159,15 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	outcome := h.runImport(ctx, h.pool, s, projectID, userID, entities)
+	writeJSON(w, outcome.status(), outcome.envelope())
+}
+
+// runImport writes the entities of an import document through q: the pool
+// for the import route, where each entity stands alone and a partial import
+// answers 207, or one transaction for the team import, which keeps all of it
+// or none (team_import.go).
+func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID string, userID ownership.UserID, entities []any) importOutcome {
 	resultAgents := make([]map[string]any, 0)
 	errorAgents := make([]any, 0)
 	resultToolkits := make([]map[string]any, 0)
@@ -3258,7 +3247,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		created, err := h.importSkill(ctx, s, destinationOwnerID, userID, se.raw)
+		created, err := h.importSkill(ctx, q, s, destinationOwnerID, userID, se.raw)
 		// A skill can be written and still fail, because the row is inserted
 		// before its versions are. The row then exists, so it is REPORTED and
 		// REGISTERED rather than dropped: a caller that sees only
@@ -3291,6 +3280,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 	// Phase 1: Import agents and build import_uuid -> appID maps
 	agentImportUUIDToAppID := map[string]int{}
+	importedByUUID := map[string]importedAgentRef{}
 	agentVersionImportUUIDToVerID := map[string]int{}
 
 	type importedAgentInfo struct {
@@ -3340,7 +3330,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		// legacy read: the legacy runtime filters `Application.owner_id ==
 		// project_id`. The caller is the version author, one statement below.
 		var appID int
-		err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.applications (name, description, owner_id, created_at, updated_at)
 			VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC', now() AT TIME ZONE 'UTC') RETURNING id`, s),
 			name, desc, destinationOwnerID.Int64()).Scan(&appID)
@@ -3403,7 +3393,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			}
 
 			var vID int
-			err = h.pool.QueryRow(ctx, fmt.Sprintf(`
+			err = q.QueryRow(ctx, fmt.Sprintf(`
 				INSERT INTO %s.application_versions (application_id, name, status, agent_type, instructions, welcome_message, llm_settings, conversation_starters, author_id, meta, pipeline_settings, soul, avatar_pack, created_at)
 				VALUES ($1, $2, 'draft', $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::jsonb, '{}'::jsonb, $10::jsonb, $11::jsonb, now() AT TIME ZONE 'UTC') RETURNING id`, s),
 				appID, vName, agentType, instructions, welcomeMsg, llmJSON, startersJSON, userID.Int64(), metaJSON, soulJSON, avatarPackJSON).Scan(&vID)
@@ -3463,7 +3453,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 					}
 					varName, _ := varMap["name"].(string)
 					varValue, _ := varMap["value"].(string)
-					if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+					if _, err := q.Exec(ctx, fmt.Sprintf(`
 						INSERT INTO %s.application_variables (application_version_id, name, value, created_at) VALUES ($1, $2, $3, now() AT TIME ZONE 'UTC')`, s),
 						vID, varName, varValue); err != nil {
 						slog.ErrorContext(ctx, "import: application variable insert failed",
@@ -3488,7 +3478,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			// the editor, the version-detail GET, the publish validation and the
 			// next export all use. See importVersionTags for the store, the
 			// conflict rule and why each failure is reported.
-			importedTags, tagFailures := h.importVersionTags(ctx, s, vName, vID, v)
+			importedTags, tagFailures := h.importVersionTags(ctx, q, s, vName, vID, v)
 			for _, message := range tagFailures {
 				slog.ErrorContext(ctx, "import: application version tag write failed",
 					"schema", s, "version_id", vID, "message", message)
@@ -3557,6 +3547,10 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		if appImportUUID != "" && len(createdVersions) > 0 {
+			firstVersion, _ := strconv.Atoi(createdVersions[0]["id"].(string))
+			importedByUUID[appImportUUID] = importedAgentRef{index: ae.entityIdx, appID: appID, versionID: firstVersion, name: name}
+		}
 		agentResult := map[string]any{
 			"id":              fmt.Sprintf("%d", appID),
 			"name":            name,
@@ -3667,7 +3661,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		var toolID int
-		err := h.pool.QueryRow(ctx, importToolkitInsertSQL(s),
+		err := q.QueryRow(ctx, importToolkitInsertSQL(s),
 			tkName, tkType, settingsJSON, toolkitOwnerID.Int64(), userID.Int64(), tkDesc).Scan(&toolID)
 		if err == nil {
 			if tk.importUUID != "" {
@@ -3693,7 +3687,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 		name, _ := ae.raw["name"].(string)
 		hasLinkError := false
-		// #420: the insert below ran as `_, _ = h.pool.Exec(...)`. A failed link
+		// #420: the insert below ran as `_, _ = q.Exec(...)`. A failed link
 		// was therefore silent. `hasLinkError` above cannot carry this fault. That
 		// flag has one message, and the message says the toolkit was not
 		// imported. A failed insert is a different fault. The toolkit IS
@@ -3751,7 +3745,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 							"Import function has been failed: unable to link toolkit "+strconv.Itoa(toolID)+": "+selErr.Error())
 						continue
 					}
-					if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+					if _, err := q.Exec(ctx, fmt.Sprintf(`
 						INSERT INTO %s.entity_tool_mapping (entity_version_id, entity_id, entity_type, tool_id, selected_tools, created_at)
 						VALUES ($1, $2, 'application', $3, $4::jsonb, now() AT TIME ZONE 'UTC')`, s),
 						vID, info.appID, toolID, selToolsJSON); err != nil {
@@ -3778,7 +3772,7 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 
 			if vIdx < len(info.skills) {
 				skillLinkFailures = append(skillLinkFailures,
-					h.attachImportedSkills(ctx, s, vID, info.skills[vIdx], importedSkills)...)
+					h.attachImportedSkills(ctx, q, s, vID, info.skills[vIdx], importedSkills)...)
 			}
 		}
 
@@ -3820,22 +3814,12 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Determine status code: 400 if all failed, 207 if mixed, 201 if all succeeded
-	totalErrors := len(errorAgents) + len(errorToolkits) + len(errorSkills)
-	totalSuccess := len(resultAgents) + len(resultToolkits) + len(resultSkills)
-	importStatus := http.StatusCreated
-	if totalErrors > 0 {
-		if totalSuccess == 0 {
-			importStatus = http.StatusBadRequest
-		} else {
-			importStatus = 207
-		}
+	return importOutcome{
+		resultAgents: resultAgents, errorAgents: errorAgents,
+		resultToolkits: resultToolkits, errorToolkits: errorToolkits,
+		resultSkills: resultSkills, errorSkills: errorSkills,
+		agents: importedByUUID,
 	}
-
-	writeJSON(w, importStatus, map[string]any{
-		"result": importChannels(resultAgents, resultToolkits, resultSkills),
-		"errors": importChannels(errorAgents, errorToolkits, errorSkills),
-	})
 }
 
 // Fork copies one or more published applications into the caller's project.
@@ -4013,7 +3997,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 			})
 			continue
 		}
-		created, err := h.importSkill(ctx, s, destinationOwnerID, userID, skill)
+		created, err := h.importSkill(ctx, h.pool, s, destinationOwnerID, userID, skill)
 		// A skill can be written and still fail, because the row is inserted
 		// before its versions are. It is then reported and registered rather
 		// than dropped, for the reason the import states at phase 0.
@@ -4497,7 +4481,7 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 						"so the %d skills of version %s were not forked", len(skillReferences), vName),
 				})
 			default:
-				for _, message := range h.attachImportedSkills(ctx, s, vID, skillReferences, importedSkills) {
+				for _, message := range h.attachImportedSkills(ctx, h.pool, s, vID, skillReferences, importedSkills) {
 					errorSkills = append(errorSkills, map[string]any{
 						"index": entityIdx, "name": name,
 						"msg": "Fork function has been failed: " + message,
@@ -4701,9 +4685,23 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isFork := strings.EqualFold(r.URL.Query().Get("fork"), "true")
-	if isFork {
+	// An export that names versions keeps those versions, fork or not.
+	// Without fork the ids used to be ignored, so Export of the open version
+	// wrote every version, and a team's export could not pin each member to
+	// its team version (issue 3010). A value that names no numeric id
+	// (`follow_version_ids=`) asks for nothing and keeps every version.
+	followed := followedVersionIDs(r.URL.Query()["follow_version_ids"])
+	switch {
+	case isFork:
 		// The version the caller named, else the newest (#1993).
-		kept, found := forkVersions(versions, r.URL.Query()["follow_version_ids"])
+		kept, found := forkVersions(versions, followed)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
+			return
+		}
+		versions = kept
+	case len(followed) > 0:
+		kept, found := namedVersions(versions, followed)
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "version not found"})
 			return

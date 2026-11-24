@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 
 import { getGetApplicationQueryKey } from '@/shared/api/generated/applications/applications';
+import { getListAgentTeamsQueryKey } from '@/shared/api/generated/chat/chat';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { serverErrorSentence } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
@@ -20,6 +21,7 @@ import {
   type ImportOutcome,
   type PublishOutcome,
 } from '../api/lifecycleApi';
+import { importTeamDocument, type TeamImportTeamBody } from '../api/teamImportApi';
 import { governanceRefusalMessage, readGovernanceRefusal } from '../lib/governanceRefusal';
 import {
   normalizePublishValidation,
@@ -172,8 +174,14 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
   );
 }
 
+/** What an Import posts: the document, and the team when the file is a team zip (issue 3010). */
+interface EntityImportRequest {
+  readonly document: EntityExportDocument;
+  readonly team?: TeamImportTeamBody | undefined;
+}
+
 export interface EntityImport {
-  readonly run: UseMutationResult<ImportOutcome, Error, EntityExportDocument>;
+  readonly run: UseMutationResult<ImportOutcome, Error, EntityImportRequest>;
 }
 
 /**
@@ -187,14 +195,17 @@ export interface EntityImport {
  */
 export function useEntityImport(projectId: string | undefined): EntityImport {
   const queryClient = useQueryClient();
-  const run = useMutation<ImportOutcome, Error, EntityExportDocument>({
-    mutationFn: (document) => importEntities(projectId ?? '', document),
-    onSuccess: () => {
+  const run = useMutation<ImportOutcome, Error, EntityImportRequest>({
+    mutationFn: ({ document, team }) =>
+      team === undefined ? importEntities(projectId ?? '', document) : importTeamDocument(projectId ?? '', document, team),
+    onSuccess: (_outcome, { team }) => {
       void queryClient.invalidateQueries({
         predicate: (query) =>
           typeof query.queryKey[0] === 'string' &&
           query.queryKey[0].startsWith(`/elitea_core/applications/prompt_lib/${projectId ?? ''}`),
       });
+      // A team import also adds a team to the Teams tab.
+      if (team !== undefined) void queryClient.invalidateQueries({ queryKey: getListAgentTeamsQueryKey(projectId ?? '') });
     },
   });
   return { run };

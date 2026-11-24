@@ -69,9 +69,10 @@ function PipelineListActions({ projectId }: { readonly projectId: string | undef
   return (
     <EntityImportButton
       testIdPrefix="pipelines"
+      acceptsTeams={false}
       isImporting={entityImport.run.isPending}
-      onImport={async (document) => {
-        await entityImport.run.mutateAsync(document);
+      onImport={async (request) => {
+        await entityImport.run.mutateAsync(request);
       }}
     />
   );

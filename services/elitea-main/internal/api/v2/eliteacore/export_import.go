@@ -796,7 +796,7 @@ func importChannels[T any](agents, toolkits, skills []T) map[string]any {
 // and its stored `data`, not the file's — so the caller's echo can report what
 // was persisted rather than what was asked for.
 func (h *Handler) importVersionTags(
-	ctx context.Context, schema, versionName string, versionID int, source map[string]any,
+	ctx context.Context, q relationQuerier, schema, versionName string, versionID int, source map[string]any,
 ) ([]map[string]any, []string) {
 	written := make([]map[string]any, 0)
 	messages := make([]string, 0)
@@ -838,14 +838,14 @@ func (h *Handler) importVersionTags(
 
 		var tagID int
 		var storedData string
-		if err := h.pool.QueryRow(ctx, fmt.Sprintf(`
+		if err := q.QueryRow(ctx, fmt.Sprintf(`
 			INSERT INTO %s.tags (name, data) VALUES ($1, $2::jsonb)
 			ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
 			RETURNING id, COALESCE(data::text, 'null')`, schema), name, dataJSON).Scan(&tagID, &storedData); err != nil {
 			messages = append(messages, "unable to import tag "+name+": "+err.Error())
 			continue
 		}
-		if _, err := h.pool.Exec(ctx, fmt.Sprintf(`
+		if _, err := q.Exec(ctx, fmt.Sprintf(`
 			INSERT INTO %s.application_version_tag_association (version_id, tag_id) VALUES ($1, $2)
 			ON CONFLICT DO NOTHING`, schema), versionID, tagID); err != nil {
 			messages = append(messages, "unable to import tag "+name+": "+err.Error())
