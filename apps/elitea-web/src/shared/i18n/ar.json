@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "الفريق: {{name}}",
   "features.agentTeams.exportAction": "تصدير",
   "features.agentTeams.exportMemberFailed": "تعذّر تصدير الفريق: تعذّرت قراءة الوكيل {{name}}.",
-  "features.agentLifecycle.import.teamOnAgents": "ملف zip هذا فريق. استورده من قائمة الوكلاء."
+  "features.agentLifecycle.import.teamOnAgents": "ملف zip هذا فريق. استورده من قائمة الوكلاء.",
+  "pages.admin.console.error.explanation": "هذا ليس ردًا بشأن صلاحياتك. حاول مرة أخرى بعد قليل.",
+  "pages.admin.console.error.retry": "حاول مرة أخرى",
+  "pages.admin.console.error.title": "تعذّر تحميل وحدة التحكم",
+  "pages.admin.console.loading": "جارٍ تحميل وحدة التحكم…"
 }

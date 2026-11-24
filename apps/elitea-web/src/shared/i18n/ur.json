@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "ٹیم: {{name}}",
   "features.agentTeams.exportAction": "برآمد کریں",
   "features.agentTeams.exportMemberFailed": "ٹیم برآمد نہیں کی جا سکی: ایجنٹ {{name}} پڑھا نہیں جا سکا۔",
-  "features.agentLifecycle.import.teamOnAgents": "یہ zip ایک ٹیم ہے۔ اسے ایجنٹس کی فہرست سے درآمد کریں۔"
+  "features.agentLifecycle.import.teamOnAgents": "یہ zip ایک ٹیم ہے۔ اسے ایجنٹس کی فہرست سے درآمد کریں۔",
+  "pages.admin.console.error.explanation": "یہ آپ کی رسائی کے بارے میں جواب نہیں ہے۔ تھوڑی دیر بعد دوبارہ کوشش کریں۔",
+  "pages.admin.console.error.retry": "دوبارہ کوشش کریں",
+  "pages.admin.console.error.title": "کنسول لوڈ نہیں ہو سکا",
+  "pages.admin.console.loading": "کنسول لوڈ ہو رہا ہے…"
 }

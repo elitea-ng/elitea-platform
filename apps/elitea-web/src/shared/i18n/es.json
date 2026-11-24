@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "Equipo: {{name}}",
   "features.agentTeams.exportAction": "Exportar",
   "features.agentTeams.exportMemberFailed": "No se pudo exportar el equipo: no se pudo leer el agente {{name}}.",
-  "features.agentLifecycle.import.teamOnAgents": "Este zip es un equipo. Impórtelo desde la lista de agentes."
+  "features.agentLifecycle.import.teamOnAgents": "Este zip es un equipo. Impórtelo desde la lista de agentes.",
+  "pages.admin.console.error.explanation": "Esto no es una respuesta sobre su acceso. Vuelva a intentarlo en un momento.",
+  "pages.admin.console.error.retry": "Reintentar",
+  "pages.admin.console.error.title": "No se pudo cargar la consola",
+  "pages.admin.console.loading": "Cargando la consola…"
 }

@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "Team: {{name}}",
   "features.agentTeams.exportAction": "Exporteren",
   "features.agentTeams.exportMemberFailed": "Het team kon niet worden geëxporteerd: de agent {{name}} kon niet worden gelezen.",
-  "features.agentLifecycle.import.teamOnAgents": "Deze zip is een team. Importeer hem vanuit de lijst met agents."
+  "features.agentLifecycle.import.teamOnAgents": "Deze zip is een team. Importeer hem vanuit de lijst met agents.",
+  "pages.admin.console.error.explanation": "Dit is geen antwoord over uw toegang. Probeer het zo meteen opnieuw.",
+  "pages.admin.console.error.retry": "Opnieuw proberen",
+  "pages.admin.console.error.title": "De console kon niet worden geladen",
+  "pages.admin.console.loading": "Console laden…"
 }

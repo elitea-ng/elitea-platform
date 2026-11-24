@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "Zespół: {{name}}",
   "features.agentTeams.exportAction": "Eksportuj",
   "features.agentTeams.exportMemberFailed": "Nie udało się wyeksportować zespołu: nie można odczytać agenta {{name}}.",
-  "features.agentLifecycle.import.teamOnAgents": "To archiwum zip to zespół. Zaimportuj je z listy agentów."
+  "features.agentLifecycle.import.teamOnAgents": "To archiwum zip to zespół. Zaimportuj je z listy agentów.",
+  "pages.admin.console.error.explanation": "To nie jest odpowiedź dotycząca Twojego dostępu. Spróbuj ponownie za chwilę.",
+  "pages.admin.console.error.retry": "Spróbuj ponownie",
+  "pages.admin.console.error.title": "Nie udało się wczytać konsoli",
+  "pages.admin.console.loading": "Wczytywanie konsoli…"
 }

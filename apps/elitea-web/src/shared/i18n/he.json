@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "צוות: {{name}}",
   "features.agentTeams.exportAction": "ייצוא",
   "features.agentTeams.exportMemberFailed": "לא ניתן היה לייצא את הצוות: לא ניתן היה לקרוא את הסוכן {{name}}.",
-  "features.agentLifecycle.import.teamOnAgents": "קובץ ה-zip הזה הוא צוות. ייבאו אותו מרשימת הסוכנים."
+  "features.agentLifecycle.import.teamOnAgents": "קובץ ה-zip הזה הוא צוות. ייבאו אותו מרשימת הסוכנים.",
+  "pages.admin.console.error.explanation": "זו אינה תשובה לגבי ההרשאות שלך. נסה שוב בעוד רגע.",
+  "pages.admin.console.error.retry": "נסה שוב",
+  "pages.admin.console.error.title": "לא הצלחנו לטעון את המסוף",
+  "pages.admin.console.loading": "טוען את המסוף…"
 }

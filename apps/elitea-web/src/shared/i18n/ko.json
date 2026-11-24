@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "팀: {{name}}",
   "features.agentTeams.exportAction": "내보내기",
   "features.agentTeams.exportMemberFailed": "팀을 내보낼 수 없습니다: 에이전트 {{name}}을(를) 읽을 수 없습니다.",
-  "features.agentLifecycle.import.teamOnAgents": "이 zip은 팀입니다. 에이전트 목록에서 가져오세요."
+  "features.agentLifecycle.import.teamOnAgents": "이 zip은 팀입니다. 에이전트 목록에서 가져오세요.",
+  "pages.admin.console.error.explanation": "이것은 접근 권한에 대한 응답이 아닙니다. 잠시 후 다시 시도하세요.",
+  "pages.admin.console.error.retry": "다시 시도",
+  "pages.admin.console.error.title": "콘솔을 불러오지 못했습니다",
+  "pages.admin.console.loading": "콘솔을 불러오는 중…"
 }

@@ -4980,5 +4980,9 @@
   "features.agentLifecycle.import.teamName": "团队：{{name}}",
   "features.agentTeams.exportAction": "导出",
   "features.agentTeams.exportMemberFailed": "无法导出团队：无法读取智能体 {{name}}。",
-  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一个团队，请从智能体列表导入。"
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一个团队，请从智能体列表导入。",
+  "pages.admin.console.error.explanation": "这并不是关于您访问权限的答复。请稍后重试。",
+  "pages.admin.console.error.retry": "重试",
+  "pages.admin.console.error.title": "无法加载控制台",
+  "pages.admin.console.loading": "正在加载控制台…"
 }
