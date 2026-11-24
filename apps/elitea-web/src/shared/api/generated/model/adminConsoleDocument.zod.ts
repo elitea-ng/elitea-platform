@@ -56,6 +56,11 @@ export const AdminConsoleDocument = zod
     elevation: zod
       .union([AdminConsoleElevation, zod.null()])
       .describe("The active elevation, null when there is none."),
+    admin_console_areas: zod
+      .boolean()
+      .describe(
+        "The platform setting of the same name (ADR-0059 R3.2, issue 2532), the same for every caller: true when the console renders its six labelled areas, false when it keeps the two unlabelled groups. On by default; an upgraded deployment starts with it off for one release.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/adminaccess/console.go:119 — the console capability document (ADR-0059 decision 6). It names areas, items, levels and roles, never a permission and never a person.\n",

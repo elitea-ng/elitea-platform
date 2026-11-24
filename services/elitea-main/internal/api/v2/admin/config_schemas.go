@@ -324,6 +324,7 @@ func configSections() []map[string]any {
 		serviceDescriptorsSection(),
 		maintenanceSection(),
 		analyticsSection(),
+		adminConsoleSection(),
 		emailSection(),
 		microsoftAppsSection(),
 	}
@@ -772,6 +773,41 @@ func analyticsSection() map[string]any {
 				"description": "Controls whether the Analytics tab is visible in project Settings. When disabled, the Analytics page is hidden for all users and the analytics endpoints refuse.",
 				"path":        "analytics.enabled",
 				"section":     "analytics",
+				"default":     true,
+			},
+		},
+	}
+}
+
+// adminConsoleSection — the Features page's switch for the administration
+// console's six labelled areas (ADR-0059 decision 6, R3.2, issue 2532). LIVE.
+//
+// The capability document (internal/api/v2/adminaccess, PlatformFlags) reads
+// the row on every GET /api/v2/admin/console and carries it as
+// `admin_console_areas`; the console renders the six areas when it is on and
+// the two unlabelled groups when it is off. Its code default is on. Shared
+// migration 0271 writes it off on a database that already held an
+// administration role assignment, so an upgrade keeps the old navigation for
+// one release; story R4.9 (issue 2623) removes the switch and the old
+// navigation. It changes what the console shows, never what the server
+// admits.
+func adminConsoleSection() map[string]any {
+	return map[string]any{
+		"id":          "admin_console",
+		"access":      platformConfigAccess(adminaccess.AreaPlatform),
+		"page":        configPageFeatures,
+		"title":       "Administration console",
+		"description": "Choose the navigation of the administration console.",
+		"order":       17,
+		"icon":        "admin_panel_settings",
+		"fields": []map[string]any{
+			{
+				"key":         "admin_console_areas",
+				"type":        "boolean",
+				"title":       "Six labelled areas",
+				"description": "Shows the console's navigation in six labelled areas (People and access, Projects, Models and spend, Agents and governance, Security, Platform), each listing only the items the person can open. When off, the console keeps the earlier two unlabelled groups. This changes what the console shows, not what anyone may do.",
+				"path":        "admin_console.admin_console_areas",
+				"section":     "admin_console",
 				"default":     true,
 			},
 		},

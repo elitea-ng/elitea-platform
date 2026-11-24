@@ -516,6 +516,7 @@ export const getGetAdminConsoleDocumentResponseMock =
       },
     ],
     elevation: null,
+    admin_console_areas: true,
   });
 
 export const getGetAdminConsoleItemResponseMock = (): AdminConsoleItem => ({

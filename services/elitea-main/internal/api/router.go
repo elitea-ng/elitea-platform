@@ -3548,7 +3548,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				if consoleRoles == nil && cfg.Pool != nil {
 					consoleRoles = v2adminconsole.NewPostgresRoles(cfg.Pool)
 				}
+				// The six-area navigation switch (R3.2) rides in the
+				// document, read from centry.platform_config.
+				var consoleAreas v2adminconsole.AreasFlag
+				if cfg.Pool != nil {
+					consoleAreas = v2adminconsole.NewPlatformFlags(cfg.Pool)
+				}
 				v2adminconsole.NewHandler(permissionResolver, consoleRoles, cfg.ConsoleElevations).
+					WithAreasFlag(consoleAreas).
 					Register(r, apimw.MarkAdministrationRoute)
 
 				// The entitlement export (ADR-0044 decision 5, #1501): who

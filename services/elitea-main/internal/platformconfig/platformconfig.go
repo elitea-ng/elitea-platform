@@ -42,6 +42,9 @@ const (
 	SectionMaintenance      = "maintenance"
 	SectionSupportAssistant = "support_assistant"
 	SectionAnalytics        = "analytics"
+	// SectionAdminConsole holds the console's own switches (ADR-0059
+	// decision 6, R3.2): today the six-area navigation.
+	SectionAdminConsole = "admin_console"
 	// SectionBranding is the DATABASE layer of the brand pack (ADR-0024
 	// decision 1). Its keys are declared in branding.go beside the resolver
 	// that reads them.
@@ -115,6 +118,14 @@ const (
 	// `/analytics*` HTTP surface (internal/api/router.go's
 	// requireAnalyticsEnabled).
 	KeyAnalyticsEnabled = "analytics_enabled"
+
+	// KeyAdminConsoleAreas switches the administration console to the six
+	// labelled areas of ADR-0059 decision 6 (R3.2, issue 2532). Its code
+	// default is on; shared migration 0271 writes it off on a database that
+	// already held an administration role assignment (an upgrade), for one
+	// release. The capability document (GET /api/v2/admin/console) carries
+	// it as `admin_console_areas`.
+	KeyAdminConsoleAreas = "admin_console_areas"
 )
 
 // Values is one section's stored rows, decoded. A key ABSENT from the map has
