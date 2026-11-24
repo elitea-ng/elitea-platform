@@ -452,6 +452,9 @@ func dedupeIDs(ids []int64) []int64 {
 // empty. Inviting the caller's own account into a project is refused when the
 // role carries a permission that the caller does not already hold there.
 // Nothing is written for any pair. A super_admin holder is exempt.
+//
+// A batch that passes and names a project the caller is not a member of marks
+// its audit record central_override (ADR-0059 R0.6a).
 func (h *Handler) checkBulkInviteSelf(
 	r *http.Request, q adminaccess.Querier, users []int64, projects map[int64]*projectTarget,
 ) *adminaccess.Refusal {
@@ -459,14 +462,39 @@ func (h *Handler) checkBulkInviteSelf(
 	if refusal != nil {
 		return refusal
 	}
-	if caller.SuperAdmin || !slices.Contains(users, caller.UserID) {
-		return nil
-	}
 	ids := make([]int64, 0, len(projects))
 	for id := range projects {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(a, b int) bool { return ids[a] < ids[b] })
+	if refusal := bulkInviteSelfRefusal(r, q, caller, users, ids, projects); refusal != nil {
+		return refusal
+	}
+	for _, id := range ids {
+		if projects[id] == nil {
+			continue
+		}
+		member, err := adminaccess.IsProjectMember(r.Context(), q, caller.UserID, id)
+		if err != nil {
+			return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
+		}
+		if !member {
+			adminaccess.MarkCentralOverride(r.Context())
+			break
+		}
+	}
+	return nil
+}
+
+// bulkInviteSelfRefusal is the rule itself, for a resolved caller and the
+// sorted project ids.
+func bulkInviteSelfRefusal(
+	r *http.Request, q adminaccess.Querier, caller adminaccess.Caller,
+	users []int64, ids []int64, projects map[int64]*projectTarget,
+) *adminaccess.Refusal {
+	if caller.SuperAdmin || !slices.Contains(users, caller.UserID) {
+		return nil
+	}
 	ctx := r.Context()
 	for _, id := range ids {
 		project := projects[id]

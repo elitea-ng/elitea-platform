@@ -23,6 +23,9 @@ type Refusal struct {
 	Permissions []string
 	// ProjectID is the project of a CodeSelfEscalation refusal.
 	ProjectID int64
+	// WaysIn are the ways a caller refused with CodeSelfEscalation can still
+	// be given the permissions (WayInProjectMember, WayInOperatorCommand).
+	WaysIn []string
 	// Status is the HTTP status of the answer; 0 is 403. The last-administrator
 	// rule answers 409 (CodeLastAdministrator).
 	Status int
@@ -53,6 +56,14 @@ func (r *Refusal) Body() map[string]any {
 	}
 	if r.ProjectID > 0 {
 		body["project_id"] = r.ProjectID
+	}
+	if len(r.WaysIn) > 0 {
+		body["ways_in"] = r.WaysIn
+		for _, way := range r.WaysIn {
+			if way == WayInOperatorCommand {
+				body["operator_command"] = OperatorCommand
+			}
+		}
 	}
 	return body
 }

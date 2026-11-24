@@ -14,8 +14,8 @@ The admin **Projects** page is the deployment-wide project list. Every project â
   <Step title="Suspend or unsuspend it">
     A suspended project's members lose access until it is unsuspended.
   </Step>
-  <Step title="Add a project admin, or change a member's role">
-    Both are available from the project's row menu.
+  <Step title="Add a project admin, change a member's role, or remove a member">
+    All three are in **Manage project member**, from the project's row menu. Type the member's email address: for someone already in the project the dialog offers **Update role** and **Remove from project** (select it twice to confirm). Removing a member keeps their account; only their roles in this project go.
   </Step>
   <Step title="Export">
     **Export to CSV** downloads the current list.
@@ -23,6 +23,19 @@ The admin **Projects** page is the deployment-wide project list. Every project â
 </Steps>
 
 <Screenshot id="admin-projects-table" alt="Admin Projects table with row actions" />
+
+## Administer a project you are not a member of
+
+You do not need to be a member of a project to manage it from here. The **Project administrator** role, and the **Admin** and **Super admin** roles, can:
+
+- **Manage the members of any project** (`projects.members.manage`): list them, add someone, change a role, or remove someone.
+- **Read and change the guarded settings of any project** (`projects.settings.view` to read, `projects.settings.manage` to change): the cloud executor, worker egress, AI disclosure, browser and computer-use settings. These five are the only configurations this reaches. A project's credentials, model configurations and toolkit configurations stay with its members.
+
+None of this reaches the project's content: its conversations, artifacts and secret values still need a membership.
+
+Every change you make to a project you are not a member of is recorded in the [audit trail](/admin/audit-trail) as a **central override**, so the project's own members can see that an administrator, not one of them, made it.
+
+You cannot use member management to widen your own permissions: adding yourself to a project, or giving yourself a role there, with permissions you do not already hold is refused. The refusal names two ways in: ask a member of the project who manages its members, or ask an operator of the deployment to run `elitea-main admin-role`. Leaving a project is always allowed.
 
 ## Create or delete a project
 

@@ -335,6 +335,9 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		if annotation.Actor != "" && event.UserID == nil && event.UserEmail == "" {
 			event.UserEmail = annotation.Actor
 		}
+		// Only a write that happened: a refused or failed request changed
+		// nothing in the project, so it is no central override.
+		event.CentralOverride = annotation.CentralOverride && status < http.StatusBadRequest
 	}
 	return event
 }

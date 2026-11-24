@@ -295,7 +295,10 @@ func (g *maintenanceGate) middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if g.admits(r) {
+		if admitted, narrow := g.admits(r); admitted {
+			if narrow {
+				r = r.WithContext(context.WithValue(r.Context(), maintenanceNarrowKey{}, true))
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -317,22 +320,39 @@ func (g *maintenanceGate) middleware(next http.Handler) http.Handler {
 //
 // It resolves on every request and caches nothing about the caller, only the
 // switch: a role change takes effect on the next request.
-func (g *maintenanceGate) admits(r *http.Request) bool {
+//
+// narrow is true when the caller was admitted only because the route is
+// decided by an administration gate (not as a bypass holder): a gate that also
+// has a project-member path (RequireResolvedPermissionsOrCentral) then decides
+// on its administration branch alone (InMaintenanceAsNarrowHolder).
+func (g *maintenanceGate) admits(r *http.Request) (admitted, narrow bool) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
-		return false
+		return false, false
 	}
 	resolution, err := g.resolver.ResolvePermissions(
 		r.Context(), user, auth.PermissionModeAdministration, "",
 	)
 	if err != nil {
-		return false
+		return false, false
 	}
 	if adminaccess.AdmitsDuringMaintenance(resolution.Permissions) {
-		return true
+		return true, false
 	}
-	return adminaccess.HoldsAdministrationPermission(resolution.Permissions) &&
+	admitted = adminaccess.HoldsAdministrationPermission(resolution.Permissions) &&
 		g.administrationRoute != nil && g.administrationRoute(r)
+	return admitted, admitted
+}
+
+type maintenanceNarrowKey struct{}
+
+// InMaintenanceAsNarrowHolder reports a request the maintenance gate let
+// through during a window only because an administration gate decides its
+// route. A gate with a project-member path must not serve that path to it:
+// the window admits the administration branch, not the product.
+func InMaintenanceAsNarrowHolder(ctx context.Context) bool {
+	narrow, _ := ctx.Value(maintenanceNarrowKey{}).(bool)
+	return narrow
 }
 
 // MaintenanceExempt reports whether maintenance never refuses path — the

@@ -256,22 +256,31 @@ func NewHandler(pool *pgxpool.Pool, opts ...Option) *Handler {
 func (h *Handler) Routes() chi.Router {
 	r := chi.NewRouter()
 	list := h.require(CurrentConfigurationListPermission)
-	details := h.require(CurrentConfigurationGetPermission)
 	create := h.require(CurrentConfigurationCreatePermission)
 	update := h.require(CurrentConfigurationUpdatePermission)
-	remove := h.require(CurrentConfigurationDeletePermission)
 
 	r.Get("/available/", h.Available)
-	r.With(list).Get("/configurations/{projectID}", h.List)
-	r.With(list).Get("/configurations/{mode}/{projectID}", h.List)
-	r.With(create).Post("/configurations/{projectID}", h.Create)
-	r.With(create).Post("/configurations/{mode}/{projectID}", h.Create)
-	r.With(details).Get("/configuration/{projectID}/{configID}", h.Get)
-	r.With(details).Get("/configuration/{mode}/{projectID}/{configID}", h.Get)
-	r.With(update).Put("/configuration/{projectID}/{configID}", h.Update)
-	r.With(update).Put("/configuration/{mode}/{projectID}/{configID}", h.Update)
-	r.With(remove).Delete("/configuration/{projectID}/{configID}", h.Delete)
-	r.With(remove).Delete("/configuration/{mode}/{projectID}/{configID}", h.Delete)
+	// The five row routes take the central branch of the guarded project
+	// settings (ADR-0059 R0.6b, project_settings_central.go): a caller who
+	// does not hold the permission in the project passes only for an
+	// allowlisted (route, configuration type) pair. Every other route here
+	// keeps the member gate alone.
+	const (
+		listPath     = "/configurations/{projectID}"
+		listModePath = "/configurations/{mode}/{projectID}"
+		rowPath      = "/configuration/{projectID}/{configID}"
+		rowModePath  = "/configuration/{mode}/{projectID}/{configID}"
+	)
+	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationListPermission)).Get(listPath, h.List)
+	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationListPermission)).Get(listModePath, h.List)
+	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationCreatePermission)).Post(listPath, h.Create)
+	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationCreatePermission)).Post(listModePath, h.Create)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationGetPermission)).Get(rowPath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationGetPermission)).Get(rowModePath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationUpdatePermission)).Put(rowPath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationUpdatePermission)).Put(rowModePath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationDeletePermission)).Delete(rowPath, h.Delete)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationDeletePermission)).Delete(rowModePath, h.Delete)
 	// The connection checks take the CREATE string. The reference declares no
 	// permission on either route, so this is a proposal, and it is the narrowest
 	// one that costs no caller a control: the button they serve sits on the

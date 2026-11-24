@@ -44,8 +44,9 @@
 //     when it is written. Creating, moving or deleting one needs every
 //     permission of the role in its project (CodePermissionNotHeld);
 //   - a central OPERATOR manages the members and roles of every project: that
-//     is the authority its central gate grants, and ADR-0059 keeps it (R0.9
-//     splits it out with its own roles). An operator usually holds no role in
+//     is the authority its central gate grants, and ADR-0059 keeps it (R0.6
+//     gives it the narrow name projects.members.manage, held by the built-in
+//     project_administrator role). An operator usually holds no role in
 //     the project, so the rule there is the effect on the caller: a membership
 //     write, a bulk invite or a write of role CONTENTS (the template, Apply to
 //     Projects, a project matrix, a rename) may not widen the caller's OWN set
@@ -394,12 +395,28 @@ func Widened(before, after map[int64]Set) (ProjectGain, bool) {
 	return ProjectGain{}, false
 }
 
-// SelfEscalation builds the CodeSelfEscalation refusal for a gain.
+// OperatorCommand is the process command an operator of the workload runs to
+// give an administration role without the console (ADR-0059 R0.12a).
+const OperatorCommand = "elitea-main admin-role"
+
+// The two ways in a CodeSelfEscalation refusal names (ADR-0059 R0.6a): a
+// member of the project who manages its members adds the caller, or an
+// operator runs OperatorCommand.
+const (
+	WayInProjectMember   = "project_member"
+	WayInOperatorCommand = "operator_command"
+)
+
+// SelfEscalation builds the CodeSelfEscalation refusal for a gain. Its body
+// names the two ways in, so the caller is not left at a dead end.
 func SelfEscalation(gain ProjectGain) *Refusal {
 	return &Refusal{
-		Code:        CodeSelfEscalation,
-		Message:     "this change would give you permissions that you do not hold",
+		Code: CodeSelfEscalation,
+		Message: "this change would give you permissions that you do not hold. " +
+			"To be given them, ask a member of the project who manages its members, " +
+			"or ask an operator of the deployment to run `" + OperatorCommand + "`",
 		Permissions: gain.Permissions,
 		ProjectID:   gain.ProjectID,
+		WaysIn:      []string{WayInProjectMember, WayInOperatorCommand},
 	}
 }
