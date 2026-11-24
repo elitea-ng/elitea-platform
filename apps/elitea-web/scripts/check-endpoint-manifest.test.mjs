@@ -977,7 +977,7 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 582 -> 583 (issue 2495, ADR-0059 R0.6a): administrationUserDelete, the Remove of the admin
 // console's Manage project member dialog. Like the other admin operations it is not in the manifest,
 // so MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 583;
+const GENERATED_OPERATION_COUNT = 586;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

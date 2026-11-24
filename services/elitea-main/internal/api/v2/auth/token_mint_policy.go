@@ -250,13 +250,20 @@ var errMintAdministrationUnknown = errors.New("the owner's administration permis
 // /api/v2/auth/ request; without the annotation the row says only
 // "POST /api/v2/auth/token/" with status 403.
 func writeTokenMintRefusal(w http.ResponseWriter, r *http.Request, refusal *tokenMintRefusal) {
+	writeTokenRefusal(w, r, TokenMintRefusedAuditAction, refusal)
+}
+
+// writeTokenRefusal answers 403 with refusal and annotates the request's
+// audit row with action: the one writer of every token refusal, the mint
+// rule's and the administration scope rule's (R1.3a).
+func writeTokenRefusal(w http.ResponseWriter, r *http.Request, action string, refusal *tokenMintRefusal) {
 	audit.Annotate(r.Context(), audit.Annotation{
-		Action:     TokenMintRefusedAuditAction,
+		Action:     action,
 		EntityType: "token",
 		EntityName: refusal.Code,
 	})
-	slog.WarnContext(r.Context(), "personal token mint refused by the credential-kind rule",
-		"code", refusal.Code, "credential_kind", string(refusal.CredentialKind),
+	slog.WarnContext(r.Context(), "personal token request refused",
+		"action", action, "code", refusal.Code, "credential_kind", string(refusal.CredentialKind),
 		"method", r.Method, "path", r.URL.Path)
 	writeTokenMintJSON(w, refusal)
 }

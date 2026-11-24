@@ -129,16 +129,45 @@ const (
 // maintenance bypass, and NOT a token scope.
 //
 // Token defaults to false so that a name becomes a token scope only by a
-// deliberate opt-in. Nothing reads the field yet: the scoped token (ADR-0059
-// decision 7, stories R1.1 and R1.2) opts rows in when it ships, and a row it
-// does not name stays refused, which is the safe failure.
+// deliberate opt-in: rows() opts in every name tokenScopeEligible admits
+// (ADR-0059 R1.3a), and a row it refuses stays refused, which is the safe
+// failure.
 func row(name string, area Area, class Class) Permission {
 	return Permission{Name: name, Area: area, Class: class, Grantable: GrantableAny}
 }
 
-// rows is the permission table. Every row other than the four set apart below
-// takes the defaults of row.
+// tokenScopeEligible is the opt-in of the token scopes (ADR-0059 decision 7,
+// "Token scopes", story R1.3a): which names a `scoped` personal access token
+// may carry. Two kinds of name are never a token scope (`token: never`):
+//
+//   - a seeded-only name: the global administrator's own permission
+//     admin.auth.users.super_admin, identity trust identity.sso.trust.manage
+//     ("the identity trust permission is never a token scope") and the four
+//     break-glass names, which belong to the elevation ledger and never to a
+//     standing credential;
+//   - a legacy name (runtime.plugins, configuration.governance): it ends on
+//     the sunset date, and a token scope would be a new grant of it, which
+//     R0.14a refuses to every role. A token names the narrow permission.
+//
+// Every other administration permission may be a scope. What a scope then
+// opens is still decided per action: the token rule of the action table
+// refuses a token on every action whose entry says `token: never`.
+func tokenScopeEligible(p Permission) bool {
+	return p.Grantable == GrantableAny && !p.Legacy
+}
+
+// rows is the permission table, with the token scopes opted in.
 func rows() []Permission {
+	table := tableRows()
+	for i := range table {
+		table[i].Token = tokenScopeEligible(table[i])
+	}
+	return table
+}
+
+// tableRows is the permission table before the token opt-in. Every row other
+// than the four set apart below takes the defaults of row.
+func tableRows() []Permission {
 	superAdmin := row(AdminAuthUsersSuperAdmin, AreaPeopleAccess, ClassWrite)
 	// The global administrator's own permission. Shared 0060 grants it to
 	// super_admin and the role policy refuses it to every other role, so only a
@@ -252,9 +281,9 @@ func seeded(name string, area Area, class Class, narrows ...string) Permission {
 	return p
 }
 
-// narrowRows are the 25 rows of shared 0261. None is a token scope (Token
-// false): the scoped token of R1.1 and R1.2 opts rows in, and identity trust
-// never is one. platform.maintenance.manage is the narrow name of the
+// narrowRows are the 25 rows of shared 0261. rows() opts the token scopes in
+// (tokenScopeEligible); identity trust and break-glass, seeded only, are
+// never one. platform.maintenance.manage is the narrow name of the
 // maintenance bypass: since R0.4b the bypass accepts it, so it carries
 // Maintenance, and a native session keeps it (NativeClient) as it keeps
 // runtime.plugins.

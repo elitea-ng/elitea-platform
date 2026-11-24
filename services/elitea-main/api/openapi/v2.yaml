@@ -19262,7 +19262,7 @@ components:
     # ---- Personal access tokens (issue 36, item 6) -----------------------------
     PersonalAccessToken:
       type: object
-      required: [id, uuid, expires, user_id, name, project_id, token]
+      required: [id, uuid, expires, user_id, name, project_id, token, admin_access, admin_scopes]
       properties:
         id:
           type: integer
@@ -19299,9 +19299,32 @@ components:
             THE FULL SIGNED VALUE ON THE CREATE RESPONSE, AND ONLY THERE. Every
             read masks it to `"..."` plus the last seven characters, which is a
             display hint and not a credential.
+        admin_access:
+          type: string
+          description: >
+            The token's administration access (ADR-0059 decision 7): `none`
+            (no administration permission, the default of a new token),
+            `scoped` (only `admin_scopes`, intersected with what the owner
+            holds at each request) or `inherit` (the owner's whole set; a
+            backfill value of the upgrade that ends on the sunset date and that
+            no request sets).
+        admin_scopes:
+          type: array
+          items: { type: string }
+          description: >
+            The administration permissions of a `scoped` token, sorted. Empty
+            for `none` and `inherit`. A scope the owner no longer holds stays
+            listed and opens nothing.
+        inherit_ends_on:
+          type: string
+          format: date
+          description: >
+            The date an `inherit` token ends (the sunset date of ADR-0059
+            decision 2). ABSENT while that date is not set, and for every other
+            access.
       description: >
-        NOTE(W2): internal/api/v2/auth/tokens.go:41-52 (the `Token` struct) and
-        :575-600 (presentToken, which decides whether `token` is revealed).
+        NOTE(W2): internal/api/v2/auth/tokens.go:42-66 (the `Token` struct) and
+        presentToken, which decides whether `token` is revealed.
 
     PersonalAccessTokenCreateRequest:
       type: object
@@ -19328,9 +19351,142 @@ components:
             number, a value the integer column cannot hold — is refused rather
             than falling back to unbound, because a caller that typed a project
             must not receive a key that bills somewhere else.
+        admin_access:
+          type: string
+          description: >
+            `none` (the default when absent) or `scoped`. `inherit` is a 400
+            (`invalid_admin_access`): no request sets it. `scoped` needs a
+            browser sign-in of the last few minutes and scopes inside the
+            caller's own administration set; see the 401 and 403 answers.
+        admin_scopes:
+          type: array
+          maxItems: 128
+          items: { type: string, minLength: 1, maxLength: 64 }
+          description: >
+            The administration permissions of a `scoped` token: between one
+            and the registry's count of names, de-duplicated and stored sorted.
+            Must be empty or absent unless `admin_access` is `scoped`
+            (`invalid_admin_scopes`).
       description: >
-        NOTE(W2): internal/api/v2/auth/tokens.go:360-368
-        (tokenCreateRequest) and :375-400 (resolveTokenProjectID).
+        NOTE(W2): internal/api/v2/auth/tokens.go (tokenCreateRequest,
+        resolveTokenProjectID) and token_admin_scopes.go
+        (parseTokenAdminAccess).
+
+    PersonalAccessTokenAdminScopesRequest:
+      type: object
+      required: [admin_access]
+      properties:
+        admin_access:
+          type: string
+          description: >
+            `none` drops every scope (no recent sign-in needed); `scoped` sets
+            exactly `admin_scopes`. `inherit` is a 400.
+        admin_scopes:
+          type: array
+          maxItems: 128
+          items: { type: string, minLength: 1, maxLength: 64 }
+          description: Required and not empty for `scoped`; empty or absent for `none`.
+      description: >
+        NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+        (tokenAdminScopesRequest, TokenSetAdminScopes).
+
+    PersonalAccessTokenScopeOption:
+      type: object
+      required: [name, area, class]
+      properties:
+        name:
+          type: string
+          description: The administration permission.
+        area:
+          type: string
+          description: >
+            Its console area (`people_access`, `projects`, `models_spend`,
+            `agents_governance`, `security` or `platform`).
+        class:
+          type: string
+          description: "`read`, `write` or `approve`."
+      description: >
+        NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+        (tokenScopeOption).
+
+    PersonalAccessTokenScopeOffer:
+      type: object
+      required: [settable, scopes]
+      properties:
+        settable:
+          type: boolean
+          description: >
+            False when the calling credential may set no administration scope
+            at all; `code` then says why.
+        code:
+          type: string
+          description: >
+            Present when `settable` is false:
+            `token_scopes_browser_session_required` (a token, a native device
+            session or a run token is calling), `token_scopes_sealed_session`,
+            `token_scopes_elevated` or `token_scopes_caller_unresolved`.
+        scopes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PersonalAccessTokenScopeOption'
+          description: >
+            The scopes the caller may give a token: its own administration
+            set, intersected with the registry's token scopes, sorted by name.
+            Empty for a caller who holds no administration permission.
+      description: >
+        NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+        (tokenScopeOffer, TokenAdminScopeOffer).
+
+    AdministrationAccessToken:
+      type: object
+      required: [id, name, expires, admin_access, admin_scopes, owner_id, owner_name, owner_email, owner_suspended]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+          nullable: true
+        expires:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null means the token never expires.
+        admin_access:
+          type: string
+          description: "`scoped` or `inherit`: a `none` token is not listed."
+        admin_scopes:
+          type: array
+          items: { type: string }
+          description: The scopes of a `scoped` token; empty for `inherit`.
+        inherit_ends_on:
+          type: string
+          format: date
+          description: The sunset date of an `inherit` token, absent while it is not set.
+        owner_id:
+          type: integer
+        owner_name:
+          type: string
+        owner_email:
+          type: string
+        owner_suspended:
+          type: boolean
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_tokens.go (accessToken). No
+        token value, no masked hint, no digest and no uuid.
+
+    AdministrationAccessTokens:
+      type: object
+      required: [total, rows]
+      properties:
+        total:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdministrationAccessToken'
+      description: >
+        NOTE(W2): internal/api/v2/admin/access_tokens.go (AccessTokens).
 
     TokenExpiration:
       type: object
@@ -25403,6 +25559,51 @@ paths:
                     source: bootstrap
                     source_ref: null
         '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /admin/access/tokens:
+    get:
+      operationId: listAdministrationAccessTokens
+      summary: List the personal access tokens with administration access
+      description: |
+        Every personal access token whose `admin_access` is not `none`
+        (ADR-0059 R1.3a), with its owner: `scoped` tokens with their scopes,
+        and `inherit` tokens with the date they end once the sunset date is
+        set. The Access page reads it.
+
+        NO SECRET: no token value, no masked hint, no digest and no uuid. A
+        row is named by its id.
+      tags: [admin]
+      responses:
+        '200':
+          description: The tokens with administration access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdministrationAccessTokens'
+              example:
+                total: 2
+                rows:
+                  - id: 31
+                    name: nightly-sync
+                    expires: '2027-02-01T00:00:00Z'
+                    admin_access: inherit
+                    admin_scopes: []
+                    owner_id: 11
+                    owner_name: Ada Admin
+                    owner_email: ada@example.com
+                    owner_suspended: false
+                  - id: 42
+                    name: usage-report
+                    expires: null
+                    admin_access: scoped
+                    admin_scopes: [access.roles.view, llm.usage.view]
+                    owner_id: 14
+                    owner_name: Sam Auditor
+                    owner_email: sam@example.com
+                    owner_suspended: false
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -46935,6 +47136,34 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/PersonalAccessToken'
+              example:
+                - id: 31
+                  uuid: 0b8f6c3e-5d1a-4c2b-9e7f-1a2b3c4d5e6f
+                  expires: null
+                  user_id: 11
+                  name: nightly-sync
+                  project_id: null
+                  token: '...k3Vq9Zs'
+                  admin_access: inherit
+                  admin_scopes: []
+                - id: 42
+                  uuid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
+                  expires: '2027-02-01T00:00:00Z'
+                  user_id: 11
+                  name: usage-report
+                  project_id: null
+                  token: '...Qm4Rt2w'
+                  admin_access: scoped
+                  admin_scopes: [access.roles.view, llm.usage.view]
+                - id: 43
+                  uuid: 9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b
+                  expires: '2026-12-24T00:00:00Z'
+                  user_id: 11
+                  name: ci
+                  project_id: 5
+                  token: '...Lp8Hc1x'
+                  admin_access: none
+                  admin_scopes: []
         '401': { $ref: '#/components/responses/401' }
         '503':
           description: The token service is not configured on this deployment.
@@ -46972,6 +47201,17 @@ paths:
         hold) is refused rather than silently falling back to unbound, because
         a caller that typed a project must not receive a key that bills
         somewhere else.
+
+        ADMINISTRATION SCOPES (ADR-0059 R1.3a,
+        internal/api/v2/auth/token_admin_scopes.go). A token is created
+        `admin_access: none` unless the body asks for `scoped`. Scopes are set
+        only from a browser session of the kind `session` or `form` (never a
+        sealed session, never under an elevation), only inside the CALLING
+        credential's own administration set, never a permission the registry
+        marks `token: never` (identity trust, the global administrator's own
+        permission, break-glass and the two legacy names), and only after a
+        sign-in within the deployment's limit (15 minutes by default). Where a
+        native device session may mint at all, its token is `none`.
       tags: [auth]
       requestBody:
         required: true
@@ -46979,6 +47219,11 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/PersonalAccessTokenCreateRequest'
+            example:
+              name: usage-report
+              expires: { measure: days, value: 30 }
+              admin_access: scoped
+              admin_scopes: [access.roles.view, llm.usage.view]
       responses:
         '200':
           description: The new token, with its secret shown once
@@ -46986,17 +47231,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PersonalAccessToken'
+              example:
+                id: 42
+                uuid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
+                expires: '2027-02-01T00:00:00Z'
+                user_id: 11
+                name: usage-report
+                project_id: null
+                token: eyJhbGciOiJIUzUxMiJ9.eyJ1dWlkIjoiN2MxZDJlM2YifQ.Qm4Rt2w
+                admin_access: scoped
+                admin_scopes: [access.roles.view, llm.usage.view]
         '400':
           description: >
             The body is not one complete JSON document, `name` is absent or too
-            long, `expires` names no value or an unknown measure, or
+            long, `expires` names no value or an unknown measure,
             `project_id` is not a positive integer (`code` is
-            `invalid_project_id`).
+            `invalid_project_id`), `admin_access` is not `none` or `scoped`
+            (`invalid_admin_access`), or `admin_scopes` does not fit it
+            (`invalid_admin_scopes`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '401': { $ref: '#/components/responses/401' }
+        '401':
+          description: >
+            Not signed in, or, for `admin_access: scoped`, the sign-in is older
+            than the deployment's limit: `code` `reauthentication_required`.
+            The client starts a limited sign-in and retries:
+            `/auth/oidc/login?max_age=<limit>&target_to=<path>`,
+            `/auth/saml/login?max_age=<limit>&target_to=<path>` or
+            `/auth/form/reauthenticate?target_to=<path>`, by the method header.
+          headers:
+            X-Elitea-Reauthentication-Max-Age:
+              schema: { type: integer }
+              description: The limit in whole seconds, on `reauthentication_required` only.
+            X-Elitea-Reauthentication-Method:
+              schema: { type: string }
+              description: >
+                `oidc`, `saml` or `form`: the sign-in that renews this session.
+                Absent when the caller has no browser re-entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '403':
           description: >
             The token owner is not a member of the requested project. `code` is
@@ -47015,6 +47292,137 @@ paths:
             before the body is read, except the binding one, which runs before
             the other fields are validated. Each refusal writes an audit row
             with action `token.mint_refused` and the code as its entity name.
+            The administration scopes are refused with
+            `token_scopes_browser_session_required`,
+            `token_scopes_sealed_session`, `token_scopes_elevated`,
+            `token_scopes_caller_unresolved`, `token_scope_not_allowed` (a
+            `token: never` permission; `error.scopes` names it) or
+            `token_scope_not_held` (outside the caller's own set;
+            `error.scopes` names them).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: The token service is not configured on this deployment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/token/admin_scopes:
+    get:
+      operationId: getPersonalTokenAdminScopeOffer
+      summary: The administration scopes the caller may give a token
+      description: |
+        NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+        (TokenAdminScopeOffer).
+
+        The calling credential's own administration set, intersected with the
+        registry's token scopes (ADR-0059 R1.3a). The token screen offers
+        these and nothing else (R1.3b); the create and the scope change check
+        again. A credential that may set no scope (a token, a native device
+        session, a run token, a sealed or an elevated session) answers
+        `settable: false` with its `code` and no scopes. This read needs no
+        recent sign-in; setting the scopes does.
+      tags: [auth]
+      responses:
+        '200':
+          description: The scopes on offer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalAccessTokenScopeOffer'
+              example:
+                settable: true
+                scopes:
+                  - { name: access.roles.view, area: people_access, class: read }
+                  - { name: admin.auth.users, area: people_access, class: write }
+                  - { name: llm.usage.view, area: models_spend, class: read }
+        '401': { $ref: '#/components/responses/401' }
+        '500': { $ref: '#/components/responses/500' }
+
+  /auth/token/{token_uuid}/admin_scopes:
+    parameters:
+      - name: token_uuid
+        in: path
+        required: true
+        schema: { type: string }
+        description: The token's UUID, in the canonical hyphenated form.
+    put:
+      operationId: setPersonalTokenAdminScopes
+      summary: Replace the administration scopes of one of the caller's tokens
+      description: |
+        NOTE(W2): internal/api/v2/auth/token_admin_scopes.go
+        (TokenSetAdminScopes).
+
+        `scoped` sets exactly `admin_scopes`, under the rules of the create
+        (a browser session of the kind `session` or `form`, no elevation,
+        scopes inside the caller's own set and never `token: never`, a recent
+        sign-in). `none` drops every scope and needs no recent sign-in. This
+        is how an `inherit` token moves to `scoped` or `none`; nothing moves a
+        token to `inherit`. Each change appends one `admin.access.changed`
+        security audit event (kind `token_scopes`); the same scopes again
+        change nothing and append nothing. A refusal writes an audit row with
+        action `token.admin_scopes_refused`.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PersonalAccessTokenAdminScopesRequest'
+            example:
+              admin_access: scoped
+              admin_scopes: [access.roles.view]
+      responses:
+        '200':
+          description: The token, masked, with its new access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PersonalAccessToken'
+              example:
+                id: 31
+                uuid: 0b8f6c3e-5d1a-4c2b-9e7f-1a2b3c4d5e6f
+                expires: null
+                user_id: 11
+                name: nightly-sync
+                project_id: null
+                token: '...k3Vq9Zs'
+                admin_access: scoped
+                admin_scopes: [access.roles.view]
+        '400':
+          description: >
+            The UUID is malformed or names no token this caller owns, the body
+            is not one JSON document, or `admin_access` is absent or not
+            `none` or `scoped` (`invalid_admin_access`), or `admin_scopes`
+            does not fit it (`invalid_admin_scopes`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: >
+            Not signed in, or the sign-in is older than the limit for a
+            `scoped` request (`reauthentication_required`, with the
+            `X-Elitea-Reauthentication-Max-Age` and
+            `X-Elitea-Reauthentication-Method` headers of the create).
+          headers:
+            X-Elitea-Reauthentication-Max-Age:
+              schema: { type: integer }
+              description: The limit in whole seconds.
+            X-Elitea-Reauthentication-Method:
+              schema: { type: string }
+              description: "`oidc`, `saml` or `form`."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: >
+            The scope rule refused the request: one of the `token_scope*`
+            codes of the create.
           content:
             application/json:
               schema:

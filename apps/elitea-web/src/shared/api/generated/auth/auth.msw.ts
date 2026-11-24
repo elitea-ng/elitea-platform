@@ -50,6 +50,7 @@ import type {
   NativeTokenResponse,
   Permission,
   PersonalAccessToken,
+  PersonalAccessTokenScopeOffer,
 } from "../model";
 
 export const getExchangeNativeTokenResponseMock = (
@@ -224,50 +225,76 @@ export const getAdministrationPermissionListResponseMock = (): Permission[] =>
     enabled: faker.datatype.boolean(),
   }));
 
-export const getListPersonalTokensResponseMock = (): PersonalAccessToken[] =>
-  Array.from(
-    { length: faker.number.int({ min: 1, max: 10 }) },
-    (_, i) => i + 1,
-  ).map(() => ({
-    id: faker.number.int(),
-    uuid: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      null,
-    ]),
-    expires: faker.helpers.arrayElement([
-      faker.date.past().toISOString().slice(0, 19) + "Z",
-      null,
-    ]),
-    user_id: faker.number.int(),
-    name: faker.helpers.arrayElement([
-      faker.string.alpha({ length: { min: 10, max: 20 } }),
-      null,
-    ]),
-    project_id: faker.helpers.arrayElement([faker.number.int(), null]),
-    token: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  }));
+export const getListPersonalTokensResponseMock = (): PersonalAccessToken[] => [
+  {
+    id: 31,
+    uuid: "0b8f6c3e-5d1a-4c2b-9e7f-1a2b3c4d5e6f",
+    expires: null,
+    user_id: 11,
+    name: "nightly-sync",
+    project_id: null,
+    token: "...k3Vq9Zs",
+    admin_access: "inherit",
+    admin_scopes: [],
+  },
+  {
+    id: 42,
+    uuid: "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+    expires: "2027-02-01T00:00:00Z",
+    user_id: 11,
+    name: "usage-report",
+    project_id: null,
+    token: "...Qm4Rt2w",
+    admin_access: "scoped",
+    admin_scopes: ["access.roles.view", "llm.usage.view"],
+  },
+  {
+    id: 43,
+    uuid: "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+    expires: "2026-12-24T00:00:00Z",
+    user_id: 11,
+    name: "ci",
+    project_id: 5,
+    token: "...Lp8Hc1x",
+    admin_access: "none",
+    admin_scopes: [],
+  },
+];
 
-export const getCreatePersonalTokenResponseMock = (
-  overrideResponse: Partial<Extract<PersonalAccessToken, object>> = {},
-): PersonalAccessToken => ({
-  id: faker.number.int(),
-  uuid: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    null,
-  ]),
-  expires: faker.helpers.arrayElement([
-    faker.date.past().toISOString().slice(0, 19) + "Z",
-    null,
-  ]),
-  user_id: faker.number.int(),
-  name: faker.helpers.arrayElement([
-    faker.string.alpha({ length: { min: 10, max: 20 } }),
-    null,
-  ]),
-  project_id: faker.helpers.arrayElement([faker.number.int(), null]),
-  token: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  ...overrideResponse,
+export const getCreatePersonalTokenResponseMock = (): PersonalAccessToken => ({
+  id: 42,
+  uuid: "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+  expires: "2027-02-01T00:00:00Z",
+  user_id: 11,
+  name: "usage-report",
+  project_id: null,
+  token: "eyJhbGciOiJIUzUxMiJ9.eyJ1dWlkIjoiN2MxZDJlM2YifQ.Qm4Rt2w",
+  admin_access: "scoped",
+  admin_scopes: ["access.roles.view", "llm.usage.view"],
 });
+
+export const getGetPersonalTokenAdminScopeOfferResponseMock =
+  (): PersonalAccessTokenScopeOffer => ({
+    settable: true,
+    scopes: [
+      { name: "access.roles.view", area: "people_access", class: "read" },
+      { name: "admin.auth.users", area: "people_access", class: "write" },
+      { name: "llm.usage.view", area: "models_spend", class: "read" },
+    ],
+  });
+
+export const getSetPersonalTokenAdminScopesResponseMock =
+  (): PersonalAccessToken => ({
+    id: 31,
+    uuid: "0b8f6c3e-5d1a-4c2b-9e7f-1a2b3c4d5e6f",
+    expires: null,
+    user_id: 11,
+    name: "nightly-sync",
+    project_id: null,
+    token: "...k3Vq9Zs",
+    admin_access: "scoped",
+    admin_scopes: ["access.roles.view"],
+  });
 
 export const getGetPersonalTokenResponseMock = (
   overrideResponse: Partial<Extract<PersonalAccessToken, object>> = {},
@@ -288,6 +315,15 @@ export const getGetPersonalTokenResponseMock = (
   ]),
   project_id: faker.helpers.arrayElement([faker.number.int(), null]),
   token: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  admin_access: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  admin_scopes: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  inherit_ends_on: faker.helpers.arrayElement([
+    faker.date.past().toISOString().slice(0, 10),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -513,6 +549,59 @@ export const getCreatePersonalTokenMockHandler = (
   );
 };
 
+export const getGetPersonalTokenAdminScopeOfferMockHandler = (
+  overrideResponse?:
+    | PersonalAccessTokenScopeOffer
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) =>
+        Promise<PersonalAccessTokenScopeOffer> | PersonalAccessTokenScopeOffer),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/auth/token/admin_scopes",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetPersonalTokenAdminScopeOfferResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSetPersonalTokenAdminScopesMockHandler = (
+  overrideResponse?:
+    | PersonalAccessToken
+    | ((
+        info: Parameters<Parameters<typeof http.put>[1]>[0],
+      ) => Promise<PersonalAccessToken> | PersonalAccessToken),
+  options?: RequestHandlerOptions,
+) => {
+  return http.put(
+    "*/auth/token/:tokenUuid/admin_scopes",
+    async (info: Parameters<Parameters<typeof http.put>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSetPersonalTokenAdminScopesResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetPersonalTokenMockHandler = (
   overrideResponse?:
     | PersonalAccessToken
@@ -570,6 +659,8 @@ export const getAuthMock = () => [
   getAdministrationPermissionListMockHandler(),
   getListPersonalTokensMockHandler(),
   getCreatePersonalTokenMockHandler(),
+  getGetPersonalTokenAdminScopeOfferMockHandler(),
+  getSetPersonalTokenAdminScopesMockHandler(),
   getGetPersonalTokenMockHandler(),
   getDeletePersonalTokenMockHandler(),
 ];
