@@ -37,6 +37,19 @@ One row of `elitea_auth.browser_sessions`. The row holds the user id, the
 display address, the provider that created it, the SAML session index, the
 three timestamps, the idle timeout it was issued under, and `revoked_at`.
 
+**The reference is what an elevation binds to.** `ref` (shared 0200; a Form
+session's `ref`, shared 0266, comes from the same sequence) is the non-secret
+name of the session that the principal carries as `BrowserSessionRef`. A
+break-glass elevation (ADR-0059 decision 5) is a row of
+`elitea_auth.admin_elevations` (shared 0269) that stores that reference: it
+applies to that one session, never to another session of the same person. The
+ledger has no foreign key to `browser_sessions`, because the sweeper deletes
+old session rows and the ledger must outlive them. It is append-only by
+trigger except its end and review columns, and access is the predicate
+`started_at IS NOT NULL AND ended_at IS NULL AND expires_at > now()`, so an
+elevation stops at its expiry with no job running. The writers are
+`adminaccess.StartElevation` and `adminaccess.EndElevation`.
+
 **The cookie carries the identifier and nothing else.** The name is unchanged —
 `elitea_session` — and the value is `s1.` followed by 32 random bytes in
 unpadded base64url. `HttpOnly`, `Secure` (unless `COOKIE_SECURE=false`),
