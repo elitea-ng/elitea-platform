@@ -19,7 +19,7 @@ package main
 //	elitea-main admin-role list
 //	elitea-main admin-role grant  USER ROLE [--reason TEXT]
 //	elitea-main admin-role revoke USER ROLE [--reason TEXT] [--override-last-administrator]
-//	elitea-main admin-role reset  ROLE
+//	elitea-main admin-role reset  ROLE [--override-last-administrator]
 //
 // USER is a numeric user id or an e-mail address. ROLE is an administration
 // role name. Every write takes adminaccess.LockRoleWrites first, like every
@@ -45,6 +45,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -87,7 +88,7 @@ type adminRoleRequest struct {
 	user   string
 	role   string
 	reason string
-	// override is --override-last-administrator (revoke only).
+	// override is --override-last-administrator (revoke and reset).
 	override bool
 }
 
@@ -117,7 +118,7 @@ func adminRoleUsage(w io.Writer) {
   elitea-main %[1]s list
   elitea-main %[1]s grant  USER ROLE [--reason TEXT]
   elitea-main %[1]s revoke USER ROLE [--reason TEXT] [--override-last-administrator]
-  elitea-main %[1]s reset  ROLE
+  elitea-main %[1]s reset  ROLE [--override-last-administrator]
 USER is a numeric user id or an e-mail address; ROLE an administration role.
 Reads DATABASE_URL. Exit codes: 0 done, 1 failed (nothing changed),
 2 invalid invocation, 3 refused by a rule.
@@ -145,16 +146,23 @@ func parseAdminRoleArgs(args []string, stderr io.Writer) (adminRoleRequest, bool
 	flags.SetOutput(stderr)
 	reason := flags.String("reason", "", "grant and revoke: why, recorded in the grant history")
 	override := flags.Bool("override-last-administrator", false,
-		"revoke: remove the role even from the last administrator of the deployment")
+		"revoke and reset: go ahead even when the change removes the last administrator")
 	flags.Usage = func() { adminRoleUsage(stderr) }
 
 	var values []string
 	rest := args[1:]
 	for {
+		before := len(rest)
 		if err := flags.Parse(rest); err != nil {
 			return adminRoleRequest{}, false
 		}
 		if flags.NArg() == 0 {
+			break
+		}
+		// `--` ends the flags: what follows is positional, as with flag.Parse.
+		consumed := rest[:before-flags.NArg()]
+		if len(consumed) > 0 && consumed[len(consumed)-1] == "--" {
+			values = append(values, flags.Args()...)
 			break
 		}
 		values = append(values, flags.Arg(0))
@@ -173,11 +181,11 @@ func parseAdminRoleArgs(args []string, stderr io.Writer) (adminRoleRequest, bool
 		req.role = strings.TrimSpace(values[0])
 	}
 	switch {
-	case req.override && req.sub != adminRoleRevoke:
-		_, _ = fmt.Fprintln(stderr, "--override-last-administrator only applies to revoke")
+	case req.override && req.sub != adminRoleRevoke && req.sub != adminRoleReset:
+		_, _ = fmt.Fprintln(stderr, "--override-last-administrator only applies to revoke and reset")
 	case req.reason != "" && req.sub != adminRoleGrant && req.sub != adminRoleRevoke:
 		_, _ = fmt.Fprintln(stderr, "--reason only applies to grant and revoke")
-	case len(req.reason) > maxAdminRoleReason || strings.IndexFunc(req.reason, unicode.IsControl) >= 0:
+	case utf8.RuneCountInString(req.reason) > maxAdminRoleReason || strings.IndexFunc(req.reason, unicode.IsControl) >= 0:
 		_, _ = fmt.Fprintf(stderr, "--reason is at most %d characters, on one line\n", maxAdminRoleReason)
 	case (req.sub == adminRoleGrant || req.sub == adminRoleRevoke) && req.user == "":
 		_, _ = fmt.Fprintln(stderr, "USER is required")
@@ -211,6 +219,12 @@ func runAdminRoleWith(
 		return adminRoleExitFailed
 	}
 	defer pool.Close()
+	// pgxpool.New does not connect; an unreachable database would otherwise
+	// fail on the first query, with an error that names the host and user.
+	if err := pool.Ping(ctx); err != nil {
+		_, _ = fmt.Fprintln(stderr, "connect to the platform database (DATABASE_URL) failed")
+		return adminRoleExitFailed
+	}
 
 	var lines []string
 	switch req.sub {
@@ -423,8 +437,9 @@ func adminRoleRevokeTx(ctx context.Context, tx pgx.Tx, req adminRoleRequest) ([]
 	severity, reasons := adminaccess.SeverityNotice, []string(nil)
 	if refusal != nil {
 		if !req.override {
-			return nil, refusedError("%s is the last administrator of the deployment; grant a successor first "+
-				"(%s USER ROLE), or repeat with --override-last-administrator", user.label(), adminaccess.SuccessorCommand)
+			return nil, refusedError("%s is the last %s; grant a successor first "+
+				"(%s USER ROLE), or repeat with --override-last-administrator",
+				user.label(), lostLevel(ctx, tx), adminaccess.SuccessorCommand)
 		}
 		severity, reasons = adminaccess.SeverityCritical, []string{"override:last_administrator"}
 	}
@@ -443,9 +458,21 @@ func adminRoleRevokeTx(ctx context.Context, tx pgx.Tx, req adminRoleRequest) ([]
 	lines := []string{fmt.Sprintf("revoked %s from %s; history row %d; security audit event %s",
 		req.role, user.label(), historyID, record.EventID)}
 	if refusal != nil {
-		lines = append(lines, "warning: the deployment now has no administrator (--override-last-administrator)")
+		lines = append(lines, "warning: the deployment now has no "+lostLevel(ctx, tx)+" (--override-last-administrator)")
 	}
 	return lines, nil
+}
+
+// lostLevel names what a change the rule refused removes, measured in its own
+// transaction after the change: the last administrator at all, or the last
+// holder of the permission while an `admin` remains.
+func lostLevel(ctx context.Context, tx pgx.Tx) string {
+	after, err := adminaccess.CountAdministrators(ctx, tx)
+	if err != nil || !after.Protected() {
+		return "administrator"
+	}
+	return "holder of " + adminaccess.SuperAdminPermission + " (global administrator; an " +
+		adminaccess.RoleAdmin + " remains)"
 }
 
 /* ── reset ─────────────────────────────────────────────────────────────── */
@@ -496,6 +523,13 @@ func adminRoleResetTx(ctx context.Context, tx pgx.Tx, req adminRoleRequest) ([]s
 	if err := requireCurrentBinary(ctx, tx); err != nil {
 		return nil, err
 	}
+	// A damaged set can hold admin.auth.users.super_admin (a legacy edit of
+	// `admin`): taking it away can remove the last administrator, so the
+	// rule applies to a reset too.
+	guard, err := adminaccess.BeginLastAdministratorGuard(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 
 	rows, err := tx.Query(ctx, `
 SELECT permission FROM public.auth_core__role_permission
@@ -539,10 +573,22 @@ DELETE FROM public.auth_core__role_permission WHERE role_id = $1 AND permission 
 			return nil, fmt.Errorf("remove the extra permissions: %w", err)
 		}
 	}
+	refusal, err := guard.Check(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	var reasons []string
+	if refusal != nil {
+		if !req.override {
+			return nil, refusedError("the reset takes a permission that makes the last %s; grant a successor first, "+
+				"or repeat with --override-last-administrator", lostLevel(ctx, tx))
+		}
+		reasons = []string{"override:last_administrator"}
+	}
 	record, err := adminaccess.AppendAccessEvent(ctx, tx, adminRoleAuditSource, adminaccess.AccessEvent{
 		Action: adminaccess.AccessActionRoleSetReset, Source: rolegrants.SourceOperator,
 		PrincipalRef: adminRolePrincipal, Role: req.role,
-		Before: before, After: after, Severity: adminaccess.SeverityCritical,
+		Before: before, After: after, Severity: adminaccess.SeverityCritical, Reasons: reasons,
 	})
 	if err != nil {
 		return nil, err

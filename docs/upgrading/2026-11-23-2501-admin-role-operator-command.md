@@ -12,7 +12,7 @@ It runs inside the main workload (`kubectl -n <ns> exec deploy/elitea-main --
 /elitea-main admin-role ...`), reads `DATABASE_URL` and is not reachable over
 HTTP or gRPC. Each change takes the role-writes lock, writes a grant history
 record with the source `operator` and a security audit event with the source
-`operator`; `reset` and `revoke --override-last-administrator` are
+`operator`; `reset` and every use of `--override-last-administrator` are
 `critical`. Exit codes: 0 done, 1 failed, 2 invalid invocation, 3 refused by a
 rule.
 

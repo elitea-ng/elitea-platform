@@ -17,7 +17,8 @@ adopts the account with `active: false`, or `DELETE`) of the last
 administrator answers a SCIM error with status `409`. The account stays
 active and keeps its roles, but its browser sessions, device sessions and
 personal access tokens are revoked in the same transaction, and one `critical`
-security audit event (`admin.access.deprovision_refused`) is written. The
+security audit event (`admin.access.deprovision_refused`) is written (a
+retry that finds nothing left to end writes none). The
 organisation said that the person left, so the access ends.
 
 **Who is affected.** Automation that demotes, suspends or deletes the only

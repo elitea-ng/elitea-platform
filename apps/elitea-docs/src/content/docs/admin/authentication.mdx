@@ -436,7 +436,7 @@ The [last administrator](/admin/users-and-roles#the-last-administrator) of the d
 
 - the account stays active and keeps its roles, so the deployment keeps an administrator on record;
 - the person's browser sessions, device sessions and personal access tokens are revoked at once: the next request with any of them is refused;
-- one `critical` security audit event is written (action `admin.access.deprovision_refused`), and the Audit Trail records `role.last_administrator_refused`;
+- one `critical` security audit event is written (action `admin.access.deprovision_refused`), and the Audit Trail records `role.last_administrator_refused`. A retry that finds no session or token left to end writes no second critical event; one that ends a new sign-in does;
 - the identity provider gets a SCIM error with status `409` that says to give a successor the role.
 
 Then give someone else the role: from the console of another administrator, or, when there is none, with [`elitea-main admin-role grant`](/deployment/operations#administrative-roles-from-the-command-line). The next provisioning cycle repeats the deactivation. While a second administrator exists, it is refused as for any administrator (above): remove the person's role, and the cycle after that deactivates the account.

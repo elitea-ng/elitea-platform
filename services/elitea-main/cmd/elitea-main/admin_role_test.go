@@ -32,7 +32,9 @@ func TestAdminRoleRefusesBadInvocationsBeforeConnecting(t *testing.T) {
 		"reset without a role":     {[]string{"reset"}, "reset takes 1 argument(s), got 0"},
 		"list with an argument":    {[]string{"list", "admin"}, "list takes 0 argument(s), got 1"},
 		"override on grant":        {[]string{"grant", "7", "admin", "--override-last-administrator"}, "only applies to revoke"},
-		"override on reset":        {[]string{"reset", "admin", "--override-last-administrator"}, "only applies to revoke"},
+		"override on list":         {[]string{"list", "--override-last-administrator"}, "only applies to revoke and reset"},
+		"positional after --":      {[]string{"grant", "--", "a@example.com", "admin", "--reason", "x"}, "grant takes 2 argument(s), got 4"},
+		"reason too long in runes": {[]string{"grant", "7", "admin", "--reason", strings.Repeat("é", 501)}, "at most 500"},
 		"reason on reset":          {[]string{"reset", "admin", "--reason", "x"}, "--reason only applies"},
 		"reason on two lines":      {[]string{"grant", "7", "admin", "--reason", "a\nb"}, "on one line"},
 		"reason too long":          {[]string{"grant", "7", "admin", "--reason", strings.Repeat("x", 501)}, "at most 500"},
@@ -78,6 +80,14 @@ func TestAdminRoleAcceptsFlagsAnywhere(t *testing.T) {
 		}
 	}
 	var stderr bytes.Buffer
+	// A reason of 500 non-ASCII characters is within the limit (characters, not bytes).
+	if _, ok := parseAdminRoleArgs([]string{"grant", "7", "admin", "--reason", strings.Repeat("é", 500)}, &stderr); !ok {
+		t.Fatalf("a 500-character reason was refused: %s", stderr.String())
+	}
+	if req, ok := parseAdminRoleArgs([]string{"grant", "--", "a@example.com", "admin"}, &stderr); !ok ||
+		req.user != "a@example.com" || req.role != "admin" {
+		t.Fatalf("-- refused: %+v %s", req, stderr.String())
+	}
 	if req, ok := parseAdminRoleArgs([]string{"list"}, &stderr); !ok || req.sub != adminRoleList {
 		t.Fatalf("list refused: %s", stderr.String())
 	}

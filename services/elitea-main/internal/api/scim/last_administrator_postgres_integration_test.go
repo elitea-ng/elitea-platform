@@ -227,13 +227,30 @@ func TestASCIMDeactivationOfTheLastAdministratorEndsTheAccessAndKeepsTheAccount(
 		t.Fatalf("the event must be critical: %s", encoded)
 	}
 
-	// SCIM DELETE is a deactivation, and is refused the same way (a second
-	// event: each refusal ended the access again).
+	// SCIM DELETE is a deactivation, and is refused the same way. The retry
+	// finds nothing live left to end, so it writes no second critical event.
 	request := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/Users/%d", id), nil)
 	deleted := httptest.NewRecorder()
 	router.ServeHTTP(deleted, request)
 	if deleted.Code != http.StatusConflict {
 		t.Fatalf("DELETE status = %d, want 409 (body %s)", deleted.Code, deleted.Body.String())
+	}
+	if events := deprovisionEvents(t, pool, id); len(events) != 1 {
+		t.Fatalf("a retry with nothing left to end wrote an event: %d events", len(events))
+	}
+	// A new sign-in after the refusal is ended by the next retry, with a
+	// new event.
+	if _, err := sessions.Create(t.Context(), browsersession.NewSession{
+		UserID: int64(id), Email: "r011-scim-root@corp.example", Provider: "oidc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retried := scimPatch(t, router, id, map[string]any{"op": "replace", "path": "active", "value": false})
+	if retried.Code != http.StatusConflict {
+		t.Fatalf("retry status = %d, want 409", retried.Code)
+	}
+	if events := deprovisionEvents(t, pool, id); len(events) != 2 {
+		t.Fatalf("a retry that ended a new session must write its event: %d events", len(events))
 	}
 }
 

@@ -227,6 +227,28 @@ SELECT id, $1 FROM public.auth_core__role WHERE mode = 'administration' AND name
 	runAdminRoleAgainst(t, dsn, "reset", "no_such_role").expect(t, adminRoleExitUsage, `no administration role "no_such_role"`)
 }
 
+// A reset that takes admin.auth.users.super_admin from a damaged `admin` set
+// can remove the last administrator, so it needs the override like a revoke.
+func TestAdminRoleResetHonoursTheLastAdministratorRule(t *testing.T) {
+	pool, dsn := newMigrateTestDatabase(t)
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO public.auth_core__role_permission (role_id, permission)
+SELECT id, $1 FROM public.auth_core__role WHERE mode = 'administration' AND name = 'admin'`,
+		adminaccess.SuperAdminPermission); err != nil {
+		t.Fatal(err)
+	}
+	adminRoleAccount(t, pool, "legacy-admin@corp.example")
+	runAdminRoleAgainst(t, dsn, "grant", "legacy-admin@corp.example", "admin").expect(t, adminRoleExitOK, "granted")
+
+	runAdminRoleAgainst(t, dsn, "reset", "admin").expect(t, adminRoleExitRefused, "--override-last-administrator")
+	runAdminRoleAgainst(t, dsn, "reset", "admin", "--override-last-administrator").
+		expect(t, adminRoleExitOK, "admin: removed "+adminaccess.SuperAdminPermission)
+	events := accessEvents(t, pool, adminaccess.AccessActionRoleSetReset)
+	if len(events) != 1 || !slices.Contains(events[0], "override:last_administrator") {
+		t.Fatalf("events %v, want one reset with the override", events)
+	}
+}
+
 // A binary older than the database refuses a reset: its registry could lack
 // a permission that the newer release granted.
 func TestAdminRoleResetRefusesABinaryOlderThanTheDatabase(t *testing.T) {

@@ -17,7 +17,8 @@ package scimdirectory
 //     session cookie and its token are refused at the next request;
 //   - its sealed credentials are revoked (revokeSealedCredentials, a hook
 //     until story R2.11, issue 2525, adds the table);
-//   - one `critical` security audit event is written.
+//   - one `critical` security audit event is written, when the refusal ended
+//     live access (a retry that finds nothing left to end writes none).
 //
 // The client gets a SCIM error with status 409 that names the operator
 // command for a successor.
@@ -42,7 +43,8 @@ var ErrLastAdministrator = errors.New("scimdirectory: the account is the last ad
 // administrator, after its access was ended.
 type LastAdministratorError struct {
 	UserID int
-	// AuditEventID is the id of the critical security audit event.
+	// AuditEventID is the id of the critical security audit event; empty
+	// when the refusal found no live access left to end (a retry).
 	AuditEventID string
 }
 
@@ -68,12 +70,37 @@ func refuseLastAdministratorDeactivation(ctx context.Context, tx pgx.Tx, id int)
 	if err != nil {
 		return err
 	}
+	// A platform principal (system@centry.user on a legacy-backed database
+	// holds the permission through `system`) is never managed by SCIM:
+	// guardTarget refuses it next, and its sessions and tokens are not the
+	// directory's to end.
+	var email string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(email, '') FROM auth_core__user WHERE id = $1`, id).Scan(&email); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // guardTarget answers ErrNotFound
+		}
+		return err
+	}
+	if IsReservedAddress(email) {
+		return nil
+	}
 	refusal, err := guard.CheckWithout(ctx, tx, int64(id))
 	if err != nil {
 		return err
 	}
 	if refusal == nil {
 		return nil
+	}
+	// What is still live, before it is ended. An identity provider retries a
+	// refused deprovisioning every cycle; a retry that finds nothing left to
+	// end writes no second critical event, so the chain records each time
+	// access was actually ended rather than each retry.
+	var live int64
+	if err := tx.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM elitea_auth.native_sessions WHERE user_id = $1 AND revoked_at IS NULL)
+     + (SELECT count(*) FROM elitea_auth.browser_sessions WHERE user_id = $1 AND revoked_at IS NULL)
+     + (SELECT count(*) FROM public.auth_core__token WHERE user_id = $1)`, id).Scan(&live); err != nil {
+		return fmt.Errorf("scimdirectory: read the live access of the last administrator: %w", err)
 	}
 	if err := revokeOnDeactivation(ctx, tx, id); err != nil {
 		return err
@@ -83,6 +110,13 @@ func refuseLastAdministratorDeactivation(ctx context.Context, tx pgx.Tx, id int)
 	}
 	if err := revokeSealedCredentials(ctx, tx, id); err != nil {
 		return err
+	}
+	refused := &LastAdministratorError{UserID: id}
+	if live == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return refused
 	}
 	record, err := adminaccess.AppendAccessEvent(ctx, tx, auditSource, adminaccess.AccessEvent{
 		Action:        adminaccess.AccessActionDeprovisionRefused,
@@ -101,7 +135,8 @@ func refuseLastAdministratorDeactivation(ctx context.Context, tx pgx.Tx, id int)
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	return &LastAdministratorError{UserID: id, AuditEventID: record.EventID}
+	refused.AuditEventID = record.EventID
+	return refused
 }
 
 // revokeSealedCredentials is the hook for the sealed credentials of story

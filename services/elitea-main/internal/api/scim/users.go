@@ -469,16 +469,19 @@ const lastAdministratorDetail = "SCIM deprovisioning refused: this account is th
 // account's access and written the critical security audit event; the
 // request's audit row says why the account is still there.
 func (h *Handler) writeLastAdministrator(w http.ResponseWriter, r *http.Request, id int, err error, operation string) {
+	var refused *scimdirectory.LastAdministratorError
+	eventID := ""
+	if errors.As(err, &refused) {
+		eventID = refused.AuditEventID
+		if id <= 0 {
+			id = refused.UserID // a create names no id; the adopted account is the subject
+		}
+	}
 	annotation := audit.Annotation{Action: adminaccess.LastAdministratorAuditAction, EntityType: "user"}
 	if id > 0 {
 		annotation.EntityID = audit.ID(int64(id))
 	}
 	audit.Annotate(r.Context(), annotation)
-	var refused *scimdirectory.LastAdministratorError
-	eventID := ""
-	if errors.As(err, &refused) {
-		eventID = refused.AuditEventID
-	}
 	slog.Warn("SCIM: refused to deprovision the last administrator; its access was ended",
 		"operation", operation, "user_id", id, "security_audit_event", eventID)
 	writeError(w, http.StatusConflict, "", lastAdministratorDetail)
