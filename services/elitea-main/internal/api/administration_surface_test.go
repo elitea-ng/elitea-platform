@@ -477,7 +477,7 @@ func TestAdministrationSurfaceReachesSessionAndWindowChecks(t *testing.T) {
 	var wholeSet []string
 	for _, entry := range result.Surface {
 		if entry.IsWrite() && entry.NamesNoPermission() {
-			wholeSet = append(wholeSet, entry.Route.String()+" "+entry.Variant)
+			wholeSet = append(wholeSet, entry.String()+" "+entry.Variant)
 		}
 	}
 	want := []string{adminsurface.TokenMint.String() + " " + adminsurface.VariantNativeSession}

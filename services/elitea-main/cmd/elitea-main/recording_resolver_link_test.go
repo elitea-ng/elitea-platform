@@ -173,8 +173,3 @@ func isRouterConfig(expr ast.Expr) bool {
 	}
 	return false
 }
-
-func isIdent(expr ast.Expr, name string) bool {
-	ident, ok := expr.(*ast.Ident)
-	return ok && ident.Name == name
-}
