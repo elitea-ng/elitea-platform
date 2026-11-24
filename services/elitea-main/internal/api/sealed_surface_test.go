@@ -41,7 +41,7 @@ func drivenSurfaceRoutes(t *testing.T) []string {
 			// stays off its surface.
 			continue
 		}
-		routes = append(routes, entry.Route.Method+" "+adminaccess.RoutePattern(entry.Route.Pattern))
+		routes = append(routes, entry.Method+" "+adminaccess.RoutePattern(entry.Pattern))
 	}
 	slices.Sort(routes)
 	return slices.Compact(routes)
