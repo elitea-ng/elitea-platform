@@ -7,8 +7,6 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"golang.org/x/net/http/httpguts"
 )
 
 // NodeSchema is the `type: http`, `revision: 2` node shape
@@ -199,11 +197,17 @@ func parseRequestTemplate(raw json.RawMessage) (RequestTemplate, error) {
 		if decodeStrict(headers, &list) != nil || list == nil || len(list) > 32 {
 			return RequestTemplate{}, ErrInvalid
 		}
+		seenHeaders := make(map[string]bool, len(list))
 		for _, entry := range list {
 			header, err := parseHeaderBinding(entry)
 			if err != nil {
 				return RequestTemplate{}, err
 			}
+			lower := strings.ToLower(header.Name)
+			if seenHeaders[lower] {
+				return RequestTemplate{}, ErrInvalid
+			}
+			seenHeaders[lower] = true
 			template.Headers = append(template.Headers, header)
 		}
 	}
@@ -305,7 +309,7 @@ func parseHeaderBinding(raw json.RawMessage) (HeaderBinding, error) {
 	}
 	if value, found := fields["value"]; found {
 		var text string
-		if decodeStrict(value, &text) != nil || len(text) > maxHeaderLiteralString || bytes.ContainsAny([]byte(text), "\x00\r\n") || !httpguts.ValidHeaderFieldValue(text) {
+		if decodeStrict(value, &text) != nil || len(text) > maxHeaderLiteralString || !validHeaderValue(text) {
 			return HeaderBinding{}, ErrInvalid
 		}
 	}

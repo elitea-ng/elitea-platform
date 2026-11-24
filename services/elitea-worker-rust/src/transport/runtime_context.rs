@@ -1194,18 +1194,20 @@ impl RuntimeContextClient {
         call_timeout: Duration,
     ) -> Result<HttpActionRpcResponse, HttpActionRpcError> {
         const HTTP_ACTION_RETRYABLE_HEADER: &str = "x-elitea-http-action-retryable";
-        const MAX_HTTP_ACTION_INVOCATION_BYTES: usize = 128 * 1024;
-        const MAX_HTTP_ACTION_RECEIPT_BYTES: usize = 4 * 1024 * 1024;
+        const MAX_HTTP_ACTION_RPC_TIMEOUT: Duration = Duration::from_millis(
+            elitea_agent_runtime::graph::http_action::MAX_HTTP_TIMEOUT_MS as u64 + 15_000,
+        );
 
         let binding = authority.redemption_binding();
         if validate_binding(&binding).is_err() {
             return Err(HttpActionRpcError::InvalidInput);
         }
-        let invocation_json =
-            serde_json::to_vec(invocation).map_err(|_| HttpActionRpcError::InvalidInput)?;
-        if invocation_json.is_empty() || invocation_json.len() > MAX_HTTP_ACTION_INVOCATION_BYTES {
-            return Err(HttpActionRpcError::ResourceExhausted);
-        }
+        let invocation_json = invocation.to_bounded_json().map_err(|err| match err {
+            elitea_agent_runtime::graph::http_action::HttpActionError::ResourceExhausted => {
+                HttpActionRpcError::ResourceExhausted
+            }
+            _ => HttpActionRpcError::InvalidInput,
+        })?;
         let request = scoped(
             &binding,
             ExecuteHttpActionRequestV1 {
@@ -1215,7 +1217,10 @@ impl RuntimeContextClient {
             "the HTTP action request authority is malformed",
         )
         .map_err(|_| HttpActionRpcError::InvalidInput)?;
-        let effective_timeout = call_timeout.min(self.config.deadline);
+        let effective_timeout = call_timeout.min(MAX_HTTP_ACTION_RPC_TIMEOUT);
+        if effective_timeout.is_zero() {
+            return Err(HttpActionRpcError::Timeout);
+        }
         let mut rpc = self.rpc();
         let operation = async {
             let response = rpc
@@ -1228,7 +1233,9 @@ impl RuntimeContextClient {
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value == "true");
             let body = response.into_inner().receipt_json;
-            if body.is_empty() || body.len() > MAX_HTTP_ACTION_RECEIPT_BYTES {
+            if body.is_empty()
+                || body.len() > elitea_agent_runtime::graph::http_action::MAX_HTTP_RECEIPT_BYTES
+            {
                 return Err(HttpActionRpcError::InvalidReceipt);
             }
             let receipt = elitea_agent_runtime::graph::http_action::decode_receipt_v2(&body)

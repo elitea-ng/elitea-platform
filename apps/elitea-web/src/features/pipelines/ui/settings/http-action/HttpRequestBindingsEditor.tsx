@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useState } from 'react';
 
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
@@ -48,7 +49,7 @@ const BODY_KIND_OPTIONS: readonly SingleSelectOption[] = [
   { value: 'none', label: 'None' },
   { value: 'json', label: 'JSON' },
   { value: 'text', label: 'Text' },
-  { value: 'form', label: 'Form' },
+  { value: 'artifact', label: 'Artifact' },
 ];
 
 const IDEMPOTENCY_OPTIONS: readonly SingleSelectOption[] = [
@@ -56,6 +57,19 @@ const IDEMPOTENCY_OPTIONS: readonly SingleSelectOption[] = [
   { value: 'from', label: 'From state' },
   { value: 'value', label: 'Literal value' },
 ];
+
+function committedRowsKey(rows: readonly HttpBindingRow[]): string {
+  return JSON.stringify(
+    rows
+      .filter((row) => row.name.trim() !== '')
+      .map((row) => ({
+        name: row.name.trim(),
+        source: row.source,
+        value: row.source === 'from' ? row.value.trim() : row.value,
+        optional: row.source === 'from' ? row.optional : false,
+      })),
+  );
+}
 
 function BindingSection({
   title,
@@ -66,15 +80,28 @@ function BindingSection({
   testIdPrefix,
   onChange,
 }: BindingSectionProps): ReactNode {
-  const updateRow = (index: number, patch: Partial<HttpBindingRow>): void => {
-    const next = rows.map((row, i) => (i === index ? { ...row, ...patch } : row));
+  const externalKey = committedRowsKey(rows);
+  const [syncedKey, setSyncedKey] = useState<string>(externalKey);
+  const [draftRows, setDraftRows] = useState<readonly HttpBindingRow[]>(() => rows);
+
+  if (externalKey !== syncedKey) {
+    setSyncedKey(externalKey);
+    setDraftRows(rows);
+  }
+
+  const commitRows = (next: readonly HttpBindingRow[]): void => {
+    setDraftRows(next);
+    setSyncedKey(committedRowsKey(next));
     onChange(next);
   };
+  const updateRow = (index: number, patch: Partial<HttpBindingRow>): void => {
+    commitRows(draftRows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
   const removeRow = (index: number): void => {
-    onChange(rows.filter((_, i) => i !== index));
+    commitRows(draftRows.filter((_, i) => i !== index));
   };
   const addRow = (): void => {
-    onChange([...rows, { name: '', source: 'from', value: '', optional: false }]);
+    setDraftRows([...draftRows, { name: '', source: 'from', value: '', optional: false }]);
   };
 
   return (
@@ -85,14 +112,14 @@ function BindingSection({
           size="small"
           variant="text"
           startIcon={<AddIcon fontSize="small" />}
-          disabled={disabled || rows.length >= 32}
+          disabled={disabled || draftRows.length >= 32}
           data-testid={`pipelines-http-${testIdPrefix}-add`}
           onClick={addRow}
         >
           {t('pipelines.httpAction.addBinding', 'Add')}
         </Button>
       </Stack>
-      {rows.map((row, index) => {
+      {draftRows.map((row, index) => {
         const stateOptions: SingleSelectOption[] = [
           { value: '', label: t('pipelines.httpAction.selectState', 'Select state') },
           ...(!stateKeys.includes(row.value) && row.value !== '' ? [{ value: row.value, label: row.value }] : []),
@@ -242,18 +269,23 @@ export function HttpRequestBindingsEditor({
           value={body.kind}
           disabled={disabled}
           options={[...BODY_KIND_OPTIONS]}
-          onChange={(value) => updateBody({ kind: value as HttpBodyDraft['kind'] })}
+          onChange={(value) => {
+            const nextKind = value as HttpBodyDraft['kind'];
+            updateBody(nextKind === 'artifact' ? { kind: nextKind, source: 'from' } : { kind: nextKind });
+          }}
         />
         {body.kind !== 'none' && (
           <Stack spacing={1}>
-            <SingleSelect
-              label={t('pipelines.httpAction.bodySource', 'Body source')}
-              value={body.source}
-              disabled={disabled}
-              options={[...SOURCE_OPTIONS]}
-              onChange={(value) => updateBody({ source: value === 'value' ? 'value' : 'from', value: '' })}
-            />
-            {body.source === 'from' ? (
+            {body.kind !== 'artifact' && (
+              <SingleSelect
+                label={t('pipelines.httpAction.bodySource', 'Body source')}
+                value={body.source}
+                disabled={disabled}
+                options={[...SOURCE_OPTIONS]}
+                onChange={(value) => updateBody({ source: value === 'value' ? 'value' : 'from', value: '' })}
+              />
+            )}
+            {body.kind === 'artifact' || body.source === 'from' ? (
               <SingleSelect
                 label={t('pipelines.httpAction.bodyStateKey', 'Body state variable')}
                 value={body.value}
@@ -279,7 +311,11 @@ export function HttpRequestBindingsEditor({
             <InputBase
               size="small"
               fullWidth
-              label={t('pipelines.httpAction.contentType', 'Content-Type (optional)')}
+              label={
+                body.kind === 'artifact'
+                  ? t('pipelines.httpAction.contentTypeRequired', 'Content-Type (required)')
+                  : t('pipelines.httpAction.contentType', 'Content-Type (optional)')
+              }
               value={body.contentType}
               disabled={disabled}
               onChange={(event) => updateBody({ contentType: event.target.value })}

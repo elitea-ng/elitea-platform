@@ -43,14 +43,15 @@ func (f *fakeRules) Rule(_ context.Context, projectID int64, name string) (Rule,
 }
 
 type fakeEffects struct {
-	lookup      *Receipt
-	lookupErr   error
-	beginErr    error
-	noDispatch  bool
-	begun       []Intent
-	committed   []Receipt
-	commitCtxOK bool
-	commitErr   error
+	lookup            *Receipt
+	lookupErr         error
+	beginErr          error
+	noDispatch        bool
+	conflictRetryable *bool
+	begun             []Intent
+	committed         []Receipt
+	commitCtxOK       bool
+	commitErr         error
 }
 
 func (f *fakeEffects) Lookup(context.Context, Admission, Invocation) (Receipt, bool, error) {
@@ -68,7 +69,11 @@ func (f *fakeEffects) Begin(_ context.Context, admitted Admission, inv Invocatio
 		return Receipt{}, false, f.beginErr
 	}
 	f.begun = append(f.begun, intent)
-	receipt := Receipt{SchemaVersion: ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: intent.RequestDigest, BindingDigest: inv.BindingDigest, EffectID: intent.EffectID, State: "dispatching"}
+	retryable := intent.Retryable
+	if f.conflictRetryable != nil {
+		retryable = *f.conflictRetryable
+	}
+	receipt := Receipt{SchemaVersion: ReceiptSchema, ActivationID: inv.ActivationID, RequestDigest: intent.RequestDigest, BindingDigest: inv.BindingDigest, EffectID: intent.EffectID, State: "dispatching", Retryable: retryable}
 	return receipt, !f.noDispatch, nil
 }
 
@@ -420,5 +425,61 @@ func TestExecuteRefusesInvalidCredentialHeaderValueBeforeBegin(t *testing.T) {
 	h.credentials.headers = http.Header{"Authorization": {"Bearer bad\x7fvalue"}}
 	if _, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"path":{"item":"i"}}`)); FailureCode(err) != CodePolicyDenied || len(h.effects.begun) != 0 {
 		t.Fatalf("invalid credential header admitted: %v begun=%d", err, len(h.effects.begun))
+	}
+}
+
+func TestExecuteBeginConflictPreservesPinnedRetryability(t *testing.T) {
+	// Live rule is Class I (GET), but conflicting existing row was pinned Class C (false): must stay false.
+	h := newHarness(t, "GET", `{"path":{"item":{"from":"k"}}}`)
+	h.effects.noDispatch = true
+	pinnedFalse := false
+	h.effects.conflictRetryable = &pinnedFalse
+	receipt, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"path":{"item":"i"}}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receipt.Retryable {
+		t.Fatalf("conflict widened Class C pinned row to retryable=true")
+	}
+
+	// Live rule is Class C (POST), conflicting row was pinned Class I (true): never widen above live (false).
+	h2 := newHarness(t, "POST", `{"path":{"item":{"from":"k"}}}`)
+	h2.effects.noDispatch = true
+	pinnedTrue := true
+	h2.effects.conflictRetryable = &pinnedTrue
+	receipt2, err := h2.service.Execute(t.Context(), invocationFor(t, h2, 0, `{"path":{"item":"i"}}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receipt2.Retryable {
+		t.Fatalf("conflict kept retryable=true under Class C rule")
+	}
+}
+
+func TestExecuteTextBodyDefaultsContentTypeToTextPlain(t *testing.T) {
+	h := newHarness(t, "POST", `{"path":{"item":{"from":"k"}},"body":{"kind":"text","from":"b"}}`)
+	receipt, err := h.service.Execute(t.Context(), invocationFor(t, h, 0, `{"body":"hello world","path":{"item":"i"}}`))
+	if err != nil || receipt.State != "completed" {
+		t.Fatalf("text body without content_type failed: %+v %v", receipt, err)
+	}
+	if got := h.requests[0].Header.Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("Content-Type = %q, want text/plain", got)
+	}
+}
+
+func TestParseNodeRejectsDuplicateAndRestrictedHeadersAndUnicodeSeparators(t *testing.T) {
+	badNodes := []string{
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Trace","value":"1"},{"name":"x-trace","value":"2"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Forwarded-For","value":"1.2.3.4"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"Forwarded","value":"for=1.2.3.4"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Auth-User","value":"admin"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Trace","value":"a\u2028b"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Trace","value":"a\u2029b"}]},"response":{"mode":"json"},"output":["out"]}`,
+		`{"id":"n","type":"http","revision":2,"operation":"a.b","request":{"headers":[{"name":"X-Trace","value":"a\u0085b"}]},"response":{"mode":"json"},"output":["out"]}`,
+	}
+	for _, raw := range badNodes {
+		if _, err := ParseNode([]byte(raw)); err == nil {
+			t.Fatalf("ParseNode should have rejected: %s", raw)
+		}
 	}
 }

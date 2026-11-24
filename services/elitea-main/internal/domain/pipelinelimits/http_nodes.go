@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/net/http/httpguts"
 	"gopkg.in/yaml.v3"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
@@ -69,6 +70,7 @@ func DisabledHTTPOperationRefusal(nodeID, operation string) error {
 
 // HTTPNodeOperations extracts `(nodeID, operation)` for every top-level
 // `type: http` node in instructions. Returns nil when the YAML has no HTTP nodes.
+// YAML merge keys (`<<`) that supply or appear on an HTTP node are refused.
 func HTTPNodeOperations(instructions string) ([]HTTPNodeOperation, error) {
 	if len(instructions) > MaxInstructionsBytes {
 		return nil, ErrInstructionsTooLarge
@@ -83,7 +85,14 @@ func HTTPNodeOperations(instructions string) ([]HTTPNodeOperation, error) {
 	}
 	var ops []HTTPNodeOperation
 	for i := 0; i+1 < len(root.Content); i += 2 {
-		if aliased(root.Content[i]).Value != "nodes" {
+		rootKey := aliased(root.Content[i])
+		if rootKey.Tag == "!!merge" {
+			if mergeIntroducesHTTPNodes(aliased(root.Content[i+1]), 0) {
+				return nil, httpNodeRefusal(nil, "YAML merge keys are not allowed with HTTP Request nodes.")
+			}
+			continue
+		}
+		if rootKey.Value != "nodes" {
 			continue
 		}
 		nodes := aliased(root.Content[i+1])
@@ -96,10 +105,18 @@ func HTTPNodeOperations(instructions string) ([]HTTPNodeOperation, error) {
 				continue
 			}
 			var nodeID, nodeType, operation string
+			var hasMerge, mergeHasHTTP bool
 			for j := 0; j+1 < len(node.Content); j += 2 {
-				k := aliased(node.Content[j]).Value
+				keyNode := aliased(node.Content[j])
 				v := aliased(node.Content[j+1])
-				switch k {
+				if keyNode.Tag == "!!merge" {
+					hasMerge = true
+					if mergeHasHTTPType(v, 0) {
+						mergeHasHTTP = true
+					}
+					continue
+				}
+				switch keyNode.Value {
 				case "id":
 					if s, ok := graphIDScalar(v); ok {
 						nodeID = s
@@ -110,12 +127,90 @@ func HTTPNodeOperations(instructions string) ([]HTTPNodeOperation, error) {
 					operation, _ = stringScalar(v)
 				}
 			}
+			if (nodeType == "http" || mergeHasHTTP) && hasMerge {
+				return nil, httpNodeRefusal(nil, "YAML merge keys are not allowed on HTTP Request nodes.")
+			}
 			if nodeType == "http" && operation != "" {
 				ops = append(ops, HTTPNodeOperation{NodeID: nodeID, Operation: operation})
 			}
 		}
 	}
 	return ops, nil
+}
+
+func mergeHasHTTPType(node *yaml.Node, depth int) bool {
+	if node == nil || depth > 8 {
+		return false
+	}
+	node = aliased(node)
+	switch node.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			k := aliased(node.Content[i])
+			v := aliased(node.Content[i+1])
+			if k.Tag == "!!merge" && mergeHasHTTPType(v, depth+1) {
+				return true
+			}
+			if k.Value == "type" {
+				if t, ok := stringScalar(v); ok && t == "http" {
+					return true
+				}
+			}
+		}
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if mergeHasHTTPType(item, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeIntroducesHTTPNodes(node *yaml.Node, depth int) bool {
+	if node == nil || depth > 8 {
+		return false
+	}
+	node = aliased(node)
+	switch node.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			k := aliased(node.Content[i])
+			v := aliased(node.Content[i+1])
+			if k.Tag == "!!merge" && mergeIntroducesHTTPNodes(v, depth+1) {
+				return true
+			}
+			if k.Value == "nodes" && v.Kind == yaml.SequenceNode {
+				for _, entry := range v.Content {
+					if mergeHasHTTPType(entry, depth+1) {
+						return true
+					}
+				}
+			}
+		}
+	case yaml.SequenceNode:
+		for _, item := range node.Content {
+			if mergeIntroducesHTTPNodes(item, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func checkStrictMappingKeys(id *yaml.Node, section string, m *yaml.Node) error {
+	seen := make(map[string]bool, len(m.Content)/2)
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := aliased(m.Content[i])
+		if k.Tag == "!!merge" {
+			return httpNodeRefusal(id, fmt.Sprintf("YAML merge keys are not allowed in %s.", section))
+		}
+		if seen[k.Value] {
+			return httpNodeRefusal(id, fmt.Sprintf("duplicate field %q is not allowed in %s.", k.Value, section))
+		}
+		seen[k.Value] = true
+	}
+	return nil
 }
 
 func httpNodeRefusal(id *yaml.Node, reason string) error {
@@ -133,19 +228,32 @@ func checkHTTPNodes(rawNodes []*yaml.Node) error {
 			continue
 		}
 		all := make(map[string]*yaml.Node, len(node.Content)/2)
+		var hasDup, hasMerge, mergeHasHTTP bool
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			k := aliased(node.Content[i]).Value
-			if _, dup := all[k]; dup {
-				// Duplicate keys on HTTP nodes are refused cleanly.
-				if nodeType, _ := stringScalar(all["type"]); nodeType == "http" {
-					return httpNodeRefusal(all["id"], "duplicate fields are not allowed.")
+			keyNode := aliased(node.Content[i])
+			valNode := aliased(node.Content[i+1])
+			if keyNode.Tag == "!!merge" {
+				hasMerge = true
+				if mergeHasHTTPType(valNode, 0) {
+					mergeHasHTTP = true
 				}
+				continue
 			}
-			all[k] = aliased(node.Content[i+1])
+			k := keyNode.Value
+			if _, dup := all[k]; dup {
+				hasDup = true
+			}
+			all[k] = valNode
 		}
 		nodeType, _ := stringScalar(all["type"])
-		if nodeType != "http" {
+		if nodeType != "http" && !mergeHasHTTP {
 			continue
+		}
+		if hasMerge {
+			return httpNodeRefusal(all["id"], "YAML merge keys are not allowed on HTTP Request nodes.")
+		}
+		if hasDup {
+			return httpNodeRefusal(all["id"], "duplicate fields are not allowed.")
 		}
 		if err := checkOneHTTPNode(all); err != nil {
 			return err
@@ -218,6 +326,9 @@ func checkOneHTTPNode(fields map[string]*yaml.Node) error {
 }
 
 func checkHTTPRequest(id, req *yaml.Node) error {
+	if err := checkStrictMappingKeys(id, "request", req); err != nil {
+		return err
+	}
 	for i := 0; i+1 < len(req.Content); i += 2 {
 		key := aliased(req.Content[i]).Value
 		val := aliased(req.Content[i+1])
@@ -252,6 +363,9 @@ func checkHTTPBindingMap(id *yaml.Node, section string, m *yaml.Node) error {
 	if m.Kind != yaml.MappingNode || len(m.Content)/2 > httpMaxBindingEntries {
 		return httpNodeRefusal(id, fmt.Sprintf("request.%s must be a mapping of at most %d bindings.", section, httpMaxBindingEntries))
 	}
+	if err := checkStrictMappingKeys(id, "request."+section, m); err != nil {
+		return err
+	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		key, ok := stringScalar(aliased(m.Content[i]))
 		if !ok || !httpBindingKeyPattern.MatchString(key) {
@@ -271,10 +385,14 @@ func checkHTTPHeaders(id, list *yaml.Node) error {
 	if list.Kind != yaml.SequenceNode || len(list.Content) > httpMaxHeaders {
 		return httpNodeRefusal(id, fmt.Sprintf("request.headers must be a list of at most %d headers.", httpMaxHeaders))
 	}
+	seenHeaders := make(map[string]bool, len(list.Content))
 	for _, entry := range list.Content {
 		item := aliased(entry)
 		if item.Kind != yaml.MappingNode {
 			return httpNodeRefusal(id, "each request.headers entry must be a mapping.")
+		}
+		if err := checkStrictMappingKeys(id, "request.headers", item); err != nil {
+			return err
 		}
 		var nameNode *yaml.Node
 		for i := 0; i+1 < len(item.Content); i += 2 {
@@ -286,7 +404,12 @@ func checkHTTPHeaders(id, list *yaml.Node) error {
 		if !ok || len(name) > httpMaxHeaderNameBytes || !httpHeaderNamePattern.MatchString(name) {
 			return httpNodeRefusal(id, "each request.headers entry must carry a valid header name.")
 		}
-		if isRestrictedHTTPHeader(strings.ToLower(name)) {
+		lowerName := strings.ToLower(name)
+		if seenHeaders[lowerName] {
+			return httpNodeRefusal(id, fmt.Sprintf("duplicate header %s is not allowed.", quoted(name)))
+		}
+		seenHeaders[lowerName] = true
+		if isRestrictedHTTPHeader(lowerName) {
 			return httpNodeRefusal(id, fmt.Sprintf("header %s is restricted and cannot be set in pipeline YAML.", quoted(name)))
 		}
 		if err := checkHTTPBinding(id, "request.headers", item, true, httpMaxHeaderValueBytes); err != nil {
@@ -299,6 +422,9 @@ func checkHTTPHeaders(id, list *yaml.Node) error {
 func checkHTTPBinding(id *yaml.Node, section string, m *yaml.Node, allowName bool, maxLiteral int) error {
 	if m.Kind != yaml.MappingNode {
 		return httpNodeRefusal(id, fmt.Sprintf("%s entries must be mappings with either 'from' or 'value'.", section))
+	}
+	if err := checkStrictMappingKeys(id, section, m); err != nil {
+		return err
 	}
 	var fromNode, valueNode, optNode *yaml.Node
 	for i := 0; i+1 < len(m.Content); i += 2 {
@@ -335,9 +461,15 @@ func checkHTTPBinding(id *yaml.Node, section string, m *yaml.Node, allowName boo
 		if valueNode.Kind != yaml.ScalarNode {
 			return httpNodeRefusal(id, fmt.Sprintf("%s literal 'value' must be a string, integer, or boolean.", section))
 		}
+		if allowName {
+			if valueNode.ShortTag() != "!!str" || len(valueNode.Value) > maxLiteral || !validHTTPHeaderValue(valueNode.Value) {
+				return httpNodeRefusal(id, fmt.Sprintf("%s literal header 'value' must be a valid string within its byte limit.", section))
+			}
+			return nil
+		}
 		switch valueNode.ShortTag() {
 		case "!!str":
-			if len(valueNode.Value) > maxLiteral || (allowName && strings.ContainsAny(valueNode.Value, "\x00\r\n")) {
+			if len(valueNode.Value) > maxLiteral {
 				return httpNodeRefusal(id, fmt.Sprintf("%s literal string value is invalid or exceeds its limit.", section))
 			}
 		case "!!bool":
@@ -363,6 +495,9 @@ func checkHTTPBody(id, body *yaml.Node) error {
 	}
 	if body.Kind != yaml.MappingNode {
 		return httpNodeRefusal(id, "request.body must be a mapping.")
+	}
+	if err := checkStrictMappingKeys(id, "request.body", body); err != nil {
+		return err
 	}
 	var kindNode, fromNode, valueNode, ctNode *yaml.Node
 	for i := 0; i+1 < len(body.Content); i += 2 {
@@ -434,6 +569,9 @@ func checkHTTPBody(id, body *yaml.Node) error {
 }
 
 func checkHTTPResponse(id, resp *yaml.Node) error {
+	if err := checkStrictMappingKeys(id, "response", resp); err != nil {
+		return err
+	}
 	var modeNode, statusesNode, maxBytesNode *yaml.Node
 	for i := 0; i+1 < len(resp.Content); i += 2 {
 		key := aliased(resp.Content[i]).Value
@@ -468,6 +606,9 @@ func checkHTTPResponse(id, resp *yaml.Node) error {
 			if item.Kind != yaml.MappingNode {
 				return httpNodeRefusal(id, "each response.accepted_statuses entry must be a {first, last} mapping.")
 			}
+			if err := checkStrictMappingKeys(id, "response.accepted_statuses", item); err != nil {
+				return err
+			}
 			var first, last *int64
 			for i := 0; i+1 < len(item.Content); i += 2 {
 				key := aliased(item.Content[i]).Value
@@ -498,14 +639,26 @@ func checkHTTPResponse(id, resp *yaml.Node) error {
 	return nil
 }
 
+func validHTTPHeaderValue(value string) bool {
+	if strings.ContainsAny(value, "\x00\r\n") || !httpguts.ValidHeaderFieldValue(value) {
+		return false
+	}
+	for _, r := range value {
+		if r == '\u0085' || r == '\u2028' || r == '\u2029' {
+			return false
+		}
+	}
+	return true
+}
+
 func isRestrictedHTTPHeader(lower string) bool {
-	if strings.HasPrefix(lower, "x-elitea-") {
+	if strings.HasPrefix(lower, "x-elitea-") || strings.HasPrefix(lower, "x-forwarded-") || strings.HasPrefix(lower, "x-auth-") {
 		return true
 	}
 	switch lower {
 	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "api-key",
 		"host", "connection", "content-length", "content-type", "transfer-encoding", "te",
-		"trailer", "upgrade", "proxy-connection", "keep-alive", "idempotency-key":
+		"trailer", "upgrade", "proxy-connection", "keep-alive", "idempotency-key", "forwarded":
 		return true
 	}
 	return false

@@ -11,7 +11,7 @@ export interface HttpBindingRow {
 }
 
 export interface HttpBodyDraft {
-  readonly kind: 'none' | 'json' | 'text' | 'form';
+  readonly kind: 'none' | 'json' | 'text' | 'artifact';
   readonly source: 'from' | 'value';
   readonly value: string;
   readonly contentType: string;
@@ -42,22 +42,32 @@ export function formatAcceptedStatuses(raw: unknown): string {
   return parts.length > 0 ? parts.join(', ') : '200-299';
 }
 
+const FORBIDDEN_RECORD_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isAllowedStatusRange(first: number, last: number): boolean {
+  if (first < 200 || last > 599 || first > last) return false;
+  if (first <= 399 && last >= 300) return false;
+  if (first <= 401 && last >= 401) return false;
+  if (first <= 403 && last >= 403) return false;
+  return true;
+}
+
 export function parseAcceptedStatuses(text: string): readonly HttpStatusRange[] | undefined {
   const tokens = text
     .split(',')
     .map((part) => part.trim())
     .filter(Boolean);
-  if (tokens.length === 0) return undefined;
+  if (tokens.length === 0 || tokens.length > 16) return undefined;
   const ranges: HttpStatusRange[] = [];
   for (const token of tokens) {
     const match = /^(\d{3})(?:\s*-\s*(\d{3}))?$/.exec(token);
     if (!match) return undefined;
     const first = Number(match[1]);
     const last = match[2] !== undefined ? Number(match[2]) : first;
-    if (first < 200 || last > 599 || first > last) return undefined;
+    if (!isAllowedStatusRange(first, last)) return undefined;
     ranges.push({ first, last });
   }
-  return ranges.length > 0 && ranges.length <= 16 ? ranges : undefined;
+  return ranges;
 }
 
 function scalarToText(value: unknown): string {
@@ -84,7 +94,7 @@ export function writeBindingMapRows(rows: readonly HttpBindingRow[]): Record<str
   const next: Record<string, unknown> = {};
   for (const row of rows) {
     const key = row.name.trim();
-    if (!key) continue;
+    if (!key || FORBIDDEN_RECORD_KEYS.has(key)) continue;
     if (row.source === 'from') {
       next[key] = row.optional ? { from: row.value.trim(), optional: true } : { from: row.value.trim() };
     } else {
@@ -128,10 +138,18 @@ export function writeHeaderRows(rows: readonly HttpBindingRow[]): readonly Recor
 export function readBodyDraft(raw: unknown): HttpBodyDraft {
   const body = asRecord(raw);
   const kind = body['kind'];
-  if (kind !== 'json' && kind !== 'text' && kind !== 'form') {
+  if (kind !== 'json' && kind !== 'text' && kind !== 'artifact') {
     return { kind: 'none', source: 'from', value: '', contentType: '' };
   }
   const contentType = typeof body['content_type'] === 'string' ? body['content_type'] : '';
+  if (kind === 'artifact') {
+    return {
+      kind: 'artifact',
+      source: 'from',
+      value: typeof body['from'] === 'string' ? body['from'] : '',
+      contentType,
+    };
+  }
   if (typeof body['from'] === 'string') {
     return { kind, source: 'from', value: body['from'], contentType };
   }
@@ -143,7 +161,7 @@ export function readBodyDraft(raw: unknown): HttpBodyDraft {
 export function writeBodyDraft(draft: HttpBodyDraft): Record<string, unknown> | undefined {
   if (draft.kind === 'none') return undefined;
   const next: Record<string, unknown> = { kind: draft.kind };
-  if (draft.source === 'from') {
+  if (draft.kind === 'artifact' || draft.source === 'from') {
     next['from'] = draft.value.trim();
   } else if (draft.kind === 'json') {
     try {

@@ -1021,3 +1021,231 @@ async fn agent_memory_answers_are_checked_and_refusals_are_terminal() {
     assert_eq!(error.code(), "runtime_context.rejected");
     assert!(!error.retryable());
 }
+
+type RecordedHttpCall = (String, Vec<u8>, Vec<u8>);
+
+struct FakeHttpActionRpc {
+    calls: Arc<Mutex<Vec<RecordedHttpCall>>>,
+    delay: Duration,
+    retryable_header: Option<String>,
+    reply: Mutex<Option<Result<Vec<u8>, Status>>>,
+}
+
+#[tonic::async_trait]
+impl super::input_content::content_fake::ContentFake for FakeHttpActionRpc {
+    async fn execute_http_action(
+        &self,
+        request: tonic::Request<crate::protocol::elitea::runtime::v1::ExecuteHttpActionRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::ExecuteHttpActionResponseV1>,
+        Status,
+    > {
+        let (claim, fence) = super::input_content::content_fake::claim_of(&request);
+        self.calls.lock().expect("http calls").push((
+            claim,
+            fence,
+            request.into_inner().invocation_json,
+        ));
+        if !self.delay.is_zero() {
+            tokio::time::sleep(self.delay).await;
+        }
+        let body = self
+            .reply
+            .lock()
+            .expect("http reply")
+            .take()
+            .expect("one http reply")?;
+        let mut resp = tonic::Response::new(
+            crate::protocol::elitea::runtime::v1::ExecuteHttpActionResponseV1 {
+                receipt_json: body,
+            },
+        );
+        if let Some(header) = &self.retryable_header {
+            resp.metadata_mut().insert(
+                "x-elitea-http-action-retryable",
+                header.parse().expect("ascii metadata value"),
+            );
+        }
+        Ok(resp)
+    }
+}
+
+fn sample_http_invocation(
+    inputs_b64: String,
+) -> elitea_agent_runtime::graph::http_action::HttpActionInvocationV3 {
+    elitea_agent_runtime::graph::http_action::HttpActionInvocationV3 {
+        schema_version: elitea_agent_runtime::graph::http_action::HTTP_ACTION_INVOCATION_SCHEMA
+            .to_owned(),
+        node_id: "fetch_fx".to_owned(),
+        thread_id: "thread-1".to_owned(),
+        step: 0,
+        attempt: 0,
+        activation_id: "aa".repeat(32),
+        binding_digest: "bb".repeat(32),
+        inputs_b64,
+        inputs_digest: "cc".repeat(32),
+        scope_ref: None,
+    }
+}
+
+fn sample_http_receipt_bytes() -> Vec<u8> {
+    serde_json::json!({
+        "schema_version": elitea_agent_runtime::graph::http_action::HTTP_ACTION_RECEIPT_SCHEMA,
+        "effect_id": "dd".repeat(32),
+        "activation_id": "aa".repeat(32),
+        "request_digest": "ee".repeat(32),
+        "binding_digest": "bb".repeat(32),
+        "state": "completed",
+        "result": {
+            "status": 200,
+            "content_type": "application/json",
+            "byte_length": 11,
+            "data": { "kind": "json", "value": { "ok": true } }
+        }
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn execute_http_action_honors_768kib_invocation_cap_and_30s_timeout_without_15s_clamp() {
+    use base64::Engine;
+    use elitea_agent_runtime::graph::http_action::{
+        MAX_HTTP_INPUTS_BYTES, MAX_HTTP_INVOCATION_BYTES,
+    };
+
+    // 256 KiB raw inputs (~350 KiB base64 JSON) must succeed even when config.deadline is tiny (20ms)
+    // and the RPC takes 60ms under a 30s call_timeout.
+    let big_inputs_b64 =
+        base64::engine::general_purpose::STANDARD.encode(vec![b'a'; MAX_HTTP_INPUTS_BYTES]);
+    let big_inv = sample_http_invocation(big_inputs_b64);
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let client = RuntimeContextClient::with_rpc(
+        FakeHttpActionRpc {
+            calls: Arc::clone(&calls),
+            delay: Duration::from_millis(60),
+            retryable_header: Some("true".to_owned()),
+            reply: Mutex::new(Some(Ok(sample_http_receipt_bytes()))),
+        },
+        config(Duration::from_millis(20), 32 * 1024),
+    )
+    .expect("http client");
+    let res = client
+        .execute_http_action(
+            &test_runtime_context_authority(),
+            &big_inv,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("256 KiB inputs under 30s call_timeout must succeed");
+    assert!(res.retryable);
+    assert_eq!(res.receipt.activation_id, "aa".repeat(32));
+    {
+        let recorded = calls.lock().expect("calls");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "claim-1");
+        assert_eq!(recorded[0].1, vec![b'f'; 32]);
+    }
+
+    // >768 KiB invocation fails locally with ResourceExhausted without calling server.
+    let over_inv = sample_http_invocation("A".repeat(MAX_HTTP_INVOCATION_BYTES + 1));
+    let over_calls = Arc::new(Mutex::new(Vec::new()));
+    let over_client = RuntimeContextClient::with_rpc(
+        FakeHttpActionRpc {
+            calls: Arc::clone(&over_calls),
+            delay: Duration::ZERO,
+            retryable_header: Some("true".to_owned()),
+            reply: Mutex::new(Some(Ok(sample_http_receipt_bytes()))),
+        },
+        config(Duration::from_secs(15), 32 * 1024),
+    )
+    .expect("over client");
+    let err = over_client
+        .execute_http_action(
+            &test_runtime_context_authority(),
+            &over_inv,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err(">768 KiB invocation must fail locally");
+    assert_eq!(
+        err,
+        super::runtime_context::HttpActionRpcError::ResourceExhausted
+    );
+    assert!(over_calls.lock().expect("calls").is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn execute_http_action_retryable_header_fails_closed_and_maps_grpc_statuses() {
+    use super::runtime_context::HttpActionRpcError;
+
+    let inv = sample_http_invocation("e30=".to_owned());
+    for (header, expected) in [
+        (Some("true"), true),
+        (Some("false"), false),
+        (None, false),
+        (Some("TRUE"), false),
+        (Some("1"), false),
+        (Some("yes"), false),
+    ] {
+        let client = RuntimeContextClient::with_rpc(
+            FakeHttpActionRpc {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                delay: Duration::ZERO,
+                retryable_header: header.map(str::to_owned),
+                reply: Mutex::new(Some(Ok(sample_http_receipt_bytes()))),
+            },
+            config(Duration::from_secs(5), 32 * 1024),
+        )
+        .expect("retryable client");
+        let resp = client
+            .execute_http_action(
+                &test_runtime_context_authority(),
+                &inv,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("ok receipt");
+        assert_eq!(
+            resp.retryable, expected,
+            "header {header:?} retryable mismatch"
+        );
+    }
+
+    for (code, expected) in [
+        (Code::Unavailable, HttpActionRpcError::Unavailable),
+        (Code::DeadlineExceeded, HttpActionRpcError::Timeout),
+        (Code::Aborted, HttpActionRpcError::NondeterministicInputs),
+        (Code::InvalidArgument, HttpActionRpcError::InvalidInput),
+        (
+            Code::ResourceExhausted,
+            HttpActionRpcError::ResourceExhausted,
+        ),
+        (Code::PermissionDenied, HttpActionRpcError::PolicyDenied),
+        (
+            Code::Unauthenticated,
+            HttpActionRpcError::AuthenticationDenied,
+        ),
+        (Code::Internal, HttpActionRpcError::Internal),
+    ] {
+        let client = RuntimeContextClient::with_rpc(
+            FakeHttpActionRpc {
+                calls: Arc::new(Mutex::new(Vec::new())),
+                delay: Duration::ZERO,
+                retryable_header: None,
+                reply: Mutex::new(Some(Err(Status::new(code, "sensitive-secret-msg")))),
+            },
+            config(Duration::from_secs(5), 32 * 1024),
+        )
+        .expect("status client");
+        let err = client
+            .execute_http_action(
+                &test_runtime_context_authority(),
+                &inv,
+                Duration::from_secs(5),
+            )
+            .await
+            .expect_err("status must error");
+        assert_eq!(err, expected);
+    }
+}

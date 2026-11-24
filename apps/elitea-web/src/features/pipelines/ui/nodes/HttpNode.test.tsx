@@ -13,7 +13,7 @@ const BASE = '/api/v2';
 beforeEach(() => {
   configureGeneratedClient({ baseUrl: BASE });
   server.use(
-    http.get(`${BASE}/httpactions/prompt_lib/*/rules/names`, () =>
+    http.get(`${BASE}/httpactions/prompt_lib/*/rule-names`, () =>
       HttpResponse.json({
         items: [{ name: 'fx_reference.rates', enabled: true }],
       }),

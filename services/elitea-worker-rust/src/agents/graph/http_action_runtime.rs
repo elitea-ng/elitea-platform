@@ -150,17 +150,24 @@ impl HttpActionAttempt {
     }
 
     fn remaining_budget(&self) -> Option<Duration> {
-        let node_limit = Duration::from_millis(self.effective_node_timeout_ms());
+        // Give Main headroom for artifact spill (5 s) + receipt commit (5 s)
+        // after the outbound HTTP timeout (`effective_node_timeout_ms <= 30 s`),
+        // clamped by the run's execution deadline.
+        const MAIN_COMMIT_HEADROOM_MS: u64 = 12_000;
+        let rpc_limit = Duration::from_millis(
+            self.effective_node_timeout_ms()
+                .saturating_add(MAIN_COMMIT_HEADROOM_MS),
+        );
         match self.execution_deadline {
             Some(deadline) => {
                 let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
                 if remaining.is_zero() {
                     None
                 } else {
-                    Some(node_limit.min(remaining))
+                    Some(rpc_limit.min(remaining))
                 }
             }
-            None => Some(node_limit),
+            None => Some(rpc_limit),
         }
     }
 
@@ -262,27 +269,32 @@ impl HttpActionAttempt {
             let Some(call_timeout) =
                 attempt_deadline.checked_duration_since(tokio::time::Instant::now())
             else {
-                let class = if self
-                    .execution_deadline
-                    .is_some_and(|d| tokio::time::Instant::now() >= d)
-                {
-                    NodeFailureClass::DeadlineInsufficient
+                let pre_dispatch = transport_try == 0 && !authority.recovering_started();
+                let (class, safety) = if pre_dispatch {
+                    let class = if self
+                        .execution_deadline
+                        .is_some_and(|d| tokio::time::Instant::now() >= d)
+                    {
+                        NodeFailureClass::DeadlineInsufficient
+                    } else {
+                        NodeFailureClass::AttemptTimeout
+                    };
+                    (class, ReplaySafety::NoExternalEffect)
                 } else {
-                    NodeFailureClass::AttemptTimeout
+                    (
+                        NodeFailureClass::AttemptTimeout,
+                        ReplaySafety::UnknownExternalEffect { effect_id },
+                    )
                 };
+                return Err(NodeFailure::new(class, safety).into());
+            };
+            if call_timeout.is_zero() {
                 let safety = if transport_try == 0 && !authority.recovering_started() {
                     ReplaySafety::NoExternalEffect
                 } else {
                     ReplaySafety::UnknownExternalEffect { effect_id }
                 };
-                return Err(NodeFailure::new(class, safety).into());
-            };
-            if call_timeout.is_zero() {
-                return Err(NodeFailure::new(
-                    NodeFailureClass::AttemptTimeout,
-                    ReplaySafety::UnknownExternalEffect { effect_id },
-                )
-                .into());
+                return Err(NodeFailure::new(NodeFailureClass::AttemptTimeout, safety).into());
             }
 
             match self.executor.execute(invocation, call_timeout).await {
@@ -307,7 +319,7 @@ impl HttpActionAttempt {
                     transport_try += 1;
                 }
                 Err(rpc_error) => {
-                    return Err(map_rpc_error(rpc_error, effect_id, self.execution_deadline).into());
+                    return Err(map_rpc_error(rpc_error, effect_id).into());
                 }
             }
         }
@@ -621,94 +633,84 @@ fn map_failed_receipt(
     effect_id: [u8; 32],
 ) -> NodeFailure {
     match code {
-        "policy_denied" | "authorization" | "egress_denied" => NodeFailure::new(
-            NodeFailureClass::AuthorizationDenied,
-            ReplaySafety::NoExternalEffect,
-        ),
+        "policy_denied" | "authorization" | "egress_denied" | "redirect_refused" => {
+            NodeFailure::new(
+                NodeFailureClass::AuthorizationDenied,
+                ReplaySafety::NoExternalEffect,
+            )
+        }
         "authentication" | "credential_missing" => NodeFailure::new(
             NodeFailureClass::AuthenticationDenied,
             ReplaySafety::NoExternalEffect,
         ),
-        "nondeterministic_inputs" | "invalid_input" | "inputs_too_big" => NodeFailure::new(
+        "nondeterministic_inputs" | "invalid_input" | "inputs_too_large" => NodeFailure::new(
             NodeFailureClass::InvalidInput,
             ReplaySafety::NoExternalEffect,
         ),
-        "response_too_big" | "unexpected_status" | "invalid_json" => NodeFailure::new(
+        "timeout" => map_transient_failed_receipt(
+            NodeFailureClass::AttemptTimeout,
+            retryable,
+            retries_enabled,
+            effect_id,
+        ),
+        "rate_limited" => map_transient_failed_receipt(
+            NodeFailureClass::RateLimited,
+            retryable,
+            retries_enabled,
+            effect_id,
+        ),
+        "dependency_unavailable" => map_transient_failed_receipt(
+            NodeFailureClass::DependencyUnavailable,
+            retryable,
+            retries_enabled,
+            effect_id,
+        ),
+        // Non-transient result failures ("response_too_large", "unexpected_status",
+        // "invalid_response") and any unrecognized/future Main failure codes fail
+        // closed without retrying.
+        _ => NodeFailure::new(
             NodeFailureClass::InvalidResult,
             ReplaySafety::NoExternalEffect,
         ),
-        "timeout" => {
-            if retryable {
-                NodeFailure::new(
-                    NodeFailureClass::AttemptTimeout,
-                    ReplaySafety::IdempotentEffectNotCommitted { effect_id },
-                )
-            } else if !retries_enabled {
-                NodeFailure::new(
-                    NodeFailureClass::AttemptTimeout,
-                    ReplaySafety::NoExternalEffect,
-                )
-            } else {
-                // Class C with retries enabled: stop immediately without
-                // issuing an illegal attempt+1 while still honoring `on_error`.
-                NodeFailure::new(
-                    NodeFailureClass::InvalidResult,
-                    ReplaySafety::NoExternalEffect,
-                )
-            }
-        }
-        "rate_limited" => {
-            if retryable {
-                NodeFailure::new(
-                    NodeFailureClass::RateLimited,
-                    ReplaySafety::IdempotentEffectNotCommitted { effect_id },
-                )
-            } else if !retries_enabled {
-                NodeFailure::new(
-                    NodeFailureClass::RateLimited,
-                    ReplaySafety::NoExternalEffect,
-                )
-            } else {
-                NodeFailure::new(
-                    NodeFailureClass::InvalidResult,
-                    ReplaySafety::NoExternalEffect,
-                )
-            }
-        }
-        _ => {
-            if retryable {
-                NodeFailure::new(
-                    NodeFailureClass::DependencyUnavailable,
-                    ReplaySafety::IdempotentEffectNotCommitted { effect_id },
-                )
-            } else {
-                NodeFailure::new(
-                    NodeFailureClass::InvalidResult,
-                    ReplaySafety::NoExternalEffect,
-                )
-            }
-        }
     }
 }
 
-fn map_rpc_error(
-    error: HttpActionRpcError,
+fn map_transient_failed_receipt(
+    transient_class: NodeFailureClass,
+    retryable: bool,
+    retries_enabled: bool,
     effect_id: [u8; 32],
-    execution_deadline: Option<tokio::time::Instant>,
 ) -> NodeFailure {
+    if retryable {
+        NodeFailure::new(
+            transient_class,
+            ReplaySafety::IdempotentEffectNotCommitted { effect_id },
+        )
+    } else if !retries_enabled {
+        NodeFailure::new(transient_class, ReplaySafety::NoExternalEffect)
+    } else {
+        // Class C with retries enabled: stop immediately without issuing an
+        // illegal attempt+1 while still honoring `on_error`.
+        NodeFailure::new(
+            NodeFailureClass::InvalidResult,
+            ReplaySafety::NoExternalEffect,
+        )
+    }
+}
+
+fn map_rpc_error(error: HttpActionRpcError, effect_id: [u8; 32]) -> NodeFailure {
     match error {
         HttpActionRpcError::Unavailable => NodeFailure::new(
             NodeFailureClass::DependencyUnavailable,
             ReplaySafety::UnknownExternalEffect { effect_id },
         ),
-        HttpActionRpcError::Timeout => {
-            let class = if execution_deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
-                NodeFailureClass::DeadlineInsufficient
-            } else {
-                NodeFailureClass::AttemptTimeout
-            };
-            NodeFailure::new(class, ReplaySafety::UnknownExternalEffect { effect_id })
-        }
+        // Always emit AttemptTimeout (never DeadlineInsufficient) when paired with
+        // UnknownExternalEffect so the emitted NodeRecoveryRequiredReceipt passes
+        // validate() and Main's noderecovery contract.
+        HttpActionRpcError::Timeout => NodeFailure::new(
+            NodeFailureClass::AttemptTimeout,
+            ReplaySafety::UnknownExternalEffect { effect_id },
+        ),
         HttpActionRpcError::PolicyDenied => NodeFailure::new(
             NodeFailureClass::AuthorizationDenied,
             ReplaySafety::NoExternalEffect,

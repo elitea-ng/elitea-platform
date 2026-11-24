@@ -27,7 +27,7 @@ import { asRecord, formatAcceptedStatuses, parseAcceptedStatuses } from './httpA
 const RESPONSE_MODE_OPTIONS: readonly SingleSelectOption[] = [
   { value: 'json', label: 'JSON' },
   { value: 'text', label: 'Text' },
-  { value: 'empty', label: 'Empty' },
+  { value: 'artifact', label: 'Artifact' },
 ];
 
 const MAX_RESPONSE_BYTES = 2_097_152;
@@ -72,7 +72,14 @@ function ResponseContractFields({
 }: ResponseContractFieldsProps): ReactNode {
   const responseMode = extensionText(response['mode']) || 'json';
   const maxBytes = typeof response['max_bytes'] === 'number' ? response['max_bytes'] : '';
-  const [statusesDraft, setStatusesDraft] = useState<string>(() => formatAcceptedStatuses(response['accepted_statuses']));
+  const externalStatuses = formatAcceptedStatuses(response['accepted_statuses']);
+  const [lastExternalStatuses, setLastExternalStatuses] = useState<string>(externalStatuses);
+  const [statusesDraft, setStatusesDraft] = useState<string>(externalStatuses);
+
+  if (externalStatuses !== lastExternalStatuses) {
+    setLastExternalStatuses(externalStatuses);
+    setStatusesDraft(externalStatuses);
+  }
 
   const handleStatusesChange = (raw: string): void => {
     setStatusesDraft(raw);

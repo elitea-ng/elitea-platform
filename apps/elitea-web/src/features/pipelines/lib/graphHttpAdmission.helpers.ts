@@ -2,8 +2,8 @@ import type { AdmissionNode, GraphAdmissionIssue } from './graphAdmission.types'
 import { admissionIssue, toStringList } from './graphAdmission.types';
 
 const HTTP_OPERATION_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
-const HTTP_RESPONSE_MODES = new Set(['json', 'text', 'empty']);
-const FORBIDDEN_HTTP_NODE_KEYS = ['url', 'method', 'credential', 'credentials', 'auth', 'origin'] as const;
+const HTTP_RESPONSE_MODES = new Set(['json', 'text', 'artifact']);
+const FORBIDDEN_HTTP_NODE_KEYS = ['url', 'method', 'credential', 'credentials', 'configuration_id', 'auth', 'origin'] as const;
 
 function scalarPreview(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
@@ -41,7 +41,7 @@ export function httpRequiredFields(node: AdmissionNode): readonly GraphAdmission
   }
   const mode = httpResponseMode(node.raw['response']);
   if (typeof mode !== 'string' || !HTTP_RESPONSE_MODES.has(mode)) {
-    issues.push(admissionIssue('node.required-field', 'http_action.rs', node.id, 'response.mode', scalarPreview(mode), 'response.mode: must be json, text, or empty.'));
+    issues.push(admissionIssue('node.required-field', 'http_action.rs', node.id, 'response.mode', scalarPreview(mode), 'response.mode: must be json, text, or artifact.'));
   }
   const outputs = toStringList(node.raw.output);
   if (outputs.length !== 1) {

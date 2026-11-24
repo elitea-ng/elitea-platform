@@ -52,10 +52,10 @@ export const BUILTIN_STATE_KEYS: ReadonlySet<string> = new Set([
  * `input_keys()` is a resolved list, not `raw.input`. See
  * `decisionInputKeys` below.
  */
-const READS_INPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'hitl', 'llm', 'router', 'state_modifier']);
+const READS_INPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'hitl', 'http', 'llm', 'router', 'state_modifier']);
 
 /** Families whose `output:` list the compiler reads — `compiler.rs:384-392`. */
-const READS_OUTPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'llm', 'state_modifier']);
+const READS_OUTPUT: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'http', 'llm', 'state_modifier']);
 
 /** Families whose `input_mapping:` values can name a state variable — `compiler.rs:1302-1338`. */
 const READS_INPUT_MAPPING: ReadonlySet<string> = new Set(['agent', 'toolkit', 'mcp', 'llm', 'printer']);
@@ -188,6 +188,37 @@ function inputReferences(node: AdmissionNode): readonly RouteTargetRef[] {
   return [];
 }
 
+function httpFromRef(field: string, entry: unknown): readonly RouteTargetRef[] {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return [];
+  const from = (entry as Readonly<Record<string, unknown>>)['from'];
+  return typeof from === 'string' && from.length > 0 ? [{ field, target: from }] : [];
+}
+
+function httpBindingMapRefs(section: string, raw: unknown): readonly RouteTargetRef[] {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  return Object.entries(raw as Readonly<Record<string, unknown>>).flatMap(([key, val]) =>
+    httpFromRef(`request.${section}.${key}`, val),
+  );
+}
+
+function httpHeaderRefs(raw: unknown): readonly RouteTargetRef[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry, index) => httpFromRef(`request.headers[${String(index)}]`, entry));
+}
+
+function httpRequestStateRefs(raw: YamlPipelineNode): readonly RouteTargetRef[] {
+  const req = raw['request'];
+  if (req === null || typeof req !== 'object' || Array.isArray(req)) return [];
+  const record = req as Readonly<Record<string, unknown>>;
+  return [
+    ...httpBindingMapRefs('path', record['path']),
+    ...httpBindingMapRefs('query', record['query']),
+    ...httpHeaderRefs(record['headers']),
+    ...httpFromRef('request.body', record['body']),
+    ...httpFromRef('request.idempotency_key', record['idempotency_key']),
+  ];
+}
+
 /** State keys `node` names through `input`/`output`/`variables_to_clean`, each tagged with its field. */
 export function declaredStateReferences(node: AdmissionNode): readonly RouteTargetRef[] {
   const raw = node.raw;
@@ -195,7 +226,8 @@ export function declaredStateReferences(node: AdmissionNode): readonly RouteTarg
   const output = READS_OUTPUT.has(node.type) ? listTargets('output', raw.output) : [];
   const cleaned = node.type === 'state_modifier' ? listTargets('variables_to_clean', raw.variables_to_clean) : [];
   const mapped = READS_INPUT_MAPPING.has(node.type) ? mappedVariables(raw) : [];
-  return [...input, ...output, ...cleaned, ...mapped];
+  const httpRefs = node.type === 'http' ? httpRequestStateRefs(raw) : [];
+  return [...input, ...output, ...cleaned, ...mapped, ...httpRefs];
 }
 
 /** Non-`messages` outputs — the compiler's own filter at `llm.rs:174` / `direct_tool.rs:182`. */

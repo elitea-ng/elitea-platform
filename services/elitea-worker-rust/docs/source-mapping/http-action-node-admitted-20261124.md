@@ -82,7 +82,7 @@ Inspected `scripts/acceptance/etl/pipelines/etl_job.yaml` (`send_webhook`) and `
 
 ### Security
 
-- **No URL/method/credential surface in YAML or UI**: Both `agent-runtime` (`deny_unknown_fields`) and Go `httpaction`/`pipelinelimits` reject `url`, `method`, `credential`, `headers` containing restricted names (`authorization`, `proxy-authorization`, `cookie`, `host`, `content-length`, `transfer-encoding`, `connection`, `upgrade`, `te`, `trailer`, `keep-alive`, `x-forwarded-*`, `forwarded`), and `revision != 2`. The Web editor fetches only `/httpactions/prompt_lib/{projectID}/rule-names` (`name` + `enabled`) and renders no URL/origin/credential controls (`HttpActionSettings.test.tsx`).
+- **No URL/method/credential surface in YAML or UI**: Both `agent-runtime` (`deny_unknown_fields`) and Go `httpaction`/`pipelinelimits` reject `url`, `method`, `credential`, `configuration_id`, duplicate keys/merge keys on HTTP nodes, case-insensitive duplicate header names, restricted headers (`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `api-key`, `host`, `content-length`, `content-type`, `transfer-encoding`, `connection`, `upgrade`, `te`, `trailer`, `proxy-connection`, `keep-alive`, `idempotency-key`, `x-elitea-*`, `x-forwarded-*`, `x-auth-*`, `forwarded`), Unicode line/paragraph separators (`U+0085`, `U+2028`, `U+2029`) in header values, and `revision != 2`. `HttpActionFrozenSnapshotV2::from_value` decodes `template_wire_b64` (`<= 64 KiB`) and verifies `sha256(wire) == template_digest`. The Web editor fetches only `/httpactions/prompt_lib/{projectID}/rule-names` (`name` + `enabled`) and renders no URL/origin/credential controls (`HttpActionSettings.test.tsx`).
 - **Cross-language canonicalization & render parity**: Rust `agent-runtime` canonicalizes inputs and validates all 25 vectors in `libs/jsonschema/runtime/v1/fixtures/http-action-render-vectors-v1.json` byte-for-byte identically to Go `internal/application/httpaction` (`render_vectors_match`).
 - **Data-free faults**: Worker maps HTTP failures to registered fault codes `pipeline.http.failed` and `pipeline.http.timeout` without echoing response bodies, headers, URLs, or secrets into errors or `node_errors`.
 
@@ -116,12 +116,12 @@ Updated in `services/elitea-worker-rust/docs/recovery-guarantees.md`:
 
 - **Rust `libs/rust/agent-runtime`** (via `slot.sh`, `--offline --locked`):
   - `cargo fmt --all -- --check`: **PASS**
-  - `cargo test --offline --locked -- graph::http_action graph::node_settings`: **27 passed, 0 failed** (includes **25/25** cross-language render vectors in `http-action-render-vectors-v1.json`)
+  - `cargo test --offline --locked -- graph::http_action graph::node_settings`: **28 passed, 0 failed** (includes **25/25** cross-language render vectors in `http-action-render-vectors-v1.json`)
   - `cargo clippy --offline --locked --all-targets -- -D warnings`: **PASS** (0 warnings)
 - **Rust `services/elitea-worker-rust`** (via `slot.sh`, `--offline --locked`):
   - `cargo fmt --all -- --check`: **PASS**
-  - `cargo test --offline --locked --lib -- agents::graph::http_action_tests agents::graph::node_admission_parity_tests agents::graph::fanout_families_parity_tests agents::graph::node_settings_tests`: **43 passed, 0 failed** (9 HTTP runtime/compiler/recovery/fan-out tests + 34 parity & settings tests)
-  - `cargo test --offline --locked --lib -- agents::graph::`: **766 passed, 0 failed, 3 ignored**
+  - `cargo test --offline --locked --lib -- agents::graph::http_action_tests agents::graph::node_admission_parity_tests agents::graph::fanout_families_parity_tests agents::graph::node_settings_tests transport::runtime_context_tests::execute_http_action`: **47 passed, 0 failed** (11 HTTP runtime/compiler/recovery/fan-out tests + 34 parity & settings tests + 2 gRPC transport tests)
+  - `cargo test --offline --locked --lib -- agents::graph::`: **768 passed, 0 failed, 3 ignored**
   - `cargo clippy --offline --locked --all-targets -- -D warnings`: **PASS** (0 warnings)
   - `cargo deny --all-features check advisories`: **PASS** (`advisories ok`)
 - **Go (`libs/go/faults` & `services/elitea-main`)**:
@@ -130,7 +130,7 @@ Updated in `services/elitea-worker-rust/docs/recovery-guarantees.md`:
   - `go vet ./...`: **PASS**
   - `govulncheck ./...`: **PASS** (`0` called vulnerabilities; 1 pre-existing uncalled module advisory)
 - **Web (`apps/elitea-web`, Node v24.19.0)**:
-  - `npx vitest run --config vitest.config.ts --project node src/features/pipelines/`: **276/276 files passed** (**3,000 passed | 1 pre-existing expected fail**)
+  - `npx vitest run --config vitest.config.ts --project node src/features/pipelines/`: **276/276 files passed** (**3,002 passed | 1 pre-existing expected fail**)
   - `npm run typecheck`: **PASS** (0 errors)
   - `npx oxlint -c .oxlintrc.json --deny-warnings src/features/pipelines/`: **PASS** (0 warnings, 0 errors across 650 files)
   - `npm run theme-gate`: **PASS** (all 9 checks + 5 brand-pack tests)

@@ -7451,5 +7451,6 @@
   "pipelines.httpAction.stateVariable": "State variable",
   "pipelines.httpAction.timeoutMs": "Request timeout (ms)",
   "pipelines.httpAction.timeoutMsHelp": "Optional per-attempt cap (1000 to 30000 ms)",
-  "pipelines.nodeSettings.httpTimeoutMsHelp": "1000 to 30000 ms"
+  "pipelines.nodeSettings.httpTimeoutMsHelp": "1000 to 30000 ms",
+  "pipelines.httpAction.contentTypeRequired": "Content-Type (required)"
 }

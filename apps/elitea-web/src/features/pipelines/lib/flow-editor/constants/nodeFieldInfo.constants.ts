@@ -302,8 +302,8 @@ export const NODE_FIELD_INFO: Readonly<Partial<Record<PipelineNodeType, Readonly
     [K.request]:
       'Structured request bindings (path, query, headers, body, and optional idempotency key) populated from pipeline state or literal values.',
     [K.response]:
-      'Response decoding contract: mode (json, text, or empty), accepted HTTP status ranges, and maximum response size in bytes.',
-    [K.responseMode]: 'How the response body is decoded into the output state variable (json, text, or empty).',
+      'Response decoding contract: mode (json, text, or artifact), accepted HTTP status ranges, and maximum response size in bytes.',
+    [K.responseMode]: 'How the response body is decoded into the output state variable (json, text, or artifact).',
     [K.acceptedStatuses]: 'HTTP status code ranges treated as successful responses (default 200-299).',
     [K.maxBytes]: 'Maximum allowed response body size in bytes (1 to 2097152).',
     [K.idempotencyKey]: 'Optional state variable or literal value sent as the rule-configured idempotency key.',

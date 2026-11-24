@@ -289,3 +289,75 @@ fn receipt_v2_fixtures_validate_and_invalid_rejected() {
         assert!(decode_receipt_v2(&bytes).is_err(), "{bad_file} must fail");
     }
 }
+
+#[test]
+fn rejects_duplicate_headers_restricted_proxy_headers_unicode_separators_and_tampered_snapshot() {
+    for bad in [
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Trace, value: '1'}\n    - {name: x-trace, value: '2'}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Forwarded-For, value: '1.2.3.4'}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: Forwarded, value: 'for=1.2.3.4'}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Auth-User, value: 'admin'}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Trace, value: \"a\\u0085b\"}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Trace, value: \"a\\u2028b\"}\nresponse: {mode: json}\noutput: [out]\n",
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Trace, value: \"a\\u2029b\"}\nresponse: {mode: json}\noutput: [out]\n",
+    ] {
+        assert!(
+            HttpActionNodeDefinition::from_yaml(bad).is_err(),
+            "must reject:\n{bad}"
+        );
+    }
+
+    // Dynamic header bindings must also reject Unicode separators.
+    let dyn_node = HttpActionNodeDefinition::from_yaml(
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  headers:\n    - {name: X-Trace, from: hdr}\nresponse: {mode: json}\noutput: [out]\n",
+    )
+    .expect("parse");
+    for sep in ["a\u{0085}b", "a\u{2028}b", "a\u{2029}b"] {
+        let mut state = BTreeMap::new();
+        state.insert("hdr".to_owned(), json!(sep));
+        assert_eq!(
+            dyn_node.resolve_canonical_inputs(&state),
+            Err(HttpActionError::InvalidInput)
+        );
+    }
+
+    // Text body without content_type is accepted consistently with Main.
+    let text_node = HttpActionNodeDefinition::from_yaml(
+        "id: h\ntype: http\nrevision: 2\noperation: a.b\nrequest:\n  body: {kind: text, from: payload}\nresponse: {mode: json}\noutput: [out]\n",
+    )
+    .expect("text body without content_type");
+    let mut state = BTreeMap::new();
+    state.insert("payload".to_owned(), json!("hello"));
+    assert!(text_node.resolve_canonical_inputs(&state).is_ok());
+
+    // Tampered template_wire_b64 in frozen snapshot must fail closed.
+    let wire = br#"{"operation":"a.b"}"#;
+    let good_digest = hex_encode(&sha256(wire));
+    let mut snap = HttpActionFrozenSnapshotV2 {
+        schema_version: HTTP_ACTION_SNAPSHOT_SCHEMA.to_owned(),
+        application_id: "1".to_owned(),
+        version_id: "2".to_owned(),
+        instructions_digest: "aa".repeat(32),
+        nodes: vec![HttpActionFrozenNodeV2 {
+            node_id: "h".to_owned(),
+            operation: "a.b".to_owned(),
+            template_digest: good_digest,
+            template_wire_b64: base64::engine::general_purpose::STANDARD.encode(wire),
+            binding_digest: String::new(),
+            output: vec!["out".to_owned()],
+            transition: None,
+        }],
+    };
+    snap.nodes[0].binding_digest = frozen_binding_digest(&snap, &snap.nodes[0]);
+    let good_val = serde_json::to_value(&snap).expect("json");
+    assert!(HttpActionFrozenSnapshotV2::from_value(&good_val).is_ok());
+
+    // Tamper template_wire_b64 without changing template_digest.
+    snap.nodes[0].template_wire_b64 =
+        base64::engine::general_purpose::STANDARD.encode(br#"{"operation":"evil.op"}"#);
+    let bad_val = serde_json::to_value(&snap).expect("json");
+    assert_eq!(
+        HttpActionFrozenSnapshotV2::from_value(&bad_val),
+        Err(HttpActionError::PolicyDenied)
+    );
+}

@@ -9,8 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"golang.org/x/net/http/httpguts"
 )
 
 // Render limits (§3.4 of the T-5D brief). MaxInputsBytes is mirrored by the
@@ -401,7 +399,7 @@ func renderHeaders(bindings []HeaderBinding, inputs map[string]any) ([]Header, e
 		if err != nil {
 			return nil, err
 		}
-		if strings.ContainsAny(text, "\r\n\x00") || !httpguts.ValidHeaderFieldValue(text) {
+		if !validHeaderValue(text) {
 			return nil, invalidInput()
 		}
 		headers = append(headers, Header{Name: name, Value: text})

@@ -906,3 +906,151 @@ fn committed_projector_validates_http_receipt_audience_and_projects_result() {
     };
     assert_eq!(err.class, NodeFailureClass::AuthorizationDenied);
 }
+
+#[tokio::test]
+async fn class_i_never_retries_non_transient_or_unknown_failed_receipt_codes() {
+    const RETRY_PIPELINE: &str = r#"state:
+  run_id: {type: str, value: "run-42"}
+  fx: {type: dict}
+entry_point: fetch_fx
+nodes:
+  - id: fetch_fx
+    type: http
+    revision: 2
+    operation: fx_reference.rates
+    request:
+      path:
+        run_id: {from: run_id}
+    response:
+      mode: json
+      accepted_statuses:
+        - {first: 200, last: 200}
+      max_bytes: 16384
+    settings:
+      retry_on_fail: true
+      max_tries: 3
+      wait_between_tries_ms: 100
+      timeout_ms: 5000
+    output: [fx]
+    transition: END
+"#;
+    let definition = PipelineDefinition::from_yaml(RETRY_PIPELINE).expect("parse pipeline");
+    let snapshot = snapshot_for_yaml(RETRY_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+
+    for non_retryable_code in [
+        "redirect_refused",
+        "response_too_large",
+        "invalid_response",
+        "inputs_too_large",
+        "future_unknown_code",
+    ] {
+        let code_owned = non_retryable_code.to_owned();
+        let executor = ScriptedHttpExecutor::new(vec![Box::new(move |inv| {
+            Ok(failed_receipt(inv, &code_owned, true))
+        })]);
+        let runtimes = PipelineNodeRuntimes::default()
+            .with_execution_id(EXEC_ID)
+            .with_execution_generation(GENERATION)
+            .with_node_recovery_authority(scoped())
+            .with_http_action(executor.clone(), snapshot.clone());
+        let graph = definition
+            .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+            .expect("compile");
+        let mut state = State::new();
+        state.insert("run_id".to_owned(), json!("run-42"));
+        let thread_id = format!("thread-no-retry-{non_retryable_code}");
+        let _ = graph
+            .invoke(state, ExecutionConfig::new(&thread_id))
+            .await
+            .expect_err("non-transient failure must fail");
+        assert_eq!(
+            executor.calls().len(),
+            1,
+            "code {non_retryable_code} must not retry on Class I"
+        );
+    }
+
+    for transient_code in ["dependency_unavailable", "rate_limited", "timeout"] {
+        let code_owned = transient_code.to_owned();
+        let executor = ScriptedHttpExecutor::new(vec![
+            Box::new(move |inv| Ok(failed_receipt(inv, &code_owned, true))),
+            Box::new(|inv| Ok(completed_receipt(inv, 200, json!({"ok": true}), true))),
+        ]);
+        let runtimes = PipelineNodeRuntimes::default()
+            .with_execution_id(EXEC_ID)
+            .with_execution_generation(GENERATION)
+            .with_node_recovery_authority(scoped())
+            .with_http_action(executor.clone(), snapshot.clone());
+        let graph = definition
+            .compile_subgraph_with_runtime(Arc::new(MemoryCheckpointer::new()), &runtimes)
+            .expect("compile");
+        let mut state = State::new();
+        state.insert("run_id".to_owned(), json!("run-42"));
+        let thread_id = format!("thread-retry-{transient_code}");
+        let out = graph
+            .invoke(state, ExecutionConfig::new(&thread_id))
+            .await
+            .expect("transient Class I failure must retry and succeed");
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 2, "code {transient_code} should retry once");
+        assert_eq!(calls[0].attempt, 0);
+        assert_eq!(calls[1].attempt, 1);
+        assert_eq!(out["fx"]["data"], json!({"ok": true}));
+    }
+}
+
+#[tokio::test]
+async fn rpc_timeout_after_execution_deadline_emits_valid_attempt_timeout_reconcile_receipt() {
+    let def = HttpActionNodeDefinition::from_yaml(SIMPLE_GET_NODE).expect("parse");
+    let snapshot = snapshot_for_yaml(SIMPLE_GET_PIPELINE, "fetch_fx", SIMPLE_GET_NODE);
+    let (binding_bytes, binding_hex) = snapshot
+        .binding_digest_for_node(&def)
+        .expect("binding digest");
+
+    // Execution deadline expires while the in-flight RPC returns Timeout.
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(25);
+    let executor = ScriptedHttpExecutor::new(vec![Box::new(move |_| {
+        std::thread::sleep(Duration::from_millis(40));
+        Err(HttpActionRpcError::Timeout)
+    })]);
+    let attempt = HttpActionAttempt::new(
+        def.clone(),
+        binding_bytes,
+        binding_hex,
+        BTreeMap::from([("fx".to_owned(), "dict".to_owned())]),
+        executor,
+        EXEC_ID.to_owned(),
+        GENERATION,
+        Some(5_000),
+        false,
+        Some(deadline),
+    );
+    let node = RecoverableNode::new(
+        Arc::new(attempt),
+        def.config_digest(),
+        NodeRecoveryPolicy::default(),
+        scoped(),
+        None,
+    );
+    let mut state = State::new();
+    state.insert("run_id".to_owned(), json!("run-42"));
+    let ctx = NodeContext::new(state, ExecutionConfig::new("thread-deadline-timeout"), 0);
+    let output = node.execute(&ctx).await.expect("reconcile interrupt");
+    let Some(Interrupt::Dynamic {
+        data: Some(data), ..
+    }) = output.interrupt
+    else {
+        panic!(
+            "expected dynamic reconcile interrupt, got {:?}",
+            output.interrupt
+        );
+    };
+    let receipt: super::node_recovery_receipt::NodeRecoveryRequiredReceipt =
+        serde_json::from_value(data["receipt"].clone()).expect("decode recovery receipt");
+    assert!(receipt.validate(), "receipt must pass validate()");
+    assert_eq!(receipt.failure_class, NodeFailureClass::AttemptTimeout);
+    assert!(matches!(
+        receipt.replay_safety,
+        elitea_agent_runtime::graph::node_recovery::ReplaySafety::UnknownExternalEffect { .. }
+    ));
+}

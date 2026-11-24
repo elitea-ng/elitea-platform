@@ -974,6 +974,15 @@ impl HttpActionFrozenSnapshotV2 {
             {
                 return Err(HttpActionError::PolicyDenied);
             }
+            let wire = BASE64_STANDARD
+                .decode(&node.template_wire_b64)
+                .map_err(|_| HttpActionError::PolicyDenied)?;
+            if wire.is_empty()
+                || wire.len() > MAX_HTTP_TEMPLATE_BYTES
+                || hex_encode(&sha256(&wire)) != node.template_digest
+            {
+                return Err(HttpActionError::PolicyDenied);
+            }
         }
         Ok(snapshot)
     }
@@ -1112,6 +1121,8 @@ pub fn encode_component(value: &str) -> String {
 #[must_use]
 pub fn is_restricted_header(lower_name: &str) -> bool {
     lower_name.starts_with("x-elitea-")
+        || lower_name.starts_with("x-forwarded-")
+        || lower_name.starts_with("x-auth-")
         || matches!(
             lower_name,
             "authorization"
@@ -1131,6 +1142,7 @@ pub fn is_restricted_header(lower_name: &str) -> bool {
                 | "proxy-connection"
                 | "keep-alive"
                 | "idempotency-key"
+                | "forwarded"
         )
 }
 
@@ -1617,8 +1629,16 @@ fn parse_request_template(
         return Err(HttpActionConfigurationError::ResourceExhausted);
     }
     let mut headers = Vec::with_capacity(raw.headers.len());
+    let mut seen_headers = BTreeSet::new();
     for entry in raw.headers {
-        headers.push(parse_header_binding(entry)?);
+        let parsed = parse_header_binding(entry)?;
+        let lower = parsed.name.to_ascii_lowercase();
+        if !seen_headers.insert(lower) {
+            return Err(HttpActionConfigurationError::Invalid(
+                "duplicate header name",
+            ));
+        }
+        headers.push(parsed);
     }
     let body = raw.body.map(parse_body_template).transpose()?;
     let idempotency_key = raw
@@ -2214,11 +2234,15 @@ fn valid_header_name(name: &str) -> bool {
 }
 
 /// Mirrors Go `httpguts.ValidHeaderFieldValue`: printable ASCII + HTAB + obs-text (`0x80..=0xfe`),
-/// refusing `\r`, `\n`, `\0`, DEL (`0x7f`), and other C0 controls.
+/// refusing `\r`, `\n`, `\0`, DEL (`0x7f`), other C0 controls, and Unicode line/paragraph separators
+/// (`U+0085`, `U+2028`, `U+2029`).
 fn valid_header_field_value(value: &str) -> bool {
     value
         .bytes()
         .all(|b| b == b'\t' || (0x20..=0x7e).contains(&b) || (0x80..=0xfe).contains(&b))
+        && !value
+            .chars()
+            .any(|ch| matches!(ch, '\u{0085}' | '\u{2028}' | '\u{2029}'))
 }
 
 fn valid_idempotency_key(value: &str) -> bool {

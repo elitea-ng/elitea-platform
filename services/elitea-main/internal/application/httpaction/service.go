@@ -218,7 +218,7 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	}
 	count := 0
 	for name, values := range headers {
-		if len(values) != 1 || !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(values[0]) {
+		if len(values) != 1 || !httpguts.ValidHeaderFieldName(name) || !validHeaderValue(values[0]) {
 			return Receipt{}, policyDenied()
 		}
 		count += len(name) + len(values[0])
@@ -228,6 +228,12 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 	}
 	if request.Body.Kind == "json" {
 		contentType := "application/json"
+		if request.Body.ContentType != "" {
+			contentType = request.Body.ContentType
+		}
+		headers.Set("Content-Type", contentType)
+	} else if request.Body.Kind == "text" {
+		contentType := "text/plain"
 		if request.Body.ContentType != "" {
 			contentType = request.Body.ContentType
 		}
@@ -258,7 +264,9 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		return Receipt{}, err
 	}
 	if !dispatch {
-		receipt.Retryable = retryable
+		// Preserve the pinned effect row's retryability; never widen Class C -> I
+		// if an admin edited the rule concurrently after the row was created.
+		receipt.Retryable = receipt.Retryable && retryable
 		return receipt, nil
 	}
 	receipt.Retryable = retryable

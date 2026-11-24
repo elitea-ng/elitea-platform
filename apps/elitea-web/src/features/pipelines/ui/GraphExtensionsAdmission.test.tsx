@@ -39,4 +39,46 @@ describe('SplitOut and Aggregate are admitted by default', () => {
     expect(entries).toContain('Parallel');
     expect(entries).toContain('HTTP Request');
   });
+
+  it('validates HTTP response mode (artifact vs empty), forbidden configuration_id, and state refs', () => {
+    const artifactDoc = {
+      entry_point: 'fetch',
+      state: { run_id: 'str', fx: 'dict' },
+      nodes: [
+        {
+          id: 'fetch',
+          type: 'http',
+          revision: 2,
+          operation: 'fx_reference.rates',
+          request: { path: { run_id: { from: 'run_id' } } },
+          response: { mode: 'artifact' },
+          output: ['fx'],
+          transition: 'END',
+        },
+      ],
+    };
+    expect(collectGraphAdmissionIssues(artifactDoc)).toEqual([]);
+
+    const badDoc = {
+      entry_point: 'fetch',
+      state: { fx: 'dict' },
+      nodes: [
+        {
+          id: 'fetch',
+          type: 'http',
+          revision: 2,
+          operation: 'fx_reference.rates',
+          configuration_id: 7,
+          request: { path: { run_id: { from: 'missing_var' } } },
+          response: { mode: 'empty' },
+          output: ['fx'],
+          transition: 'END',
+        },
+      ],
+    };
+    const issues = collectGraphAdmissionIssues(badDoc);
+    expect(issues.some((i) => i.field === 'response.mode')).toBe(true);
+    expect(issues.some((i) => i.field === 'configuration_id')).toBe(true);
+    expect(issues.some((i) => i.field === 'request.path.run_id' && i.message.includes('missing_var'))).toBe(true);
+  });
 });
