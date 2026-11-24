@@ -151,6 +151,27 @@ Six built-in roles of the central administration mode hold a set of permissions 
 | `security_auditor` | Security auditor | `models.admin.audit_trail.view`, `access.roles.view`, `access.breakglass.review`, and the security signal permissions when security signals ship | Use any route that writes or approves, other than attesting a break-glass review. Never `security.signals.reidentify`. |
 | `emergency_access` | Emergency access | `access.breakglass.request` | Anything else: the role only lets its holder ask for a break-glass elevation. |
 
+### What each role cannot do
+
+The console hides what a role cannot use. The server refuses it as well, and the separation matrix pins that answer: `services/elitea-main/internal/api/testdata/separation_matrix.txt` in the source tree. It has one line for each route and action of the administration surface. For each built-in role, the line says whether the server admits the request (`allowed`) or refuses it (`refused`). The roles are tested with their standing sets, without an elevation. CI fails when the server answers differently from the file. Tests that read the file also hold the "Cannot" column above:
+
+- `llm_manager` is refused on every write route for identity, roles, users, the agent registry, delegation reviews, worker egress, the kill switch, retention and guardrails.
+- `project_administrator` is refused on every platform configuration route and on every LLM write route.
+- `security_auditor` is refused on every route that writes or approves.
+
+The file does not yet pin the routes that change who holds what. Those lines are marked `pending #2587`, and a later release pins them against a database:
+
+- role assignment on the Users page and under `/admin/modes`
+- saving the Roles matrix and syncing it to projects
+- creating, renaming and deleting roles
+- adding, changing and removing project members, on both member routes
+- the bulk invite and the project matrix
+- writes to SCIM group bindings
+- writes to identity providers
+- every route of the central project settings under `/configurations`, reads included
+
+The narrow-role checks above still read the router's own answer for the pending routes where only the role's gate decides.
+
 The administration `editor` and `viewer` roles are built-in too. Elitea defines no set for them: they keep the set they held at the upgrade (empty on a new deployment). On a deployment upgraded from the legacy platform, the administration `system` role is also built-in; it keeps its set and is never assigned.
 
 **The sets are locked.** The server refuses to rename or delete a built-in role (`409`), and to change its permissions in the Roles matrix (`403` with the code `role_set_locked`), for every caller, a super admin included. A deployment that wants a different set creates a custom role and gives it the permissions. The operator command [`elitea-main admin-role reset <role>`](/deployment/operations#administrative-roles-from-the-command-line) puts a built-in set back to the one Elitea defines.
