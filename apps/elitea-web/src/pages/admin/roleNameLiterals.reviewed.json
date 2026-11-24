@@ -1,20 +1,6 @@
 {
-  "about": "The reviewed client checks by role name (ADR-0059 decision 7, story R0.13), read by roleNameLiterals.test.ts. Decisions: kept (tests the name on purpose), compat (serves the single admin_role field the Users page still reads; goes with R0.8c, issue 2586), project (a project role name, which ADR-0059 does not change), unrelated (not a role name). The four-name type AdminRole in api/adminUsersApi.ts types that same compat field and goes with it; the server never trusts any of these: it tests admin.auth.users.super_admin.",
+  "about": "The reviewed client checks by role name (ADR-0059 decision 7, story R0.13), read by roleNameLiterals.test.ts. Decisions: kept (tests the name on purpose), compat (kept for compatibility; none left since R0.8c, issue 2586, removed the single admin_role field, its AdminRole type and the single-role picker), project (a project role name, which ADR-0059 does not change), unrelated (not a role name). The server never trusts any of these: it tests admin.auth.users.super_admin.",
   "sites": [
-    {
-      "file": "elitea-web/src/pages/admin/AdminUsersTable.tsx",
-      "comparison": "const rowIsSuperAdmin = row.admin_role === 'super_admin';",
-      "count": 1,
-      "decision": "compat",
-      "why": "Presentation only: the single-role picker of a super_admin row is disabled for a caller who cannot assign super_admin. Reads the compat admin_role field; R0.8c replaces the picker with the role set."
-    },
-    {
-      "file": "elitea-web/src/pages/admin/AdminUsersTable.tsx",
-      "comparison": "disabled={option.value === 'super_admin' && !canAssignSuperAdmin}",
-      "count": 1,
-      "decision": "compat",
-      "why": "Presentation only: the super_admin option of the single-role picker is disabled without admin.auth.users.super_admin (canAssignSuperAdmin is the permission). The server refuses on the permission either way."
-    },
     {
       "file": "elitea-web/src/pages/admin/ProjectMemberDialog.tsx",
       "comparison": "return roles.some((option) => option.name === 'admin') ? 'admin' : (roles[0]?.name ?? '');",

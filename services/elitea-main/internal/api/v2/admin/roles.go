@@ -111,7 +111,9 @@ const projectUserNameLikePattern = `project\_user\_%`
 //
 // Response body: {total, rows:[{name, <role>: bool, …}], catalogue:[{name,
 // deprecated}]} — one row per known permission, one boolean column per role in
-// the selected scope, and one catalogue entry per row.
+// the selected scope, and one catalogue entry per row. The central scope adds
+// `roles`, one entry per column with its seed record (ADR-0059 R0.8c): the
+// Users page lists the assignable roles from it.
 func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 	scope := chi.URLParam(r, "scope")
 	if !isKnownScope(scope) {
@@ -124,10 +126,18 @@ func (h *Handler) AdminPermissions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matrix, err := h.readMatrix(r.Context(), scope, chi.URLParam(r, "mode"))
+	mode := chi.URLParam(r, "mode")
+	matrix, err := h.readMatrix(r.Context(), scope, mode)
 	if err != nil {
 		writeMatrixError(w, err)
 		return
+	}
+	if scope == scopeAdministration {
+		// Only the read describes the columns; the writes diff the cells.
+		if matrix.columns, err = h.centralColumns(r.Context(), mode, matrix.roles); err != nil {
+			writeMatrixError(w, err)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, matrix.response())
 }
@@ -144,6 +154,21 @@ type permissionMatrix struct {
 	inherited bool
 	// projectID is 0 for the central (administration) scope.
 	projectID int
+	// columns describes each role of a central matrix; nil for a project one.
+	columns []matrixColumn
+}
+
+// matrixColumn is one role of the central matrix with its seed record
+// (elitea_auth.admin_role_seeds, shared 0263): built-in is a recorded fact,
+// not a name. The Users page hides a role marked `unassignable` (the legacy
+// `system` role) and labels a built-in role by its display name.
+type matrixColumn struct {
+	Name    string `json:"name"`
+	BuiltIn bool   `json:"built_in"`
+	// Marker is the seed row's marker, null for a custom role.
+	Marker *string `json:"marker"`
+	// DisplayName is the registry's name for a built-in role, empty otherwise.
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 func (m permissionMatrix) response() map[string]any {
@@ -157,7 +182,55 @@ func (m permissionMatrix) response() map[string]any {
 	}
 	// `total` counts the CATALOGUE, matching the legacy `len(all_permissions)`.
 	// It is not a page count — this endpoint is never paginated.
-	return map[string]any{"total": len(rows), "rows": rows, "catalogue": catalogueEntries(m.catalogue)}
+	body := map[string]any{"total": len(rows), "rows": rows, "catalogue": catalogueEntries(m.catalogue)}
+	if m.columns != nil {
+		body["roles"] = m.columns
+	}
+	return body
+}
+
+// centralColumns describes the roles of a central mode with their seed rows.
+// A database without the seed table records no built-in role.
+func (h *Handler) centralColumns(ctx context.Context, mode string, roles []string) ([]matrixColumn, error) {
+	markers := map[string]string{}
+	present, err := h.seedRecordPresent(ctx, h.pool)
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		rows, err := h.pool.Query(ctx, `
+SELECT role.name, seed.marker
+FROM elitea_auth.admin_role_seeds AS seed
+JOIN public.auth_core__role AS role ON role.id = seed.role_id
+WHERE role.mode = $1`, mode)
+		if err != nil {
+			return nil, fmt.Errorf("read the built-in roles: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var name, marker string
+			if err := rows.Scan(&name, &marker); err != nil {
+				return nil, fmt.Errorf("read the built-in roles: %w", err)
+			}
+			markers[name] = marker
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("read the built-in roles: %w", err)
+		}
+	}
+	columns := make([]matrixColumn, 0, len(roles))
+	for _, role := range roles {
+		column := matrixColumn{Name: role}
+		if marker, ok := markers[role]; ok {
+			column.BuiltIn = true
+			column.Marker = &marker
+			if declared, ok := adminaccess.LookupBuiltInRole(role); ok {
+				column.DisplayName = declared.DisplayName
+			}
+		}
+		columns = append(columns, column)
+	}
+	return columns, nil
 }
 
 // catalogueEntry describes one permission of the catalogue. It is served

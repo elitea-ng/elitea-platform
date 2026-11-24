@@ -146,14 +146,16 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/secrets',
           label: t('pages.admin.nav.secrets', 'Secrets'),
           icon: VpnKeyOutlinedIcon,
-          anyPermission: ['configuration.secrets.secret.list', 'configuration.secrets.secret.create'],
+          // The listing is gated on `…secret.view` (`v2/secrets/admin.go`);
+          // `…secret.list` is a default-mode name the console never receives.
+          anyPermission: ['configuration.secrets.secret.view', 'configuration.secrets.secret.create'],
         },
         {
           id: 'app-requests',
           path: '/app-requests',
           label: t('pages.admin.nav.appRequests', 'App Requests'),
           icon: AssignmentOutlinedIcon,
-          anyPermission: ['admin.moderation', 'admin.moderation.view'],
+          anyPermission: ['admin.moderation'],
         },
       ],
     },
@@ -165,7 +167,30 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/configuration',
           label: t('pages.admin.nav.configuration', 'Configuration'),
           icon: SettingsOutlinedIcon,
-          anyPermission: ['runtime.plugins'],
+          // ADR-0059 R0.16 (interim until R3.2): what the three Configuration
+          // routes admit, `runtime.plugins` or any narrow name a section
+          // declares (`config_section_access.go`). `adminNavGroups.test.ts`
+          // holds this list to the server's, exported to
+          // `./adminPermissionRegistry.json`.
+          anyPermission: [
+            'runtime.plugins',
+            'configuration.branding',
+            'configuration.microsoft_apps',
+            'configuration.native_clients',
+            'configuration.service_descriptors',
+            'identity.sso.settings.manage',
+            'identity.sso.view',
+            'llm.catalogue.view',
+            'llm.guardrails.manage',
+            'llm.policy.manage',
+            'llm.policy.view',
+            'mcp.catalogue.manage',
+            'platform.config.manage',
+            'platform.config.view',
+            'platform.email.manage',
+            'platform.maintenance.manage',
+            'runtime.airun.serviceproviders',
+          ],
         },
         {
           id: 'branding',
@@ -191,15 +216,17 @@ export function navGroups(): readonly AdminNavGroup[] {
           //
           // This platform's administration mode issues that name. See this
           // module's header on why a gate whose permission no seed grants is
-          // a nav item that disappears for good.
-          anyPermission: ['runtime.plugins'],
+          // a nav item that disappears for good. ADR-0059 R0.4a: the routes
+          // accept `platform.email.manage` beside it.
+          anyPermission: ['runtime.plugins', 'platform.email.manage'],
         },
         {
           id: 'features',
           path: '/features',
           label: t('pages.admin.nav.features', 'Features'),
           icon: TuneOutlinedIcon,
-          anyPermission: ['runtime.plugins'],
+          // The Features sections read on `platform.config.view` (R0.5).
+          anyPermission: ['runtime.plugins', 'platform.config.view', 'platform.config.manage'],
         },
         {
           id: 'service-descriptors',
@@ -238,8 +265,9 @@ export function navGroups(): readonly AdminNavGroup[] {
           // (`internal/api/router.go`, `central("configuration.governance")`),
           // a name this platform's administration mode issues — see this
           // module's header on why an unissuable name is a nav item that
-          // disappears for good.
-          anyPermission: ['configuration.governance'],
+          // disappears for good. ADR-0059 R0.3: the listing accepts
+          // `llm.policy.view` beside it.
+          anyPermission: ['configuration.governance', 'llm.policy.view'],
         },
         {
           id: 'agent-registry',
@@ -322,7 +350,8 @@ export function navGroups(): readonly AdminNavGroup[] {
           // server-side, and it is the string the LEGACY Tasks page declares
           // (legacy/plugins/admin/module.py:392-421). Shared migration 0060
           // grants it, so this item cannot disappear for want of a grant.
-          anyPermission: ['runtime.plugins'],
+          // ADR-0059 R0.4a: the routes accept `platform.operations.view` too.
+          anyPermission: ['runtime.plugins', 'platform.operations.view'],
         },
         {
           id: 'kill-switch',

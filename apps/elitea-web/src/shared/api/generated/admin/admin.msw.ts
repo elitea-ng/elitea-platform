@@ -295,7 +295,6 @@ export const getListAdminAuthUsersResponseMock = (): AdminAuthUsersPage => ({
       suspended: false,
       is_admin: true,
       is_active: true,
-      admin_role: "admin",
       admin_roles: ["admin", "llm_manager"],
     },
     {
@@ -306,7 +305,6 @@ export const getListAdminAuthUsersResponseMock = (): AdminAuthUsersPage => ({
       suspended: true,
       is_admin: false,
       is_active: false,
-      admin_role: null,
       admin_roles: [],
     },
   ],

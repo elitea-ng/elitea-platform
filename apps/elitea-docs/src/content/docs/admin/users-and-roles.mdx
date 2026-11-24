@@ -36,7 +36,9 @@ Invitations do not have a dedicated accept-invite page. A new member accepts an 
 
 A person can hold several administration roles at once, for example `llm_manager` and `security_auditor`. They hold the union of the permissions of every role; there is no role switcher. Any role of the administration mode can be assigned, built-in or custom, except one that is never assigned (the legacy `system` role).
 
-The Users page still offers one role per person; a control for several roles comes in a later release. Until then, assign several roles through the API.
+On the Users page, the **Administration roles** column holds a picker for each person. Open it, tick every role the person should hold, and close it: closing saves the whole set in one request. Built-in roles are shown by their display name (for example *LLM manager*) with a line on what the role is for; a custom role is shown by its name. The picker offers every role that holds at least one permission, except the legacy `system` role; the empty `editor` and `viewer` roles of a new deployment are not offered, but a role a person already holds is always shown so it can be taken away. When the server refuses a change, for example because you would change your own roles or give a permission you do not hold, the page says why and keeps the roles as they were. The CSV export lists the roles by the same names, separated by `;`.
+
+You can also set the roles through the API.
 
 **`POST /api/v2/admin/auth_users/administration`** with `action: set_admin_role` sets a person's roles. Send one of two forms:
 
@@ -52,7 +54,7 @@ A request with both is a `400`, and so is a role the deployment does not define 
 
 **`POST /api/v2/admin/modes/administration`** with `{"user_id", "mode": "administration", "role"}` adds one role and keeps the others; `DELETE` with `?id=<user_id>:administration:<role>` removes one.
 
-**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, sorted by name: no role ranks above another, so a person who holds only `llm_manager` is listed with `llm_manager`. The single `admin_role` field, the highest of `super_admin`, `admin`, `editor` and `viewer` that the person holds, is kept while the Users page reads it and is removed when the page shows the set of roles. No check reads it: read `admin_roles`.
+**`GET /api/v2/admin/auth_users/administration`** lists every role of each person in `admin_roles`, sorted by name: no role ranks above another, so a person who holds only `llm_manager` is listed with `llm_manager`. The single `admin_role` field, which held the highest of `super_admin`, `admin`, `editor` and `viewer`, is no longer returned: read `admin_roles`.
 
 ### What the name `super_admin` reaches
 
@@ -86,7 +88,7 @@ Open **Roles**. It shows a permission matrix across three scopes, each a tab:
 
 Besides the broad central permissions such as `runtime.plugins` and `configuration.governance`, the deployment has narrow ones, each for one subject. The upgrade that adds them grants all of them to the `super_admin` role and all but `identity.sso.trust.manage` to the `admin` role, so both administrator roles keep everything they could do and hold the new names too. No existing grant is removed.
 
-A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation still shows the E-mail, Tasks and Configuration pages only to a holder of `runtime.plugins`, so a role that holds only a narrow name can call those routes but does not see the pages in the menu until a later release. The built-in narrow roles below hold only a narrow set.
+A route accepts a narrow permission beside the broad one it narrows, so a holder of the broad permission sees no change. The rows that say **Accepted** are wired today on the server; the other names are accepted as later releases wire their routes. The admin navigation shows a page to a holder of any permission its routes accept, broad or narrow, so a narrow role sees the pages it can use in the menu (see [what a narrow role sees](/admin/overview#what-a-narrow-role-sees)). The built-in narrow roles below hold only a narrow set.
 
 | Permission | Allows | Narrows |
 |---|---|---|
@@ -138,7 +140,7 @@ Both legacy names end on a sunset date, at least 90 days after the last replacem
 
 ## Built-in administration roles
 
-Six built-in roles of the central administration mode hold a set of permissions that Elitea defines. The upgrade that adds the four new ones creates them with their sets; it assigns them to nobody. The Roles matrix still labels each column with the role name; the display names appear when the roles can be assigned from the console.
+Six built-in roles of the central administration mode hold a set of permissions that Elitea defines. The upgrade that adds the four new ones creates them with their sets; it assigns them to nobody. The Users page shows each built-in role by its display name; the Roles matrix still labels each column with the role name.
 
 | Role | Display name | Permissions | Cannot |
 |---|---|---|---|

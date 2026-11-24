@@ -29,7 +29,8 @@
 # Users listing (users.go adminRolePriority in the listing SQL) is gone, the
 # listing returns the set by name; currentAdminRole was removed by R0.8b and
 # the demotion guard tests admin.auth.users.super_admin
-# (adminaccess.Caller.SuperAdmin), not the caller's role name.
+# (adminaccess.Caller.SuperAdmin), not the caller's role name. R0.8c removed
+# the listing's single `admin_role` field and its legacyAdminRoleOrder.
 
 # ── The ADR's table ─────────────────────────────────────────────────────────
 internal/infra/db/projectaccess/projectaccess.go | func Membership | sql:super_admin | 1 | kept | The standing administration role named super_admin passes the project access check of every project. An elevation gives permissions, not the name, and a custom role is not the name: neither passes (middleware/project_authorization_elevation_postgres_integration_test.go). Break-glass repairs the platform; it does not open project content.
@@ -39,8 +40,6 @@ internal/db/queries/auth_provisioning.sql | query HasAuthAdministrationAdminRole
 internal/db/queries/auth_provisioning.sql | query HasAuthAdministrationAdminRole | sql:super_admin | 1 | kept | As above: the two names, by decision.
 internal/db/sqlcgen/auth_provisioning.sql.go | const hasAuthAdministrationAdminRole | sql:admin | 1 | kept | Generated from auth_provisioning.sql HasAuthAdministrationAdminRole.
 internal/db/sqlcgen/auth_provisioning.sql.go | const hasAuthAdministrationAdminRole | sql:super_admin | 1 | kept | Generated from auth_provisioning.sql HasAuthAdministrationAdminRole.
-internal/api/v2/admin/users.go | var legacyAdminRoleOrder | literal:super_admin | 1 | compat | Serves only the single admin_role field of the listing, which the Users page still reads; no check decides by it. Goes with R0.8c.
-internal/api/v2/admin/users.go | var legacyAdminRoleOrder | literal:admin | 1 | compat | As above.
 
 # ── The super_admin role as the TARGET of a write ───────────────────────────
 # Giving or taking the role named super_admin needs the permission

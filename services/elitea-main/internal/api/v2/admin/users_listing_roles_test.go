@@ -26,10 +26,9 @@ func TestTheUsersListingShowsANarrowRoleHeldAlone(t *testing.T) {
 	if !slices.Equal(row.AdminRoles, []string{adminaccess.RoleLLMManager}) || !row.IsAdmin {
 		t.Fatalf("listing = %+v, want admin_roles [llm_manager] and is_admin true", row)
 	}
-	// The single legacy field names none of the four, so it is null; it is
-	// served for one release and read by no check (R0.8c removes it).
+	// The single legacy field is gone (R0.8c): the set is the only answer.
 	if row.AdminRole != nil {
-		t.Fatalf("admin_role = %q, want null for a person with no legacy role", *row.AdminRole)
+		t.Fatalf("admin_role = %s, want the field absent", row.AdminRole)
 	}
 }
 
@@ -43,8 +42,8 @@ func TestTheUsersListingRanksNoRoleNameAboveAnother(t *testing.T) {
 	if !slices.Equal(row.AdminRoles, []string{"empty_role", "super_admin"}) {
 		t.Fatalf("admin_roles = %v, want [empty_role super_admin]", row.AdminRoles)
 	}
-	if row.AdminRole == nil || *row.AdminRole != adminaccess.RoleSuperAdmin {
-		t.Fatalf("admin_role = %v, want super_admin", row.AdminRole)
+	if row.AdminRole != nil {
+		t.Fatalf("admin_role = %s, want the field absent", row.AdminRole)
 	}
 }
 
