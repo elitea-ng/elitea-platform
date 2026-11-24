@@ -29,9 +29,10 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
+import { PermissionCatalogueEntry } from '@/shared/api/generated/model/permissionCatalogueEntry.zod';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
-import { unwrapListPage } from '@/shared/api/unwrap';
+import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
 /** Which matrix is being read or written. See this module's header. */
 type PermissionScope = 'administration' | 'public' | 'support';
@@ -46,6 +47,18 @@ type PermissionScope = 'administration' | 'public' | 'support';
 export interface PermissionMatrixRow {
   readonly name: string;
   readonly [role: string]: string | boolean | undefined;
+}
+
+/**
+ * The matrix read: its rows, and the permission names the server marks
+ * deprecated (ADR-0059 R0.14a: `runtime.plugins` and
+ * `configuration.governance`, which end on a sunset date). The marks travel in
+ * the response's `catalogue`, beside the rows, never in them: every key of a
+ * row other than `name` is a role column, and the rows go back on a save.
+ */
+export interface PermissionMatrixData {
+  readonly rows: PermissionMatrixRow[];
+  readonly deprecated: readonly string[];
 }
 
 export interface PermissionMatrixTarget {
@@ -131,6 +144,17 @@ const ROLE_REFUSAL_MESSAGES: Readonly<Record<string, () => string>> = {
     ),
   role_self_escalation: () =>
     t('pages.admin.roles.refusal.selfEscalation', 'This change would give you permissions that you do not hold.'),
+  // ADR-0059 R0.11: the 409 of the last-administrator rule.
+  last_administrator: () =>
+    t(
+      'pages.admin.roles.refusal.lastAdministrator',
+      'This change would leave the deployment without an administrator. Give the role to someone else first.',
+    ),
+  permission_deprecated: () =>
+    t(
+      'pages.admin.roles.refusal.deprecated',
+      'This permission is being retired, so it can no longer be added to a role. Grant the narrower permission that replaces it.',
+    ),
   role_caller_unresolved: () =>
     t(
       'pages.admin.roles.refusal.unresolved',
@@ -168,19 +192,37 @@ function roleRefusalReason(body: RoleRefusalBody): string | undefined {
   return sentences.join(' ');
 }
 
+/**
+ * The names a matrix body's `catalogue` marks `deprecated: true`. The entry is
+ * the contract's `PermissionCatalogueEntry` (the schema the personal-project
+ * matrix shares); an entry that does not parse marks nothing.
+ */
+function deprecatedNames(response: unknown): string[] {
+  const body = unwrapBody(response);
+  if (typeof body !== 'object' || body === null) return [];
+  const catalogue = (body as { catalogue?: unknown }).catalogue;
+  if (!Array.isArray(catalogue)) return [];
+  return catalogue.flatMap((entry: unknown) => {
+    const parsed = PermissionCatalogueEntry.safeParse(entry);
+    return parsed.success && parsed.data.deprecated ? [parsed.data.name] : [];
+  });
+}
+
 /** `GET /admin/permissions/{scope}/{targetMode}` — the whole matrix, unpaginated. */
 export function usePermissionMatrix(
   target: PermissionMatrixTarget,
   options: { enabled?: boolean } = {},
-): UseQueryResult<PermissionMatrixRow[], Error> {
+): UseQueryResult<PermissionMatrixData, Error> {
   return useQuery({
     queryKey: adminRolesKeys.matrix(target),
     enabled: options.enabled ?? true,
-    queryFn: async (): Promise<PermissionMatrixRow[]> =>
-      unwrapListPage<PermissionMatrixRow>(
-        await eliteaFetch<unknown>(matrixUrl(target)),
-        'adminPermissionMatrix',
-      ).rows,
+    queryFn: async (): Promise<PermissionMatrixData> => {
+      const response = await eliteaFetch<unknown>(matrixUrl(target));
+      return {
+        rows: unwrapListPage<PermissionMatrixRow>(response, 'adminPermissionMatrix').rows,
+        deprecated: deprecatedNames(response),
+      };
+    },
   });
 }
 

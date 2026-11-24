@@ -88,6 +88,14 @@ type ServerConfig struct {
 	MaxInputEntries        int
 	MaxInputContentBytes   uint64
 	MaxStringBytes         int
+	// RequiredWorkerCapabilities names domain-scoped capabilities every
+	// claiming worker must advertise (either in worker_capabilities or via a
+	// matching legacy boolean). Validated at startup; missing capabilities
+	// fail closed with UNSUPPORTED_CAPABILITY before Claim.
+	RequiredWorkerCapabilities []string
+	// ExtraServerCapabilities appends validated domain-named capabilities to
+	// ClaimReceiptV1.server_capabilities on executable receipts.
+	ExtraServerCapabilities []string
 }
 
 type Server struct {
@@ -139,6 +147,8 @@ type Server struct {
 	// to remote agents (ADR-0044 decision 4); nil answers
 	// MintDelegationAssertion UNSUPPORTED_CAPABILITY.
 	delegationAssertions DelegationAssertions
+	requiredWorkerCaps   runtimedomain.CapabilitySet
+	extraServerCaps      runtimedomain.CapabilitySet
 }
 
 // AdmissionPinReader reads the credential profile an execution was admitted
@@ -202,6 +212,17 @@ func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier Comm
 	if config.MaxInputManifestBytes <= 0 || config.MaxInputEntries <= 0 || config.MaxInputContentBytes == 0 || config.MaxStringBytes <= 0 {
 		return nil, errors.New("control input limits must be positive")
 	}
+	requiredWorkerCaps, err := runtimedomain.ParseCapabilities(config.RequiredWorkerCapabilities)
+	if err != nil {
+		return nil, errors.New("control required worker capabilities are invalid")
+	}
+	extraServerCaps, err := runtimedomain.ParseCapabilities(config.ExtraServerCapabilities)
+	if err != nil {
+		return nil, errors.New("control extra server capabilities are invalid")
+	}
+	if _, err := extraServerCaps.With(builtInServerCapabilities...); err != nil {
+		return nil, errors.New("control extra server capabilities exceed capacity headroom")
+	}
 	meter := config.Meter
 	if meter == nil {
 		meter = otel.Meter("elitea-main")
@@ -213,13 +234,28 @@ func NewServer(config ServerConfig, authorizer WorkloadAuthorizer, verifier Comm
 	if err != nil {
 		return nil, err
 	}
-	return &Server{config: config, authorizer: authorizer, verifier: verifier, claims: claims, inputs: inputs, settlements: settlements, vectorMintFailures: failures}, nil
+	return &Server{
+		config:             config,
+		authorizer:         authorizer,
+		verifier:           verifier,
+		claims:             claims,
+		inputs:             inputs,
+		settlements:        settlements,
+		vectorMintFailures: failures,
+		requiredWorkerCaps: requiredWorkerCaps,
+		extraServerCaps:    extraServerCaps,
+	}, nil
 }
 
 func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimCommandRequestV1) (*runtimev1.ClaimCommandResponseV1, error) {
 	if request == nil || request.GetWorkloadSessionId() == "" || request.GetProducerId() == "" || hasUnknownFields(request.ProtoReflect()) {
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The claim request is malformed.", false), nil
 	}
+	workerCaps, err := runtimedomain.ParseCapabilities(request.GetWorkerCapabilities())
+	if err != nil {
+		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The claim request capabilities are malformed.", false), nil
+	}
+	effective := resolveWorkerCapabilities(request, workerCaps)
 	workloadIdentity, err := s.authorizer.AuthorizeWorkload(ctx, request.GetWorkloadSessionId(), request.GetProducerId())
 	if err != nil || workloadIdentity == "" {
 		refusalCode, refusalMessage, refusalRetryable := workloadRefusal(err)
@@ -234,8 +270,15 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	if err != nil {
 		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The signed worker command is malformed.", false), nil
 	}
-	if rejection := s.governedClaimRejection(ctx, request, command); rejection != nil {
+	if rejection := s.governedClaimRejection(ctx, effective.governedSecurityContext, command); rejection != nil {
 		return rejection, nil
+	}
+	if rejection := s.requiredWorkerCapabilitiesRejection(effective); rejection != nil {
+		return rejection, nil
+	}
+	serverCaps, err := s.serverCapabilitiesForClaim(command)
+	if err != nil {
+		return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_INTERNAL, "The claim server capabilities are unavailable.", false), nil
 	}
 
 	decision, err := s.claims.Claim(ctx, executionapp.ClaimRequest{
@@ -248,11 +291,12 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 		WorkloadIdentity:             workloadIdentity,
 		WorkloadSessionID:            request.GetWorkloadSessionId(),
 		ProducerID:                   request.GetProducerId(),
-		AgentModelCheckpointRecovery: request.GetAgentModelCheckpointRecovery(),
-		NodeRecovery:                 request.GetNodeRecovery(),
-		FanoutInterruptDecisions:     request.GetFanoutInterruptDecisions(),
-		FanoutDelegatedCredentials:   request.GetFanoutDelegatedCredentials(),
-		IdleCompaction:               request.GetIdleCompaction(),
+		AgentModelCheckpointRecovery: effective.agentModelCheckpointRecovery,
+		NodeRecovery:                 effective.nodeRecovery,
+		FanoutInterruptDecisions:     effective.fanoutInterruptDecisions,
+		FanoutDelegatedCredentials:   effective.fanoutDelegatedCredentials,
+		IdleCompaction:               effective.idleCompaction,
+		WorkerCapabilities:           workerCaps.Strings(),
 	})
 	if err != nil {
 		logClaimRejection(ctx, "claim", command, err)
@@ -315,6 +359,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	// when told so (an older Main would refuse them and the run would never
 	// settle).
 	receipt.ToolkitTypedRefusals = advertisesTypedToolRefusals(command)
+	receipt.ServerCapabilities = serverCaps
 	// The paused writer the admitting transaction stored on the job (FU-269).
 	if writer := decision.PausedWriter; writer != nil {
 		receipt.PausedWriter = &runtimev1.PausedWriterV1{ExecutionId: writer.ExecutionID, Generation: writer.Generation}
@@ -1084,7 +1129,7 @@ var _ runtimev1.RuntimeControlServiceServer = (*Server)(nil)
 // execution's pin is governed, because that command lost the context its
 // admission recorded. Neither is retryable: the same command and worker
 // meet the same answer.
-func (s *Server) governedClaimRejection(ctx context.Context, request *runtimev1.ClaimCommandRequestV1, command *runtimev1.WorkerCommandV1) *runtimev1.ClaimCommandResponseV1 {
+func (s *Server) governedClaimRejection(ctx context.Context, governedWorker bool, command *runtimev1.WorkerCommandV1) *runtimev1.ClaimCommandResponseV1 {
 	if ref := command.GetSecurityContextRef(); ref != nil {
 		reference, err := securitycontext.ReferenceFromProto(ref)
 		if err == nil && reference.ContentID != securitycontext.ContentIDPrefix+command.GetExecutionId() {
@@ -1094,7 +1139,7 @@ func (s *Server) governedClaimRejection(ctx context.Context, request *runtimev1.
 			logClaimRejection(ctx, "security_context_ref", command, err)
 			return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PROTOCOL_VIOLATION, "The security context reference is malformed.", false)
 		}
-		if !request.GetGovernedSecurityContextV1() {
+		if !governedWorker {
 			return claimRejection(runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_GOVERNED_WORKER_REQUIRED, "The command needs a worker that verifies the execution security context.", false)
 		}
 		// The run's revocation epochs (#1121): a stale binding, mandate or

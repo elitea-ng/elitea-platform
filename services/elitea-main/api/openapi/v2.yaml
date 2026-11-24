@@ -20960,9 +20960,9 @@ components:
 
     AdminAuthUserRow:
       type: object
-      required: [id, name, email, last_login, suspended, is_admin, is_active, admin_role, admin_roles]
+      required: [id, name, email, last_login, suspended, is_admin, is_active, admin_roles]
       description: >
-        NOTE(W2): internal/api/v2/admin/users.go:215-229 — one account of
+        NOTE(W2): internal/api/v2/admin/users.go:203-216 — one account of
         the deployment.
       properties:
         id: { type: integer }
@@ -20981,20 +20981,13 @@ components:
         is_active:
           type: boolean
           description: Legacy field. The inverse of `suspended`.
-        admin_role:
-          type: string
-          nullable: true
-          description: >
-            The highest of `super_admin`, `admin`, `editor` and `viewer` that
-            the account holds, null when it holds none of them. Kept for one
-            release beside `admin_roles`; read `admin_roles`.
         admin_roles:
           type: array
           items: { type: string }
           description: >
-            Every administration role the account holds: the four legacy names
-            first, highest first, then every other role by name. Empty for an
-            account with no administration role.
+            Every administration role the account holds, sorted by name: no
+            role ranks above another (ADR-0059 R0.13). Empty for an account
+            with no administration role.
 
     AdminAuthUsersPage:
       type: object
@@ -21098,8 +21091,11 @@ components:
             `role_permission_not_held`, `role_own_set_locked`,
             `role_permission_reserved`, `role_super_admin_required`,
             `role_self_escalation`, `role_caller_unresolved`,
-            `role_self_assignment` or `role_set_locked`. Absent on a 403 of
-            the route gate.
+            `role_self_assignment` or `role_set_locked` (403), or
+            `permission_deprecated` (400: the save adds a legacy permission,
+            `runtime.plugins` or `configuration.governance`, to a role that
+            does not hold it; ADR-0059 R0.14a). Absent on a 403 of the route
+            gate.
         role:
           type: string
           description: The role the refusal is about, when there is one.
@@ -22342,13 +22338,56 @@ components:
       type: object
       required: [total, rows]
       description: >
-        NOTE(W2): internal/api/v2/admin/roles.go:148-152. `total` counts the
+        NOTE(W2): internal/api/v2/admin/roles.go:147-180. `total` counts the
         permission CATALOGUE; this endpoint is never paginated.
       properties:
         total: { type: integer }
         rows:
           type: array
           items: { $ref: '#/components/schemas/PermissionMatrixRow' }
+        roles:
+          type: array
+          description: >
+            The central (administration-scope) matrix only: one entry per role
+            column, describing it by its seed record (ADR-0059 R0.8c). Absent
+            on a project matrix.
+          items: { $ref: '#/components/schemas/PermissionMatrixRoleColumn' }
+        catalogue:
+          type: array
+          items: { $ref: '#/components/schemas/PermissionCatalogueEntry' }
+          description: >
+            One entry per row, beside the rows rather than in them: every key
+            of a row other than `name` is a role column, and a client sends the
+            rows back on a save.
+
+    PermissionMatrixRoleColumn:
+      type: object
+      required: [name, built_in, marker]
+      description: >
+        NOTE(W2): internal/api/v2/admin/roles.go:165. `built_in` is true when
+        elitea_auth.admin_role_seeds holds a record for the role, not because of
+        its name. `marker` is the record's marker (declared, as_found or
+        unassignable), null for a custom role. `display_name` is set for a
+        built-in role Elitea defines.
+      properties:
+        name: { type: string }
+        built_in: { type: boolean }
+        marker: { type: string, nullable: true }
+        display_name: { type: string }
+
+    PermissionCatalogueEntry:
+      type: object
+      required: [name, deprecated]
+      description: >
+        NOTE(W2): internal/api/v2/admin/roles.go:239-258 (ADR-0059 R0.14a).
+      properties:
+        name: { type: string }
+        deprecated:
+          type: boolean
+          description: >
+            The permission ends on a sunset date. Existing grants keep
+            working; a save that adds it to a role that does not hold it is
+            refused with `permission_deprecated`.
 
     UserProjectPermissionsUpdate:
       description: >
@@ -25188,11 +25227,9 @@ paths:
         user's e-mail address. `counts` is computed over ALL users, unfiltered,
         because it labels the page's two tabs.
 
-        `admin_roles` lists every administration role of the account: the four
-        legacy names first (highest first), then every other role by name.
-        `admin_role` is the highest of the four legacy names the account holds
-        (null when it holds none of them); it is kept for one release beside
-        `admin_roles` (ADR-0059 R0.8b) and is then removed (R0.13).
+        `admin_roles` lists every administration role of the account, sorted
+        by name. The single `admin_role` field (the highest of the four legacy
+        names) was removed in ADR-0059 R0.8c: read `admin_roles`.
       tags: [admin]
       parameters:
         - name: limit
@@ -25243,7 +25280,6 @@ paths:
                     suspended: false
                     is_admin: true
                     is_active: true
-                    admin_role: admin
                     admin_roles: [admin, llm_manager]
                   - id: 12
                     name: Bo Blocked
@@ -25252,7 +25288,6 @@ paths:
                     suspended: true
                     is_admin: false
                     is_active: false
-                    admin_role: null
                     admin_roles: []
                 total: 2
                 counts: { platform: 2, system: 1 }
@@ -29458,6 +29493,11 @@ paths:
         estate. An unknown permission name is always a 400. The `system` role is
         neither written nor rejected: it appears in every body the GET produces,
         so rejecting it would make that body unsavable.
+
+        A save that adds `runtime.plugins` or `configuration.governance` to a
+        role that does not hold it in a target project is a 400 with the code
+        `permission_deprecated`, and nothing is written (ADR-0059 R0.14a). A
+        role that holds it already keeps it.
       tags: [admin]
       parameters:
         - name: team_projects
@@ -29492,7 +29532,21 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProjectPermissionsResult'
-        '400': { $ref: '#/components/responses/400' }
+        '400':
+          description: >
+            An unknown role or permission, a role a target project does not
+            define, or a legacy permission newly granted
+            (`permission_deprecated`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRoleRefusal'
+              example:
+                error: runtime.plugins ends on the sunset date and can no longer be added to a role; grant the narrow permission that replaces it
+                code: permission_deprecated
+                role: editor
+                roles: [editor]
+                permissions: [runtime.plugins]
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }

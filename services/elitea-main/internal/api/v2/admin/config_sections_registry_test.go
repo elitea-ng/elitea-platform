@@ -21,6 +21,8 @@ var pointerReadHalves = map[string]string{
 	"service_descriptors": "a fieldless pointer to /admin/app/service-descriptors, whose listing is gated on " +
 		"runtime.airun.serviceproviders; configuration.service_descriptors is granted by no migration, so " +
 		"without this every administrator would lose the pointer from the filtered list",
+	"llm_proxy": "a fieldless pointer to the gateway editor, whose routes open on llm.catalogue.view and the " +
+		"other llm.* names; with platform.config.view an LLM manager would never see the editor (R0.16)",
 }
 
 // sectionAccessProblems answers what is wrong with one section's
@@ -189,9 +191,11 @@ func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 		"maintenance":     {adminaccess.PlatformMaintenanceManage, adminaccess.PlatformMaintenanceManage},
 		"auth":            {adminaccess.IdentitySSOView, adminaccess.IdentitySSOSettingsManage},
 		"analytics":       {adminaccess.PlatformConfigView, adminaccess.PlatformConfigManage},
-		"branding":        {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},
-		"native_clients":  {adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationNativeClients},
-		"microsoft_apps":  {adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationMicrosoftApps},
+		// The read half is the pointer's page (pointerReadHalves).
+		"llm_proxy":      {adminaccess.LLMCatalogueView, adminaccess.PlatformConfigManage},
+		"branding":       {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},
+		"native_clients": {adminaccess.ConfigurationNativeClients, adminaccess.ConfigurationNativeClients},
+		"microsoft_apps": {adminaccess.ConfigurationMicrosoftApps, adminaccess.ConfigurationMicrosoftApps},
 		// The read half is the pointer's page (pointerReadHalves).
 		"service_descriptors": {adminaccess.RuntimeAirunServiceProviders, adminaccess.ConfigurationServiceDescriptors},
 	}

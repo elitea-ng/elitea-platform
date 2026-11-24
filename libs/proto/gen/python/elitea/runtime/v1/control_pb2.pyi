@@ -100,7 +100,7 @@ BROWSER_SESSION_REPORT_STATE_V1_LINGERING: BrowserSessionReportStateV1
 BROWSER_SESSION_REPORT_STATE_V1_ENDED: BrowserSessionReportStateV1
 
 class ClaimCommandRequestV1(_message.Message):
-    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials", "idle_compaction")
+    __slots__ = ("workload_session_id", "producer_id", "signed_command", "agent_model_checkpoint_recovery", "node_recovery", "governed_security_context_v1", "fanout_interrupt_decisions", "fanout_delegated_credentials", "idle_compaction", "worker_capabilities")
     WORKLOAD_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PRODUCER_ID_FIELD_NUMBER: _ClassVar[int]
     SIGNED_COMMAND_FIELD_NUMBER: _ClassVar[int]
@@ -110,6 +110,7 @@ class ClaimCommandRequestV1(_message.Message):
     FANOUT_INTERRUPT_DECISIONS_FIELD_NUMBER: _ClassVar[int]
     FANOUT_DELEGATED_CREDENTIALS_FIELD_NUMBER: _ClassVar[int]
     IDLE_COMPACTION_FIELD_NUMBER: _ClassVar[int]
+    WORKER_CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
     workload_session_id: str
     producer_id: str
     signed_command: _envelope_pb2.SignedWorkerCommandEnvelopeV1
@@ -119,7 +120,8 @@ class ClaimCommandRequestV1(_message.Message):
     fanout_interrupt_decisions: bool
     fanout_delegated_credentials: bool
     idle_compaction: bool
-    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ..., fanout_delegated_credentials: _Optional[bool] = ..., idle_compaction: _Optional[bool] = ...) -> None: ...
+    worker_capabilities: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, workload_session_id: _Optional[str] = ..., producer_id: _Optional[str] = ..., signed_command: _Optional[_Union[_envelope_pb2.SignedWorkerCommandEnvelopeV1, _Mapping]] = ..., agent_model_checkpoint_recovery: _Optional[bool] = ..., node_recovery: _Optional[bool] = ..., governed_security_context_v1: _Optional[bool] = ..., fanout_interrupt_decisions: _Optional[bool] = ..., fanout_delegated_credentials: _Optional[bool] = ..., idle_compaction: _Optional[bool] = ..., worker_capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class SettlementRecoveryV1(_message.Message):
     __slots__ = ("proposal", "proposal_digest", "idempotency_key", "settlement_receipt_id", "outcome")
@@ -136,7 +138,7 @@ class SettlementRecoveryV1(_message.Message):
     def __init__(self, proposal: _Optional[_Union[_output_pb2.SettlementProposalV1, _Mapping]] = ..., proposal_digest: _Optional[_Union[_common_pb2.DigestV1, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., settlement_receipt_id: _Optional[str] = ..., outcome: _Optional[_Union[_common_pb2.ExecutionOutcomeV1, str]] = ...) -> None: ...
 
 class ClaimReceiptV1(_message.Message):
-    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json", "vector_token", "toolkit_typed_refusals", "paused_writer")
+    __slots__ = ("disposition", "identity", "fence", "lease_expires_at_unix_millis", "input_bundle_ref", "input_bundle", "desired_state", "claim_handoff_watermark", "claim_id", "settlement_recovery", "retirement", "claim_started_at_unix_micros", "node_recovery_receipt_json", "vector_token", "toolkit_typed_refusals", "paused_writer", "server_capabilities")
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
     FENCE_FIELD_NUMBER: _ClassVar[int]
@@ -153,6 +155,7 @@ class ClaimReceiptV1(_message.Message):
     VECTOR_TOKEN_FIELD_NUMBER: _ClassVar[int]
     TOOLKIT_TYPED_REFUSALS_FIELD_NUMBER: _ClassVar[int]
     PAUSED_WRITER_FIELD_NUMBER: _ClassVar[int]
+    SERVER_CAPABILITIES_FIELD_NUMBER: _ClassVar[int]
     disposition: ClaimDispositionV1
     identity: _common_pb2.ExecutionIdentityV1
     fence: _common_pb2.ExecutionFenceV1
@@ -169,7 +172,8 @@ class ClaimReceiptV1(_message.Message):
     vector_token: VectorClaimTokenV1
     toolkit_typed_refusals: bool
     paused_writer: PausedWriterV1
-    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: _Optional[bool] = ..., paused_writer: _Optional[_Union[PausedWriterV1, _Mapping]] = ...) -> None: ...
+    server_capabilities: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, disposition: _Optional[_Union[ClaimDispositionV1, str]] = ..., identity: _Optional[_Union[_common_pb2.ExecutionIdentityV1, _Mapping]] = ..., fence: _Optional[_Union[_common_pb2.ExecutionFenceV1, _Mapping]] = ..., lease_expires_at_unix_millis: _Optional[int] = ..., input_bundle_ref: _Optional[_Union[_input_pb2.ExecutionInputBundleReferenceV1, _Mapping]] = ..., input_bundle: _Optional[_Union[_input_pb2.ExecutionInputBundleV1, _Mapping]] = ..., desired_state: _Optional[_Union[_common_pb2.DesiredExecutionStateV1, str]] = ..., claim_handoff_watermark: _Optional[int] = ..., claim_id: _Optional[str] = ..., settlement_recovery: _Optional[_Union[SettlementRecoveryV1, _Mapping]] = ..., retirement: _Optional[_Union[_errors_pb2.RuntimeErrorV1, _Mapping]] = ..., claim_started_at_unix_micros: _Optional[int] = ..., node_recovery_receipt_json: _Optional[bytes] = ..., vector_token: _Optional[_Union[VectorClaimTokenV1, _Mapping]] = ..., toolkit_typed_refusals: _Optional[bool] = ..., paused_writer: _Optional[_Union[PausedWriterV1, _Mapping]] = ..., server_capabilities: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class PausedWriterV1(_message.Message):
     __slots__ = ("execution_id", "generation")

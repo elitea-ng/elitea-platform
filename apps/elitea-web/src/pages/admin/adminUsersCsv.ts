@@ -9,23 +9,19 @@
 import { t } from '@/shared/i18n';
 
 import { toCsvDocument } from './adminCsv';
+import { adminRoleLabel } from './adminRoleCopy';
 import type { AdminUserRow } from './api/adminUsersApi';
 
+/** Every administration role held (ADR-0059 R0.8c), by display name. */
 function roleLabel(row: AdminUserRow): string {
-  if (row.admin_role === null) return t('pages.admin.users.role.none', 'None');
-  const labels: Record<NonNullable<AdminUserRow['admin_role']>, string> = {
-    super_admin: t('pages.admin.users.role.superAdmin', 'Super Admin'),
-    admin: t('pages.admin.users.role.admin', 'Admin'),
-    editor: t('pages.admin.users.role.editor', 'Editor'),
-    viewer: t('pages.admin.users.role.viewer', 'Viewer'),
-  };
-  return labels[row.admin_role];
+  if (row.admin_roles.length === 0) return t('pages.admin.users.role.none', 'None');
+  return row.admin_roles.map((name) => adminRoleLabel(name)).join('; ');
 }
 
 /**
  * `rows` → a CSV document, header included.
  *
- * `Status` and `Admin Role` are the readings the table makes. `Last login` is
+ * `Status` and `Administration roles` are the readings the table makes. `Last login` is
  * NOT: the table renders `new Date(value).toLocaleString()` in the viewer's
  * timezone (`AdminUsersTable.formatLastLogin`), while this writes the server's
  * own string unchanged. That is deliberate — a spreadsheet column wants a
@@ -39,7 +35,7 @@ export function buildAdminUsersCsv(rows: readonly AdminUserRow[]): string {
     t('pages.admin.users.column.email', 'Email'),
     t('pages.admin.users.column.lastLogin', 'Last login'),
     t('pages.admin.users.column.status', 'Status'),
-    t('pages.admin.users.column.adminRole', 'Admin Role'),
+    t('pages.admin.users.column.adminRoles', 'Administration roles'),
   ];
   return toCsvDocument(
     header,
