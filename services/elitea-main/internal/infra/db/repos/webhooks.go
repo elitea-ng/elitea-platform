@@ -239,9 +239,13 @@ func (r *WebhooksRepo) ListByEvent(ctx context.Context, projectID, eventType str
 type WebhookSecretMoveReport struct {
 	// Moved is how many rows had their plaintext sealed into the vault.
 	Moved int
-	// Skipped is how many rows could not be moved. Each one is logged with
-	// its webhook id, keeps signing with its plaintext, and is retried on
-	// the next start.
+	// Generated is how many rows had NO signing secret and got a new random
+	// one sealed into the vault (#2959: every delivery is signed).
+	Generated int
+	// Skipped is how many rows could not be moved or given a secret. Each one
+	// is logged with its webhook id and retried on the next start; until
+	// then a row with plaintext keeps signing with it, and a row with no
+	// secret is not delivered.
 	Skipped int
 }
 
@@ -287,7 +291,77 @@ func (r *WebhooksRepo) MoveLegacySecretsToVault(ctx context.Context) (WebhookSec
 			report.Moved++
 		}
 	}
+
+	// Every delivery is signed (#2959), so a webhook created before the
+	// secret was mandatory gets one now: a new random value, sealed into its
+	// project vault like any other. The dispatcher refuses to deliver a row
+	// with no secret, so a row this pass cannot reach is never sent
+	// unsigned; it is logged and retried on the next start. The owner reads
+	// the value with rotate_secret, which returns a new one once.
+	rows, err = r.pool.Query(ctx,
+		`SELECT id FROM webhooks WHERE secret = '' AND secret_ref = '' ORDER BY created_at, id`)
+	if err != nil {
+		return report, fmt.Errorf("webhooks: list unsigned webhooks: %w", err)
+	}
+	unsigned, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return report, fmt.Errorf("webhooks: list unsigned webhooks: %w", err)
+	}
+	if len(unsigned) > 0 && r.vault == nil {
+		return report, errWebhookSecretStoreUnavailable
+	}
+	for _, id := range unsigned {
+		generated, err := r.generateOneMissingSecret(ctx, id)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return report, ctxErr
+			}
+			report.Skipped++
+			slog.ErrorContext(ctx, "webhooks: could not give a webhook a signing secret",
+				"webhook", id, "err", err)
+			continue
+		}
+		if generated {
+			report.Generated++
+		}
+	}
 	return report, nil
+}
+
+// generateOneMissingSecret seals a new random signing secret for one webhook
+// that has none, under a row lock re-checked inside the transaction, so two
+// replicas starting together generate it once.
+func (r *WebhooksRepo) generateOneMissingSecret(ctx context.Context, id string) (bool, error) {
+	generated := false
+	err := r.withTx(ctx, func(tx pgx.Tx) error {
+		var projectID string
+		err := tx.QueryRow(ctx,
+			`SELECT project_id FROM webhooks
+			WHERE id = $1 AND secret = '' AND secret_ref = ''
+			FOR UPDATE SKIP LOCKED`, id,
+		).Scan(&projectID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		secret, err := webhook.NewSigningSecret()
+		if err != nil {
+			return fmt.Errorf("webhooks: generate a signing secret: %w", err)
+		}
+		ref, err := r.sealSecret(ctx, tx, projectID, secret)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE webhooks SET secret_ref = $2 WHERE id = $1`, id, ref); err != nil {
+			return err
+		}
+		generated = true
+		return nil
+	})
+	return generated, err
 }
 
 func (r *WebhooksRepo) moveOneLegacySecret(ctx context.Context, id string) (bool, error) {

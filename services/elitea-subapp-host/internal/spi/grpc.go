@@ -80,17 +80,23 @@ func headersFromMetadata(md metadata.MD) (http.Header, bool) {
 	return headers, true
 }
 
-// verifiedIdentity reads and verifies the caller's identity. With no shared
-// secret configured nothing can be verified and the identity is EMPTY — never
-// the metadata's claim (a runner whose tools address tenant data refuses a
-// call with no verified project). With a secret, a missing or invalid
-// signature is refused unless optional is set (Health).
+// verifiedIdentity reads and verifies the caller's identity. A missing or
+// invalid signature is refused unless optional is set (Health).
+//
+// With no shared secret nothing can be verified, and the call is refused
+// (#2959): the host does not start that way unless the explicit development
+// flag ELITEA_DEV_INSECURE_IDENTITY is set, and only under that flag is the
+// identity EMPTY instead — never the metadata's claim (a runner whose tools
+// address tenant data refuses a call with no verified project).
 func (s *Server) verifiedIdentity(ctx context.Context, optional bool) (Identity, error) {
 	secret := []byte(s.settings.IdentitySecret)
 	md, _ := metadata.FromIncomingContext(ctx)
 	headers, ok := headersFromMetadata(md)
 	if len(secret) == 0 {
-		return Identity{}, nil
+		if optional || s.settings.InsecureIdentity {
+			return Identity{}, nil
+		}
+		return Identity{}, status.Error(codes.Unauthenticated, "this host has no identity secret and refuses every call")
 	}
 	if ok && headers.Get(HeaderSignature) != "" && VerifySignature(headers, secret) {
 		return IdentityFromHeaders(headers), nil

@@ -36,7 +36,7 @@ func unpricedAdmissionHandler(router *trackingRouter, budgeted bool, calc CostEs
 		checkVerdict: failmode.Decision{Verdict: failmode.Allow, State: failmode.StateNATSHealthy, Budgeted: budgeted},
 		updated:      make(chan struct{}, 8),
 	}
-	return NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	return newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 }
 
 func audioRouterWithAnswers() *trackingRouter {

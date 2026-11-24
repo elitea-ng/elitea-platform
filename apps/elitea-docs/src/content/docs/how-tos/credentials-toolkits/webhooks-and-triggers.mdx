@@ -110,14 +110,14 @@ If your destination is refused, the form shows the reason inline, under the URL 
 
 From the same page you can:
 
-- **See whether a webhook signs its deliveries.** The Secret column shows a mask when a secret is set and **Not set** when it isn't. The value itself is write-only: nobody who reads the row, including project viewers, can see it.
+- **See the webhook's secret status.** Every webhook has a secret, and every delivery is signed. The Secret column shows a mask; the value itself is write-only: nobody who reads the row, including project viewers, can see it. A webhook registered before signing became mandatory received a generated secret when the platform was upgraded. Rotate it to get a value you can give to your receiver.
 - **Rotate** the secret — Elitea generates a fresh value, shows it once, exactly like creation, and deletes the old one. Deliveries are signed with the new value from the next event on, so update your receiver straight away.
 - **Enable or disable** a webhook without deleting it, with the toggle in the Active column.
 - **Delete** a webhook, with a confirmation step.
 - **Expand a row** to see its **Recent deliveries** — every attempt Elitea made, newest first, with the event, outcome, how many tries it took, and the destination's response code or the transport error. A delivery's outcome is `success`, `failed` (the destination rejected it or didn't answer, retried up to three times), or `blocked` (the destination was refused by the platform's destination rules — see above — before any request was made; **Redeliver** is unavailable for a blocked delivery, since it would be refused identically). Each non-blocked delivery has a **Redeliver** action that resends the exact same signed body on demand, for example after you've fixed a receiver that was down.
 
 <Note>
-The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and a secret Elitea will sign requests with. The create response is the only one that returns the secret; reads return `has_secret` instead. `POST /webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret` replaces it and returns the new value once. An update that leaves out `secret`, or sends it empty, keeps the stored one.
+The webhook API itself still works with a personal access token, if you'd rather script registration: create an entry with a target URL, the events you want, and, optionally, a secret Elitea will sign requests with. When you leave `secret` out, Elitea generates a random 32-byte secret. The create response is the only one that returns the secret; reads return `has_secret` instead. `POST /webhooks/prompt_lib/{projectID}/{webhookID}/rotate_secret` replaces it and returns the new value once. An update that leaves out `secret`, or sends it empty, keeps the stored one; a secret cannot be removed. Elitea never sends an unsigned delivery: a webhook row with no secret records a `failed` delivery that says so, and rotating its secret resumes deliveries.
 </Note>
 
 ### The event catalog
@@ -165,7 +165,7 @@ The event fires once the run's outcome is durably settled — after the platform
 
 ### Verifying the signature
 
-Every delivery carries an `X-Webhook-Signature` header shaped `sha256=<hex>` — an HMAC-SHA256 of the exact request body, keyed with the webhook's secret — plus an `X-Webhook-Event` header repeating the event type outside the signed body, so you can route before parsing JSON. A minimal Node.js verifier:
+Every delivery carries an `X-Webhook-Signature` header (always: there is no unsigned webhook) shaped `sha256=<hex>` — an HMAC-SHA256 of the exact request body, keyed with the webhook's secret — plus an `X-Webhook-Event` header repeating the event type outside the signed body, so you can route before parsing JSON. A minimal Node.js verifier:
 
 ```js
 import { createHmac, timingSafeEqual } from 'node:crypto';

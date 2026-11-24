@@ -191,7 +191,7 @@ func TestSharedModelAppearsOnModelsEndpoint(t *testing.T) {
 		modelPublic: {{title: sharedModelID, shared: true}},
 	}}
 	resolver := newSharedResolver(db)
-	h := NewHandler(&fakeRouter{}, nil, nil, WithModelResolver(resolver)).route()
+	h := newTestHandler(&fakeRouter{}, nil, nil, WithModelResolver(resolver)).route()
 
 	rec := getModels(t, h, "/llm/v1/models", modelCaller)
 	if rec.Code != http.StatusOK {

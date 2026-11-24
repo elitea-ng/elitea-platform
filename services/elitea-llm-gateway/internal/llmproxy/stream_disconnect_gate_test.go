@@ -206,7 +206,7 @@ func TestStreamDisconnect_RealHangup_CancelsProviderAndBillsEstimate(t *testing.
 				trailerDelay: 300 * time.Millisecond,
 			}
 			calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-			h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+			h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 			srv := newStreamTestServer(t, h)
 			defer srv.close()
@@ -254,7 +254,7 @@ func TestStreamCleanCompletion_BillsExactlyOnce(t *testing.T) {
 		trailerDelay: time.Millisecond,
 	}
 	calc := &fakeCostEstimator{inputRateNano: gateInputRateNano, outputRateNano: gateOutputRateNano}
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	srv := newStreamTestServer(t, h)
 	defer srv.close()

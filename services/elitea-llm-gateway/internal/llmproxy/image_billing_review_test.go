@@ -39,7 +39,7 @@ func TestImageAdmission_TokenPricedModelWithoutAnImagePriceKeepsTheOldRule(t *te
 	gate := newImageGate(healthyAllow(limit-1, limit))
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, &tokenCalc{token: true}))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, &tokenCalc{token: true}))
 	rec, _ := serveImage(t, h, `{"model":"openai/gpt-image-1","prompt":"p"}`, nil)
 	if rec.Code != http.StatusOK || !router.imageCalled() {
 		t.Fatalf("a token-priced image model must not be refused on the flat estimate: %d", rec.Code)
@@ -52,7 +52,7 @@ func TestImageAdmission_TokenPricedModelWithoutAnImagePriceKeepsTheOldRule(t *te
 	gate = newImageGate(healthyAllow(limit-1, limit))
 	router = &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h = NewHandler(router, nil, nil, WithBudgetGate(gate, &tokenCalc{token: false}))
+	h = newTestHandler(router, nil, nil, WithBudgetGate(gate, &tokenCalc{token: false}))
 	rec, _ = serveImage(t, h, `{"model":"openai/some-new-image-model","prompt":"p"}`, nil)
 	assertBudgetRefusal(t, rec, budgetCodeProject, budgetScopeFieldProject)
 }
@@ -62,7 +62,7 @@ func TestImageBilling_SettleUsesTheAdmissionQuote(t *testing.T) {
 	calc := &flakyCalc{imageCalc: imageCalc{unit: 120_000_000, priced: true}}
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	_, row := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p","size":"1792x1024","quality":"hd"}`, nil)
 	gate.waitForUpdate(t)
@@ -82,7 +82,7 @@ func TestImageBilling_ATypedNilCalculatorPricesNothing(t *testing.T) {
 	gate := newImageGate(healthyAllow(0, 0))
 	router := &imageRouter{}
 	router.imgResp = imageResponse(1)
-	h := NewHandler(router, nil, nil, WithBudgetGate(gate, calc))
+	h := newTestHandler(router, nil, nil, WithBudgetGate(gate, calc))
 
 	_, row := serveImage(t, h, `{"model":"openai/dall-e-3","prompt":"p"}`, nil)
 	gate.waitForUpdate(t)

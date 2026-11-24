@@ -205,7 +205,7 @@ func TestBuildImageVariationRequest_MissingImage(t *testing.T) {
 // End-to-end: a valid multipart edit request reaches the router and returns 200.
 func TestImageEditEndToEnd(t *testing.T) {
 	fake := &fakeRouter{imgResp: &schemas.BifrostImageGenerationResponse{}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	body, ct := multipartBody(t,
 		map[string]string{"model": "m", "prompt": "p"},
@@ -223,7 +223,7 @@ func TestImageEditEndToEnd(t *testing.T) {
 
 func TestImageVariationEndToEnd(t *testing.T) {
 	fake := &fakeRouter{imgResp: &schemas.BifrostImageGenerationResponse{}}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	body, ct := multipartBody(t,
 		map[string]string{"model": "m"},
@@ -241,7 +241,7 @@ func TestImageVariationEndToEnd(t *testing.T) {
 
 func TestImageEditBadMultipartBody(t *testing.T) {
 	fake := &fakeRouter{}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/edits", strings.NewReader("not multipart"))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=xxx")
@@ -255,7 +255,7 @@ func TestImageEditBadMultipartBody(t *testing.T) {
 
 func TestImageEditMissingFieldReturns400(t *testing.T) {
 	fake := &fakeRouter{}
-	h := NewHandler(fake, nil, nil)
+	h := newTestHandler(fake, nil, nil)
 
 	body, ct := multipartBody(t, map[string]string{"prompt": "p"}, map[string][]byte{"image": []byte("D")})
 	req := httptest.NewRequest(http.MethodPost, "/llm/v1/images/edits", body)

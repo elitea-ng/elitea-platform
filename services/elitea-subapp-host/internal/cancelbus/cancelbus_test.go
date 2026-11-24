@@ -113,7 +113,14 @@ func startNATS(t *testing.T) string {
 // when it is set.
 func replica(t *testing.T, store spi.Store, url string, material ...natsconn.Material) subappv1.ProviderServiceClient {
 	t.Helper()
-	settings, err := spi.SettingsFromEnv(echo.EnvPrefix, func(string) (string, bool) { return "", false })
+	// No identity secret: the development flag lets the host serve the
+	// unsigned calls these replicas exchange.
+	settings, err := spi.SettingsFromEnv(echo.EnvPrefix, func(key string) (string, bool) {
+		if key == spi.InsecureIdentityEnvVar {
+			return "true", true
+		}
+		return "", false
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

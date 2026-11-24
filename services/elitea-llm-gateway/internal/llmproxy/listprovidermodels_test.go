@@ -248,7 +248,7 @@ func TestListProviderModels_NilPolicyFailsClosed(t *testing.T) {
 	fp := newFakeListProvider(http.StatusOK, `{"data":[{"id":"gpt-4o"}]}`)
 	defer fp.Close()
 
-	h := NewHandler(nil, nil, nil) // no WithEgressPolicy
+	h := newTestHandler(nil, nil, nil) // no WithEgressPolicy
 	resp := doListProviderModels(t, h, checkConnectionRequest{Type: "open_ai", APIBase: fp.URL})
 
 	if resp.Success || resp.Reason != checkConnectionReasonEgress {

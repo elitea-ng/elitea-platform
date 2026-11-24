@@ -61,10 +61,12 @@ type Repository interface {
 	RotateSecret(ctx context.Context, projectID, webhookID, secret string) (Webhook, error)
 }
 
-// webhookWriteRequest is the create and update body. On update an absent or
-// empty `secret` keeps the stored one, so a client that sends back what it
-// read (which carries no secret) cannot strip the signature by accident; a
-// non-empty value replaces it. Update never echoes it.
+// webhookWriteRequest is the create and update body. On create an absent or
+// empty `secret` makes the server generate one. On update an absent or empty
+// `secret` keeps the stored one, so a client that sends back what it read
+// (which carries no secret) cannot strip the signature; a non-empty value
+// replaces it. There is no way to remove a secret: every delivery is signed
+// (#2959). Update never echoes it.
 type webhookWriteRequest struct {
 	URL    string   `json:"url"`
 	Events []string `json:"events"`
@@ -73,7 +75,7 @@ type webhookWriteRequest struct {
 }
 
 // secretResponse is the one shape that carries the secret: the answer to
-// Create (when the caller set one) and to RotateSecret. No other route
+// Create (the caller's value or the generated one) and to RotateSecret. No other route
 // returns it, and no route returns it twice.
 type secretResponse struct {
 	Webhook
@@ -254,8 +256,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, wh.redacted())
 }
 
-// Create registers a webhook. A `secret` in the body is sealed into the
-// project vault and returned in this response only.
+// Create registers a webhook. Every webhook has a signing secret (#2959): a
+// `secret` in the body is used as given, and when the body has none (absent
+// or empty) the server generates a random one. Either way it is sealed into
+// the project vault and returned in this response only.
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 
@@ -271,6 +275,14 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	secret := ""
 	if body.Secret != nil {
 		secret = *body.Secret
+	}
+	if secret == "" {
+		generated, err := NewSigningSecret()
+		if err != nil {
+			apierr.Write(w, apierr.Internal("internal server error"))
+			return
+		}
+		secret = generated
 	}
 
 	created, err := h.repo.Create(r.Context(), projectID, Webhook{

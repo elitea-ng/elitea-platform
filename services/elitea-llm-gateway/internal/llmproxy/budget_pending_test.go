@@ -49,7 +49,7 @@ func assertPendingRefusal(t *testing.T, label string, rec *httptest.ResponseReco
 func TestBudgetPending_RefusesEverySpendRouteBeforeTheProvider(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "should-not-be-served"}
-	h := NewHandler(router, nil, nil, WithBudgetEnforcementPending())
+	h := newTestHandler(router, nil, nil, WithBudgetEnforcementPending())
 	if !h.BudgetEnforcementPending() || h.BudgetEnforcementInstalled() {
 		t.Fatal("setup: the handler is not pending")
 	}
@@ -88,7 +88,7 @@ func TestBudgetPending_RefusesEverySpendRouteBeforeTheProvider(t *testing.T) {
 func TestBudgetPending_NotPendingKeepsTheUnmeteredPosture(t *testing.T) {
 	router := &trackingRouter{}
 	router.chatResp = &schemas.BifrostChatResponse{ID: "ok"}
-	h := NewHandler(router, nil, nil)
+	h := newTestHandler(router, nil, nil)
 	if h.BudgetEnforcementPending() {
 		t.Fatal("a handler built without the option is pending")
 	}
@@ -102,7 +102,7 @@ func TestBudgetPending_NotPendingKeepsTheUnmeteredPosture(t *testing.T) {
 // The option never marks a handler that already has a gate.
 func TestBudgetPending_OptionIsInertWhenAGateIsWired(t *testing.T) {
 	gate := &fakeBudgetChecker{checkVerdict: allowDecision(), updated: make(chan struct{})}
-	h := NewHandler(&trackingRouter{}, nil, nil,
+	h := newTestHandler(&trackingRouter{}, nil, nil,
 		WithBudgetGate(gate, &fakeCostEstimator{totalNano: 1}), WithBudgetEnforcementPending())
 	if h.BudgetEnforcementPending() {
 		t.Fatal("a handler with a wired gate is pending")
@@ -132,7 +132,7 @@ func (r *pendingRouter) ChatCompletionRequest(ctx *schemas.BifrostContext, req *
 // the install, requests are admitted by the gate and billed.
 func TestBudgetPending_InstallUnderLoadServesNothingUnenforced(t *testing.T) {
 	router := &pendingRouter{}
-	h := NewHandler(router, nil, nil, WithBudgetEnforcementPending())
+	h := newTestHandler(router, nil, nil, WithBudgetEnforcementPending())
 	router.h = h
 
 	load := startBudgetLoad(t, h, 8)
@@ -183,7 +183,7 @@ func TestBudgetPending_InstallUnderLoadServesNothingUnenforced(t *testing.T) {
 // gate after the install, would be a 200 and a provider call.
 func TestBudgetPending_InstalledGateDecidesEveryLaterRequest(t *testing.T) {
 	router := &concurrentRouter{}
-	h := NewHandler(router, nil, nil, WithBudgetEnforcementPending())
+	h := newTestHandler(router, nil, nil, WithBudgetEnforcementPending())
 	gate := &fakeBudgetChecker{
 		checkVerdict: failmode.Decision{Verdict: failmode.Block402, State: failmode.StateNATSHealthy},
 		updated:      make(chan struct{}),

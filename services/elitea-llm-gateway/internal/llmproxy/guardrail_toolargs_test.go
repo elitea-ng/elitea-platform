@@ -437,7 +437,7 @@ func agentHandler(t *testing.T, resolver *policy.AgentResolver, rows ...policy.R
 	if resolver != nil {
 		opts = append(opts, WithAgentResolver(resolver))
 	}
-	return NewHandler(router, nil, nil, opts...)
+	return newTestHandler(router, nil, nil, opts...)
 }
 
 // TestGuardrailAgentScopeWithoutRateLimiter is the regression for agent rows
