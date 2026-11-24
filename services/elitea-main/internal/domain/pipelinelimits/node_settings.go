@@ -291,24 +291,6 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 		return nil
 	}
 	reducers := stateReducers(state)
-	if usesNodeErrors {
-		if declaredType, found := stateType(state, NodeErrorsKey); found {
-			reducer := reducers[NodeErrorsKey]
-			// Decision 2: a user's own key must say `reducer: append` explicitly.
-			if declaredType != "list" || reducer != "append" {
-				return settingsRefusal(nodeSettingsDocumentMarker, "node_errors_type")
-			}
-		}
-		for _, fields := range declared {
-			if nodeType, _ := stringScalar(fields["type"]); nodeType != "agent" {
-				continue
-			}
-			if mappingHasKey(fields["input_mapping"], NodeErrorsKey) || sequenceHas(fields["output"], NodeErrorsKey) {
-				id, _ := graphIDScalar(fields["id"])
-				return settingsRefusal(id, "node_errors_nested_mapping")
-			}
-		}
-	}
 	ids := map[string]struct{}{}
 	owned := map[string]struct{}{}
 	failureHandlers := map[string]struct{}{}
@@ -332,6 +314,35 @@ func checkNodeSettings(declared []map[string]*yaml.Node, state *yaml.Node) error
 						owned[target] = struct{}{}
 					}
 				}
+			}
+		}
+	}
+	if usesNodeErrors {
+		if declaredType, found := stateType(state, NodeErrorsKey); found {
+			reducer := reducers[NodeErrorsKey]
+			// Decision 2: a user's own key must say `reducer: append` explicitly.
+			if declaredType != "list" || reducer != "append" {
+				return settingsRefusal(nodeSettingsDocumentMarker, "node_errors_type")
+			}
+		}
+		for _, fields := range declared {
+			id, _ := graphIDScalar(fields["id"])
+			nodeType, _ := stringScalar(fields["type"])
+			_, isOwned := owned[id]
+			crosses := false
+			switch nodeType {
+			case "agent":
+				crosses = mappingHasKey(fields["input_mapping"], NodeErrorsKey) || sequenceHas(fields["output"], NodeErrorsKey)
+			case "map":
+				crosses = sequenceHas(fields["broadcast"], NodeErrorsKey) || sequenceHas(fields["outputs"], NodeErrorsKey)
+			}
+			if !crosses && isOwned {
+				crosses = sequenceHas(fields["input"], NodeErrorsKey) ||
+					sequenceHas(fields["output"], NodeErrorsKey) ||
+					(nodeType == "llm" && (mappingHasKey(fields["input_mapping"], NodeErrorsKey) || mappingReferencesVariable(fields["input_mapping"], NodeErrorsKey)))
+			}
+			if crosses {
+				return settingsRefusal(id, "node_errors_nested_mapping")
 			}
 		}
 	}
@@ -363,14 +374,12 @@ func checkOneNodeSettings(block declaredSettings, ids, owned, failureHandlers ma
 	if settings.timeoutMs != nil && !contains(admittedKeys, "timeout_ms") {
 		return settingsRefusal(id, "timeout_not_allowed")
 	}
-	if _, isOwned := owned[id]; isOwned {
-		return settingsRefusal(id, "fanout_owned")
-	}
 	if target := settings.errorTransition; target != nil && *target != "END" {
+		_, isOwned := owned[id]
 		_, declared := ids[*target]
 		_, targetOwned := owned[*target]
 		_, targetHandler := failureHandlers[*target]
-		if *target == id || targetOwned || targetHandler || !declared {
+		if isOwned || *target == id || targetOwned || targetHandler || !declared {
 			return settingsRefusal(id, "error_transition_target")
 		}
 	}
@@ -405,6 +414,36 @@ func mappingHasKey(node *yaml.Node, key string) bool {
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if aliased(node.Content[i]).Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func mappingReferencesVariable(node *yaml.Node, target string) bool {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		entry := aliased(node.Content[i+1])
+		if entry == nil || entry.Kind != yaml.MappingNode {
+			continue
+		}
+		var kind, val string
+		for j := 0; j+1 < len(entry.Content); j += 2 {
+			k := aliased(entry.Content[j]).Value
+			v, ok := stringScalar(aliased(entry.Content[j+1]))
+			if !ok {
+				continue
+			}
+			switch k {
+			case "type":
+				kind = v
+			case "value":
+				val = v
+			}
+		}
+		if kind == "variable" && val == target {
 			return true
 		}
 	}

@@ -19,10 +19,14 @@ type Selector struct {
 	ProjectID         int64
 	ActorUserID       int64
 	ResponseMessageID string
+	GraphThread       string
 }
 
 func (s Selector) Validate() error {
 	if s.ProjectID <= 0 || s.ProjectID > math.MaxInt32 || s.ActorUserID <= 0 || !domain.ValidResponseMessageID(s.ResponseMessageID) {
+		return ErrInvalid
+	}
+	if s.GraphThread != "" && !domain.ValidGraphThread(s.GraphThread) {
 		return ErrInvalid
 	}
 	return nil

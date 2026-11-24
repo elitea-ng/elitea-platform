@@ -234,15 +234,43 @@ const reducerIn = (document: YamlPipelineDocument) => (key: string): string | un
   return reducer === 'overwrite' ? undefined : reducer;
 };
 
+function mappingHasKey(mapping: unknown, key: string): boolean {
+  return isRecord(mapping) && Object.hasOwn(mapping, key);
+}
+
+function mappingReferencesVariable(mapping: unknown, target: string): boolean {
+  if (!isRecord(mapping)) return false;
+  return Object.values(mapping).some(
+    (entry) => isRecord(entry) && entry['type'] === 'variable' && entry['value'] === target,
+  );
+}
+
+function ownedFanoutCrossesNodeErrors(node: YamlPipelineNode): boolean {
+  if (strings(node.input).includes(NODE_ERRORS_KEY) || strings(node.output).includes(NODE_ERRORS_KEY)) {
+    return true;
+  }
+  return node.type === 'llm'
+    && (mappingHasKey(node['input_mapping'], NODE_ERRORS_KEY) || mappingReferencesVariable(node['input_mapping'], NODE_ERRORS_KEY));
+}
+
+function nodeCrossesNodeErrorsBoundary(node: YamlPipelineNode, owned: ReadonlySet<string>): boolean {
+  if (node.type === 'agent' && (mappingHasKey(node['input_mapping'], NODE_ERRORS_KEY) || strings(node.output).includes(NODE_ERRORS_KEY))) {
+    return true;
+  }
+  if (node.type === 'map' && (strings(node['broadcast']).includes(NODE_ERRORS_KEY) || strings(node['outputs']).includes(NODE_ERRORS_KEY))) {
+    return true;
+  }
+  return owned.has(node.id) && ownedFanoutCrossesNodeErrors(node);
+}
+
 /** C3 and C4: only a document whose nodes continue on error owns `node_errors`. */
-function nodeErrorsIssue(document: YamlPipelineDocument): GraphAdmissionIssue | undefined {
+function nodeErrorsIssue(document: YamlPipelineDocument, owned: ReadonlySet<string>): GraphAdmissionIssue | undefined {
   const declared = stateSpec(document, NODE_ERRORS_KEY);
   // Decision 2: a user's own key must say `reducer: append` explicitly.
   if (declared !== undefined && (declared.type !== 'list' || reducerIn(document)(NODE_ERRORS_KEY) !== 'append')) {
     return issue(undefined, 'node_errors_type', `state.${NODE_ERRORS_KEY}`);
   }
-  const mapping = (document.nodes ?? []).find((node) => node.type === 'agent'
-    && ((isRecord(node['input_mapping']) && Object.hasOwn(node['input_mapping'], NODE_ERRORS_KEY)) || strings(node.output).includes(NODE_ERRORS_KEY)));
+  const mapping = (document.nodes ?? []).find((node) => nodeCrossesNodeErrorsBoundary(node, owned));
   return mapping === undefined ? undefined : issue(mapping.id, 'node_errors_nested_mapping', 'input_mapping');
 }
 
@@ -267,11 +295,12 @@ export function graphNodeSettingsIssues(rawDocument: YamlPipelineDocument): read
   const { blocks, refused } = parseBlocks(nodes);
   if (refused !== undefined) return [refused];
   if (blocks.length === 0) return [];
-  const owner = blocks.some((block) => usesNodeErrors(block.settings)) ? nodeErrorsIssue(document) : undefined;
+  const owned = fanoutOwnedNodes(nodes);
+  const owner = blocks.some((block) => usesNodeErrors(block.settings)) ? nodeErrorsIssue(document, owned) : undefined;
   if (owner !== undefined) return [owner];
   const context: NodeContext = {
     ids: new Set(nodes.map((node) => node.id)),
-    owned: fanoutOwnedNodes(nodes),
+    owned,
     failureHandlers: new Set(nodes.filter((node) => node['failure_handler'] !== undefined).map((node) => node.id)),
     reducerOf: reducerIn(document),
   };
@@ -300,7 +329,7 @@ const familyKeys = (node: YamlPipelineNode): readonly string[] | undefined => no
 
 function badErrorTarget({ node, settings }: Block, { ids, owned, failureHandlers }: NodeContext): boolean {
   const target = settings.error_transition;
-  return target !== undefined && target !== 'END' && (target === node.id || owned.has(target) || failureHandlers.has(target) || !ids.has(target));
+  return target !== undefined && target !== 'END' && (owned.has(node.id) || target === node.id || owned.has(target) || failureHandlers.has(target) || !ids.has(target));
 }
 
 /** The per-node admission, in the Worker's order (first match wins). */
@@ -310,7 +339,6 @@ const NODE_CHECKS: readonly (readonly [(block: Block, context: NodeContext) => b
   [({ node }) => familyKeys(node) === undefined, 'family_not_yet'],
   [({ node, settings }) => settings.retry_on_fail && !(familyKeys(node) ?? []).includes('retry_on_fail'), 'retry_not_allowed'],
   [({ node, settings }) => settings.timeout_ms !== undefined && !(familyKeys(node) ?? []).includes('timeout_ms'), 'timeout_not_allowed'],
-  [({ node }, { owned }) => owned.has(node.id), 'fanout_owned'],
   [badErrorTarget, 'error_transition_target'],
   // C5: the raw key, never the runtime's END default.
   [({ node, settings }) => node.type === 'router' && settings.on_error === 'continue' && node.default_output === undefined, 'router_continue_needs_default'],

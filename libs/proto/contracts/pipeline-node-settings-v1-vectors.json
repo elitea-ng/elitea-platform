@@ -231,10 +231,10 @@
       "node": "run"
     },
     {
-      "name": "a Map Code worker refuses settings",
-      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: run, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: run, type: code, code: 'return \"x\"', input: [entity, item_index], output: [item_result], settings: {retry_on_fail: true}}\n",
-      "refusal": "fanout_owned",
-      "node": "run"
+      "name": "a Map Code worker admits automatic settings (5b-5)",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: run, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: run, type: code, code: 'return \"x\"', input: [entity, item_index], output: [item_result], settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 500, timeout_ms: 5000}}\n",
+      "refusal": null,
+      "node": null
     },
     {
       "name": "an LLM node",
@@ -297,10 +297,40 @@
       "node": "run"
     },
     {
-      "name": "a Map worker",
+      "name": "a Map worker admits automatic settings (5b-5)",
       "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  tail_out: str\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: tail}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n  - {id: tail, type: state_modifier, template: x, output: [tail_out], transition: END}\n",
-      "refusal": "fanout_owned",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "a Map worker routes on error to END (5b-5)",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  tail_out: str\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: tail}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: error_output, error_transition: END}}\n  - {id: tail, type: state_modifier, template: x, output: [tail_out], transition: END}\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "a Map worker refuses error_transition escaping to a root node (5b-5)",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  tail_out: str\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: tail}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: error_output, error_transition: tail}}\n  - {id: tail, type: state_modifier, template: x, output: [tail_out], transition: END}\n",
+      "refusal": "error_transition_target",
       "node": "render"
+    },
+    {
+      "name": "Parallel LLM and Code branches admit automatic settings (5b-5)",
+      "yaml": "entry_point: gather\nstate:\n  left_out: str\n  right_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: ask_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    error_policy: fail_after_drain\n    output: [gathered]\n    transition: END\n  - id: ask_a\n    type: llm\n    input_mapping: {task: {type: fixed, value: Hi}}\n    output: [left_out]\n    settings: {retry_on_fail: true, max_tries: 3, wait_between_tries_ms: 500, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 5000}\n  - id: run_b\n    type: code\n    code: 'return \"ok\"'\n    output: [right_out]\n    settings: {retry_on_fail: true, max_tries: 2, on_error: error_output, error_transition: END, timeout_ms: 2000}\n",
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "a Parallel branch refuses error_transition targeting a sibling branch (5b-5)",
+      "yaml": "entry_point: gather\nstate:\n  left_out: str\n  right_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: ask_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    error_policy: fail_after_drain\n    output: [gathered]\n    transition: END\n  - id: ask_a\n    type: llm\n    input_mapping: {task: {type: fixed, value: Hi}}\n    output: [left_out]\n    settings: {on_error: error_output, error_transition: run_b}\n  - id: run_b\n    type: code\n    code: 'return \"ok\"'\n    output: [right_out]\n",
+      "refusal": "error_transition_target",
+      "node": "ask_a"
+    },
+    {
+      "name": "a Parallel Agent branch still refuses settings as family_not_yet (5b-5)",
+      "yaml": "entry_point: gather\nstate:\n  left_out: str\n  right_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: delegate_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    error_policy: fail_after_drain\n    output: [gathered]\n    transition: END\n  - id: delegate_a\n    type: agent\n    tool: child\n    input_mapping: {task: {type: fixed, value: work}}\n    output: [left_out]\n    settings: {on_error: continue}\n  - id: run_b\n    type: code\n    code: 'return \"ok\"'\n    output: [right_out]\n",
+      "refusal": "family_not_yet",
+      "node": "delegate_a"
     },
     {
       "name": "an error route into a Map worker",
@@ -435,10 +465,34 @@
       "node": "ShapeA"
     },
     {
-      "name": "legacy labels: a legacy-labelled Map worker",
+      "name": "legacy labels: a legacy-labelled Map worker admits automatic settings (5b-5)",
       "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: Render Item, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: Render Item, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
-      "refusal": "fanout_owned",
-      "node": "RenderItem"
+      "refusal": null,
+      "node": null
+    },
+    {
+      "name": "Map broadcast cannot pass node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, broadcast: [node_errors], outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: END}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}', settings: {on_error: continue}}\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "map_entities"
+    },
+    {
+      "name": "Parallel Code branch cannot declare input node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: {type: str, value: ''}\n  b_out: {type: str, value: ''}\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: run_a}\n      - {id: b, node: run_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: run_a\n    type: code\n    language: python\n    code: 'return \"ok\"'\n    input: [topic, node_errors]\n    output: [a_out]\n    settings: {on_error: continue}\n  - id: run_b\n    type: code\n    language: python\n    code: 'return \"ok\"'\n    input: [topic]\n    output: [b_out]\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "run_a"
+    },
+    {
+      "name": "Parallel LLM branch cannot read parent node_errors across fan-out boundary (SEC-5B5-02)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: str\n  b_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: ask_a}\n      - {id: b, node: ask_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: ask_a\n    type: llm\n    input: [topic, node_errors]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [a_out]\n    settings: {on_error: continue}\n  - id: ask_b\n    type: llm\n    input: [topic]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [b_out]\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "ask_a"
+    },
+    {
+      "name": "Parallel Agent branch cannot declare input node_errors across fan-out boundary (SEC-5B5-02b)",
+      "yaml": "entry_point: gather\nstate:\n  topic: str\n  a_out: str\n  b_out: str\n  gathered: {type: list, value: []}\nnodes:\n  - id: gather\n    type: parallel\n    branches:\n      - {id: a, node: agent_a}\n      - {id: b, node: ask_b}\n    max_concurrency: 2\n    wait: all\n    output: [gathered]\n    transition: END\n  - id: agent_a\n    type: agent\n    tool: child_pipeline\n    input: [topic, node_errors]\n    input_mapping: {task: {type: variable, value: topic}}\n    output: [a_out]\n  - id: ask_b\n    type: llm\n    input: [topic]\n    input_mapping: {task: {type: fstring, value: '{topic}'}}\n    output: [b_out]\n    settings: {on_error: continue}\n",
+      "refusal": "node_errors_nested_mapping",
+      "node": "agent_a"
     }
   ]
 }

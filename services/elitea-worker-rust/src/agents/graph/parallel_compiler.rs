@@ -3,8 +3,9 @@
 use async_trait::async_trait;
 
 use super::{
-    FanoutChildRefusal, PipelineConfigurationError, PipelineDefinition, PipelineGraphBuilder,
-    PipelineNodeDefinition, PipelineNodeRuntimes, state_value_matches,
+    AdmittedNodeSettings, FanoutChildRefusal, PipelineConfigurationError, PipelineDefinition,
+    PipelineGraphBuilder, PipelineNodeDefinition, PipelineNodeRuntimes, StateReducer,
+    state_value_matches,
 };
 use crate::agents::graph::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
@@ -24,6 +25,7 @@ use crate::agents::graph::map_yaml::MapNodeDefinition;
 use crate::agents::graph::node_events::{
     PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender,
 };
+use crate::agents::graph::node_settings_runtime::SettingsNode;
 use crate::agents::graph::parallel::{
     AdkParallelBranchRuntime, DurableParallelNode, ParallelBranchExecution,
     ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchTerminal,
@@ -37,6 +39,9 @@ use adk_rust::graph::{
     NodeOutput, START, State, StateGraph, StateSchema,
 };
 use elitea_agent_runtime::graph::fanout::runner::DecisionSource;
+use elitea_agent_runtime::graph::node_settings::{
+    EXECUTED_ONCE_KEY, NODE_ERRORS_KEY, bind_digest, settings_digest,
+};
 use ring::digest;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -368,7 +373,6 @@ impl PipelineDefinition {
             .ok_or(PipelineConfigurationError::Unsupported(
                 "the fixed Parallel authority was not composed",
             ))?;
-        let resolver = runtimes.application.clone();
         let owned = definition
             .branches()
             .iter()
@@ -394,7 +398,7 @@ impl PipelineDefinition {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         reject_nested_parallel(&owned, runtimes)?;
-        if resolver.is_none()
+        if runtimes.application.is_none()
             && owned
                 .values()
                 .any(|branch| matches!(branch, OwnedBranch::Agent(_)))
@@ -429,19 +433,7 @@ impl PipelineDefinition {
                 None => branch.node().to_owned(),
             })
             .collect();
-        let saved_code = saved_code_languages(owned.values(), runtimes);
-        let factory = Arc::new(CompilerParallelBranches {
-            owned,
-            state_types: self.state.clone(),
-            resolver,
-            llm: runtimes.llm.clone(),
-            code: runtimes.code.clone(),
-            code_recovery: runtimes.node_recovery.is_some(),
-            saved_code,
-            events: runtimes.events.clone(),
-            root_session: binding.root_session.clone(),
-            delegated_servers: runtimes.delegated_servers(),
-        });
+        let factory = self.build_fanout_branches(owned, runtimes, binding)?;
         let runtime = Arc::new(AdkParallelBranchRuntime::new(
             binding.authority.clone(),
             factory,
@@ -466,6 +458,43 @@ impl PipelineDefinition {
 }
 
 impl PipelineDefinition {
+    fn build_fanout_branches(
+        &self,
+        owned: BTreeMap<String, OwnedBranch>,
+        runtimes: &PipelineNodeRuntimes,
+        binding: &ParallelCompilerBinding,
+    ) -> Result<Arc<CompilerParallelBranches>, PipelineConfigurationError> {
+        let mut node_settings = BTreeMap::new();
+        for branch in owned.values() {
+            if let Some(admitted) = self.settings.get(branch.id()) {
+                if runtimes.node_recovery.is_none() && matches!(branch, OwnedBranch::Code(_)) {
+                    return Err(PipelineConfigurationError::Unsupported(
+                        "node recovery requires a current fenced durable writer",
+                    ));
+                }
+                node_settings.insert(branch.id().to_owned(), admitted.clone());
+            }
+        }
+        let saved_code = saved_code_languages(owned.values(), runtimes);
+        Ok(Arc::new(CompilerParallelBranches {
+            owned,
+            node_settings,
+            state_types: self.state.clone(),
+            resolver: runtimes.application.clone(),
+            llm: runtimes.llm.clone(),
+            code: runtimes.code.clone(),
+            code_recovery: runtimes.node_recovery.is_some(),
+            saved_code,
+            events: runtimes.events.clone(),
+            root_session: binding.root_session.clone(),
+            // M1: a Map item's delegated sign-in pause meets the same
+            // `credential_unavailable` gate a Parallel member does.
+            delegated_servers: runtimes.delegated_servers(),
+            execution_id: runtimes.execution_id(),
+            execution_deadline: Some(fanout_execution_deadline(runtimes, binding)),
+        }))
+    }
+
     /// T-2A3: a Map runs on the shared fan-out adapter: one child per source
     /// item, keyed by its index, every child running the Map's one owned
     /// worker (a State Modifier, a saved Agent or an LLM node).
@@ -530,23 +559,10 @@ impl PipelineDefinition {
             OwnedBranch::Agent(node) => node.selection().alias().to_owned(),
             other => other.id().to_owned(),
         };
-        let saved_code = saved_code_languages([&worker], runtimes);
-        let factory = Arc::new(CompilerParallelBranches {
-            owned: (0..map.max_items)
-                .map(|index| (index.to_string(), worker.clone()))
-                .collect(),
-            state_types: self.state.clone(),
-            resolver: runtimes.application.clone(),
-            llm: runtimes.llm.clone(),
-            code: runtimes.code.clone(),
-            code_recovery: runtimes.node_recovery.is_some(),
-            saved_code,
-            events: runtimes.events.clone(),
-            root_session: binding.root_session.clone(),
-            // M1: a Map item's delegated sign-in pause meets the same
-            // `credential_unavailable` gate a Parallel member does.
-            delegated_servers: runtimes.delegated_servers(),
-        });
+        let owned = (0..map.max_items)
+            .map(|index| (index.to_string(), worker.clone()))
+            .collect();
+        let factory = self.build_fanout_branches(owned, runtimes, binding)?;
         let worker_digest = factory
             .owned_definition_digest(&crate::agents::graph::ParallelBranchDefinition::map_item(
                 0,
@@ -577,6 +593,30 @@ impl PipelineDefinition {
             builder = builder.edge(definition.id(), if target == "END" { END } else { target });
         }
         Ok(builder)
+    }
+}
+
+fn llm_child_visit(branch_id: &str, node_id: &str, input: &State) -> Result<String, GraphError> {
+    let ordered = input.iter().collect::<BTreeMap<_, _>>();
+    let bytes = serde_json::to_vec(&ordered).map_err(|_| {
+        GraphError::SerializationError("an LLM child input is not serializable".to_owned())
+    })?;
+    let mut hash = digest::Context::new(&digest::SHA256);
+    hash.update(b"elitea.graph.fanout.llm-child-visit.v1\0");
+    for field in [branch_id.as_bytes(), node_id.as_bytes(), &bytes] {
+        hash.update(&u64::try_from(field.len()).unwrap_or(u64::MAX).to_be_bytes());
+        hash.update(field);
+    }
+    Ok(crate::sandbox::code_recovery::hex(hash.finish().as_ref()))
+}
+
+fn fanout_execution_deadline(
+    runtimes: &PipelineNodeRuntimes,
+    binding: &ParallelCompilerBinding,
+) -> tokio::time::Instant {
+    match runtimes.execution_deadline() {
+        Some(deadline) => deadline.min(binding.deadline),
+        None => binding.deadline,
     }
 }
 
@@ -656,7 +696,12 @@ impl PipelineDefinition {
     ) -> CodeChild {
         let mut bound = node.clone();
         bound.refresh_debug_compiler_digest(self.definition_digest);
-        let mut types = self.state.clone();
+        let mut types: BTreeMap<String, String> = self
+            .state
+            .iter()
+            .filter(|(key, _)| !self.settings.owns_key(key))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         if let Some(map) = map {
             types.insert(
                 map.item.clone(),
@@ -859,6 +904,8 @@ impl OwnedBranch {
 
 struct CompilerParallelBranches {
     owned: BTreeMap<String, OwnedBranch>,
+    /// 5b-5: admitted automatic-mode `settings:` for directly owned branches/workers.
+    node_settings: BTreeMap<String, AdmittedNodeSettings>,
     state_types: BTreeMap<String, String>,
     /// Present whenever an Agent branch exists (checked at compile time).
     resolver: Option<Arc<dyn PipelineApplicationResolver>>,
@@ -875,6 +922,10 @@ struct CompilerParallelBranches {
     root_session: Option<Arc<dyn RootSessionSource>>,
     /// FU-250: the servers the run holds a resolved token for.
     delegated_servers: Arc<BTreeSet<String>>,
+    /// 5b-5: the Main execution id for child-thread `node_errors` support refs.
+    execution_id: Option<Arc<String>>,
+    /// 5b-5: monotonic run deadline propagated to child retry/timeout settings.
+    execution_deadline: Option<tokio::time::Instant>,
 }
 
 impl CompilerParallelBranches {
@@ -1008,8 +1059,16 @@ impl CompilerParallelBranches {
             None => factory,
         };
         let checkpointer = execution.checkpointer();
-        let node = LlmNode::new(definition.clone(), self.state_types.clone(), factory)
-            .with_parallel_inputs();
+        let admitted = self.node_settings.get(definition.id());
+        let mut node = LlmNode::new(definition.clone(), self.state_types.clone(), factory)
+            .with_parallel_inputs()
+            .with_execution_deadline(self.execution_deadline);
+        if let Some(authority) = execution.node_recovery() {
+            node = node.with_node_recovery(authority);
+        }
+        if let Some(admitted) = admitted {
+            node = node.with_settings(admitted.clone(), self.execution_id.clone());
+        }
         let mut channels = BTreeSet::from([
             "input".to_owned(),
             "messages".to_owned(),
@@ -1017,15 +1076,24 @@ impl CompilerParallelBranches {
             LLM_TOOL_RESUME_STATE_KEY.to_owned(),
             PARALLEL_LLM_INPUTS_STATE_KEY.to_owned(),
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+            crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
         ]);
         channels.extend(definition.input_keys().iter().cloned());
         channels.extend(definition.output_keys().iter().cloned());
         let mut schema = StateSchema::new();
         for channel in channels {
-            schema
-                .channels
-                .insert(channel.clone(), Channel::new(&channel));
+            let typed = if admitted.is_some() && definition.output_keys().contains(&channel) {
+                let default = self
+                    .state_types
+                    .get(&channel)
+                    .map_or(serde_json::Value::Null, |kind| typed_default(kind));
+                Channel::new(&channel).with_default(default)
+            } else {
+                Channel::new(&channel)
+            };
+            schema.channels.insert(channel, typed);
         }
+        add_child_settings_channels(&mut schema, admitted);
         schema
             .channels
             .insert("messages".to_owned(), Channel::list("messages"));
@@ -1052,6 +1120,7 @@ impl CompilerParallelBranches {
         definition: &StateModifierNodeDefinition,
         execution: &ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
+        let admitted = self.node_settings.get(definition.id());
         let mut channels = BTreeSet::from([
             "messages".to_owned(),
             "_pipeline_blocked".to_owned(),
@@ -1069,8 +1138,19 @@ impl CompilerParallelBranches {
                 .channels
                 .insert(key.clone(), Channel::new(&key).with_default(default));
         }
-        StateGraph::new(schema)
-            .add_node(execution.wrap_node(StateModifierNode::new(definition.clone())))
+        add_child_settings_channels(&mut schema, admitted);
+        let graph = match admitted {
+            Some(admitted) => {
+                StateGraph::new(schema).add_node(execution.wrap_node(SettingsNode::new(
+                    StateModifierNode::new(definition.clone()),
+                    admitted.clone(),
+                    self.execution_id.clone(),
+                )))
+            }
+            None => StateGraph::new(schema)
+                .add_node(execution.wrap_node(StateModifierNode::new(definition.clone()))),
+        };
+        graph
             .add_edge(START, definition.id())
             .add_edge(definition.id(), END)
             .compile()
@@ -1093,6 +1173,7 @@ impl CompilerParallelBranches {
         execution: &ParallelBranchExecution,
     ) -> Result<CompiledGraph, GraphError> {
         let definition = &child.node;
+        let admitted = self.node_settings.get(definition.id());
         let unavailable =
             |message: &str| GraphError::InvalidGraph(format!("graph.fanout.code_child: {message}"));
         let runtime = self
@@ -1110,17 +1191,33 @@ impl CompilerParallelBranches {
             )?;
             let runtime = runtime.bind_saved_child_scope(Arc::new(scope))?;
             let body = CodeNode::new(definition.clone(), child.types.clone(), runtime)?
-                .with_failure_slot(Arc::clone(&failure));
-            Box::new(
-                super::super::node_recovery_runtime::RecoverableNode::new(
-                    Arc::new(body),
-                    definition.validated_digest(),
-                    super::super::node_recovery::NodeRecoveryPolicy::default(),
-                    journals,
-                    None,
-                )
-                .with_legacy_first_attempt(),
-            )
+                .with_failure_slot(Arc::clone(&failure))
+                .with_timeout_ms(admitted.and_then(|s| s.settings.timeout_ms));
+            let policy = match admitted {
+                Some(admitted) => admitted.settings.to_recovery_policy().map_err(|_| {
+                    unavailable("Code node settings could not compile to a recovery policy")
+                })?,
+                None => super::super::node_recovery::NodeRecoveryPolicy::default(),
+            };
+            let settings_retry = admitted.is_some_and(|s| s.settings.retry_on_fail);
+            let mut wrapper = super::super::node_recovery_runtime::RecoverableNode::new(
+                Arc::new(body),
+                definition.validated_digest(),
+                policy,
+                journals,
+                None,
+            );
+            if !settings_retry {
+                wrapper = wrapper.with_legacy_first_attempt();
+            }
+            if let Some(admitted) = admitted {
+                wrapper = wrapper.with_settings(admitted.clone(), self.execution_id.clone());
+            }
+            Box::new(wrapper)
+        } else if admitted.is_some() {
+            return Err(unavailable(
+                "node recovery requires a current fenced durable writer",
+            ));
         } else {
             Box::new(
                 CodeNode::new(definition.clone(), child.types.clone(), runtime)?
@@ -1145,6 +1242,7 @@ impl CompilerParallelBranches {
                 .channels
                 .insert(key.clone(), Channel::new(&key).with_default(default));
         }
+        add_child_settings_channels(&mut schema, admitted);
         StateGraph::new(schema)
             .add_node(
                 execution.wrap_node(super::super::fanout_code_child::CodeBranchNode {
@@ -1242,6 +1340,13 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         &self,
         branch: &crate::agents::graph::ParallelBranchDefinition,
     ) -> Result<[u8; 32], GraphError> {
+        let fold_settings = |node_id: &str, base: [u8; 32]| {
+            let Some(admitted) = self.node_settings.get(node_id) else {
+                return base;
+            };
+            let map = BTreeMap::from([(node_id.to_owned(), admitted.settings.clone())]);
+            bind_digest(base, settings_digest(&map))
+        };
         let declared = match self.definition(branch)? {
             OwnedBranch::Agent(node) => node,
             OwnedBranch::Llm(node) => {
@@ -1250,17 +1355,19 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 digest.update(&node.config_digest());
                 let mut result = [0; 32];
                 result.copy_from_slice(digest.finish().as_ref());
-                return Ok(result);
+                return Ok(fold_settings(node.id(), result));
             }
             // The Map worker digest main binds into every item id.
-            OwnedBranch::StateModifier(node) => return Ok(node.config_digest()),
+            OwnedBranch::StateModifier(node) => {
+                return Ok(fold_settings(node.id(), node.config_digest()));
+            }
             OwnedBranch::Code(child) => {
                 let mut digest = digest::Context::new(&digest::SHA256);
                 digest.update(b"elitea.graph.fanout.owned-code.v1\0");
                 digest.update(&child.node.validated_digest());
                 let mut result = [0; 32];
                 result.copy_from_slice(digest.finish().as_ref());
-                return Ok(result);
+                return Ok(fold_settings(child.node.id(), result));
             }
         };
         let participant = self
@@ -1290,15 +1397,37 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
         branch: &crate::agents::graph::ParallelBranchDefinition,
         parent: &State,
     ) -> Result<State, GraphError> {
+        let stripped;
+        let parent_view =
+            if parent.contains_key(elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY) {
+                stripped = parent
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.as_str() != elitea_agent_runtime::graph::node_settings::NODE_ERRORS_KEY
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<State>();
+                &stripped
+            } else {
+                parent
+            };
         match self.definition(branch)? {
-            OwnedBranch::Agent(node) => node.freeze_parallel_input(parent),
-            OwnedBranch::Llm(node) => node.freeze_parallel_input(parent),
+            OwnedBranch::Agent(node) => node.freeze_parallel_input(parent_view),
+            OwnedBranch::Llm(node) => {
+                let mut input = node.freeze_parallel_input(parent_view)?;
+                let visit = llm_child_visit(branch.id(), node.id(), &input)?;
+                input.insert(
+                    crate::agents::graph::application::APPLICATION_VISIT_STATE_KEY.to_owned(),
+                    serde_json::Value::String(visit),
+                );
+                Ok(input)
+            }
             // A State Modifier reads its declared inputs directly.
             OwnedBranch::StateModifier(node) => node
                 .input_keys()
                 .iter()
                 .map(|key| {
-                    parent
+                    parent_view
                         .get(key)
                         .map(|value| (key.clone(), value.clone()))
                         .ok_or_else(|| {
@@ -1319,7 +1448,7 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
                 let mut input = child
                     .read_keys()
                     .into_iter()
-                    .filter_map(|key| match parent.get(&key) {
+                    .filter_map(|key| match parent_view.get(&key) {
                         Some(value) => Some(Ok((key, value.clone()))),
                         None if reads_all => None,
                         None => Some(Err(GraphError::InvalidGraph(
@@ -1547,6 +1676,27 @@ impl ParallelBranchGraphFactory for CompilerParallelBranches {
             _ => None,
         };
         super::super::parallel_cards::child_resume(pause, catalog, decisions).await
+    }
+}
+
+/// 5b-5: isolated per-child-thread channels for `node_errors` and `execute_once`.
+fn add_child_settings_channels(schema: &mut StateSchema, admitted: Option<&AdmittedNodeSettings>) {
+    let Some(admitted) = admitted else {
+        return;
+    };
+    if admitted.settings.uses_node_errors() {
+        schema.channels.insert(
+            NODE_ERRORS_KEY.to_owned(),
+            Channel::new(NODE_ERRORS_KEY)
+                .with_default(serde_json::json!([]))
+                .with_reducer(StateReducer::Append.channel_reducer(NODE_ERRORS_KEY)),
+        );
+    }
+    if admitted.settings.execute_once {
+        schema.channels.insert(
+            EXECUTED_ONCE_KEY.to_owned(),
+            Channel::new(EXECUTED_ONCE_KEY),
+        );
     }
 }
 

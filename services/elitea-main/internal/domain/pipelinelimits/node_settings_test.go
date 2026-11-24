@@ -186,3 +186,85 @@ nodes:
 		t.Fatalf("got %v, want %q", api, want)
 	}
 }
+
+// 5b-5: fan-out-owned children admit automatic settings, allow error_transition: END,
+// and refuse error_transition escaping to a root node or sibling branch.
+func TestNodeSettingsFanoutChildrenAdmitAutomaticAndRefuseEscapingTransitions(t *testing.T) {
+	t.Parallel()
+	admitted := `entry_point: gather
+state:
+  a_out: str
+  b_out: str
+  gathered: {type: list, value: []}
+nodes:
+  - id: gather
+    type: parallel
+    branches:
+      - {id: a, node: llm_a}
+      - {id: b, node: code_b}
+    max_concurrency: 2
+    wait: all
+    error_policy: fail_after_drain
+    output: [gathered]
+    transition: tail
+  - id: llm_a
+    type: llm
+    input_mapping: {task: {type: fixed, value: Hi}}
+    output: [a_out]
+    settings: {retry_on_fail: true, max_tries: 5, wait_between_tries_ms: 300000, on_error: continue, always_output_data: true, execute_once: true, timeout_ms: 900000}
+  - id: code_b
+    type: code
+    code: 'return "ok"'
+    output: [b_out]
+    settings: {retry_on_fail: true, max_tries: 2, wait_between_tries_ms: 100, on_error: error_output, error_transition: END, timeout_ms: 1000}
+  - id: tail
+    type: state_modifier
+    template: done
+    output: [a_out]
+    transition: END
+`
+	if err := pipelinelimits.Check(admitted); err != nil {
+		t.Fatalf("admitted fan-out settings refused: %v", err)
+	}
+	for name, bad := range map[string]struct {
+		yaml    string
+		node    string
+		refusal string
+	}{
+		"escape to root": {
+			yaml:    strings.Replace(admitted, "error_transition: END", "error_transition: tail", 1),
+			node:    "code_b",
+			refusal: "error_transition_target",
+		},
+		"escape to sibling": {
+			yaml:    strings.Replace(admitted, "error_transition: END", "error_transition: llm_a", 1),
+			node:    "code_b",
+			refusal: "error_transition_target",
+		},
+		"max_tries limit+1": {
+			yaml:    strings.Replace(admitted, "max_tries: 5", "max_tries: 6", 1),
+			node:    "llm_a",
+			refusal: "max_tries_range",
+		},
+		"wait limit+1": {
+			yaml:    strings.Replace(admitted, "wait_between_tries_ms: 300000", "wait_between_tries_ms: 300001", 1),
+			node:    "llm_a",
+			refusal: "wait_range",
+		},
+		"timeout limit+1": {
+			yaml:    strings.Replace(admitted, "timeout_ms: 900000", "timeout_ms: 900001", 1),
+			node:    "llm_a",
+			refusal: "timeout_range",
+		},
+	} {
+		bad := bad
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			api := pipelinelimits.Refusal(pipelinelimits.Check(bad.yaml))
+			want := "Node " + bad.node + ": " + pipelinelimits.NodeSettingsRefusalTexts[bad.refusal]
+			if api == nil || api.Code != pipelinelimits.CodeNodeSettingsInvalid || api.Message != want {
+				t.Fatalf("got %v, want %q", api, want)
+			}
+		})
+	}
+}

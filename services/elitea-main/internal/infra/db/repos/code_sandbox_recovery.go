@@ -88,7 +88,7 @@ func (r *CodeIntentRepository) recoveryRecord(ctx context.Context, tx sqlExecuto
 		return record, code.Visit{}, err
 	}
 	record.preparedFingerprint = fingerprint
-	latest, err := lockLatestNodeRecoveryVisit(ctx, tx, execution, generation)
+	latest, err := lockLatestNodeRecoveryVisitForActivation(ctx, tx, execution, generation, journal.ActivationID, journal.JournalRevision)
 	if err != nil || latest.activation != journal.ActivationID || latest.revision != journal.JournalRevision {
 		return record, code.Visit{}, code.ErrRejected
 	}

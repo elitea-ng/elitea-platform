@@ -52,6 +52,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Fan-out child node settings and per-thread pending visit (5b-5, FU-071)](node-settings-fanout-children-20261124.md) lifts the `fanout_owned` admission refusal across Worker, Main, and Web for automatic-mode `settings:` in `Parallel` branches and `Map` workers/child pipelines (refusing escaping `error_transition` targets), isolates `node_errors`/`execute_once`/retry journals per `p1:`/`m1:` child thread, and lands migration `shared/0271` + Main per-`graph_thread` pending recovery visit support with cross-actor/cross-project authorization checks.
 - [HTTP action Main foundation (5d-1)](http-action-main-foundation-20261123.md) adds project HTTP action rules (migration `shared/0270`, admin API, Settings > HTTP actions UI), revision-2 rendering and start snapshots, invocation v3, the fenced effect ledger, `openapi` credential resolution with singleflight OAuth2 token fetching, dedicated 32/8 pool isolation, and the HTTPS-only egress-guarded `http.RoundTripper` transport (closes FU-073 and Main half of FU-072).
 
 - [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.

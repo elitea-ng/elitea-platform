@@ -1247,7 +1247,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// deadline), and the grants models.http_action_rules.manage (admin) and
 	// models.http_action_rules.list (admin, editor, viewer), including the
 	// per-project override rows. No foreign key to centry.project.
-	require.EqualValues(t, 270, Head(shared))
+	//
+	// 271: shared/0271_node_recovery_per_thread_visit.sql, replaces
+	// node_recovery_one_pending_visit (execution_id, generation) with
+	// (execution_id, generation, graph_thread) and adds
+	// node_recovery_latest_visit_by_thread so operator recovery pending visits
+	// isolate per fan-out child thread (FU-071, 5b-5). No permission.
+	require.EqualValues(t, 271, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

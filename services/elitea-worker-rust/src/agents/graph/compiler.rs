@@ -2513,6 +2513,11 @@ impl PipelineDefinition {
     pub(super) fn result_policy(&self) -> PipelineResultPolicy {
         let mut keys = Vec::new();
         for node in &self.nodes {
+            if self.parallel_owned_nodes.contains(node.id())
+                || self.map_owned_nodes.contains(node.id())
+            {
+                continue;
+            }
             let (transition, output_keys) = match node {
                 PipelineNodeDefinition::Application(node) => {
                     (node.transition(), node.output_keys())

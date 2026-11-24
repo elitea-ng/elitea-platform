@@ -201,16 +201,40 @@ impl RawSettingsCatalog {
         reducers: &BTreeMap<String, StateReducer>,
         owned: &BTreeSet<String>,
     ) -> Result<SettingsCatalog, PipelineConfigurationError> {
-        // C4: a document that owns `node_errors` never maps it into or out
-        // of a nested pipeline; the child keeps its own entries.
+        // C4: a document that owns `node_errors` never maps it across a nested
+        // pipeline or fan-out child boundary; each child keeps its own entries.
         if self.uses_node_errors() {
             for node in nodes {
-                if let PipelineNodeDefinition::Application(agent) = node
-                    && (agent.variable_keys().any(|key| key == NODE_ERRORS_KEY)
-                        || agent.output_keys().iter().any(|key| key == NODE_ERRORS_KEY))
-                {
+                let crosses_boundary = match node {
+                    PipelineNodeDefinition::Application(agent) => {
+                        agent.variable_keys().any(|key| key == NODE_ERRORS_KEY)
+                            || agent.output_keys().iter().any(|key| key == NODE_ERRORS_KEY)
+                    }
+                    PipelineNodeDefinition::Map(map) => {
+                        map.runtime()
+                            .broadcast
+                            .iter()
+                            .any(|key| key == NODE_ERRORS_KEY)
+                            || map
+                                .runtime()
+                                .outputs
+                                .iter()
+                                .any(|key| key == NODE_ERRORS_KEY)
+                    }
+                    _ => false,
+                } || (owned.contains(node.id())
+                    && (node.input_keys().iter().any(|key| key == NODE_ERRORS_KEY)
+                        || node.output_keys().iter().any(|key| key == NODE_ERRORS_KEY)
+                        || match node {
+                            PipelineNodeDefinition::Llm(llm) => {
+                                llm.input_mapping().contains_key(NODE_ERRORS_KEY)
+                                    || llm.mapped_variables().any(|key| key == NODE_ERRORS_KEY)
+                            }
+                            _ => false,
+                        }));
+                if crosses_boundary {
                     return Err(refusal(
-                        agent.id(),
+                        node.id(),
                         NodeSettingsRefusal::NodeErrorsNestedMapping,
                     ));
                 }
@@ -239,9 +263,6 @@ impl RawSettingsCatalog {
                     return Err(refusal(&id, NodeSettingsRefusal::FamilyPause));
                 }
             };
-            if owned.contains(&id) {
-                return Err(refusal(&id, NodeSettingsRefusal::FanoutOwned));
-            }
             let node = nodes.iter().find(|node| node.id() == id).ok_or(
                 PipelineConfigurationError::Invalid(
                     "a pipeline node with settings is not admitted",
@@ -249,7 +270,8 @@ impl RawSettingsCatalog {
             )?;
             if let Some(target) = raw.settings.error_transition.as_deref()
                 && target != "END"
-                && (target == id
+                && (owned.contains(&id)
+                    || target == id
                     || owned.contains(target)
                     || self.failure_handlers.contains(target)
                     || !nodes.iter().any(|node| node.id() == target))

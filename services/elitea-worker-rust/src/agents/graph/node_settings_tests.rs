@@ -448,15 +448,17 @@ fn every_admission_refusal_is_typed_and_names_the_node() {
         refused(recovered),
         ("run".to_owned(), NodeSettingsRefusal::WithRecovery)
     );
-    // A Map-owned node, and an error route into a Map-owned node.
     let map = "entry_point: map_entities\nstate:\n  entities: {type: list, value: []}\n  item_result: {type: str, value: ''}\n  mapped: {type: list, value: []}\n  tail_out: str\nnodes:\n  - {id: map_entities, type: map, worker: render, source: entities, item: entity, index: item_index, outputs: [item_result], destination: mapped, max_items: 64, max_concurrency: 4, reduction: ordered_collection, transition: tail}\n  - {id: render, type: state_modifier, input: [entity, item_index], output: [item_result], template: '{{ item_index }}'}\n  - {id: tail, type: state_modifier, template: x, output: [tail_out], transition: END}\n";
-    let owned = map.replace(
+    let escape = map.replace(
         "template: '{{ item_index }}'}",
-        "template: '{{ item_index }}', settings: {on_error: continue}}",
+        "template: '{{ item_index }}', settings: {on_error: error_output, error_transition: tail}}",
     );
     assert_eq!(
-        refused(&owned),
-        ("render".to_owned(), NodeSettingsRefusal::FanoutOwned)
+        refused(&escape),
+        (
+            "render".to_owned(),
+            NodeSettingsRefusal::ErrorTransitionTarget
+        )
     );
     let into_owned = map.replace(
         "template: x, output",

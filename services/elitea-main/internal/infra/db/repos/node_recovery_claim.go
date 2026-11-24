@@ -23,7 +23,7 @@ func loadLatestNodeRecoveryClaimVisit(ctx context.Context, tx sqlExecutor, execu
 	var status string
 	err := tx.QueryRow(ctx, `SELECT receipt_json,receipt_digest,status FROM elitea_runtime.node_recovery_visits
 WHERE execution_id=$1 AND generation=$2
-ORDER BY created_at DESC,journal_revision DESC LIMIT 1 FOR UPDATE`, executionID, int64(generation)).Scan(&raw, &digest, &status)
+ORDER BY CASE status WHEN 'AUTHORIZED' THEN 0 WHEN 'SUSPENDED' THEN 1 WHEN 'STOPPED' THEN 2 ELSE 3 END ASC,created_at DESC,journal_revision DESC,graph_thread ASC,activation_id DESC LIMIT 1 FOR UPDATE`, executionID, int64(generation)).Scan(&raw, &digest, &status)
 	if err != nil {
 		return nodeRecoveryClaimVisit{}, err
 	}

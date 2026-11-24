@@ -28,8 +28,16 @@ func TestNodeRecoveryResultReadUsesExactAuthorizedOwnerProof(t *testing.T) {
 		name                   string
 		version, actor, status string
 		data                   []byte
+		siblingPending         bool
 		deny                   bool
-	}{{name: "authorized exact bytes", data: data}, {name: "foreign result version", version: strings.Repeat("9", 64), deny: true}, {name: "other actor", actor: "22", deny: true}, {name: "tampered wire", data: []byte("tampered"), deny: true}, {name: "not suspended", status: "RESUMED", deny: true}} {
+	}{
+		{name: "authorized exact bytes", data: data},
+		{name: "foreign result version", version: strings.Repeat("9", 64), deny: true},
+		{name: "other actor", actor: "22", deny: true},
+		{name: "tampered wire", data: []byte("tampered"), deny: true},
+		{name: "not suspended", status: "RESUMED", deny: true},
+		{name: "resumed while sibling suspended", status: "RESUMED", data: data, siblingPending: true},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := tc.version
 			if v == "" {
@@ -44,6 +52,9 @@ func TestNodeRecoveryResultReadUsesExactAuthorizedOwnerProof(t *testing.T) {
 				status = "AUTHORIZED"
 			}
 			rows := append(recoveryClaimRows(), scriptedRow{values: []any{r.ActivationID, r.JournalRevision}}, scriptedRow{values: []any{raw, digest[:], action, actor, status}})
+			if status == "RESUMED" {
+				rows = append(rows, scriptedRow{values: []any{tc.siblingPending}})
+			}
 			e := &scriptedExecutor{rowResults: rows}
 			s := &recoveryTxStore{scriptedExecutor: e}
 			repo := recoveryRepo(t, s)

@@ -54,7 +54,8 @@ func (r *NodeRecoveryRepository) PollNodeRecovery(ctx context.Context, claim sto
 		var activation string
 		var revision uint64
 		err = tx.QueryRow(ctx, `SELECT receipt_json,receipt_digest,activation_id,journal_revision FROM elitea_runtime.node_recovery_visits
-WHERE execution_id=$1 AND generation=$2 AND status IN ('SUSPENDED','AUTHORIZED','RESUMED','STOPPED') ORDER BY created_at DESC,journal_revision DESC LIMIT 1 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation)).Scan(&raw, &digest, &activation, &revision)
+WHERE execution_id=$1 AND generation=$2 AND status IN ('SUSPENDED','AUTHORIZED','RESUMED','STOPPED')
+ORDER BY CASE status WHEN 'AUTHORIZED' THEN 0 WHEN 'SUSPENDED' THEN 1 WHEN 'STOPPED' THEN 2 ELSE 3 END ASC,created_at DESC,journal_revision DESC,graph_thread ASC,activation_id DESC LIMIT 1 FOR UPDATE`, claim.ExecutionID, int64(claim.Generation)).Scan(&raw, &digest, &activation, &revision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return storage.ErrContentRejected
 		}
@@ -96,7 +97,7 @@ func (r *NodeRecoveryRepository) AcknowledgeNodeRecovery(ctx context.Context, cl
 		if err != nil {
 			return err
 		}
-		current, err := lockLatestNodeRecoveryVisit(ctx, tx, claim.ExecutionID, claim.Generation)
+		current, err := lockLatestNodeRecoveryVisitForActivation(ctx, tx, claim.ExecutionID, claim.Generation, ack.ActivationID, ack.ExpectedRevision)
 		if err != nil {
 			return err
 		}
@@ -145,8 +146,21 @@ FOR UPDATE OF visit,action`, claim.ExecutionID, int64(claim.Generation), ack.Act
 		}
 		replay := consumedClaim != ""
 		if replay {
-			if status != branch.status || applied != ack.AppliedRevision || scope.desired != branch.desired || !bytes.Equal(savedAck, ackBytes) {
+			if status != branch.status || applied != ack.AppliedRevision || !bytes.Equal(savedAck, ackBytes) {
 				return storage.ErrContentRejected
+			}
+			if scope.desired != branch.desired {
+				if branch.desired != "RUNNING" || scope.desired != "SUSPENDED" {
+					return storage.ErrContentRejected
+				}
+				var siblingPending bool
+				err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM elitea_runtime.node_recovery_visits WHERE execution_id=$1 AND generation=$2 AND graph_thread<>$3 AND status IN ('SUSPENDED','AUTHORIZED'))`, claim.ExecutionID, int64(claim.Generation), receipt.GraphThread).Scan(&siblingPending)
+				if err != nil {
+					return err
+				}
+				if !siblingPending {
+					return storage.ErrContentRejected
+				}
 			}
 		} else {
 			if status != "AUTHORIZED" || scope.desired != "SUSPENDED" {
@@ -188,7 +202,7 @@ WHERE execution_id=$1 AND generation=$2 AND activation_id=$3 AND journal_revisio
 					return err
 				}
 			} else {
-				tag, err = tx.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET desired_state='RUNNING'
+				tag, err = tx.Exec(ctx, `UPDATE elitea_runtime.execution_jobs SET desired_state=CASE WHEN EXISTS(SELECT 1 FROM elitea_runtime.node_recovery_visits WHERE execution_id=$1 AND generation=$2 AND status IN ('SUSPENDED','AUTHORIZED')) THEN 'SUSPENDED' ELSE 'RUNNING' END
 WHERE execution_id=$1 AND generation=$2 AND desired_state='SUSPENDED' AND state='RUNNING'`, claim.ExecutionID, int64(claim.Generation))
 				if err != nil {
 					return err

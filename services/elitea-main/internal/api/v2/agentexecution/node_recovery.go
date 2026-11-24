@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	app "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
@@ -40,7 +42,17 @@ func NewCurrentNodeRecoveryRoute(useCase CurrentNodeRecoveryUseCase, authConfig 
 			return
 		}
 		if r.Method == http.MethodGet {
-			if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" {
+			if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+				writeError(w, http.StatusBadRequest, "Invalid node recovery request")
+				return
+			}
+			graphThread, queryOK := parseNodeRecoveryReadThread(r.URL.RawQuery)
+			if !queryOK {
+				writeError(w, http.StatusBadRequest, "Invalid node recovery request")
+				return
+			}
+			selector.GraphThread = graphThread
+			if selector.Validate() != nil {
 				writeError(w, http.StatusBadRequest, "Invalid node recovery request")
 				return
 			}
@@ -79,6 +91,26 @@ func NewCurrentNodeRecoveryRoute(useCase CurrentNodeRecoveryUseCase, authConfig 
 	router.Method(http.MethodGet, CurrentNodeRecoveryPath, apimw.Auth(authConfig)(read))
 	router.Method(http.MethodPost, CurrentNodeRecoveryActionPath, apimw.Auth(authConfig)(write))
 	return router, nil
+}
+
+const maxNodeRecoveryRawQueryBytes = 2048
+
+func parseNodeRecoveryReadThread(rawQuery string) (string, bool) {
+	if rawQuery == "" {
+		return "", true
+	}
+	if len(rawQuery) > maxNodeRecoveryRawQueryBytes || strings.ContainsAny(rawQuery, "&;") {
+		return "", false
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil || len(values) != 1 {
+		return "", false
+	}
+	threads, ok := values["graph_thread"]
+	if !ok || len(threads) != 1 || threads[0] == "" || !domain.ValidGraphThread(threads[0]) {
+		return "", false
+	}
+	return threads[0], true
 }
 
 func writeNodeRecoveryError(w http.ResponseWriter, err error, read bool) {
