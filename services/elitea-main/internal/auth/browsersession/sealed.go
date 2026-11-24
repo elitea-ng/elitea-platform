@@ -181,7 +181,9 @@ func StartSealedSession(ctx context.Context, tx pgx.Tx, appender securityaudit.A
 	if start.At.IsZero() {
 		return SealedSession{}, adminaccess.ErrElevationNoTimestamp
 	}
-	at := start.At.UTC()
+	// At PostgreSQL's precision, so the session's and the elevation's
+	// expiry, computed from it on both sides, are the same instant.
+	at := start.At.UTC().Truncate(time.Microsecond)
 	elevationStart := adminaccess.ElevationStart{
 		UserID: start.UserID, BrowserSessionRef: 1, Level: start.Level, Path: adminaccess.ElevationPathSealed,
 		ReasonCode: start.ReasonCode, Reason: start.Reason, Ticket: start.Ticket,
