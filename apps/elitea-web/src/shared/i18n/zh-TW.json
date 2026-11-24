@@ -4964,5 +4964,21 @@
   "entities.token.table.adminAccess": "管理",
   "entities.token.table.adminInherit": "您的所有管理權限",
   "entities.token.table.adminInheritEnds": "您的所有管理權限，至 {{date}}",
-  "entities.token.table.adminNone": "無"
+  "entities.token.table.adminNone": "無",
+  "agents.deleteApplicationButton.failed": "無法刪除此代理。",
+  "features.agentLifecycle.bulk.deleteFailedCount": "{{count}} 個{{noun}}無法刪除。",
+  "features.agentLifecycle.import.failed": "匯入失敗，未匯入任何內容。",
+  "features.agentLifecycle.import.team.badKind": "{{file}} 必須包含 kind: team。",
+  "features.agentLifecycle.import.team.badYaml": "{{file}} 不是有效的 YAML。",
+  "features.agentLifecycle.import.team.leadNotMember": "負責人 {{lead}} 不是 {{file}} 的成員。",
+  "features.agentLifecycle.import.team.missingMember": "{{file}} 參照了 zip 中不存在的檔案：{{files}}。",
+  "features.agentLifecycle.import.team.noMembers": "{{file}} 必須以 .agent.md 檔案路徑列出其成員。",
+  "features.agentLifecycle.import.team.noName": "{{file}} 沒有團隊名稱。",
+  "features.agentLifecycle.import.team.repeatedMember": "{{file}} 重複列出了一個成員。",
+  "features.agentLifecycle.import.team.tooManyMembers": "一個團隊最多有 {{limit}} 個代理。",
+  "features.agentLifecycle.import.teamLead": "負責人：{{name}}",
+  "features.agentLifecycle.import.teamName": "團隊：{{name}}",
+  "features.agentTeams.exportAction": "匯出",
+  "features.agentTeams.exportMemberFailed": "無法匯出團隊：無法讀取代理 {{name}}。",
+  "features.agentLifecycle.import.teamOnAgents": "此 zip 是一個團隊，請從代理清單匯入。"
 }

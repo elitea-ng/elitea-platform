@@ -21,6 +21,7 @@ import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 
 import { useAgentTeamList, useAgentTeamWrites, useTeamAbilities } from '../model/useAgentTeams';
+import { useTeamExport } from '../model/useTeamExport';
 import { TeamEditDialog } from './TeamEditDialog';
 import { TeamRow } from './TeamRow';
 
@@ -68,6 +69,7 @@ function TeamsList({
   const [deleting, setDeleting] = useState<AgentTeam | undefined>(undefined);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
   const [startError, setStartError] = useState<string | undefined>(undefined);
+  const teamExport = useTeamExport();
 
   const start = (team: AgentTeam): void => {
     setStartError(undefined);
@@ -100,6 +102,7 @@ function TeamsList({
         )}
       </Box>
       {startError !== undefined && <Alert testId="agent-teams-start-error">{startError}</Alert>}
+      {teamExport.error !== undefined && <Alert testId="agent-teams-export-error">{teamExport.error}</Alert>}
       {list.isError && (
         <Alert testId="agent-teams-load-error">{serverErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
       )}
@@ -114,6 +117,8 @@ function TeamsList({
           team={team}
           starting={writes.start.isPending}
           onStart={() => start(team)}
+          exporting={teamExport.exportingId === team.id}
+          onExport={() => void teamExport.exportTeam(team)}
           onEdit={abilities.canUpdate ? () => setEditing({ team }) : undefined}
           onDelete={abilities.canDelete ? () => { setDeleteError(undefined); setDeleting(team); } : undefined}
         />

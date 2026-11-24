@@ -155,18 +155,31 @@ ORDER BY team_id, position`, ids)
 func (s *AgentTeams) CreateTeam(ctx context.Context, projectID, actorID int64, team agentteams.Team) (agentteams.Stored, error) {
 	var id int64
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `
-INSERT INTO elitea_chat.agent_teams (project_id, name, description, floor_policy, lead_position, created_by)
-VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6) RETURNING id`,
-			projectID, team.Name, team.Description, string(team.Policy), team.Lead, actorID).Scan(&id); err != nil {
-			return err
-		}
-		return writeTeamMembers(ctx, tx, id, team.Members)
+		var insertErr error
+		id, insertErr = InsertTeam(ctx, tx, projectID, actorID, team)
+		return insertErr
 	})
 	if err != nil {
-		return agentteams.Stored{}, teamWriteError("create", err)
+		return agentteams.Stored{}, err
 	}
 	return s.GetTeam(ctx, projectID, id)
+}
+
+// InsertTeam writes a normalized team inside the caller's transaction and
+// answers its id: the team import creates its agents and the team in one
+// transaction (issue 3010). A taken name is agentteams.ErrNameTaken.
+func InsertTeam(ctx context.Context, tx pgx.Tx, projectID, actorID int64, team agentteams.Team) (int64, error) {
+	var id int64
+	if err := tx.QueryRow(ctx, `
+INSERT INTO elitea_chat.agent_teams (project_id, name, description, floor_policy, lead_position, created_by)
+VALUES ($1, $2, $3, $4, NULLIF($5, 0), $6) RETURNING id`,
+		projectID, team.Name, team.Description, string(team.Policy), team.Lead, actorID).Scan(&id); err != nil {
+		return 0, teamWriteError("create", err)
+	}
+	if err := writeTeamMembers(ctx, tx, id, team.Members); err != nil {
+		return 0, teamWriteError("create", err)
+	}
+	return id, nil
 }
 
 // UpdateTeam replaces a team's fields and roster.

@@ -264,6 +264,9 @@ import type {
   SetAgentMemoryOptOutBody,
   SetDefaultVersionRequest,
   SetProjectQuotaParams,
+  TeamImportRefusal,
+  TeamImportRequest,
+  TeamImportResponse,
   TrendingAuthor,
   UnpublishRequest,
   UnpublishResponse,
@@ -34712,6 +34715,252 @@ export function useImportWizard<
   const queryOptions = getImportWizardQueryOptions(
     projectId,
     importWizardRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type importTeamResponse201 = {
+  data: TeamImportResponse;
+  status: 201;
+};
+
+export type importTeamResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type importTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type importTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type importTeamResponse409 = {
+  data: TeamImportRefusal;
+  status: 409;
+};
+
+export type importTeamResponse422 = {
+  data: TeamImportRefusal;
+  status: 422;
+};
+
+export type importTeamResponseSuccess = importTeamResponse201 & {
+  headers: Headers;
+};
+export type importTeamResponseError = (
+  | importTeamResponse400
+  | importTeamResponse401
+  | importTeamResponse403
+  | importTeamResponse409
+  | importTeamResponse422
+) & {
+  headers: Headers;
+};
+
+export type importTeamResponse =
+  importTeamResponseSuccess | importTeamResponseError;
+
+export const getImportTeamUrl = (projectId: string) => {
+  return `/elitea_core/team_import/prompt_lib/${projectId}`;
+};
+
+/**
+ * NOTE(W2): internal/api/v2/eliteacore/team_import.go:156
+ * (`TeamImportPost`), issue 3010. One transaction creates every agent,
+ * version, toolkit, skill and link of the document, then the team
+ * (ADR-0050 decision 8); any failure keeps nothing. Each member is
+ * pinned to the first version of its agent. Gated by
+ * `models.applications.export_import.import` AND `models.teams.create`.
+ * @summary Import a set of agents as one saved team, all or nothing
+ */
+export const importTeam = async (
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<importTeamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<importTeamResponse>(getImportTeamUrl(projectId), {
+    ...options,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getHeaders(options?.headers),
+    },
+    body: JSON.stringify(teamImportRequest),
+  });
+};
+
+export const getImportTeamQueryKey = (
+  projectId: string,
+  teamImportRequest?: TeamImportRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/team_import/prompt_lib/${projectId}`,
+    teamImportRequest,
+  ] as const;
+};
+
+export const getImportTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof importTeam>>,
+  TError = N400Response | N401Response | N403Response | TeamImportRefusal,
+>(
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getImportTeamQueryKey(projectId, teamImportRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof importTeam>>> = ({
+    signal,
+  }) => importTeam(projectId, teamImportRequest, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof importTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ImportTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof importTeam>>
+>;
+export type ImportTeamQueryError =
+  N400Response | N401Response | N403Response | TeamImportRefusal;
+
+export function useImportTeam<
+  TData = Awaited<ReturnType<typeof importTeam>>,
+  TError = N400Response | N401Response | N403Response | TeamImportRefusal,
+>(
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importTeam>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof importTeam>>,
+          TError,
+          Awaited<ReturnType<typeof importTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useImportTeam<
+  TData = Awaited<ReturnType<typeof importTeam>>,
+  TError = N400Response | N401Response | N403Response | TeamImportRefusal,
+>(
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importTeam>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof importTeam>>,
+          TError,
+          Awaited<ReturnType<typeof importTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useImportTeam<
+  TData = Awaited<ReturnType<typeof importTeam>>,
+  TError = N400Response | N401Response | N403Response | TeamImportRefusal,
+>(
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Import a set of agents as one saved team, all or nothing
+ */
+
+export function useImportTeam<
+  TData = Awaited<ReturnType<typeof importTeam>>,
+  TError = N400Response | N401Response | N403Response | TeamImportRefusal,
+>(
+  projectId: string,
+  teamImportRequest: TeamImportRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof importTeam>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getImportTeamQueryOptions(
+    projectId,
+    teamImportRequest,
     options,
   );
 

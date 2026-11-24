@@ -17,7 +17,9 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::command::{CommandShape, analyse};
+use crate::credentials::{CommandGrant, CredentialCache, Redactor, Secret};
 use crate::deny::DenyList;
+use crate::egress_proxy::{EgressProxy, NetworkReport};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::SandboxMode;
 use crate::sandbox::{Enforcement, Prepared, SandboxConfig, SandboxRequest, prepare};
@@ -125,6 +127,16 @@ pub struct ShellConfig {
     /// executor's runner turns it off (its worker pushes, and its tool set
     /// has no `git_push`).
     pub host_push: bool,
+    /// Run a command with what a rule grants it ([`CommandSpec::grant`]:
+    /// a credential profile's login and a network limited to named hosts,
+    /// #3005/#3006). Off by default: only the desktop host turns it on; the
+    /// cloud executor's runner never does. A session tells its rules engine
+    /// ([`crate::approvals::RulesEngine::set_credential_grants`]): off, no
+    /// rule grants anything, so a network call is asked; and a spec that
+    /// still carries a grant is refused here (nothing runs).
+    pub credential_grants: bool,
+    /// The logins fetched for grants in this session (in memory only).
+    pub credentials: CredentialCache,
 }
 
 impl ShellConfig {
@@ -153,7 +165,18 @@ impl ShellConfig {
             background_processes: true,
             max_process_wall: Duration::from_hours(4),
             host_push: true,
+            credential_grants: false,
+            credentials: CredentialCache::default(),
         }
+    }
+
+    /// Where a credential profile's empty configuration directory lives:
+    /// beside the session's temporary directory (in the host's data, which
+    /// commands may read only where it is opened again, and never write).
+    fn grant_config_base(&self) -> Option<PathBuf> {
+        self.temp_dir
+            .parent()
+            .map(|parent| parent.join("grant-config"))
     }
 
     /// The home directory credentials are looked up under: [`Self::home`],
@@ -211,6 +234,11 @@ pub struct CommandSpec {
     /// Listen on and connect to the loopback addresses
     /// ([`SandboxRequest::loopback`]).
     pub loopback: bool,
+    /// What a rule the person wrote grants this command
+    /// ([`crate::approvals::RulesEngine::command_grant`]): the network
+    /// limited to its hosts (whatever [`Self::network`] says) and, with a
+    /// credential, the program's login. Foreground commands only.
+    pub grant: Option<CommandGrant>,
 }
 
 /// What a command did.
@@ -241,6 +269,12 @@ pub struct CommandOutput {
     pub enforcement_note: Option<&'static str>,
     /// Whether it ran under `/bin/sh -c` (compound) or as plain argv.
     pub shell: bool,
+    /// What a rule granted it (`the gh login, network limited to …`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant: Option<String>,
+    /// With a grant: the hosts it was limited to and those it was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkReport>,
 }
 
 /// A stream read with its head and tail kept.
@@ -358,17 +392,42 @@ impl Capture {
 
 type SharedCapture = Arc<Mutex<Capture>>;
 
-async fn capture<R: AsyncRead + Unpin>(mut reader: R, cap: usize, into: SharedCapture) {
+/// [`capture`] `reader` into `into` on its own task, redacting `secrets`.
+fn spawn_capture<R: AsyncRead + Unpin + Send + 'static>(
+    reader: R,
+    config: &ShellConfig,
+    into: &SharedCapture,
+    secrets: &[Secret],
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(capture(
+        reader,
+        config.output_cap,
+        Arc::clone(into),
+        Redactor::new(secrets),
+    ))
+}
+
+/// Read `reader` into `into`, with `redactor` removing the grant's secrets
+/// before anything is kept (so the head and tail cut never splits one).
+async fn capture<R: AsyncRead + Unpin>(
+    mut reader: R,
+    cap: usize,
+    into: SharedCapture,
+    mut redactor: Redactor,
+) {
     let mut buffer = [0u8; 8192];
     while let Ok(read) = reader.read(&mut buffer).await {
         if read == 0 {
             break;
         }
+        let safe = redactor.push(&buffer[..read]);
         if let Ok(mut captured) = into.lock() {
-            captured.push(&buffer[..read], cap);
+            captured.push(&safe, cap);
         }
     }
+    let rest = redactor.finish();
     if let Ok(mut captured) = into.lock() {
+        captured.push(&rest, cap);
         captured.finish(cap);
     }
 }
@@ -547,6 +606,182 @@ pub fn sandbox_request(
         allow_listen: config.allow_listen,
         loopback: false,
         allow_keychain: config.allow_keychain,
+        network_proxy: None,
+    })
+}
+
+/// The proxy port a granted command's plan is judged with (the real one
+/// is bound when it runs).
+const PLAN_PROXY_PORT: u16 = 1;
+
+/// What a granted command runs with: its proxy (stopped when this is
+/// dropped), the variables only it gets, the secrets removed from its
+/// output, and the directory it may read.
+struct Granted {
+    proxy: EgressProxy,
+    env: Vec<(String, String)>,
+    secrets: Vec<Secret>,
+    readable: Vec<PathBuf>,
+    describe: String,
+}
+
+impl std::fmt::Debug for Granted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Names only: the values hold the login and the proxy credential.
+        formatter
+            .debug_struct("Granted")
+            .field("proxy", &self.proxy)
+            .field(
+                "env",
+                &self.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// The environment the host runs a profile's login command with: the
+/// person's `PATH` (absolute entries) and home, nothing else.
+fn token_environment() -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = ["USER", "LOGNAME", "LANG"]
+        .iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| ((*name).to_owned(), value))
+        })
+        .collect();
+    if let Some(home) = crate::sys::home_dir() {
+        env.push(("HOME".to_owned(), home.display().to_string()));
+    }
+    if let Ok(joined) = std::env::join_paths(crate::command::search_path()) {
+        env.push(("PATH".to_owned(), joined.to_string_lossy().into_owned()));
+    }
+    env
+}
+
+/// A command's environment ([`environment`]) with what its grant adds;
+/// the proxy is the only way out, so no `NO_PROXY` lets a client around it.
+fn granted_environment(config: &ShellConfig, granted: Option<&Granted>) -> Vec<(String, String)> {
+    with_grant(environment(config), granted.map(|granted| &granted.env[..]))
+}
+
+/// `env` with a grant's variables: each replaces any spelling of its name,
+/// and `NO_PROXY` goes.
+fn with_grant(
+    mut env: Vec<(String, String)>,
+    granted: Option<&[(String, String)]>,
+) -> Vec<(String, String)> {
+    if let Some(granted) = granted {
+        env.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("no_proxy")
+                && !granted
+                    .iter()
+                    .any(|(granted, _)| granted.eq_ignore_ascii_case(name))
+        });
+        env.extend(granted.iter().cloned());
+    }
+    env
+}
+
+/// Variables a proxied command's clients read (both spellings).
+const PROXY_VARIABLES: &[&str] = &[
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+];
+
+/// Start what `grant` gives `spec`: refused (nothing runs) when the host
+/// does not run grants, the platform cannot limit the network, the
+/// command is not one simple command its profile admits, or the login
+/// cannot be read.
+async fn start_grant(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    grant: &CommandGrant,
+) -> ToolResult<Granted> {
+    let refuse = |why: &str| ToolError::new(ErrorCode::Denied, format!("{why}; nothing ran"));
+    if !config.credential_grants || config.sandbox.container {
+        return Err(refuse(
+            "this host does not run commands with a rule's grant",
+        ));
+    }
+    if !crate::sandbox::scoped_network_supported() {
+        return Err(refuse(
+            "this machine's sandbox cannot limit a command's network to named hosts",
+        ));
+    }
+    if grant.hosts.is_empty() || spec.loopback {
+        return Err(refuse("a grant needs its hosts, and no loopback"));
+    }
+    let CommandShape::Simple(argv) = analyse(&spec.command) else {
+        return Err(refuse("a grant covers one plain command"));
+    };
+    let mut env = Vec::new();
+    let mut secrets = Vec::new();
+    let mut readable = Vec::new();
+    if let Some(id) = &grant.credential {
+        let profile = crate::credentials::profile(id)
+            .ok_or_else(|| refuse(&format!("`{id}` is not a credential profile")))?;
+        if crate::command::basename(&argv[0]) != profile.program || !profile.admits(&argv) {
+            return Err(refuse(&format!(
+                "the {} login is not handed to this command",
+                profile.program
+            )));
+        }
+        let program = crate::command::resolve_program(
+            profile.program,
+            &workspace.absolute(&spec.cwd),
+            &crate::command::search_path(),
+        )
+        .ok_or_else(|| refuse(&format!("`{}` is not on PATH", profile.program)))?;
+        let secret = config
+            .credentials
+            .fetch(profile, &program, &token_environment())
+            .await?;
+        env.push((profile.env.to_owned(), secret.expose().to_owned()));
+        secrets.push(secret);
+        if let Some(name) = profile.config_dir_env {
+            let base = config
+                .grant_config_base()
+                .ok_or_else(|| refuse("the grant has no directory for its configuration"))?;
+            let dir = crate::credentials::empty_config_dir(&base, profile)?;
+            let request = sandbox_request(workspace, config, spec.mode, false)?;
+            if request
+                .writable_roots
+                .iter()
+                .any(|root| dir.starts_with(root))
+            {
+                return Err(refuse("the grant's configuration directory is writable"));
+            }
+            env.push((name.to_owned(), dir.display().to_string()));
+            readable.push(dir);
+        }
+        env.extend(
+            profile
+                .fixed_env
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+    }
+    let proxy = EgressProxy::start(grant.hosts.clone())
+        .await
+        .map_err(|error| ToolError::io("cannot start the grant's network filter", &error))?;
+    let url = proxy.url();
+    env.extend(
+        PROXY_VARIABLES
+            .iter()
+            .map(|name| ((*name).to_owned(), url.clone())),
+    );
+    Ok(Granted {
+        proxy,
+        env,
+        secrets,
+        readable,
+        describe: grant.describe(),
     })
 }
 
@@ -619,8 +854,30 @@ fn spec_request(
     config: &ShellConfig,
     spec: &CommandSpec,
 ) -> ToolResult<SandboxRequest> {
-    let mut request = sandbox_request(workspace, config, spec.mode, spec.network)?;
+    granted_request(workspace, config, spec, None)
+}
+
+/// [`spec_request`]: with a grant, the network off but for the proxy's
+/// port (`proxy`, or a placeholder when only planning) and the grant's
+/// readable directories.
+fn granted_request(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    granted: Option<&Granted>,
+) -> ToolResult<SandboxRequest> {
+    let network = spec.network && spec.grant.is_none();
+    let mut request = sandbox_request(workspace, config, spec.mode, network)?;
     request.loopback = spec.loopback;
+    if spec.grant.is_some() {
+        request.network_proxy =
+            Some(granted.map_or(PLAN_PROXY_PORT, |granted| granted.proxy.port()));
+        if let Some(granted) = granted {
+            request
+                .readable_roots
+                .extend(granted.readable.iter().cloned());
+        }
+    }
     Ok(request)
 }
 
@@ -637,6 +894,24 @@ pub fn prepare_command(
     config: &ShellConfig,
     spec: &CommandSpec,
     unhidden_approved: bool,
+) -> ToolResult<PreparedCommand> {
+    if spec.grant.is_some() {
+        // A grant's proxy and login live as long as one foreground run.
+        return Err(ToolError::new(
+            ErrorCode::Unsupported,
+            "a command a rule grants a login or named hosts runs in the foreground only",
+        ));
+    }
+    prepare_granted(workspace, config, spec, unhidden_approved, None)
+}
+
+/// [`prepare_command`], with what a grant started for it.
+fn prepare_granted(
+    workspace: &Workspace,
+    config: &ShellConfig,
+    spec: &CommandSpec,
+    unhidden_approved: bool,
+    granted: Option<&Granted>,
 ) -> ToolResult<PreparedCommand> {
     if workspace.stat(&spec.cwd)? != Some(EntryKind::Dir) {
         return Err(ToolError::invalid(format!(
@@ -655,7 +930,7 @@ pub fn prepare_command(
             true,
         ),
     };
-    let request = spec_request(workspace, config, spec)?;
+    let request = granted_request(workspace, config, spec, granted)?;
     let prepared = prepare(&request, &argv, &config.sandbox)?;
     refuse_unhidden(&request, &prepared, unhidden_approved)?;
     Ok(PreparedCommand {
@@ -738,22 +1013,30 @@ pub async fn run_checked_up_to(
     max_timeout: Duration,
     keep_stdout_line: Option<KeepLine>,
 ) -> ToolResult<CommandOutput> {
+    // A grant's proxy, login and directory, for this run only: the proxy
+    // stops when `granted` is dropped at the end of this call.
+    let granted = match &spec.grant {
+        Some(grant) => Some(start_grant(workspace, config, spec, grant).await?),
+        None => None,
+    };
     let PreparedCommand {
         prepared,
         shell,
         program,
-    } = prepare_command(workspace, config, spec, unhidden_approved)?;
+    } = prepare_granted(workspace, config, spec, unhidden_approved, granted.as_ref())?;
     let timeout = spec
         .timeout
         .unwrap_or(config.default_timeout)
         .min(max_timeout);
-
+    let secrets = granted
+        .as_ref()
+        .map_or_else(Vec::new, |g| g.secrets.clone());
     let mut command = tokio::process::Command::new(&prepared.program);
     command
         .args(&prepared.args)
         .current_dir(workspace.absolute(&spec.cwd))
         .env_clear()
-        .envs(environment(config))
+        .envs(granted_environment(config, granted.as_ref()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -776,11 +1059,10 @@ pub async fn run_checked_up_to(
         .stderr
         .take()
         .ok_or_else(|| ToolError::new(ErrorCode::Io, "no stderr"))?;
-    let cap = config.output_cap;
     let out_capture = Arc::new(Mutex::new(Capture::filtered(keep_stdout_line)));
     let err_capture = SharedCapture::default();
-    let mut out_reader = tokio::spawn(capture(stdout, cap, Arc::clone(&out_capture)));
-    let mut err_reader = tokio::spawn(capture(stderr, cap, Arc::clone(&err_capture)));
+    let mut out_reader = spawn_capture(stdout, config, &out_capture, &secrets);
+    let mut err_reader = spawn_capture(stderr, config, &err_capture, &secrets);
 
     let waited = tokio::time::timeout(timeout, child.wait()).await;
     let (status, timed_out) = if let Ok(status) = waited {
@@ -825,6 +1107,8 @@ pub async fn run_checked_up_to(
         enforcement: prepared.enforcement,
         enforcement_note: prepared.note,
         shell,
+        grant: granted.as_ref().map(|granted| granted.describe.clone()),
+        network: granted.as_ref().map(|granted| granted.proxy.report()),
     })
 }
 
@@ -993,7 +1277,77 @@ mod tests {
             mode,
             network: false,
             loopback: false,
+            grant: None,
         }
+    }
+
+    /// A grant's variables replace every spelling of their names, `NO_PROXY`
+    /// goes (the proxy is the only way out), the rest is kept; no grant
+    /// changes nothing. The secret-looking variables were dropped before
+    /// (`passthrough_environment`), and a grant adds only its own.
+    #[test]
+    fn a_grant_replaces_its_variables_and_drops_no_proxy() {
+        let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        let base = vec![
+            pair("PATH", "/usr/bin"),
+            pair("no_proxy", "*"),
+            pair("NO_PROXY", "*"),
+            pair("https_proxy", "http://elsewhere:1"),
+        ];
+        assert_eq!(super::with_grant(base.clone(), None), base);
+        let granted = [
+            pair("GH_TOKEN", "t"),
+            pair("HTTPS_PROXY", "http://127.0.0.1:2"),
+        ];
+        let env = super::with_grant(base, Some(&granted));
+        assert_eq!(
+            env,
+            vec![
+                pair("PATH", "/usr/bin"),
+                pair("GH_TOKEN", "t"),
+                pair("HTTPS_PROXY", "http://127.0.0.1:2"),
+            ]
+        );
+    }
+
+    /// The login is redacted before the head and tail cut: a capped output
+    /// keeps no part of it, also where it straddles reads.
+    #[tokio::test]
+    async fn a_capped_output_keeps_no_part_of_a_secret() {
+        use crate::credentials::{Redactor, Secret};
+        let secret = Secret::for_test("gho_0123456789abcdefghij");
+        let mut text = String::new();
+        for _ in 0..2_000 {
+            text.push_str("line gho_0123456789abcdefghij end\n");
+        }
+        let into = super::SharedCapture::default();
+        // A slow reader: every read returns at most 7 bytes.
+        let reader = tokio_test_reader(text.into_bytes(), 7);
+        super::capture(reader, 4_096, into.clone(), Redactor::new(&[secret])).await;
+        let captured = super::rendered(&into, false);
+        assert!(captured.truncated);
+        assert!(!captured.text.contains("gho_"), "{}", captured.text);
+        assert!(captured.text.contains("[REDACTED]"));
+    }
+
+    /// An `AsyncRead` over `bytes` that returns at most `step` bytes a read.
+    fn tokio_test_reader(bytes: Vec<u8>, step: usize) -> impl tokio::io::AsyncRead + Unpin {
+        struct Slow(std::io::Cursor<Vec<u8>>, usize);
+        impl tokio::io::AsyncRead for Slow {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+                buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                use std::io::Read as _;
+                let step = self.1.min(buf.remaining());
+                let mut chunk = vec![0; step];
+                let read = self.0.read(&mut chunk)?;
+                buf.put_slice(&chunk[..read]);
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+        Slow(std::io::Cursor::new(bytes), step)
     }
 
     /// In a container with a trusted root, a workspace command's git

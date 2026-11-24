@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { deleteApplication, getApplication, getListApplicationsQueryKey, updateApplicationVersion } from '@/shared/api/generated/applications/applications';
+import { serverErrorOf } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 
 import { fetchExportDocument } from '../api/lifecycleApi';
@@ -18,6 +19,8 @@ import { fetchExportDocument } from '../api/lifecycleApi';
 interface ApplicationBulkResult {
   /** The ids the action did not complete on. */
   readonly failed: readonly string[];
+  /** The server's own sentence for the first refusal, when it sent one. */
+  readonly reason?: string;
 }
 
 interface ApplicationBulkActions {
@@ -37,14 +40,34 @@ interface VersionDetail {
 /** Runs `run` over `ids` one at a time, collecting the ids it threw on. */
 async function eachId(ids: readonly string[], run: (id: string) => Promise<void>): Promise<ApplicationBulkResult> {
   const failed: string[] = [];
+  let reason: string | undefined;
   for (const id of ids) {
     try {
       await run(id);
-    } catch {
+    } catch (error) {
       failed.push(id);
+      reason ??= serverErrorOf(error);
     }
   }
-  return { failed };
+  return reason === undefined ? { failed } : { failed, reason };
+}
+
+async function deleteOne(projectId: string, id: string): Promise<void> {
+  await deleteApplication(projectId, Number(id));
+}
+
+/**
+ * Deletes every selected application, then tries the refused ones once
+ * more. A sub-agent copy is refused while its parent holds it (issue 3009),
+ * and deleting the parent deletes the copy: selected together, the copy can
+ * come first, be refused, and be gone by the end. The delete of an agent
+ * that is gone answers 204, so the second pass counts it as deleted and the
+ * person is not told a deleted agent failed.
+ */
+async function deleteAll(projectId: string, ids: readonly string[]): Promise<ApplicationBulkResult> {
+  const first = await eachId(ids, (id) => deleteOne(projectId, id));
+  if (first.failed.length === 0 || first.failed.length === ids.length) return first;
+  return eachId(first.failed, (id) => deleteOne(projectId, id));
 }
 
 /** One entity's export document, handed to the browser as a JSON file. */
@@ -79,7 +102,10 @@ export function useApplicationBulkActions(projectId: string | undefined, kind: '
       setError(undefined);
       try {
         const result = await action();
-        if (result.failed.length > 0) setError(failure(result.failed.length));
+        // The count, then the server's reason for the first refusal: a
+        // guessed cause ("must be unpublished first") sent people after the
+        // wrong fix whenever the refusal was something else.
+        if (result.failed.length > 0) setError([failure(result.failed.length), result.reason].filter(Boolean).join(' '));
         if (refresh) await queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(projectId ?? '') }).catch(() => undefined);
         return result;
       } finally {
@@ -111,11 +137,8 @@ export function useApplicationBulkActions(projectId: string | undefined, kind: '
       ),
     deleteMany: (ids) =>
       run(
-        () =>
-          eachId(ids, async (id) => {
-            await deleteApplication(projectId ?? '', Number(id));
-          }),
-        (count) => t('features.agentLifecycle.bulk.deleteFailed', '{{count}} {{noun}} could not be deleted. A published agent must be unpublished first.', { count, noun }),
+        () => deleteAll(projectId ?? '', ids),
+        (count) => t('features.agentLifecycle.bulk.deleteFailedCount', '{{count}} {{noun}} could not be deleted.', { count, noun }),
         true,
       ),
   };

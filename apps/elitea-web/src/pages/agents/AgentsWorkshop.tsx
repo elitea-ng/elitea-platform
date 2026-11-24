@@ -64,8 +64,8 @@ function AgentListActions({ projectId, canCreate }: { readonly projectId: string
       <EntityImportButton
         testIdPrefix="agents"
         isImporting={entityImport.run.isPending}
-        onImport={async (document) => {
-          await entityImport.run.mutateAsync(document);
+        onImport={async (request) => {
+          await entityImport.run.mutateAsync(request);
         }}
       />
     </>
