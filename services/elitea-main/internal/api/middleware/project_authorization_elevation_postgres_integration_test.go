@@ -10,18 +10,14 @@ package middleware_test
 // content. Nor does a custom role, whatever it holds. Do not "fix" the check
 // to a permission.
 //
-// Two halves:
-//
-//   - now: a user with no standing role, and a holder of a custom role named
-//     differently that holds every permission of super_admin, both get 403
-//     on a project they are not a member of; the standing super_admin gets
-//     through (the control);
-//   - with R2.1 (#2515): a user with an active super_admin-level elevation
-//     and no role gets 403. Until R2.1 creates elitea_auth.admin_elevations
-//     there is nothing to insert, so a tripwire stands in its place: it
-//     passes while the table is absent and FAILS the run that creates it,
-//     which must replace it with the elevation case. It never skips (a
-//     skip is no coverage, scripts/go/declared-skips.txt).
+// The cases: a user with no standing role, and a holder of a custom role
+// named differently that holds every permission of super_admin, both get 403
+// on a project they are not a member of; the standing super_admin gets
+// through (the control). A user with no role and an ACTIVE super_admin-level
+// elevation bound to the session of the request gets 403 too (R2.1a, #2515).
+// The elevation is written by the ledger itself (adminaccess.StartElevation),
+// so the case keeps holding once the resolver adds the elevated set (R2.1b,
+// #2595).
 //
 // It runs on the real schema: 001_initial.sql and the shared corpus.
 
@@ -38,9 +34,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/testpg"
 	migrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
@@ -86,23 +84,61 @@ SELECT (SELECT COUNT(*) FROM public.auth_core__role_permission p JOIN public.aut
 		t.Fatalf("premise: the custom role holds %d of the %d permissions of super_admin", copied, held)
 	}
 
-	expectProjectAccess(t, pool, "r013-standing@autotest.local", http.StatusOK)
-	expectProjectAccess(t, pool, "r013-none@autotest.local", http.StatusForbidden)
-	expectProjectAccess(t, pool, "r013-copy@autotest.local", http.StatusForbidden)
+	expectProjectAccess(t, pool, "r013-standing@autotest.local", 0, http.StatusOK)
+	expectProjectAccess(t, pool, "r013-none@autotest.local", 0, http.StatusForbidden)
+	expectProjectAccess(t, pool, "r013-copy@autotest.local", 0, http.StatusForbidden)
 
-	// The R2.1 tripwire (see the header).
-	var elevationsExist bool
-	if err := pool.QueryRow(t.Context(),
-		`SELECT to_regclass('elitea_auth.admin_elevations') IS NOT NULL`).Scan(&elevationsExist); err != nil {
-		t.Fatalf("look for the elevations table: %v", err)
+	// An active super_admin-level elevation of the user with no role, bound to
+	// the session the request comes from: permissions, not the role name.
+	var noneID, approverID, elevatedSession int64
+	if err := pool.QueryRow(t.Context(), `
+SELECT (SELECT id FROM public.auth_core__user WHERE email = 'r013-none@autotest.local'),
+       (SELECT id FROM public.auth_core__user WHERE email = 'r013-standing@autotest.local')`).Scan(&noneID, &approverID); err != nil {
+		t.Fatalf("read the elevated user: %v", err)
 	}
-	if elevationsExist {
-		t.Fatal("elitea_auth.admin_elevations exists: R2.1 (#2515) replaces this tripwire with an active " +
-			"super_admin-level elevation of r013-none@autotest.local, and expects 403 for it")
+	if err := pool.QueryRow(t.Context(), `
+INSERT INTO elitea_auth.browser_sessions (id, user_id, provider, expires_at, idle_timeout_seconds)
+VALUES (repeat('r013', 10), $1, 'oidc', now() + interval '1 day', 0)
+RETURNING ref`, noneID).Scan(&elevatedSession); err != nil {
+		t.Fatalf("open a browser session of the elevated user: %v", err)
 	}
+	appender, err := securityaudit.NewPostgresAppender("elitea-main/r013-test")
+	if err != nil {
+		t.Fatalf("appender: %v", err)
+	}
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, err := adminaccess.StartElevation(t.Context(), tx, appender, adminaccess.ElevationStart{
+			UserID:            noneID,
+			BrowserSessionRef: elevatedSession,
+			Level:             adminaccess.ElevationLevelSuperAdmin,
+			Path:              adminaccess.ElevationPathApproved,
+			ReasonCode:        adminaccess.ElevationReasonIncident,
+			Reason:            "R0.13: an elevation does not open project content",
+			ApproverUserID:    approverID,
+			At:                time.Now().Add(-time.Minute),
+			Duration:          time.Hour,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("start the elevation: %v", err)
+	}
+	var active bool
+	if err := pool.QueryRow(t.Context(), `
+SELECT EXISTS (SELECT 1 FROM elitea_auth.admin_elevations
+               WHERE user_id = $1 AND browser_session_ref = $2 AND level = 'super_admin'
+                 AND started_at IS NOT NULL AND ended_at IS NULL AND expires_at > now())`,
+		noneID, elevatedSession).Scan(&active); err != nil {
+		t.Fatalf("read the elevation: %v", err)
+	}
+	if !active {
+		t.Fatal("premise: the super_admin-level elevation is not active")
+	}
+	expectProjectAccess(t, pool, "r013-none@autotest.local", elevatedSession, http.StatusForbidden)
 }
 
-func expectProjectAccess(t *testing.T, pool *pgxpool.Pool, email string, want int) {
+// expectProjectAccess sends the request as a browser session of the user;
+// sessionRef is that session's reference (0: none).
+func expectProjectAccess(t *testing.T, pool *pgxpool.Pool, email string, sessionRef int64, want int) {
 	t.Helper()
 	var id int
 	if err := pool.QueryRow(t.Context(),
@@ -113,7 +149,8 @@ func expectProjectAccess(t *testing.T, pool *pgxpool.Pool, email string, want in
 	router.With(apimw.RequireProjectAccess(pool)).Get("/p/{projectID}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	principal := auth.User{ID: fmt.Sprint(id), UserID: fmt.Sprint(id), CredentialKind: auth.CredentialKindSession}
+	principal := auth.User{ID: fmt.Sprint(id), UserID: fmt.Sprint(id), CredentialKind: auth.CredentialKindSession,
+		BrowserSessionRef: sessionRef}
 	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/p/%d", elevationTestProject), nil)
 	request = request.WithContext(auth.ContextWithUser(request.Context(), principal))
 	recorder := httptest.NewRecorder()
