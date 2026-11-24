@@ -35,8 +35,9 @@ var moduleRoot = func() string {
 // on another). The file and line do not change with inlining.
 //
 // Frames of this package, and of the middleware's in-handler helpers
-// (HoldsPermissionIn, HoldsResolvedPermission), are skipped, so the handler
-// that called them is named.
+// (HoldsPermissionIn, HoldsResolvedPermission), and the standing-set helper
+// auth.ResolveStandingAdministration (ADR-0059 R2.1b) are skipped, so the
+// handler that called them is named.
 func caller() (string, bool) {
 	pcs := make([]uintptr, 32)
 	n := runtime.Callers(1, pcs)
@@ -51,6 +52,7 @@ func caller() (string, bool) {
 		switch {
 		case pkg == modulePath+"/internal/api/adminsurface":
 		case pkg == modulePath+"/internal/api/middleware" && strings.HasPrefix(fn, "Holds"):
+		case pkg == modulePath+"/internal/auth" && fn == "ResolveStandingAdministration":
 		case pkg == modulePath+"/internal/api/middleware":
 			// Every other function of the middleware package runs in front of
 			// the handler: the Require* gates, and middleware such as the

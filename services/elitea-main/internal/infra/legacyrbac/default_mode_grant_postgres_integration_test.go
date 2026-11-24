@@ -51,6 +51,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	dbschema "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/db/schema"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 )
 
 const defaultModeGrant = `
@@ -239,6 +240,16 @@ func newGrantPool(t *testing.T) *pgxpool.Pool {
 		if _, err := pool.Exec(ctx, projection); err != nil {
 			t.Fatalf("apply schema projection: %v", err)
 		}
+	}
+	// The administration mode of a browser session with a server-side row
+	// reads the elevation ledger (ADR-0059 R2.1b), which every deployed
+	// database has from shared 0269 on.
+	ledger, err := migrations.Files.ReadFile("shared/0269_admin_elevations.sql")
+	if err != nil {
+		t.Fatalf("read the elevation ledger migration: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(ledger)); err != nil {
+		t.Fatalf("apply the elevation ledger migration: %v", err)
 	}
 	return pool
 }
