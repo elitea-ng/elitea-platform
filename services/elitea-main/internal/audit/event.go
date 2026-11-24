@@ -104,6 +104,54 @@ type Event struct {
 	TraceID      string
 	SpanID       string
 	ParentSpanID string
+
+	// The role-use fields of an administration-mode row (ADR-0059 decision
+	// 8, story R1.4a; shared 0268). Each is NULL when not recorded. They are
+	// OUTSIDE the chain hash (centry.audit_event_canonical, shared 0206, does
+	// not name them) and therefore not tamper-evident until R1.4b.
+	//
+	// ActingRoles is the caller's standing administration roles at request
+	// time, by name; nil writes NULL (no administration resolution), an empty
+	// non-nil slice writes {} (a credential that acts with none).
+	ActingRoles []string
+	// ElevationID is the elevation the request was made under (R2.1), "" for
+	// none.
+	ElevationID string
+	// CredentialKind is one of the CredentialKind* values below, "" when
+	// unknown.
+	CredentialKind string
+	// CentralOverride says the write went through the central override
+	// (R0.6).
+	CentralOverride *bool
+	// ReasonCode and Reason are the reason the caller gave (R3.8). The text
+	// is stored in this row only; a chained security event carries the code.
+	ReasonCode    string
+	Reason        string
+	ReasonMissing *bool
+}
+
+// The credential_kind values of an admin audit row: the credentials table of
+// ADR-0059 decision 7. No other value is ever written.
+const (
+	CredentialKindSession = "session"
+	CredentialKindForm    = "form"
+	CredentialKindSealed  = "sealed"
+	CredentialKindToken   = "token"
+	CredentialKindNative  = "native"
+	CredentialKindRun     = "run"
+	CredentialKindSystem  = "system"
+	CredentialKindSCIM    = "scim"
+)
+
+// KnownCredentialKind reports whether kind is one of the credential_kind
+// values.
+func KnownCredentialKind(kind string) bool {
+	switch kind {
+	case CredentialKindSession, CredentialKindForm, CredentialKindSealed, CredentialKindToken,
+		CredentialKindNative, CredentialKindRun, CredentialKindSystem, CredentialKindSCIM:
+		return true
+	}
+	return false
 }
 
 // Recorder accepts an event for eventual persistence.
@@ -144,6 +192,29 @@ type Annotation struct {
 	// carries no user principal, so the trail names the integration that made
 	// the change rather than showing an empty actor. It never overrides a user.
 	Actor string
+	// ActorCredentialKind is the credential_kind of that non-user caller
+	// (CredentialKindSCIM for a SCIM client, which never reaches the
+	// permission resolver). Like Actor, it is written only when the request
+	// carries no user principal.
+	ActorCredentialKind string
+
+	// CentralOverride is set by a handler whose write went through the
+	// central override (R0.6).
+	CentralOverride *bool
+	// ReasonCode, Reason and ReasonMissing are set by the reason check of a
+	// dangerous or critical action (R3.8).
+	ReasonCode    string
+	Reason        string
+	ReasonMissing *bool
+}
+
+// Administration is what an administration-mode permission resolution of the
+// request knew about the caller (ADR-0059 R1.4a). The resolver records it on
+// the request being audited; the middleware writes it into the row.
+type Administration struct {
+	// ActingRoles is the caller's standing administration roles, by name,
+	// as the resolution read them. Never nil once recorded.
+	ActingRoles []string
 }
 
 // AnnotationSlot is the mutable cell the middleware puts on the context before
@@ -153,6 +224,9 @@ type Annotation struct {
 type AnnotationSlot struct {
 	annotation Annotation
 	present    bool
+
+	administration *Administration
+	elevationID    string
 }
 
 // ContextWithAnnotationSlot marks ctx as "this request is being audited" and
@@ -206,6 +280,77 @@ func Annotate(ctx context.Context, a Annotation) {
 	if a.Actor != "" {
 		slot.annotation.Actor = a.Actor
 	}
+	if a.ActorCredentialKind != "" {
+		slot.annotation.ActorCredentialKind = a.ActorCredentialKind
+	}
+	if a.CentralOverride != nil {
+		slot.annotation.CentralOverride = a.CentralOverride
+	}
+	if a.ReasonCode != "" {
+		slot.annotation.ReasonCode = a.ReasonCode
+	}
+	if a.Reason != "" {
+		slot.annotation.Reason = a.Reason
+	}
+	if a.ReasonMissing != nil {
+		slot.annotation.ReasonMissing = a.ReasonMissing
+	}
+}
+
+// RecordAdministration records an administration-mode resolution of the
+// caller on the request being audited, which makes its row an
+// administration-mode row (ADR-0059 R1.4a). The permission resolver calls it;
+// a later resolution of the same request replaces an earlier one. A no-op
+// when the request is not being audited.
+func RecordAdministration(ctx context.Context, a Administration) {
+	slot, ok := ctx.Value(annotationKey{}).(*AnnotationSlot)
+	if !ok || slot == nil {
+		return
+	}
+	roles := append(make([]string, 0, len(a.ActingRoles)), a.ActingRoles...)
+	slot.administration = &Administration{ActingRoles: roles}
+}
+
+// Administration returns the administration-mode resolution recorded on the
+// request, and whether there was one.
+func (s *AnnotationSlot) Administration() (Administration, bool) {
+	if s == nil || s.administration == nil {
+		return Administration{}, false
+	}
+	return *s.administration, true
+}
+
+type elevationKey struct{}
+
+// ContextWithElevationID records the elevation the request is made under
+// (R2.1 sets it; nothing does before). It is the context accessor of the
+// elevation id: a code path below the audit middleware that calls it also
+// writes the id into the row of the request being audited, because a context
+// flows down and never back up.
+func ContextWithElevationID(ctx context.Context, elevationID string) context.Context {
+	if elevationID == "" {
+		return ctx
+	}
+	if slot, ok := ctx.Value(annotationKey{}).(*AnnotationSlot); ok && slot != nil {
+		slot.elevationID = elevationID
+	}
+	return context.WithValue(ctx, elevationKey{}, elevationID)
+}
+
+// ElevationIDFromContext answers the elevation the request is made under, ""
+// for none.
+func ElevationIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(elevationKey{}).(string)
+	return id
+}
+
+// ElevationID answers the elevation id recorded on the slot below the audit
+// middleware, "" for none.
+func (s *AnnotationSlot) ElevationID() string {
+	if s == nil {
+		return ""
+	}
+	return s.elevationID
 }
 
 // ID is a convenience for the pointer fields above.

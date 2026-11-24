@@ -394,3 +394,90 @@ ALTER TABLE centry.audit_events ENABLE TRIGGER zz_audit_events_chain`); err != n
 		t.Fatalf("prune without the anchor: break %+v", report.Break)
 	}
 }
+
+// The role-use columns of shared 0268 (ADR-0059 R1.4a) are outside the chain
+// hash. On a database whose rows were chained before the columns existed, the
+// chain still verifies after 0268 and after rows that carry them; and a new
+// row's hash does not depend on them: changing one leaves the chain intact.
+func TestRoleUseColumnsStayOutsideTheChainHash(t *testing.T) {
+	pool := newChainPool(t, 4)
+	ctx := context.Background()
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// The database as it was before 0268: the template applied it, so its
+	// columns are dropped, and rows are chained without them.
+	if _, err := pool.Exec(ctx, `
+ALTER TABLE centry.audit_events
+    DROP COLUMN acting_roles, DROP COLUMN elevation_id, DROP COLUMN credential_kind,
+    DROP COLUMN central_override, DROP COLUMN reason_code, DROP COLUMN reason,
+    DROP COLUMN reason_missing`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for i := range 3 {
+		insertRow(t, pool, fmt.Sprintf("POST /before/%d", i), now.Add(time.Duration(i)*time.Second))
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 3 {
+		t.Fatalf("chain before 0268: %+v (break %+v)", report, report.Break)
+	}
+
+	// 0268 itself, the file the runner applies.
+	migration, err := platformmigrations.Files.ReadFile("shared/0268_admin_audit_role_use.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(migration)); err != nil {
+		t.Fatalf("apply 0268: %v", err)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 3 {
+		t.Fatalf("chain after 0268: %+v (break %+v)", report, report.Break)
+	}
+
+	// New rows through the recorder, with every role-use field set.
+	recorder := NewPostgresRecorder(pool, quiet)
+	override, missing := true, false
+	for i := range 2 {
+		status := int32(200)
+		recorder.Record(ctx, Event{
+			EventType: "api", Action: fmt.Sprintf("PUT /after/%d", i), StatusCode: &status,
+			ActingRoles: []string{"admin", "llm_manager"}, CredentialKind: CredentialKindToken,
+			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: &override,
+			ReasonCode: "incident", Reason: "INC-42", ReasonMissing: &missing,
+		})
+	}
+	if err := recorder.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Dropped() != 0 {
+		t.Fatalf("the recorder dropped %d events", recorder.Dropped())
+	}
+	var stored int64
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM centry.audit_events
+ WHERE acting_roles = '{admin,llm_manager}' AND credential_kind = 'token'
+   AND elevation_id = '0192f0c1-7b6e-7c3a-8f00-000000000001' AND central_override
+   AND reason_code = 'incident' AND reason = 'INC-42' AND NOT reason_missing`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 2 {
+		t.Fatalf("%d rows carry the role-use fields, want 2", stored)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 5 {
+		t.Fatalf("chain with role-use rows: %+v (break %+v)", report, report.Break)
+	}
+
+	// The hash does not cover the new columns: a change to one of them is
+	// allowed by the append-only guard and leaves every link verifying. (So
+	// the columns are NOT tamper-evident until R1.4b, which the architecture
+	// page states.)
+	if _, err := pool.Exec(ctx, `
+UPDATE centry.audit_events
+   SET acting_roles = '{super_admin}', credential_kind = 'session', elevation_id = NULL,
+       central_override = false, reason_code = 'other', reason = 'changed', reason_missing = true
+ WHERE action LIKE 'PUT /after/%'`); err != nil {
+		t.Fatalf("UPDATE of the role-use columns: %v", err)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 5 {
+		t.Fatalf("chain after changing the role-use columns: %+v (break %+v)", report, report.Break)
+	}
+}
