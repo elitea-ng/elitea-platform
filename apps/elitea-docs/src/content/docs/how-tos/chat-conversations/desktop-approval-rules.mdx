@@ -1,0 +1,83 @@
+---
+title: "Decide which commands run without asking (desktop)"
+description: "How approval rules in the Elitea desktop app allow, ask or refuse a Local work agent's commands, and how a rule you write lets a CLI such as gh run with its login and a short list of hosts, without a question."
+---
+
+In a **Local work** thread of the Elitea desktop app, the agent runs commands in your folder under the operating system's sandbox. **Approval rules** decide which of those commands run without a question, which are asked, and which are refused. You keep them in **Settings ▸ Approval rules**.
+
+## Where rules come from
+
+- **Your rules** apply to every folder. The app keeps them in its configuration directory, in `rules.json`.
+- **This workspace's rules** apply to one folder. The app keeps them in its own data, never in the folder.
+- **A repository's proposal** is the folder's `.elitea/rules.json`. It is listed under the folder's rules and is never used until you select **Import these rules**. An import is bounded: it never lets a command use the network, hand out a login or reach a host, and it never widens the sandbox.
+- **Always allow** on an approval card adds a rule for that command to the workspace's rules. It covers the sandbox and network the command asked for, nothing more.
+
+Your organization's policy comes first, then plan mode, then the rules. A **Forbidden** rule wins over an **Ask** rule, which wins over an **Allow** rule, across both files. In **Act** mode a command no rule allows is asked; **Bypass** mode runs it without the question, but still refuses what a policy or a Forbidden rule refuses.
+
+## Write a rule
+
+<Steps>
+1. Open **Settings ▸ Approval rules** and pick the folder.
+2. Under **This workspace** or **Every workspace (your rules)**, select **Add rule**.
+3. Type the **Command pattern**: the words the command starts with, for example `cargo [test|check]`. `*` is any one word.
+4. Choose the **Decision**: **Allow**, **Ask** or **Forbidden**. For Forbidden, say in **Justification** what to do instead; the agent reads it.
+5. Add examples the rule must match and must not match. The app checks them when you save, and refuses a rule whose examples disagree with it.
+6. Select **Save rule**. Use **Test a command** to see which rule would decide a command.
+</Steps>
+
+An Allow rule covers one plain command. A command line with pipes, `&&` or `;` is never allowed by a rule; a Forbidden or Ask rule still matches any part of it.
+
+## Let a CLI run with its login (macOS)
+
+A command normally runs with the network off and none of your logins: the sandbox hides your credential files. An **Allow** rule that you write can give one program its stored login and let it reach a few named hosts, still inside the sandbox. A command that matches such a rule runs without a question, even in **Act** mode.
+
+The first login the app knows is the GitHub CLI's (`gh`). The app reads the token with `gh auth token` itself, outside the sandbox, and gives it to that one command only. The token never appears in the command's output, the transcript or the agent's context: any echo of it is replaced with `[REDACTED]`.
+
+<Steps>
+1. Sign in to the GitHub CLI once in a terminal: `gh auth login`.
+2. In **Settings ▸ Approval rules**, under **Every workspace (your rules)**, select **Add rule**.
+3. Type a pattern that starts with `gh`, for example `gh [pr|issue|run] [list|view|diff|checks|status]`, and keep the decision **Allow**.
+4. Under **Login and network (macOS)**, set **Login** to **The GitHub CLI (gh) login**. Leave **Hosts it may reach** empty to use `api.github.com`, `github.com` and `uploads.github.com`, or list your own.
+5. Select **Save rule**.
+</Steps>
+
+The rule now shows **Covers the workspace-write sandbox with the gh login, reaching only its login’s hosts**. A command it covers reaches no other host: the app runs a small filtering proxy for that command, and the sandbox lets the command connect to that proxy and nothing else.
+
+### Keep writes out of a read-only rule
+
+A rule for `gh api` would also cover `gh api -X POST …`. A prompt injection could make the agent run such a write while your rule is meant for reads. Add **conditions**, which must all hold for the rule to match; a command that fails one is asked as before:
+
+| Field | Meaning | Example |
+| --- | --- | --- |
+| **Flags it must not have** | None of these anywhere in the command, in any spelling (`-fX`, `--input=x`). | `-f -F --field --raw-field --input -H --header` |
+| **Flags it must have** | Each of these must be there. | `--draft` for `gh pr create` |
+| **Allowed flag values** | Every value of the flag must be one of these, ignoring case. | `-X GET` and `--method GET` |
+| **GraphQL queries only** | For `gh api graphql`: every `query=` document is a query, never a mutation or subscription. A document read from a file is refused. | |
+
+For example, these three rules let `gh` read without asking, and ask for every write:
+
+```json
+{
+  "version": 1,
+  "rules": [
+    { "pattern": ["gh", ["pr", "issue", "run"], ["list", "view", "diff", "checks", "status"]], "credential": "gh" },
+    { "pattern": ["gh", "api"], "credential": "gh",
+      "conditions": { "forbid_flags": ["-f", "-F", "--field", "--raw-field", "--input", "-H", "--header"],
+                      "flag_values": { "-X": ["GET"], "--method": ["GET"] } } },
+    { "pattern": ["gh", "api", "graphql"], "credential": "gh", "conditions": { "graphql": "query" } }
+  ]
+}
+```
+
+A rule can also list **hosts** without a login, for example a `curl` rule limited to `api.example.com`.
+
+### What a grant never does
+
+- A rule from a repository never grants a login or hosts, imported or not. **Always allow** never writes one either.
+- A Forbidden or Ask rule, your organization's denied commands, plan mode and a policy that turns the network off all still win.
+- A command with pipes or lists, a background or terminal command, and `gh auth`, `gh config`, `gh alias` and `gh extension` never get the login.
+- Hosts are names, never IP addresses or ports, and at most 32 per rule.
+
+<Note>
+The host list is enforced on **macOS** only. On **Linux** the sandbox gives a command its own network, which cannot reach the app's proxy; on **Windows** commands have no sandbox yet. There a rule with a login or hosts grants nothing: it is an ordinary Allow rule without the network, and a command that asks for the network is asked as before.
+</Note>
