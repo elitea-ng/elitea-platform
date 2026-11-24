@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
-base=(-f "$chart/values-standalone.yaml"
+base=(-f "$chart/values-standalone.yaml" -f deploy/helm/tests/fixtures/network-peers.yaml
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 work=$(mktemp -d)

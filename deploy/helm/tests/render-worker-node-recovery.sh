@@ -69,7 +69,7 @@ bad() { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 # values-standalone.yaml supplies the runtime plane the worker requires; the
 # gateway postures are render-only values (`.invalid` never resolves).
 RENDER=(
-  -f "$CHART/values-standalone.yaml"
+  -f "$CHART/values-standalone.yaml" -f "$CHART/../tests/fixtures/network-peers.yaml"
   --set worker.enabled=true
   --set main.runtime.indexIngestDispatch.enabled=false --set-string main.runtime.indexIngestDispatch.commandStream=
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1

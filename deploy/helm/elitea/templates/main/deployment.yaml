@@ -51,6 +51,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "elitea-main.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.main.serviceAccount }}
       {{- /*
         One clock for the whole shutdown (main.preStop in values.yaml): the
         preStop sleep, then ELITEA_SHUTDOWN_TIMEOUT of drain after SIGTERM,

@@ -45,6 +45,8 @@ spec:
         {{- include "elitea-deepwiki.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: deepwiki-migrate
     spec:
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: false
       restartPolicy: Never
       {{- with .Values.deepwiki.podSecurityContext }}
       securityContext:

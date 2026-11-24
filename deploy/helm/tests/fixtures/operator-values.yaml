@@ -13,6 +13,14 @@ networkPolicies:
     # Access by kubectl port-forward only; a real install lists its ingress
     # controller in networkPolicies.main.ingressFrom instead.
     noExternalIngress: true
+  # The worker's and the LLM gateway's egress policies (#2951, #2952): the
+  # cluster's own ranges (kind's defaults) and where PostgreSQL is.
+  clusterCIDRs: [10.244.0.0/16, 10.96.0.0/12]
+  egressPeers:
+    postgresql:
+      to:
+        - ipBlock:
+            cidr: 10.20.0.5/32
 
 main:
   env:

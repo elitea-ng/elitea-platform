@@ -34,6 +34,8 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "elitea-web.serviceAccountName" . }}
+      # Nothing in this pod calls the Kubernetes API (#2953).
+      automountServiceAccountToken: {{ include "elitea.automountToken" .Values.web.serviceAccount }}
       {{- with .Values.web.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
