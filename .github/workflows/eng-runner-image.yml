@@ -34,6 +34,7 @@ on:
     paths:
       - "deploy/ci-runners/image/**"
       - ".github/workflows/eng-runner-image.yml"
+      - "scripts/ci/action-archive-list.mjs"
   schedule:
     # Mondays 05:17 UTC.
     - cron: "17 5 * * 1"
@@ -94,6 +95,22 @@ jobs:
             || echo "::warning::could not remove every preinstalled toolchain; continuing"
           df -h / | tail -1
 
+      # The action archive cache the image bakes in (Containerfile, "action
+      # archive cache"): every remote action this repository's workflows and
+      # actions use, resolved to its commit, plus what a composite action
+      # among them uses. Downloaded here, on a hosted runner, so the pool
+      # stops fetching them from codeload on every job. The weekly build
+      # picks up Dependabot bumps; until then the pool downloads only the
+      # bumped action.
+      - name: Download the action archives
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/ci/action-archive-list.mjs --download deploy/ci-runners/image/action-archive | tee -a "$GITHUB_STEP_SUMMARY"
+          count="$(find deploy/ci-runners/image/action-archive -name '*.tar.gz' | wc -l)"
+          echo "ACTION_ARCHIVE_COUNT=${count}" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
@@ -130,6 +147,7 @@ jobs:
           # every other directory must be created by the tool that uses it.
           docker run --rm --entrypoint /bin/bash \
             --tmpfs /home/runner/_work:rw,exec,uid=1001,gid=1001,size=2g \
+            -e ACTION_ARCHIVE_COUNT \
             "$REF" -euo pipefail -c '
             test "$(id -un)" = runner
             test -z "$(ls -A /home/runner/_work)"
@@ -188,6 +206,20 @@ jobs:
               fi
             done
             docker --version
+
+            # The action archive cache: where the runner looks, every archive
+            # the build downloaded, each a gzip tarball with the one top-level
+            # directory the runner unpacks, and none writable by the runner.
+            test "$ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE" = /opt/action-archive-cache
+            found=0
+            for f in "$ACTIONS_RUNNER_ACTION_ARCHIVE_CACHE"/*_*/*.tar.gz; do
+              case "$(basename "$f")" in [0-9a-f]*.tar.gz) ;; *) echo "not <sha>.tar.gz: $f" >&2; exit 1 ;; esac
+              test "$(tar -tzf "$f" | cut -d/ -f1 | sort -u | wc -l)" = 1
+              if [ -w "$f" ]; then echo "$f is writable by the runner" >&2; exit 1; fi
+              found=$((found + 1))
+            done
+            test "$found" = "$ACTION_ARCHIVE_COUNT"
+            echo "action archive cache: ${found} archives"
             echo "smoke ok"
           '
           docker image inspect "$REF" --format 'size: {{.Size}} bytes, user: {{.Config.User}}' | tee -a "$GITHUB_STEP_SUMMARY"
