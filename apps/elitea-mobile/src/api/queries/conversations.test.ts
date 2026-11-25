@@ -2,6 +2,7 @@ import { createApiClient } from '@/api/client';
 import type { BaseFetch } from '@/api/middleware';
 import {
   CONVERSATIONS_PAGE_SIZE,
+  conversationPagesAreStale,
   fetchConversationPage,
   flattenConversationPages,
   nextConversationOffset,
@@ -40,6 +41,33 @@ describe('conversation paging', () => {
     ]);
     expect(flat.map((r) => r.id)).toEqual([3, 2, 1]);
     expect(flattenConversationPages(undefined)).toEqual([]);
+  });
+
+  // Issue 3030: rows of the first page were deleted on another device, so
+  // the next page reports a lower total and the rows behind them are out
+  // of reach at its offset. The pages are refetched from offset 0.
+  it('calls the pages stale when a later page reports a lower total or comes back empty below its total', () => {
+    expect(conversationPagesAreStale([
+      { offset: 0, total: 75, rows: [row(1)] },
+      { offset: 30, total: 73, rows: [row(2)] },
+    ])).toBe(true);
+    expect(conversationPagesAreStale([
+      { offset: 0, total: 75, rows: [row(1)] },
+      { offset: 30, total: 75, rows: [] },
+    ])).toBe(true);
+    expect(conversationPagesAreStale([
+      { offset: 0, total: 31, rows: [row(1)] },
+      { offset: 30, total: 31, rows: [row(2)] },
+    ])).toBe(false);
+    expect(conversationPagesAreStale([{ offset: 0, total: 0, rows: [] }])).toBe(false);
+    expect(conversationPagesAreStale(undefined)).toBe(false);
+  });
+
+  it('leaves offline pages out of the staleness check', () => {
+    expect(conversationPagesAreStale([
+      { offset: 0, total: 75, rows: [row(1)] },
+      { offset: 30, total: 40, rows: [row(2)], offline: true },
+    ])).toBe(false);
   });
 });
 

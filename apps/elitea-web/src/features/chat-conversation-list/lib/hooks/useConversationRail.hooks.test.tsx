@@ -101,6 +101,29 @@ describe('useConversationRail', () => {
     expect(pageReads[0]?.searchParams.has('source')).toBe(false);
   });
 
+  // Issue 3030: chat 1 was deleted elsewhere after the listing, so chat 3 moved
+  // up to offset 1 and the page at offset 2 is empty. The bucket is re-read
+  // from the top instead of ending with chat 3 out of reach.
+  it('reaches the older rows of a bucket after rows ahead of its offset were deleted elsewhere', async () => {
+    server.use(
+      http.get(`${BASE}/elitea_core/folder/prompt_lib/7`, ({ request }) => {
+        const url = new URL(request.url);
+        if (!url.searchParams.has('date_group')) return undefined;
+        pageReads.push(url);
+        const offset = Number(url.searchParams.get('offset'));
+        const limit = Number(url.searchParams.get('limit'));
+        return HttpResponse.json({ conversations: [row(2), row(3)].slice(offset, offset + limit), total: 2 });
+      }),
+    );
+    const { result } = renderHook(() => useConversationRail({ projectId: '7' }), { wrapper });
+    await waitFor(() => expect(result.current.dateGroups).toHaveLength(1));
+
+    act(() => result.current.loadMoreInGroup('Today'));
+    await waitFor(() => expect(result.current.dateGroups[0]?.conversations.map((c) => c.id)).toEqual(['2', '3']));
+    expect(pageReads.map((url) => url.searchParams.get('offset'))).toEqual(['2', '0']);
+    expect(result.current.hasMore(result.current.dateGroups[0]!)).toBe(false);
+  });
+
   it('reads nothing while it is not enabled, and reads once it is', async () => {
     const { result, rerender } = renderHook(({ enabled }) => useConversationRail({ projectId: '7', enabled }), { wrapper, initialProps: { enabled: false } });
     await new Promise((resolve) => setTimeout(resolve, 50));

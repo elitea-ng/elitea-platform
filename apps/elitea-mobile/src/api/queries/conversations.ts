@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
@@ -70,6 +72,39 @@ export function nextConversationOffset(last: ConversationPage): number | undefin
 }
 
 /**
+ * Whether the pages' offsets no longer point where the server's rows are
+ * (issue 3030): rows an earlier page carried were deleted or archived on
+ * another device, so a later page reports a lower total and the rows behind
+ * them moved up past its offset, out of reach; or a page came back empty
+ * while its total still lies above its offset. Offline pages are left out:
+ * the store and the workspace count differently.
+ */
+export function conversationPagesAreStale(pages: readonly ConversationPage[] | undefined): boolean {
+  let total: number | undefined;
+  for (const page of pages ?? []) {
+    if (page.offline === true) continue;
+    if (total !== undefined && page.total < total) return true;
+    if (page.rows.length === 0 && page.total > page.offset) return true;
+    total = page.total;
+  }
+  return false;
+}
+
+/** Refetches every page, from offset 0, once the pages are stale. */
+function useRefetchStalePages(query: {
+  readonly data: InfiniteData<ConversationPage, unknown> | undefined;
+  readonly isFetching: boolean;
+  readonly isPlaceholderData: boolean;
+  readonly refetch: () => Promise<unknown>;
+}): void {
+  const stale = !query.isPlaceholderData && conversationPagesAreStale(query.data?.pages);
+  const { isFetching, refetch } = query;
+  useEffect(() => {
+    if (stale && !isFetching) void refetch();
+  }, [stale, isFetching, refetch]);
+}
+
+/**
  * Flattens pages, dropping rows a later page repeats (a conversation created
  * while paging shifts the offsets by one).
  */
@@ -108,7 +143,7 @@ export function useLocalWorkConversations(projectId: number | null, enabled: boo
   const saved = useDeviceCopy(queryKeys.localWork(projectId ?? 0), on, () =>
     offlineConversationRows(projectId as number, 0, CONVERSATIONS_PAGE_SIZE, undefined, 'local_work'),
   );
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: queryKeys.localWork(projectId ?? 0),
     enabled: on,
     placeholderData: savedFirstPage(saved),
@@ -116,13 +151,15 @@ export function useLocalWorkConversations(projectId: number | null, enabled: boo
     queryFn: ({ pageParam, signal }) => fetchConversationPage(projectId as number, pageParam, sessionApiClient(), signal, 'local_work'),
     getNextPageParam: nextConversationOffset,
   });
+  useRefetchStalePages(query);
+  return query;
 }
 
 export function useConversations(projectId: number | null) {
   const saved = useDeviceCopy(queryKeys.conversations(projectId ?? 0), projectId !== null, () =>
     offlineConversationRows(projectId as number, 0, CONVERSATIONS_PAGE_SIZE),
   );
-  return useInfiniteQuery({
+  const query = useInfiniteQuery({
     queryKey: queryKeys.conversations(projectId ?? 0),
     enabled: projectId !== null,
     placeholderData: savedFirstPage(saved),
@@ -131,4 +168,6 @@ export function useConversations(projectId: number | null) {
       fetchConversationPage(projectId as number, pageParam, sessionApiClient(), signal),
     getNextPageParam: nextConversationOffset,
   });
+  useRefetchStalePages(query);
+  return query;
 }
