@@ -13,13 +13,18 @@
 // - `--require-signed` (the release check, per platform: macOS yes, Windows not yet):
 //   a platform not fully signed fails.
 //
-//   node scripts/desktop-package.mjs <macos|windows> [--require-signed] [--dry-run] [--github-output]
-//   node scripts/desktop-package.mjs asset-name <macos|windows> <ext> <brand> <version> <true|false>
+//   node scripts/desktop-package.mjs <macos|windows|linux> [--require-signed] [--dry-run] [--github-output]
+//   node scripts/desktop-package.mjs asset-name <macos|windows|linux> <ext> <brand> <version> <true|false>
 //   node scripts/desktop-package.mjs release-assets <dir> <notes-file> [--complete]
 //   node scripts/desktop-package.mjs notes <body-file> <section-file>
 //
 // --dry-run: unsigned whatever is set (a pull request: its run must not sign with the
 // repository's certificates, and a fork has none).
+//
+// Linux has no signer: its AppImage and .deb carry no code signature (the AppImage
+// format's embedded signature and a GPG detached one need a key no secret holds), and
+// a download is checked against SHA256SUMS. Its plan is always `sign=false`, and its
+// asset names carry no `-unsigned`, which would promise a signed build to come.
 //
 // The plan prints `sign=true|false` (and, for Windows, `signer=trusted|pfx|none`); with
 // --github-output it also writes them to $GITHUB_OUTPUT. It never prints a secret value.
@@ -80,9 +85,13 @@ function partition(env, names) {
  * @returns {{ sign: boolean, signer?: 'trusted' | 'pfx' | 'none', notice: string }}
  */
 export function plan(platform, env, { requireSigned = false, dryRun = false } = {}) {
+  if (platform === 'linux') {
+    if (requireSigned) throw new Error('Linux: --require-signed has nothing to require (Linux packages carry no code signature)');
+    return { sign: false, notice: 'Linux: the AppImage and the .deb carry no code signature; a download is checked against SHA256SUMS' };
+  }
   if (dryRun) {
     if (requireSigned) throw new Error('--dry-run and --require-signed exclude each other');
-    if (platform !== 'macos' && platform !== 'windows') throw new Error(`unknown platform "${platform}" (macos or windows)`);
+    if (platform !== 'macos' && platform !== 'windows') throw new Error(`unknown platform "${platform}" (macos, windows or linux)`);
     return {
       sign: false,
       ...(platform === 'windows' ? { signer: 'none' } : {}),
@@ -111,7 +120,7 @@ export function plan(platform, env, { requireSigned = false, dryRun = false } = 
     if (requireSigned) throw new Error('Windows signing secrets not set (Azure Trusted Signing or PFX)');
     return { sign: false, signer: 'none', notice: 'Windows: unsigned build (no Azure Trusted Signing or PFX secrets)' };
   }
-  throw new Error(`unknown platform "${platform}" (macos or windows)`);
+  throw new Error(`unknown platform "${platform}" (macos, windows or linux)`);
 }
 
 /**
@@ -119,11 +128,14 @@ export function plan(platform, env, { requireSigned = false, dryRun = false } = 
  * decision 10): the architecture each platform is built for and its file kinds.
  * macOS: the styled, notarised .dmg (the direct download: drag the app to
  * Applications; owner decision 2026-11-22, in place of a zipped .app) and the signed
- * .pkg (device management). Windows: the MSI and the MSIX.
+ * .pkg (device management). Windows: the MSI and the MSIX. Linux (#3034): the AppImage
+ * (the download for any distribution) and the .deb (Debian, Ubuntu), x86_64, the
+ * architecture's Linux name; `signs: false`, so no name says `-unsigned`.
  */
 export const ASSET_KINDS = Object.freeze({
-  macos: Object.freeze({ arch: 'arm64', exts: Object.freeze(['dmg', 'pkg']) }),
-  windows: Object.freeze({ arch: 'x64', exts: Object.freeze(['msi', 'msix']) }),
+  macos: Object.freeze({ arch: 'arm64', exts: Object.freeze(['dmg', 'pkg']), signs: true }),
+  windows: Object.freeze({ arch: 'x64', exts: Object.freeze(['msi', 'msix']), signs: true }),
+  linux: Object.freeze({ arch: 'x86_64', exts: Object.freeze(['AppImage', 'deb']), signs: false }),
 });
 
 /** The checksum file attached next to the packages. */
@@ -133,7 +145,7 @@ const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const BRAND = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 // The brand is lazy and the version starts with a digit: `Acme-2-1.0.0-…` reads as brand
 // `Acme-2`, the only reading whose version is X.Y.Z.
-const ASSET = /^(?<brand>[A-Za-z0-9][A-Za-z0-9._-]*?)-(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-(?<os>macos|windows)-(?<arch>arm64|x64)(?<unsigned>-unsigned)?\.(?<ext>dmg|pkg|msix|msi)$/;
+const ASSET = /^(?<brand>[A-Za-z0-9][A-Za-z0-9._-]*?)-(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)-(?<os>macos|windows|linux)-(?<arch>arm64|x64|x86_64)(?<unsigned>-unsigned)?\.(?<ext>dmg|pkg|msix|msi|AppImage|deb)$/;
 
 /**
  * The brand as a file-name word: accents dropped (`Café` → `Cafe`), every run of other
@@ -153,17 +165,19 @@ export function brandSlug(brand) {
  * `Elitea-7.8.0-macos-arm64.pkg` or `Elitea-7.8.0-windows-x64-unsigned.msi`. The brand
  * is the app's product name (the brand manifest's shortName) as brandSlug makes it; the
  * version is the full release version (a nightly keeps its `-nightly.…`). An unsigned
- * file says so in its name.
+ * file says so in its name, on the platforms that sign (`Elitea-7.8.0-linux-x86_64.AppImage`
+ * is unsigned and says nothing: Linux never signs, ASSET_KINDS `signs`).
  */
 export function assetName({ os, ext, brand, version, signed }) {
   const kind = ASSET_KINDS[os];
-  if (!kind) throw new Error(`asset name: unknown platform "${os}" (macos or windows)`);
+  if (!kind) throw new Error(`asset name: unknown platform "${os}" (macos, windows or linux)`);
   if (!kind.exts.includes(ext)) throw new Error(`asset name: ${os} has no .${ext} asset (${kind.exts.join(', ')})`);
   const b = brandSlug(brand);
   if (!BRAND.test(b)) throw new Error(`asset name: brand "${brand}" has no letter or digit for a file name`);
   if (!VERSION.test(String(version ?? ''))) throw new Error(`asset name: "${version}" is not X.Y.Z or X.Y.Z-pre`);
   if (typeof signed !== 'boolean') throw new Error('asset name: signed must be true or false');
-  return `${b}-${version}-${os}-${kind.arch}${signed ? '' : '-unsigned'}.${ext}`;
+  if (!kind.signs && signed) throw new Error(`asset name: ${os} packages carry no code signature (signed must be false)`);
+  return `${b}-${version}-${os}-${kind.arch}${signed || !kind.signs ? '' : '-unsigned'}.${ext}`;
 }
 
 /** The parts of a release asset's name, or null when `name` is not one. */
@@ -172,7 +186,9 @@ export function parseAssetName(name) {
   if (!m) return null;
   const kind = ASSET_KINDS[m.groups.os];
   if (kind.arch !== m.groups.arch || !kind.exts.includes(m.groups.ext)) return null;
-  return { brand: m.groups.brand, version: m.groups.version, os: m.groups.os, arch: m.groups.arch, ext: m.groups.ext, signed: !m.groups.unsigned };
+  // A platform that never signs never writes `-unsigned` (assetName).
+  if (!kind.signs && m.groups.unsigned) return null;
+  return { brand: m.groups.brand, version: m.groups.version, os: m.groups.os, arch: m.groups.arch, ext: m.groups.ext, signed: kind.signs && !m.groups.unsigned };
 }
 
 /**
@@ -239,7 +255,15 @@ export function releaseNotesSection(assets) {
       lines.push(`- **Windows 10 2004 or later, x64. Unsigned** until a Windows code-signing certificate is set up. ${parts.join(' ')}`);
     }
   }
-  lines.push(`- \`${CHECKSUMS}\` holds each file's SHA-256: \`shasum -a 256 -c ${CHECKSUMS}\` on macOS, \`Get-FileHash <file>\` in PowerShell.`);
+  const [appimage, deb] = [by('linux', 'AppImage'), by('linux', 'deb')];
+  if (appimage || deb) {
+    const files = [
+      appimage && `${code(appimage)} (any distribution with glibc 2.39 or later, such as Ubuntu 24.04, Debian 13 or Fedora 40: \`chmod +x\` it and run it; without FUSE, run it with \`--appimage-extract-and-run\`)`,
+      deb && `${code(deb)} (Debian and Ubuntu: \`sudo apt install ./<file>\`)`,
+    ];
+    lines.push(`- **Linux, x86_64. No code signature; check the download against \`${CHECKSUMS}\`.** ${files.filter(Boolean).join(', or ')}. Install bubblewrap (\`bwrap\`) for the sandbox local commands run in.`);
+  }
+  lines.push(`- \`${CHECKSUMS}\` holds each file's SHA-256: \`shasum -a 256 -c ${CHECKSUMS}\` on macOS, \`sha256sum -c --ignore-missing ${CHECKSUMS}\` on Linux, \`Get-FileHash <file>\` in PowerShell.`);
   lines.push(NOTES_END);
   return `${lines.join('\n')}\n`;
 }
@@ -292,7 +316,7 @@ if (isMain) {
   try {
     if (command === 'asset-name') {
       const [os, ext, brand, version, signed] = args;
-      if (signed !== 'true' && signed !== 'false') throw new Error('usage: desktop-package.mjs asset-name <macos|windows> <ext> <brand> <version> <true|false>');
+      if (signed !== 'true' && signed !== 'false') throw new Error('usage: desktop-package.mjs asset-name <macos|windows|linux> <ext> <brand> <version> <true|false>');
       console.log(assetName({ os, ext, brand, version, signed: signed === 'true' }));
     } else if (command === 'release-assets') {
       releaseAssetsCli(args);

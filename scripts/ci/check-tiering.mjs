@@ -97,6 +97,7 @@ export const DESKTOP_PACKAGE_PATHS = [
   ".github/workflows/desktop-package.yml",
   ".github/actions/desktop-macos-package/**",
   ".github/actions/desktop-windows-package/**",
+  ".github/actions/desktop-linux-package/**",
   // The dry run is the desktop lane of the brand output scan (brand/sample).
   "brand/**",
   "scripts/brand/**",
@@ -303,7 +304,7 @@ export function checkDesktopPackage({ ci, tiers, workflows }) {
   }
   if (job.with?.upload_release_assets === true) errors.push("desktop-package: ci.yml must not pass `upload_release_assets: true` (a pull request uploads nothing)");
   const jobs = workflows["desktop-package.yml"]?.parsed?.jobs ?? {};
-  const packaging = { macos: ["./.github/actions/desktop-macos-package", ["dry-run", "debug"]], windows: ["./.github/actions/desktop-windows-package", ["dry-run"]] };
+  const packaging = { macos: ["./.github/actions/desktop-macos-package", ["dry-run", "debug"]], windows: ["./.github/actions/desktop-windows-package", ["dry-run"]], linux: ["./.github/actions/desktop-linux-package", []] };
   for (const [name, [action, inputs]] of Object.entries(packaging)) {
     const pkg = (jobs[name]?.steps ?? []).find((s) => String(s.uses ?? "") === action);
     if (!pkg) {

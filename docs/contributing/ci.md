@@ -306,15 +306,17 @@ A change to `ci.yml`, to `tier-paths.json` or to the gate scripts runs every job
   is `HOME` (hosted runners and eng-runner): the tar holds paths relative to the workspace, so a runner with
   another home layout would extract them to the wrong directory.
 - **Desktop packages.** `desktop-package` (heavy tier) runs on a pull request only when `apps/elitea-desktop/**`,
-  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the two packaging actions, the brands
+  `libs/rust/vendor/agent-desktop/**`, the Rust toolchain pin, `desktop-package.yml`, the three packaging actions, the brands
   (`brand/**`, `scripts/brand/**`) or the brand output scan change. The macOS run is an unsigned debug dry run of brand/sample (the app, the
   `.pkg` and the styled `.dmg`, whose Finder layout is read back and checked on the mounted image), and it is the desktop lane of the brand output scan (the macOS host job in `ci-desktop.yml` no longer builds a second binary
   for it; `ci-local-tools-macos.yml` runs the local-index tests that job used to). The Windows run builds the ELITEA MSI and
-  MSIX in full, unsigned (`tauri build` in the release profile, the sidecar, makeappx). Both stage the release asset names.
+  MSIX in full, unsigned (`tauri build` in the release profile, the sidecar, makeappx). The Linux run (#3034, on the pool)
+  builds the ELITEA AppImage and `.deb` in full, smoke-tests the AppImage under `xvfb-run` (`--version`, and still up
+  after 30 s), and keeps both as the `desktop-linux` artifact (7 days). All three stage the release asset names.
   `publish.yml` (the nightly pre-release on main, and every release) runs the release build, macOS signed and verified,
   Windows unsigned until a signer exists, and its `desktop-assets` job (on the pool) attaches the packages and `SHA256SUMS`
   to the release. `check-tiering.mjs` holds the path list, the dry-run inputs, `require_signed_macos: true`, a stated
-  `require_signed_windows` and `upload_release_assets: true` in `publish.yml`, and a Windows job with no `if:`.
+  `require_signed_windows` and `upload_release_assets: true` in `publish.yml`, and Windows and Linux jobs with no `if:`.
   The macOS app is Apple silicon only.
 
 ## Runners
@@ -407,6 +409,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-governed-scale.yml` | `scale` (PostgreSQL and NATS as processes) |
 | `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
 | `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
+| `desktop-package.yml` | `linux` (the AppImage and the `.deb`: the image has the Tauri build libraries and xvfb; no FUSE, so linuxdeploy runs extracted) |
 | `eng-runner-image.yml` | `runner-pin` |
 | `sunset-reminder.yml` | `remind` (the ADR-0059 sunset tracking issue, daily on `main`) |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |
@@ -429,7 +432,7 @@ job definitions, down from 59; every other job is routed):
 - **The pool's own janitor**: `cancel-merged-pr-runs.yml` (`cancel`, `delete-caches`) cancels the runs of
   merged pull requests to free the pool. Queued on the pool, it would wait behind the very runs it cancels.
 - **macOS and Windows**: `ci-desktop.yml` `desktop` (and `desktop-second-attempt`, which runs only when GitHub
-  never acquired `desktop`) and `windows-host`, `ci-local-tools-macos.yml`, `desktop-package.yml`, and
+  never acquired `desktop`) and `windows-host`, `ci-local-tools-macos.yml`, `desktop-package.yml` (`macos`, `windows`), and
   `ci-desktop-control.yml`, whose matrix has a Windows leg. `ci-desktop.yml` `host-runner` and `verdict` run on
   the pool. A web-only change starts none of `ci-desktop.yml` (see "A job GitHub never acquired").
 

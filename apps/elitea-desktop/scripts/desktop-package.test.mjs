@@ -67,6 +67,48 @@ test('WINDOWS_PUBLISHER alone is a half-configured signer', () => {
   assert.throws(() => plan('windows', { WINDOWS_PUBLISHER: 'CN=Acme' }), /half configured/);
 });
 
+test('Linux never signs: one plan, whatever is set, and nothing to require', () => {
+  for (const env of [{}, all(SECRETS.macos), all(SECRETS.windowsPfx)]) {
+    assert.equal(plan('linux', env).sign, false);
+    assert.equal(plan('linux', env, { dryRun: true }).sign, false);
+  }
+  assert.match(plan('linux', {}).notice, /no code signature.*SHA256SUMS/);
+  assert.equal(plan('linux', {}).signer, undefined);
+  assert.throws(() => plan('linux', {}, { requireSigned: true }), /nothing to require/);
+  const out = execFileSync(process.execPath, [SCRIPT, 'linux'], { env: { PATH: process.env.PATH }, encoding: 'utf8' });
+  assert.match(out, /^sign=false$/m);
+  assert.doesNotMatch(out, /^signer=/m);
+});
+
+test('the Linux job: the pool, the shared action, the release names and the smoke test', () => {
+  const wf = readFileSync(join(REPO, '.github/workflows/desktop-package.yml'), 'utf8');
+  const action = readFileSync(join(REPO, '.github/actions/desktop-linux-package/action.yml'), 'utf8');
+  const linux = wf.slice(wf.indexOf('\n  linux:'));
+  assert.match(linux, /runs-on: \$\{\{ \(vars\.ENG_RUNNER == 'on' && [^\n]*\) && 'eng-runner' \|\| 'ubuntu-latest' \}\}/);
+  assert.match(linux, /uses: \.\/\.github\/actions\/eng-runner-env\n\s+with:\n\s+rust: "true"/);
+  assert.match(linux, /uses: \.\/\.github\/actions\/desktop-linux-package/);
+  assert.doesNotMatch(linux.split('\n    steps:')[0], /^ {4}if:/m);
+  assert.match(linux, /for ext in AppImage deb; do/);
+  assert.match(linux, /asset-name linux "\$ext" "\$brand" "\$version" "\$SIGNED"/);
+  assert.match(linux, /name: desktop-release-linux/);
+  // No FUSE on the pool: linuxdeploy and the AppImage run extracted.
+  assert.match(action, /APPIMAGE_EXTRACT_AND_RUN: "1"/);
+  assert.match(action, /npx tauri build --bundles appimage,deb/);
+  assert.match(action, /--config src-tauri\/tauri\.brand\.json --config src-tauri\/tauri\.sidecar\.conf\.json/);
+  assert.match(action, /elitea-doc-extract-sidecar-x86_64-unknown-linux-gnu/);
+  // The smoke test: --version is the stamped version, and the app is still up after 30 s.
+  assert.match(action, /got="\$\("\$appimage" --version\)"/);
+  assert.match(action, /xvfb-run -a "\$\{run\[@\]\}"/);
+  assert.match(action, /if \[ "\$status" -ne 124 \]/);
+  assert.match(action, /"\$\{appimage\[0\]\}" --appimage-extract >\/dev\/null/);
+  assert.match(action, /Recommends \| grep -q "bubblewrap"/);
+  // No brand literal in the shared action.
+  assert.doesNotMatch(action, /Elitea [0-9]|brand\/elitea|ai\.elitea/);
+  // The .deb recommends the sandbox the host runs commands in.
+  const conf = JSON.parse(readFileSync(join(REPO, 'apps/elitea-desktop/src-tauri/tauri.conf.json'), 'utf8'));
+  assert.deepEqual(conf.bundle.linux.deb.recommends, ['bubblewrap']);
+});
+
 test('the release check requires signing', () => {
   assert.throws(() => plan('macos', {}, { requireSigned: true }), /not set/);
   assert.throws(() => plan('windows', {}, { requireSigned: true }), /not set/);
@@ -163,11 +205,16 @@ test('the packages reach the release through one job, the only one that writes t
   // desktop-package.yml never writes to a release; it uploads one-day artifacts on a release call only.
   assert.doesNotMatch(wf, /gh release|softprops\/action-gh-release|contents: write/);
   const uploads = wf.split('\n').flatMap((line, i, lines) => (line.includes('actions/upload-artifact@') ? [lines.slice(i - 2, i + 6).join('\n')] : []));
-  assert.equal(uploads.length, 4, 'a keep step and a release step per platform');
+  assert.equal(uploads.length, 6, 'a keep step and a release step per platform');
   for (const u of uploads) {
-    if (/name: desktop-release-(macos|windows)/.test(u)) {
+    if (/name: desktop-release-(macos|windows|linux)/.test(u)) {
       assert.match(u, /if: inputs\.upload_release_assets\n/);
       assert.match(u, /retention-days: 1/);
+    } else if (/name: desktop-linux\n/.test(u)) {
+      // Linux keeps its unsigned packages from a pull request's dry run too: nothing signs
+      // them, so the dry run's files are the ones a release would ship (#3034).
+      assert.match(u, /if: github\.event_name == 'pull_request' \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.keep_artifacts\)\n/);
+      assert.match(u, /retention-days: 7/);
     } else {
       assert.match(u, /if: github\.event_name == 'workflow_dispatch' && inputs\.keep_artifacts\n/);
     }
@@ -232,7 +279,12 @@ test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {
   // A nightly keeps its full version; a product name with spaces becomes one word.
   assert.equal(name('windows', 'msix', false, '7.9.0-nightly.20261122.412'), 'Elitea-7.9.0-nightly.20261122.412-windows-x64-unsigned.msix');
   assert.equal(name('macos', 'pkg', true, '1.0.0', 'Acme Agent'), 'Acme-Agent-1.0.0-macos-arm64.pkg');
-  assert.throws(() => name('linux', 'deb', false), /unknown platform/);
+  // Linux (#3034): x86_64, the AppImage and the .deb, never marked `-unsigned` (it never signs).
+  assert.equal(name('linux', 'AppImage', false), 'Elitea-7.8.0-linux-x86_64.AppImage');
+  assert.equal(name('linux', 'deb', false), 'Elitea-7.8.0-linux-x86_64.deb');
+  assert.throws(() => name('linux', 'deb', true), /linux packages carry no code signature/);
+  assert.throws(() => name('linux', 'rpm', false), /linux has no \.rpm asset \(AppImage, deb\)/);
+  assert.throws(() => name('freebsd', 'deb', false), /unknown platform/);
   assert.throws(() => name('macos', 'msi', true), /macos has no \.msi asset/);
   assert.throws(() => name('macos', 'pkg', true, '7.8'), /not X\.Y\.Z/);
   // Any shortName yields a file name: accents dropped, other characters one `-`.
@@ -245,24 +297,32 @@ test('asset names: <Brand>-<version>-<os>-<arch>[-unsigned].<ext>', () => {
 });
 
 test('asset names parse back, and nothing else parses', () => {
-  for (const [os, ext, signed] of [['macos', 'pkg', true], ['macos', 'dmg', true], ['windows', 'msi', false], ['windows', 'msix', true]]) {
+  const arch = { macos: 'arm64', windows: 'x64', linux: 'x86_64' };
+  for (const [os, ext, signed] of [['macos', 'pkg', true], ['macos', 'dmg', true], ['windows', 'msi', false], ['windows', 'msix', true], ['linux', 'AppImage', false], ['linux', 'deb', false]]) {
     const n = assetName({ os, ext, brand: 'Acme-2', version: '1.2.3-nightly.20261122.7', signed });
-    assert.deepEqual(parseAssetName(n), { brand: 'Acme-2', version: '1.2.3-nightly.20261122.7', os, arch: os === 'macos' ? 'arm64' : 'x64', ext, signed });
+    assert.deepEqual(parseAssetName(n), { brand: 'Acme-2', version: '1.2.3-nightly.20261122.7', os, arch: arch[os], ext, signed });
+  }
+  // Tauri's own Linux names, another architecture's spelling, and a `-unsigned` Linux never writes.
+  for (const n of ['Elitea_7.8.0_amd64.AppImage', 'Elitea_7.8.0_amd64.deb', 'Elitea-7.8.0-linux-x64.AppImage', 'Elitea-7.8.0-linux-amd64.deb', 'Elitea-7.8.0-linux-x86_64-unsigned.AppImage', 'Elitea-7.8.0-linux-x86_64.msi', 'Elitea-7.8.0-windows-x64.deb', 'Elitea-7.8.0-linux-x86_64.appimage']) {
+    assert.equal(parseAssetName(n), null, n);
   }
   for (const n of ['Elitea_7.8.0_x64_en-US.msi', 'Elitea-7.8.0-arm64.pkg', 'Elitea-7.8.0-macos-x64.pkg', 'Elitea-7.8.0-windows-x64.pkg', 'Elitea-7.8.0-macos-arm64.zip', 'Elitea-7.8.0-macos-arm64.app.zip', 'Elitea-7.8.0-windows-x64.dmg', CHECKSUMS]) {
     assert.equal(parseAssetName(n), null, n);
   }
 });
 
-const RELEASE = ['Elitea-7.8.0-macos-arm64.dmg', 'Elitea-7.8.0-macos-arm64.pkg', 'Elitea-7.8.0-windows-x64-unsigned.msi', 'Elitea-7.8.0-windows-x64-unsigned.msix'];
+const RELEASE = ['Elitea-7.8.0-macos-arm64.dmg', 'Elitea-7.8.0-macos-arm64.pkg', 'Elitea-7.8.0-windows-x64-unsigned.msi', 'Elitea-7.8.0-windows-x64-unsigned.msix', 'Elitea-7.8.0-linux-x86_64.AppImage', 'Elitea-7.8.0-linux-x86_64.deb'];
 
 test('release assets: one version, one of each kind, never an unsigned Mac app', () => {
   const assets = checkReleaseAssets(RELEASE, { complete: true });
   assert.deepEqual(assets.map((a) => a.name), [...RELEASE].sort());
-  assert.deepEqual(assets.filter((a) => !a.signed).map((a) => a.os), ['windows', 'windows']);
+  assert.deepEqual(assets.filter((a) => !a.signed).map((a) => a.os), ['linux', 'linux', 'windows', 'windows']);
   // A failed Windows build: the macOS packages alone, but not when the job passed.
   assert.equal(checkReleaseAssets(RELEASE.slice(0, 2)).length, 2);
-  assert.throws(() => checkReleaseAssets(RELEASE.slice(0, 2), { complete: true }), /windows \.msi, windows \.msix did not arrive/);
+  assert.throws(() => checkReleaseAssets(RELEASE.slice(0, 2), { complete: true }), /windows \.msi, windows \.msix, linux \.AppImage, linux \.deb did not arrive/);
+  // The Linux job's files are part of a complete release (#3034).
+  assert.throws(() => checkReleaseAssets(RELEASE.slice(0, 5), { complete: true }), /linux \.deb did not arrive/);
+  assert.throws(() => checkReleaseAssets([...RELEASE, 'Elitea-7.8.0-linux-x86_64.AppImage']), /two \.AppImage files for linux/);
   assert.throws(() => checkReleaseAssets([]), /no desktop package/);
   assert.throws(() => checkReleaseAssets([...RELEASE, 'Elitea_7.8.0_x64_en-US.msi']), /is not <Brand>/);
   assert.throws(() => checkReleaseAssets([...RELEASE.slice(1), 'Elitea-7.8.1-macos-arm64.pkg']), /7\.8\.1, the others/);
@@ -303,7 +363,13 @@ test('the notes section: macOS signed and notarised, Windows unsigned with the w
   assert.match(signed, /x64\. Signed\.\*\* `Elitea-7\.8\.0-windows-x64\.msi` and `Elitea-7\.8\.0-windows-x64\.msix`\./);
   assert.doesNotMatch(signed, /SmartScreen|Apple silicon/);
   // macOS alone (a failed Windows build): no Windows line.
-  assert.doesNotMatch(releaseNotesSection(checkReleaseAssets(RELEASE.slice(0, 2))), /Windows 10/);
+  assert.doesNotMatch(releaseNotesSection(checkReleaseAssets(RELEASE.slice(0, 2))), /Windows 10|Linux, x86_64/);
+  // Linux: no code signature, said; the AppImage's FUSE fallback; the .deb; bubblewrap.
+  assert.match(section, /\*\*Linux, x86_64\. No code signature; check the download against `SHA256SUMS`\.\*\* `Elitea-7\.8\.0-linux-x86_64\.AppImage` \(any distribution with glibc 2\.39 or later/);
+  assert.match(section, /--appimage-extract-and-run/);
+  assert.match(section, /`Elitea-7\.8\.0-linux-x86_64\.deb` \(Debian and Ubuntu: `sudo apt install \.\/<file>`\)/);
+  assert.match(section, /Install bubblewrap \(`bwrap`\)/);
+  assert.match(section, /`sha256sum -c --ignore-missing SHA256SUMS` on Linux/);
 });
 
 test('the notes section is appended once: a re-run replaces it', () => {
