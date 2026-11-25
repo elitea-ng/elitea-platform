@@ -31,6 +31,9 @@ import Typography from '@mui/material/Typography';
 import type { NativeClient } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { AdminWritableSection } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { AdminNativeClientDialog } from './AdminNativeClientDialog';
 import { NativeClientTable } from './AdminNativeClientTable';
 import {
@@ -186,11 +189,21 @@ interface DialogState {
 
 const CLOSED_DIALOG: DialogState = { open: false, editing: undefined, serverError: undefined, fieldErrors: NO_FIELD_ERRORS };
 
+/** Native clients are the Client applications item (R3.4b, issue 2613). */
 export function AdminNativeClientsEditor() {
+  return (
+    <AdminWritableSection itemId={ADMIN_ITEM.clientApplications}>
+      <NativeClientsEditor />
+    </AdminWritableSection>
+  );
+}
+
+function NativeClientsEditor() {
   const listQuery = useAdminNativeClients();
-  const saveMutation = useSaveNativeClient();
-  const enabledMutation = useSetNativeClientEnabled();
-  const deleteMutation = useDeleteNativeClient();
+  const access = useAdminWritable(ADMIN_ITEM.clientApplications);
+  const saveMutation = access.guard(useSaveNativeClient());
+  const enabledMutation = access.guard(useSetNativeClientEnabled());
+  const deleteMutation = access.guard(useDeleteNativeClient());
 
   const [dialog, setDialog] = useState<DialogState>(CLOSED_DIALOG);
   const [pending, setPending] = useState<PendingAction | undefined>(undefined);
@@ -319,6 +332,7 @@ export function AdminNativeClientsEditor() {
           size="small"
           variant="elitea"
           color="primary"
+          disabled={!access.writable}
           onClick={() => setDialog({ ...CLOSED_DIALOG, open: true })}
           sx={{ textTransform: 'none' }}
           data-testid="admin-native-clients-add"
@@ -358,7 +372,7 @@ export function AdminNativeClientsEditor() {
 
       <ConfirmDialog
         action={pending}
-        busy={enabledMutation.isPending || deleteMutation.isPending}
+        busy={!access.writable || enabledMutation.isPending || deleteMutation.isPending}
         onCancel={() => setPending(undefined)}
         onConfirm={handleConfirm}
       />

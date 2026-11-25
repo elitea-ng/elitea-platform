@@ -52,6 +52,7 @@ import { DataGrid } from '@mui/x-data-grid';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import type { AdminServiceDescriptor } from './api/adminServiceDescriptorsApi';
 
 export interface AdminServiceDescriptorsTableProps {
@@ -169,6 +170,8 @@ export const AdminServiceDescriptorsTable = memo(function AdminServiceDescriptor
   onActivate,
   onDeactivate,
 }: AdminServiceDescriptorsTableProps) {
+  // View-only mode (R3.4b, issue 2613): Activate and Deactivate are disabled.
+  const viewOnly = useAdminWriteControl().disabled;
   const rows = useMemo<DescriptorGridRow[]>(
     () => descriptors.map((descriptor) => ({ ...descriptor, id: rowKey(descriptor) })),
     [descriptors],
@@ -243,6 +246,7 @@ export const AdminServiceDescriptorsTable = memo(function AdminServiceDescriptor
                       <Button
                         size="small"
                         color="warning"
+                        disabled={viewOnly}
                         onClick={() => onDeactivate(row)}
                       >
                         {t('pages.admin.serviceDescriptors.action.deactivate', 'Deactivate')}
@@ -257,7 +261,7 @@ export const AdminServiceDescriptorsTable = memo(function AdminServiceDescriptor
                 if (row.status !== 'inactive' || !row.published_manifest_digest) return null;
                 return (
                   <Stack direction="row" sx={{ alignItems: 'center', height: '100%' }}>
-                    <Button size="small" onClick={() => onActivate(row)}>
+                    <Button size="small" disabled={viewOnly} onClick={() => onActivate(row)}>
                       {t('pages.admin.serviceDescriptors.action.activate', 'Activate')}
                     </Button>
                   </Stack>
@@ -267,7 +271,7 @@ export const AdminServiceDescriptorsTable = memo(function AdminServiceDescriptor
           ]
         : []),
     ],
-    [onActivate, onDeactivate],
+    [onActivate, onDeactivate, viewOnly],
   );
 
   return (

@@ -35,6 +35,7 @@ import { server } from '@/test/setup';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
 import { normalizeCatalogueKey, resolveSecretForSave, validateTokenUrl } from './adminMcpServerForm';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const CATALOGUE = [
   {
@@ -464,5 +465,20 @@ describe('validateTokenUrl', () => {
     }
     expect(validateTokenUrl('', 'https://{w}.example/mcp', true)).toContain('token endpoint');
     expect(validateTokenUrl('', 'https://{w}.example/mcp', false)).toBeUndefined();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): the prebuilt MCP servers are the
+// Toolkits item. At its read level Add, Edit and Remove are disabled.
+describe('Admin › MCP Servers catalogue - view only', () => {
+  it('disables the catalogue writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'toolkits');
+    renderAdminRoute(<AdminMcpServersEditor />);
+
+    expect(await screen.findByText('GitHub Copilot')).toBeInTheDocument();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('admin-mcp-servers-add')).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
   });
 });

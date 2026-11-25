@@ -22,6 +22,8 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { withoutBlankLinks, type ConfigLink } from './ConfigurationLinksEditor';
 import { withoutBlankListEntries } from './ConfigurationListEditor';
 import { listItemTypeFor } from './ConfigurationSectionForm';
@@ -53,6 +55,8 @@ export interface AdminConfigurationPageState {
   readonly onFieldChange: (key: string, next: unknown) => void;
   readonly isDirty: boolean;
   readonly isSaving: boolean;
+  /** View-only mode (R3.4b, issue 2613): the page's item is read for this caller. */
+  readonly readOnly: boolean;
   readonly onSave: () => void;
   readonly onDiscard: () => void;
   readonly saveError: string | undefined;
@@ -114,7 +118,8 @@ function cleanForSave(
  * pages partitioning the sections between them is the invariant this whole
  * mechanism protects.
  */
-function useAdminConfigSectionsPage(page: string | undefined): AdminConfigurationPageState {
+function useAdminConfigSectionsPage(page: string | undefined, itemId: string): AdminConfigurationPageState {
+  const access = useAdminWritable(itemId);
   const sectionsQuery = useAdminConfigSections();
   const sections = useMemo(
     () => (sectionsQuery.data ?? []).filter((section) => (section.page ?? '') === (page ?? '')),
@@ -160,7 +165,7 @@ function useAdminConfigSectionsPage(page: string | undefined): AdminConfiguratio
     [serverValues, draft],
   );
 
-  const saveMutation = useSaveAdminConfigValues();
+  const saveMutation = access.guard(useSaveAdminConfigValues());
 
   const onSelectSection = useCallback((sectionId: string) => {
     setSelectedId(sectionId);
@@ -230,6 +235,7 @@ function useAdminConfigSectionsPage(page: string | undefined): AdminConfiguratio
     onFieldChange,
     isDirty: Object.keys(draft).length > 0,
     isSaving: saveMutation.isPending,
+    readOnly: !access.writable,
     onSave,
     onDiscard,
     saveError,
@@ -252,7 +258,7 @@ function useAdminConfigSectionsPage(page: string | undefined): AdminConfiguratio
  * feature switches.
  */
 export function useAdminConfigurationPage(): AdminConfigurationPageState {
-  return useAdminConfigSectionsPage(undefined);
+  return useAdminConfigSectionsPage(undefined, ADMIN_ITEM.configuration);
 }
 
 /**
@@ -261,5 +267,5 @@ export function useAdminConfigurationPage(): AdminConfigurationPageState {
  * `resourcesSection` own doc comment has the full history).
  */
 export function useAdminFeaturesPage(): AdminConfigurationPageState {
-  return useAdminConfigSectionsPage(ADMIN_CONFIG_PAGE_FEATURES);
+  return useAdminConfigSectionsPage(ADMIN_CONFIG_PAGE_FEATURES, ADMIN_ITEM.features);
 }

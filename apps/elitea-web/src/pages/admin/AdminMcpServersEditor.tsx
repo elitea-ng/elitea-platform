@@ -45,6 +45,9 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { AdminMcpServerDialog } from './AdminMcpServerDialog';
+import { AdminWritableSection } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
 import { configFailureField, configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminMcpServers,
@@ -107,6 +110,7 @@ function McpServerTable({
   readonly onEdit: (server: AdminMcpServer) => void;
   readonly onRemove: (server: AdminMcpServer) => void;
 }) {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableContainer>
       {/* Named, so the table has an accessible name for a screen reader and a
@@ -175,21 +179,21 @@ function McpServerTable({
               </TableCell>
               <TableCell align="right">
                 <Button
-            variant="elitea" color="tertiary"
+                  variant="elitea"
+                  color="tertiary"
                   size="small"
-                  onClick={() => {
-                    onEdit(server);
-                  }}
+                  disabled={viewOnly}
+                  onClick={() => onEdit(server)}
                   sx={{ textTransform: 'none' }}
                 >
                   {t('pages.admin.mcpServers.edit', 'Edit')}
                 </Button>
                 <Button
-            variant="elitea" color="alarm"
+                  variant="elitea"
+                  color="alarm"
                   size="small"
-                                    onClick={() => {
-                    onRemove(server);
-                  }}
+                  disabled={viewOnly}
+                  onClick={() => onRemove(server)}
                   sx={{ textTransform: 'none' }}
                 >
                   {t('pages.admin.mcpServers.remove', 'Remove')}
@@ -219,10 +223,20 @@ function deleteWarning(name: string): string {
   );
 }
 
+/** The prebuilt MCP servers are connectors: the Toolkits item (R3.4b, issue 2613). */
 export function AdminMcpServersEditor() {
+  return (
+    <AdminWritableSection itemId={ADMIN_ITEM.toolkits}>
+      <McpServersEditor />
+    </AdminWritableSection>
+  );
+}
+
+function McpServersEditor() {
   const listQuery = useAdminMcpServers();
-  const saveMutation = useSaveAdminMcpServer();
-  const deleteMutation = useDeleteAdminMcpServer();
+  const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const saveMutation = access.guard(useSaveAdminMcpServer());
+  const deleteMutation = access.guard(useDeleteAdminMcpServer());
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AdminMcpServer | undefined>(undefined);
@@ -306,6 +320,7 @@ export function AdminMcpServersEditor() {
         <Button
           size="small"
           variant="elitea" color="primary"
+          disabled={!access.writable}
           onClick={openCreate}
           sx={{ textTransform: 'none' }}
           data-testid="admin-mcp-servers-add"
@@ -347,9 +362,7 @@ export function AdminMcpServersEditor() {
 
       <Dialog
         open={pendingDelete !== undefined}
-        onClose={() => {
-          setPendingDelete(undefined);
-        }}
+        onClose={() => setPendingDelete(undefined)}
         maxWidth="xs"
         fullWidth
         data-testid="admin-mcp-server-delete-dialog"
@@ -363,9 +376,7 @@ export function AdminMcpServersEditor() {
         <DialogActions>
           <Button
             variant="elitea" color="tertiary"
-            onClick={() => {
-              setPendingDelete(undefined);
-            }}
+            onClick={() => setPendingDelete(undefined)}
             disabled={deleteMutation.isPending}
             sx={{ textTransform: 'none' }}
           >
@@ -374,7 +385,7 @@ export function AdminMcpServersEditor() {
           <Button
             variant="elitea" color="alarm"
             onClick={handleDelete}
-            disabled={deleteMutation.isPending}
+            disabled={!access.writable || deleteMutation.isPending}
             sx={{ textTransform: 'none' }}
             data-testid="admin-mcp-server-delete-confirm"
           >

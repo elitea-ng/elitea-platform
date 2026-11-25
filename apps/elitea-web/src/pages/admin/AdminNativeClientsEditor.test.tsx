@@ -27,6 +27,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import { testTimeout } from '@/test/timeouts';
 
 const CLIENTS = [
@@ -427,5 +428,27 @@ describe('AdminNativeClientsEditor', { timeout: testTimeout(20_000) }, () => {
       'That native client was removed by someone else. The list has been refreshed.',
     );
     expect(recorded).toHaveLength(0);
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): native clients are the Client
+// applications item. At its read level Register, Edit, Remove and the switch
+// are disabled; the device counts still read.
+describe('AdminNativeClientsEditor - view only', () => {
+  it('disables the client writes at the read level', async () => {
+    useHandlers();
+    serveConsoleLevel('read', 'client-applications');
+    renderAdminRoute(<AdminNativeClientsEditor />);
+
+    await screen.findByText('Example Desktop');
+    await findViewOnlyNotice();
+    const dbRow = rowOf('com.example.desktop');
+    await waitFor(() => expect(within(dbRow).getByRole('button', { name: 'Edit' })).toBeDisabled());
+    expect(within(dbRow).getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(within(dbRow).getByRole('switch', { name: 'Enable Example Desktop' })).toBeDisabled();
+    expect(screen.getByTestId('admin-native-clients-add')).toBeDisabled();
+    expect(screen.getByTestId('native-client-devices-com.example.desktop')).toHaveTextContent('3');
+    expect(enabledWriteControls()).toEqual([]);
+    expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 });

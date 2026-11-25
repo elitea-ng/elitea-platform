@@ -22,6 +22,7 @@ import { AdminConfiguration } from './Configuration';
 import { isFieldVisible, widgetFor } from './ConfigurationSectionForm';
 import { linkUrlError, toConfigLinks, withoutBlankLinks } from './ConfigurationLinksEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 interface RecordedRequest {
   readonly method: string;
@@ -426,5 +427,23 @@ describe('field widgets', () => {
         { a: true, b: 'y' },
       ),
     ).toBe(false);
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `configuration`
+// the generic form and its Save are disabled; the section list still opens
+// sections.
+describe('AdminConfiguration — view only', () => {
+  it('disables the form and Save at the read level', async () => {
+    serveConsoleLevel('read', 'configuration');
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    await findViewOnlyNotice();
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: 'Documentation Card Title' })).toBeDisabled(),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
   });
 });

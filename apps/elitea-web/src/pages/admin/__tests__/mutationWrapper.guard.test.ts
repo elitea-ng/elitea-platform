@@ -34,13 +34,7 @@ const GENERATED_DIR = fileURLToPath(new URL('../../../shared/api/generated', imp
  * `src/pages/admin`. Remove a line when its page is converted; never add one.
  */
 const NOT_CONVERTED: readonly string[] = [
-  'AdminEmailEditor.tsx',
-  'AdminMcpServersEditor.tsx',
-  'AdminMicrosoftAppsEditor.tsx',
-  'AdminNativeClientsEditor.tsx',
-  'ServiceDescriptorDecisionDialog.tsx',
   'useAdminBrandingPage.ts',
-  'useAdminConfigurationPage.ts',
   'useBrandingPackage.ts',
 ];
 
