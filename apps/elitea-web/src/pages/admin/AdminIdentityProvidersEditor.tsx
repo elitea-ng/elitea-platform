@@ -50,6 +50,9 @@ import { AdminIdentityProviderDialog } from "./AdminIdentityProviderDialog";
 import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
 import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
 import { ProviderTable } from "./AdminIdentityProviderTable";
+import { AdminViewOnlyNotice, AdminWritable } from "./AdminWritable";
+import { ADMIN_ITEM } from "./adminItemIds";
+import { useAdminWritable } from "./adminWriteAccess";
 import { configFailureReason } from "./api/adminConfigurationApi";
 import { identityTrustFailureReason } from "./api/identityTrustRefusal";
 import {
@@ -144,10 +147,20 @@ function deleteWarning(name: string): string {
   );
 }
 
+/** The tab under the read-only wrapper of its own item (R3.4b, issue 2613). */
 export function AdminIdentityProvidersEditor() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.identityProviders}>
+      <IdentityProvidersEditor />
+    </AdminWritable>
+  );
+}
+
+function IdentityProvidersEditor() {
+  const access = useAdminWritable(ADMIN_ITEM.identityProviders);
   const listQuery = useAdminIdentityProviders();
-  const saveMutation = useSaveAdminIdentityProvider();
-  const deleteMutation = useDeleteAdminIdentityProvider();
+  const saveMutation = access.guard(useSaveAdminIdentityProvider());
+  const deleteMutation = access.guard(useDeleteAdminIdentityProvider());
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AdminIdentityProvider | undefined>(
@@ -219,6 +232,7 @@ export function AdminIdentityProvidersEditor() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <AdminViewOnlyNotice />
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           "pages.admin.identityProviders.description",
@@ -260,6 +274,7 @@ export function AdminIdentityProvidersEditor() {
           size="small"
           variant="elitea" color="primary"
           onClick={openCreate}
+          disabled={!access.writable}
           sx={{ textTransform: "none" }}
           data-testid="admin-identity-providers-add"
         >
@@ -296,10 +311,14 @@ export function AdminIdentityProvidersEditor() {
           two halves of the same configuration on two screens. */}
       <Divider sx={{ mt: "0.5rem" }} />
       {/* The SCIM credential comes first: an identity provider needs one
-          before any group it pushes can be bound. */}
-      <AdminScimClientsEditor />
-      <Divider sx={{ mt: "0.5rem" }} />
-      <AdminScimGroupBindingsEditor />
+          before any group it pushes can be bound. SCIM is its own console
+          item, so it has its own read-only wrapper. */}
+      <AdminWritable itemId={ADMIN_ITEM.scim}>
+        <AdminViewOnlyNotice />
+        <AdminScimClientsEditor />
+        <Divider sx={{ mt: "0.5rem" }} />
+        <AdminScimGroupBindingsEditor />
+      </AdminWritable>
 
       <AdminIdentityProviderDialog
         open={dialogOpen}
@@ -354,7 +373,7 @@ export function AdminIdentityProvidersEditor() {
           <Button
             variant="elitea" color="alarm"
             onClick={handleDelete}
-            disabled={deleteMutation.isPending}
+            disabled={!access.writable || deleteMutation.isPending}
             sx={{ textTransform: "none" }}
             data-testid="admin-identity-provider-delete-confirm"
           >

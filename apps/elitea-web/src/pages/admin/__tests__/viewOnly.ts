@@ -13,7 +13,7 @@ import { server } from '@/test/setup';
  * A filter's "Apply" reads, so only "Apply to …" is a write.
  */
 const WRITE_CONTROL =
-  /\b(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|apply to)\b/i;
+  /\b(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|bind|apply to)\b/i;
 
 /**
  * Serves `GET /admin/console` with `itemIds` at `level`, and the item read

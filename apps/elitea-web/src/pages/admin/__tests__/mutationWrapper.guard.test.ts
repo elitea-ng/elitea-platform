@@ -35,14 +35,11 @@ const GENERATED_DIR = fileURLToPath(new URL('../../../shared/api/generated', imp
  */
 const NOT_CONVERTED: readonly string[] = [
   'AdminEmailEditor.tsx',
-  'AdminIdentityProvidersEditor.tsx',
   'AdminLlmProxyEditor.tsx',
   'AdminMcpServersEditor.tsx',
   'AdminMicrosoftAppsEditor.tsx',
   'AdminNativeClientsEditor.tsx',
   'AdminProjectCloudExecutorDialog.tsx',
-  'AdminScimClientsEditor.tsx',
-  'AdminScimGroupBindingsEditor.tsx',
   'ConnectorRequests.tsx',
   'CredentialRevokeDialog.tsx',
   'DelegationReview.tsx',

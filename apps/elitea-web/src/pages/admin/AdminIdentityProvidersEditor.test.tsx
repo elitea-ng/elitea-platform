@@ -37,6 +37,7 @@ import {
   splitLoginDomains,
 } from './adminIdentityProviderForm';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, serveConsoleLevel } from './__tests__/viewOnly';
 
 const PROVIDERS = [
   {
@@ -397,5 +398,86 @@ describe('identity provider form rules', () => {
     expect(isLoginDomain('localhost')).toBe(false);
     expect(isLoginDomain('-bad.example.com')).toBe(false);
     expect(isLoginDomain('a..example.com')).toBe(false);
+  });
+});
+
+/*
+ * Read-only mode (R3.4b, issue 2613). The tab and its SCIM half are two
+ * console items, each with its own level: at `read` every write is disabled,
+ * not hidden, and the listings stay.
+ */
+describe('view only', () => {
+  function useScimHandlers(): void {
+    server.use(
+      http.get('*/admin/scim_clients/administration', () =>
+        HttpResponse.json({
+          clients: [{ id: 'c1', name: 'Entra production', auth_method: 'bearer', secret_hint: 'ab12', status: 'active' }],
+          total: 1,
+          scim_base_path: '/api/v2/scim/v2',
+          token_endpoint_path: '/api/v2/scim/oauth/token',
+          access_token_ttl_seconds: 3600,
+        }),
+      ),
+      http.get('*/admin/scim_group_bindings/administration', () =>
+        HttpResponse.json({
+          bindings: [
+            {
+              id: '7',
+              display_name: 'Platform Team',
+              external_id: 'grp-1',
+              project_id: 12,
+              project_name: 'Platform',
+              role_name: 'editor',
+              members: [],
+            },
+          ],
+          total: 1,
+        }),
+      ),
+    );
+  }
+
+  it('disables every write of both items at read and keeps the listings', async () => {
+    useScimHandlers();
+    serveConsoleLevel('read', 'identity-providers', 'scim');
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+
+    expect(await screen.findByText('Corporate SSO')).toBeInTheDocument();
+    expect(await screen.findByText('Entra production')).toBeInTheDocument();
+    expect(await screen.findByText('Platform Team')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByTestId('admin-view-only')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled());
+    expect(screen.getByTestId('admin-scim-clients-add')).toBeDisabled();
+    expect(screen.getByTestId('admin-scim-group-bindings-add')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it('keeps the SCIM half writable when only its own item is at write', async () => {
+    useScimHandlers();
+    server.use(
+      http.get('*/admin/console', () =>
+        HttpResponse.json({
+          areas: [
+            {
+              id: 'people_access',
+              label_key: 'pages.admin.console.area.people_access',
+              items: [
+                { id: 'identity-providers', label_key: 'pages.admin.console.item.identity-providers', level: 'read' },
+                { id: 'scim', label_key: 'pages.admin.console.item.scim', level: 'write' },
+              ],
+            },
+          ],
+          roles: [{ name: 'admin', built_in: true }],
+          elevation: null,
+          admin_console_areas: true,
+        }),
+      ),
+    );
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+
+    await waitFor(() => expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled());
+    expect(screen.getByTestId('admin-scim-clients-add')).toBeEnabled();
+    expect(screen.getByTestId('admin-scim-group-bindings-add')).toBeEnabled();
   });
 });
