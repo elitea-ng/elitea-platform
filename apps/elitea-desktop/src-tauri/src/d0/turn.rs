@@ -3587,18 +3587,21 @@ impl AgentHost {
         // commit lands; the UI stays busy for it as for a chain.
         // The person may have skipped the next agent, or stopped the
         // exchange (ADR-0061 decision 2c).
-        let floor_next = if failure.is_none() && !handed_off {
+        let routed_next = if failure.is_none() && !handed_off {
             floor::next(&request, &started, &conversation_uuid)
-                .and_then(|next| self.exchanges.advance(next))
         } else {
             None
         };
+        let had_next = routed_next.is_some();
+        let floor_next = routed_next.and_then(|next| self.exchanges.advance(next));
         // The person stopped the exchange before this turn's end.
         let floor_next_stopped = floor_next.is_none()
             && started
                 .floor
                 .as_ref()
                 .is_some_and(|floor| self.exchanges.stopped(&floor.question_id));
+        // The person skipped every agent that was still to answer.
+        let floor_next_skipped = had_next && floor_next.is_none() && !floor_next_stopped;
         let continuing = matches!(chain_step, Some(ChainStep::Continue))
             || goal_step.is_some()
             || floor_next.is_some();
@@ -3852,6 +3855,12 @@ impl AgentHost {
                 super::exchange::STOPPED_BY_PERSON,
                 super::exchange::STOPPED_MESSAGE,
             );
+        } else if floor_next_skipped {
+            floor::stopped(
+                &done_events,
+                super::exchange::SKIPPED_BY_PERSON,
+                super::exchange::ALL_SKIPPED_MESSAGE,
+            );
         }
         let _ = done_sent.send(());
     }
@@ -3977,15 +3986,21 @@ impl AgentHost {
             let question = next.question_id.clone();
             let Some(next) = self.exchanges.advance(next) else {
                 // Said once per Stop (the cancelled turn may have said it).
-                let message = if !self.exchanges.stopped(&question) {
-                    Some(super::exchange::ALL_SKIPPED_MESSAGE)
+                let notice = if !self.exchanges.stopped(&question) {
+                    Some((
+                        super::exchange::SKIPPED_BY_PERSON,
+                        super::exchange::ALL_SKIPPED_MESSAGE,
+                    ))
                 } else if self.exchanges.take_announcement(previous.turn_id()) {
-                    Some(super::exchange::STOPPED_MESSAGE)
+                    Some((
+                        super::exchange::STOPPED_BY_PERSON,
+                        super::exchange::STOPPED_MESSAGE,
+                    ))
                 } else {
                     None
                 };
-                if let Some(message) = message {
-                    floor::stopped(&previous, super::exchange::STOPPED_BY_PERSON, message);
+                if let Some((code, message)) = notice {
+                    floor::stopped(&previous, code, message);
                 }
                 return;
             };

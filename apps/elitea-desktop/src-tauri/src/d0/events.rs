@@ -490,14 +490,35 @@ impl TurnEvents {
         });
         *seq += 1;
         if let Some(state) = state {
-            self.emitter.emit(AgentEvent {
-                turn_id: self.turn_id.clone(),
-                seq: *seq,
-                kind: super::agent_state::KIND,
-                payload: state,
-            });
-            *seq += 1;
+            self.emit_state(&mut seq, state);
         }
+    }
+
+    /// The person answered the approval the turn waits on (`allowed`, or
+    /// denied / unanswered): the agent's avatar leaves `waiting` (ADR-0061
+    /// decision 4b) — back to the tool it asked for, or thinking.
+    pub fn approval_answered(&self, allowed: bool) {
+        let Ok(mut seq) = self.seq.lock() else {
+            return;
+        };
+        let state = self
+            .avatar
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .answered(allowed);
+        if let Some(state) = state {
+            self.emit_state(&mut seq, state);
+        }
+    }
+
+    fn emit_state(&self, seq: &mut u64, state: Value) {
+        self.emitter.emit(AgentEvent {
+            turn_id: self.turn_id.clone(),
+            seq: *seq,
+            kind: super::agent_state::KIND,
+            payload: state,
+        });
+        *seq += 1;
     }
 
     pub fn status(&self, phase: Phase, message: Option<&str>) {

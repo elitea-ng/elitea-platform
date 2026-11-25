@@ -54,34 +54,38 @@ export interface MotionSpec {
   readonly badge?: 'check' | 'cross' | undefined;
 }
 
-/** A duration token (`"1200ms"`) in milliseconds. */
-export function tokenMs(value: string): number {
-  const match = /^(\d+(?:\.\d+)?)ms$/.exec(value.trim());
-  if (match === null) throw new Error(`motion token ${value} is not in ms`);
-  return Number(match[1]);
+/**
+ * A duration token in milliseconds: `"1200ms"`, `"1.2s"` or a bare number of ms. A brand can re-time the avatar tokens,
+ * and these are read at import: a value that is none of these gives `fallback` (the default timing), never a throw.
+ */
+export function tokenMs(value: unknown, fallback: number): number {
+  const match = typeof value === 'string' ? /^(\d+(?:\.\d+)?)(ms|s)?$/.exec(value.trim()) : null;
+  if (match === null) return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : fallback;
+  const amount = Number(match[1]);
+  return match[2] === 's' ? amount * 1000 : amount;
 }
 
 const AVATAR = BRAND_TOKENS.motion.avatar;
 
 /** One state's timing from `motion.avatar`. */
-function timing(slot: { readonly duration: string; readonly loop: boolean }): Pick<MotionSpec, 'durationMs' | 'loop'> {
-  return { durationMs: tokenMs(slot.duration), loop: slot.loop };
+function timing(slot: { readonly duration: string; readonly loop: boolean }, defaultMs: number): Pick<MotionSpec, 'durationMs' | 'loop'> {
+  return { durationMs: tokenMs(slot.duration, defaultMs), loop: slot.loop };
 }
 
 /** How long the hand-off baton travels between two avatars (`motion.handoff`, on `motion.easing`). */
-export const HANDOFF_MS: number = tokenMs(BRAND_TOKENS.motion.handoff);
+export const HANDOFF_MS: number = tokenMs(BRAND_TOKENS.motion.handoff, 400);
 
 /** The easing of every avatar and hand-off motion (`motion.easing`). */
 export const MOTION_EASING: string = BRAND_TOKENS.motion.easing;
 
 /** The motion of each state. `idle` breathes; the list never animates it (`isAnimatedState`). */
 export const MOTION_SPEC: Readonly<Record<AgentState, MotionSpec>> = {
-  [AGENT_STATE.Idle]: { kind: MOTION_KIND.Breathe, tone: undefined, ...timing(AVATAR.idle), peakScale: 1.03 },
-  [AGENT_STATE.Thinking]: { kind: MOTION_KIND.Ring, tone: MOTION_TONE.Accent, ...timing(AVATAR.thinking), peakScale: 1 },
-  [AGENT_STATE.Speaking]: { kind: MOTION_KIND.Pulse, tone: MOTION_TONE.Accent, ...timing(AVATAR.speaking), peakScale: 1.06 },
-  [AGENT_STATE.Working]: { kind: MOTION_KIND.Orbit, tone: MOTION_TONE.Accent, ...timing(AVATAR.working), peakScale: 1 },
-  [AGENT_STATE.Waiting]: { kind: MOTION_KIND.Halo, tone: MOTION_TONE.Attention, ...timing(AVATAR.waiting), peakScale: 1 },
-  [AGENT_STATE.Success]: { kind: MOTION_KIND.Badge, tone: MOTION_TONE.Success, ...timing(AVATAR.oneShot), peakScale: 1, badge: 'check' },
-  [AGENT_STATE.Error]: { kind: MOTION_KIND.Badge, tone: MOTION_TONE.Error, ...timing(AVATAR.oneShot), peakScale: 1, badge: 'cross' },
-  [AGENT_STATE.Waking]: { kind: MOTION_KIND.Pulse, tone: MOTION_TONE.Accent, ...timing(AVATAR.waking), peakScale: 1.1 },
+  [AGENT_STATE.Idle]: { kind: MOTION_KIND.Breathe, tone: undefined, ...timing(AVATAR.idle, 4000), peakScale: 1.03 },
+  [AGENT_STATE.Thinking]: { kind: MOTION_KIND.Ring, tone: MOTION_TONE.Accent, ...timing(AVATAR.thinking, 1200), peakScale: 1 },
+  [AGENT_STATE.Speaking]: { kind: MOTION_KIND.Pulse, tone: MOTION_TONE.Accent, ...timing(AVATAR.speaking, 900), peakScale: 1.06 },
+  [AGENT_STATE.Working]: { kind: MOTION_KIND.Orbit, tone: MOTION_TONE.Accent, ...timing(AVATAR.working, 1600), peakScale: 1 },
+  [AGENT_STATE.Waiting]: { kind: MOTION_KIND.Halo, tone: MOTION_TONE.Attention, ...timing(AVATAR.waiting, 2000), peakScale: 1 },
+  [AGENT_STATE.Success]: { kind: MOTION_KIND.Badge, tone: MOTION_TONE.Success, ...timing(AVATAR.oneShot, 400), peakScale: 1, badge: 'check' },
+  [AGENT_STATE.Error]: { kind: MOTION_KIND.Badge, tone: MOTION_TONE.Error, ...timing(AVATAR.oneShot, 400), peakScale: 1, badge: 'cross' },
+  [AGENT_STATE.Waking]: { kind: MOTION_KIND.Pulse, tone: MOTION_TONE.Accent, ...timing(AVATAR.waking, 1400), peakScale: 1.1 },
 };

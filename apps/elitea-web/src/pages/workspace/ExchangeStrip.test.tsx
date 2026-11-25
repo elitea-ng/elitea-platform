@@ -92,6 +92,12 @@ describe('the exchange strip (issue 3058)', () => {
     expect(line).toHaveTextContent('You stopped the exchange.');
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+  it('says the person skipped the rest by its code, whatever the host message says', () => {
+    const view = { ...replayView([running('t1', 1, 'Mira', 0, [2])]), floorStopped: { code: 'skipped_by_person', message: 'reworded by the host' } };
+    renderWithTheme(<StopNotices view={view} onContinue={() => undefined} />);
+    expect(screen.getByTestId('turn-floor-stopped')).toHaveTextContent('You skipped the remaining agents.');
+  });
 });
 
 describe('the agent is named (issue 3058)', () => {

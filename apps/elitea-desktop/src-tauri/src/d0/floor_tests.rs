@@ -678,3 +678,30 @@ async fn skip_drops_one_queued_agent_and_the_next_one_answers() {
         "{states:?}"
     );
 }
+
+/// Skip of every agent left: no later agent starts, and the first turn says
+/// `floor_stopped` `skipped_by_person` once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skipping_everyone_left_says_skipped_by_person() {
+    let server = serve(three_agent_platform(Duration::from_millis(500))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(to_all_three(&h)).await.unwrap();
+    floor_status(&h, &started.turn_id).await;
+    h.host.exchange_skip(&started.turn_id, 88).unwrap();
+    assert!(
+        h.host
+            .exchange_skip(&started.turn_id, 99)
+            .unwrap()
+            .is_empty()
+    );
+    until_done_of(&h, &started.turn_id).await;
+    let stopped = first_event(&h, "floor_stopped").await;
+    assert_eq!(stopped.turn_id, started.turn_id);
+    assert_eq!(stopped.payload["code"], "skipped_by_person");
+    assert_eq!(
+        stopped.payload["message"],
+        "You skipped the remaining agents."
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(starts_of(&h).len(), 1, "{:?}", starts_of(&h));
+}

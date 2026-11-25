@@ -28,6 +28,9 @@ pub const STOPPED_BY_PERSON: &str = "stopped_by_person";
 /// `floor_stopped`'s message when the person stopped the exchange.
 pub const STOPPED_MESSAGE: &str = "You stopped the exchange.";
 
+/// `floor_stopped`'s code when the person skipped every agent left.
+pub const SKIPPED_BY_PERSON: &str = "skipped_by_person";
+
 /// `floor_stopped`'s message when the person skipped every agent left.
 pub const ALL_SKIPPED_MESSAGE: &str = "You skipped the remaining agents.";
 
@@ -170,10 +173,13 @@ impl Exchanges {
     /// `next` as the person left it: the first agent at or after its
     /// position that was not skipped; `None` when the exchange was stopped
     /// or nobody is left. An exchange the host does not know is unchanged.
+    /// The agent picked is reserved (it leaves the queue), so a Skip of it
+    /// that arrives before its turn begins is refused (`exchange_not_queued`)
+    /// rather than accepted with no effect.
     #[must_use]
     pub fn advance(&self, next: FloorNext) -> Option<FloorNext> {
-        let inner = self.inner();
-        let Some(exchange) = inner.by_question.get(&next.question_id) else {
+        let mut inner = self.inner();
+        let Some(exchange) = inner.by_question.get_mut(&next.question_id) else {
             return Some(next);
         };
         if exchange.stopped {
@@ -186,6 +192,8 @@ impl Exchanges {
             .skip(next.position)
             .find(|(_, id)| !exchange.skipped.contains(id))
             .map(|(position, id)| (position, *id))?;
+        // Reserved: the queue now starts after it.
+        exchange.position = position;
         let agent = exchange
             .agents
             .iter()
@@ -345,9 +353,33 @@ mod tests {
             exchanges.skip("nope", 99).err().map(|e| e.code),
             Some("exchange_unknown".into())
         );
-        // The last one skipped: nobody is left.
+    }
+
+    /// Every agent left skipped: nobody answers.
+    #[test]
+    fn skipping_everyone_left_ends_the_exchange() {
+        let exchanges = Exchanges::default();
+        exchanges.begin("t1", &floor(0), events());
+        exchanges.skip("t1", 88).expect("queued");
         exchanges.skip("t1", 99).expect("queued");
         assert!(exchanges.advance(next(1, 88)).is_none());
+    }
+
+    /// The agent `advance` picked is reserved: a Skip of it before its turn
+    /// begins is refused, not silently ignored.
+    #[test]
+    fn the_picked_agent_cannot_be_skipped_before_it_begins() {
+        let exchanges = Exchanges::default();
+        exchanges.begin("t1", &floor(0), events());
+        let advanced = exchanges.advance(next(1, 88)).expect("the second");
+        assert_eq!(advanced.participant_id, 88);
+        assert_eq!(
+            exchanges.skip("t1", 88).err().map(|e| e.code),
+            Some("exchange_not_queued".into())
+        );
+        // The one after it is still queued.
+        let (remaining, _) = exchanges.skip("t1", 99).expect("queued");
+        assert!(remaining.is_empty());
     }
 
     #[test]

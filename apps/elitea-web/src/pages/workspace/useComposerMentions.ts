@@ -130,14 +130,19 @@ interface InsertHandle {
 /** Appends each "Address" request of `threadKey` to the composer (`input`), after a space when the text has none. */
 export function useAddressRequests(threadKey: string | undefined, input: RefObject<InsertHandle | null>): void {
   const request = useAddressStore((state) => (threadKey === undefined || threadKey === '' ? undefined : state.byThread[threadKey]));
-  // A request made before this composer mounted (another thread view, a remount) is not replayed.
-  const done = useRef(request?.seq ?? 0);
+  // A request made before this composer showed the thread (another thread view, a remount) is not replayed: the count
+  // of requests seen is kept per thread, and starts again from the thread's latest when the composer shows another.
+  const done = useRef({ threadKey, seq: request?.seq ?? 0 });
   useEffect(() => {
+    if (done.current.threadKey !== threadKey) {
+      done.current = { threadKey, seq: request?.seq ?? 0 };
+      return;
+    }
     const handle = input.current;
-    if (request === undefined || handle === null || request.seq <= done.current) return;
-    done.current = request.seq;
+    if (request === undefined || handle === null || request.seq <= done.current.seq) return;
+    done.current = { threadKey, seq: request.seq };
     const content = handle.getInputContent();
     const gap = content === '' || /\s$/.test(content) ? '' : ' ';
     handle.replaceRange(content.length, content.length, `${gap}${agentToken(request)}`);
-  }, [request, input]);
+  }, [request, input, threadKey]);
 }

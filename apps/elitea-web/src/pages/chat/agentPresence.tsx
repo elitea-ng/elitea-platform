@@ -110,20 +110,46 @@ export function ActiveAgentStatus({ conversationKey, agents }: { readonly conver
   );
 }
 
-/** The politely announced line for the rows' labels; repeats and bursts inside `ANNOUNCE_INTERVAL_MS` say nothing new. */
+type Announced = Map<number, { label: string; at: number }>;
+
+/**
+ * The lines to announce now for `rows`, recording them in `last`. A label repeated says nothing; a change within
+ * `ANNOUNCE_INTERVAL_MS` of the agent's last announcement waits (`held`, its due time returned) and is said then.
+ */
+export function announcements(rows: readonly ParticipantRowView[], last: Announced, now: number): { lines: string[]; dueAt: number | undefined } {
+  const lines: string[] = [];
+  let dueAt: number | undefined;
+  for (const row of rows) {
+    if (row.label === undefined) continue;
+    const before = last.get(row.participantId);
+    if (before?.label === row.label) continue;
+    if (before !== undefined && now - before.at < ANNOUNCE_INTERVAL_MS) {
+      const due = before.at + ANNOUNCE_INTERVAL_MS;
+      dueAt = dueAt === undefined ? due : Math.min(dueAt, due);
+      continue;
+    }
+    last.set(row.participantId, { label: row.label, at: now });
+    lines.push(`${row.name}: ${row.label}`);
+  }
+  return { lines, dueAt };
+}
+
+/**
+ * The politely announced line for the rows' labels: a repeat says nothing, and a change inside `ANNOUNCE_INTERVAL_MS`
+ * of the agent's last announcement is said once that interval is over (the latest label then), so the final state is
+ * never lost. Changes of several agents at once are read as one line.
+ */
 export function AgentStateAnnouncer({ rows }: { readonly rows: readonly ParticipantRowView[] }): ReactNode {
   const [message, setMessage] = useState('');
-  const last = useRef(new Map<number, { label: string; at: number }>());
+  const last = useRef<Announced>(new Map());
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const now = Date.now();
-    for (const row of rows) {
-      if (row.label === undefined) continue;
-      const before = last.current.get(row.participantId);
-      if (before?.label === row.label || (before !== undefined && now - before.at < ANNOUNCE_INTERVAL_MS)) continue;
-      last.current.set(row.participantId, { label: row.label, at: now });
-      setMessage(`${row.name}: ${row.label}`);
-    }
-  }, [rows]);
+    const { lines, dueAt } = announcements(rows, last.current, Date.now());
+    if (lines.length > 0) setMessage(lines.join('. '));
+    if (dueAt === undefined) return undefined;
+    const timer = setTimeout(() => setTick((n) => n + 1), Math.max(0, dueAt - Date.now()));
+    return () => clearTimeout(timer);
+  }, [rows, tick]);
   return (
     <Box
       component="output"

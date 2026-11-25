@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AvatarStates } from '@elitea/client-core/conversation';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { AgentStateAnnouncer, ANNOUNCE_INTERVAL_MS, agentRowViews, handoffOf, HandoffBaton, type PresenceAgent } from './agentPresence';
+import { AgentStateAnnouncer, ANNOUNCE_INTERVAL_MS, agentRowViews, announcements, handoffOf, HandoffBaton, type PresenceAgent } from './agentPresence';
 import type { ParticipantRowView } from './ParticipantRowControls';
 
 const AGENTS: PresenceAgent[] = [
@@ -111,5 +111,25 @@ describe('the live region (issue 3067)', () => {
       rerender(<AgentStateAnnouncer rows={[row(2, 'CI Doctor', 'Writing')]} />);
     });
     expect(region).toHaveTextContent('CI Doctor: Writing');
+  });
+
+  it('says a change it held back once the second is over, so the final state is never lost', () => {
+    vi.useFakeTimers({ now: 20_000 });
+    try {
+      const { rerender } = render(<AgentStateAnnouncer rows={[row(2, 'CI Doctor', 'Thinking')]} />);
+      const region = screen.getByTestId('agent-state-announcer');
+      act(() => { vi.advanceTimersByTime(300); });
+      rerender(<AgentStateAnnouncer rows={[row(2, 'CI Doctor', 'Running cargo')]} />);
+      expect(region).toHaveTextContent('CI Doctor: Thinking');
+      act(() => { vi.advanceTimersByTime(ANNOUNCE_INTERVAL_MS); });
+      expect(region).toHaveTextContent('CI Doctor: Running cargo');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads the changes of several agents at once as one line', () => {
+    const rows = [row(2, 'CI Doctor', 'Running cargo'), row(3, 'Mira', 'Thinking')];
+    expect(announcements(rows, new Map(), 5_000).lines).toEqual(['CI Doctor: Running cargo', 'Mira: Thinking']);
   });
 });

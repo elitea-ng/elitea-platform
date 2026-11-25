@@ -107,15 +107,77 @@ pub fn sanitise(value: &str) -> Option<String> {
 }
 
 /// A command line's program name: the basename of its first word that is
-/// not an environment assignment (`TOKEN=… cargo test` names `cargo`).
+/// not an environment assignment (`TOKEN="a b" cargo test` names `cargo`).
+/// Quotes are honoured, so a quoted value is never taken for the program;
+/// a line whose quotes do not balance names no program.
 #[must_use]
 pub fn program_of(command: &str) -> Option<String> {
-    let word = command
-        .split_whitespace()
-        .find(|word| !word.contains('='))?
-        .trim_matches(|c| c == '"' || c == '\'');
+    let words = shell_words(command)?;
+    let word = words.iter().find(|word| !is_assignment(word))?;
     let base = word.rsplit(['/', '\\']).next().unwrap_or(word);
     sanitise(base)
+}
+
+/// `NAME=value` with `NAME` an identifier (`^[A-Za-z_][A-Za-z0-9_]*=`).
+fn is_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The line's words with their quotes removed (`"…"` and `'…'`; a
+/// backslash escapes the next character outside single quotes); `None` when
+/// a quote is left open or the line ends in a lone backslash.
+fn shell_words(line: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"') | None, '\\') => {
+                // An escaped quote, backslash or space; any other backslash
+                // is literal (a Windows path: `C:\tools\npm.cmd`).
+                let next = chars.clone().next()?;
+                if matches!(next, '"' | '\'' | '\\') || next.is_whitespace() {
+                    chars.next();
+                    word.push(next);
+                } else {
+                    word.push('\\');
+                }
+                in_word = true;
+            }
+            (Some(_), c) => word.push(c),
+            (None, '"' | '\'') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(word);
+    }
+    Some(words)
 }
 
 /// The tool category of a local tool, when it has one (`tool-categories-v1`
@@ -203,11 +265,20 @@ pub fn derive(kind: &str, payload: &Value) -> Option<Derived> {
     }
 }
 
+fn waits_on_person(derived: &Derived) -> bool {
+    derived.state == state::WAITING && derived.activity.waiting_on == Some("person")
+}
+
 /// One turn's avatar: whose turn it is, and the state it last reported.
 #[derive(Debug, Default)]
 pub struct AvatarTracker {
     participant_id: Option<i64>,
     last: Option<Derived>,
+    /// The state before the turn began waiting on the person (an approval):
+    /// what the agent goes back to once the person allows it.
+    before_wait: Option<Derived>,
+    /// The turn failed: its closing `done` does not make it a success.
+    errored: bool,
 }
 
 impl AvatarTracker {
@@ -221,8 +292,38 @@ impl AvatarTracker {
     /// The `agent_state` payload `kind` causes, only when the agent's state
     /// or activity changed, and only once the turn's participant is known.
     pub fn observe(&mut self, kind: &str, payload: &Value) -> Option<Value> {
-        let participant_id = self.participant_id?;
+        self.participant_id?;
         let derived = derive(kind, payload)?;
+        // A failed turn still sends its `done`: it stays an error.
+        if self.errored && derived.state == state::SUCCESS {
+            return None;
+        }
+        if derived.state == state::ERROR {
+            self.errored = true;
+        }
+        if waits_on_person(&derived) {
+            self.before_wait = self.last.clone();
+        }
+        self.report(derived)
+    }
+
+    /// The person answered the approval the turn waits on: allowed, the
+    /// agent goes back to what it was doing (the tool it asked for); denied
+    /// or unanswered, it thinks again. `None` when the turn was not waiting
+    /// on the person.
+    pub fn answered(&mut self, allowed: bool) -> Option<Value> {
+        if !self.last.as_ref().is_some_and(waits_on_person) {
+            return None;
+        }
+        let next = match self.before_wait.take() {
+            Some(before) if allowed && before.state == state::WORKING => before,
+            _ => Derived::bare(state::THINKING),
+        };
+        self.report(next)
+    }
+
+    fn report(&mut self, derived: Derived) -> Option<Value> {
+        let participant_id = self.participant_id?;
         if self.last.as_ref() == Some(&derived) {
             return None;
         }
@@ -454,6 +555,56 @@ mod tests {
         let tool = emitted[3]["activity"]["tool"].as_str().expect("tool");
         assert_eq!(tool.len(), MAX_NAME);
         assert!(!tool.contains(' ') && !tool.contains('/'));
+    }
+
+    /// A failed turn's closing `done` leaves it on error: one emission.
+    #[test]
+    fn a_failed_turn_stays_an_error() {
+        let mut tracker = AvatarTracker::default();
+        tracker.set_participant(77);
+        tracker.observe("status", &json!({"phase": "running"}));
+        let error = tracker.observe("error", &json!({"code": "model", "message": "x"}));
+        assert_eq!(error.expect("error")["state"], "error");
+        assert!(
+            tracker
+                .observe("done", &json!({"commit": "pending"}))
+                .is_none()
+        );
+    }
+
+    /// An allowed approval goes back to the tool it asked for; a denied one thinks.
+    #[test]
+    fn an_answered_approval_ends_the_wait() {
+        let run = json!({"tool": "run_command", "args_summary": "cargo test"});
+        let mut tracker = AvatarTracker::default();
+        tracker.set_participant(77);
+        assert!(tracker.answered(true).is_none());
+        tracker.observe("tool_call", &run);
+        tracker.observe("approval_request", &json!({"request_id": "r1"}));
+        let working = tracker.answered(true).expect("working");
+        assert_eq!(working["state"], "working");
+        assert_eq!(working["activity"]["tool"], "run_command");
+        assert_eq!(working["activity"]["program"], "cargo");
+        assert!(tracker.answered(true).is_none());
+        tracker.observe("approval_request", &json!({"request_id": "r2"}));
+        let denied = tracker.answered(false).expect("thinking");
+        assert_eq!(denied, json!({"participant_id": 77, "state": "thinking"}));
+    }
+
+    #[test]
+    fn a_quoted_assignment_never_names_the_program() {
+        assert_eq!(
+            program_of("TOKEN=\"abc def\" cargo test").as_deref(),
+            Some("cargo")
+        );
+        assert_eq!(
+            program_of("A='x y' B=2 /usr/bin/npm run").as_deref(),
+            Some("npm")
+        );
+        assert!(program_of("TOKEN=\"abc def cargo test").is_none());
+        // Not an identifier before `=`: the word is the program.
+        assert_eq!(program_of("./x=y run").as_deref(), Some("x_y"));
+        assert_eq!(program_of("\"my tool\" --flag").as_deref(), Some("my_tool"));
     }
 
     #[test]

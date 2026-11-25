@@ -10,8 +10,12 @@ different tool) writes a new frame. The frame never carries tool arguments or
 command text, and it still has no SSE id.
 
 **Who is affected.** Clients that read the execution event stream. Clients
-before 1.66 ignore the new key; a client that renders `working` for a
-delegating agent shows `waiting` there now.
+before 1.66 ignore the new key. The sub-agent change is a behaviour change: a
+client before 1.66 shows a delegating agent as `waiting` (its attention halo)
+where it showed `working`, and if that run then ends without a terminal frame
+(a cancel, a lost stream) such a client keeps the halo until the next frame,
+because it settles every `waiting` as a pause on a person. Update clients with
+the server; 1.66 clients settle a wait on an agent.
 
 **What to do.** Nothing. No configuration, migration or restart order is
 involved.

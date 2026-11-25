@@ -3,7 +3,7 @@
  * agents before the folder's files, an agent pick inserts the text Main routes on, a file pick is unchanged; the To
  * chip names who answers by Main's rule; the Participants tab's Address puts `@Name ` into the composer.
  */
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +13,7 @@ import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
-import { matchingAgents, requestAddress } from './useComposerMentions';
+import { matchingAgents, requestAddress, useAddressRequests } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
 import { WorkspaceComposer } from './WorkspaceComposer';
 import { toTarget, WorkspaceToChip } from './WorkspaceToChip';
@@ -123,5 +123,18 @@ describe('Address from the Participants tab (issue 3056)', () => {
     await userEvent.setup().type(input, 'look');
     act(() => requestAddress('42', 'CI Doctor'));
     await waitFor(() => expect(input).toHaveValue('look @CI Doctor '));
+  });
+
+  it('keeps its count per thread: a composer that moves to another thread takes that thread\'s next address', () => {
+    let text = '';
+    const handle = { getInputContent: () => text, replaceRange: (start: number, end: number, value: string) => { text = text.slice(0, start) + value + text.slice(end); } };
+    const ref = { current: handle };
+    const { rerender } = renderHook(({ thread }: { thread: string }) => useAddressRequests(thread, ref), { initialProps: { thread: 'a1' } });
+    act(() => { requestAddress('a1', 'Mira'); requestAddress('a1', 'Mira'); requestAddress('a1', 'Mira'); });
+    expect(text).toBe('@Mira ');
+    text = '';
+    rerender({ thread: 'b1' });
+    act(() => requestAddress('b1', 'CI Doctor'));
+    expect(text).toBe('@CI Doctor ');
   });
 });
