@@ -15,6 +15,7 @@ import { server } from '@/test/setup';
 
 import { AdminRetention } from './Retention';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 interface RecordedRequest {
   readonly method: string;
@@ -92,6 +93,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetGeneratedClient();
+  delete window.admin_ui_config;
 });
 
 describe('AdminRetention - policies', () => {
@@ -170,5 +172,51 @@ describe('AdminRetention - legal holds', () => {
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.url).toMatch(/\/admin\/legal_holds\/11\/release$/);
     expect(recorded[0]!.body).toEqual({ reason: 'matter closed' });
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `data-retention`
+// every field and action of both tabs is disabled, not hidden; the tabs and
+// the active-only filter still read.
+describe('AdminRetention - view only', () => {
+  it('disables the policy and hold writes at the read level', async () => {
+    serveConsoleLevel('read', 'data-retention');
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRetention />);
+
+    const row = await screen.findByTestId('admin-retention-row-gateway_request_log');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Save' })).toBeDisabled());
+    expect(within(row).getByRole('textbox', { name: /Maximum/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set override' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Remove' })[0]).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+
+    await user.click(screen.getByRole('tab', { name: 'Legal holds' }));
+    const hold = await screen.findByTestId('admin-legal-hold-11');
+    expect(screen.getByRole('button', { name: 'Place a legal hold' })).toBeDisabled();
+    expect(within(hold).getByRole('button', { name: 'Release' })).toBeDisabled();
+    expect(screen.getByRole('switch', { name: 'Active holds only' })).toBeEnabled();
+    expect(recorded).toEqual([]);
+  });
+});
+
+// An action narrower than its item (R3.4b review): data-retention is `write`
+// for either of its permissions, so each tab checks its own.
+describe('AdminRetention - one permission of two', () => {
+  it('lets a legal-hold manager place holds while the retention policy stays disabled', async () => {
+    serveConsoleLevel('write', 'data-retention');
+    window.admin_ui_config = { permissions: ['legal_hold.manage'], vite_server_url: '/api/v2' };
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminRetention />);
+
+    const row = await screen.findByTestId('admin-retention-row-gateway_request_log');
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Save' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Set override' })).toBeDisabled();
+
+    await user.click(screen.getByRole('tab', { name: 'Legal holds' }));
+    const hold = await screen.findByTestId('admin-legal-hold-11');
+    expect(screen.getByRole('button', { name: 'Place a legal hold' })).toBeEnabled();
+    expect(within(hold).getByRole('button', { name: 'Release' })).toBeEnabled();
   });
 });

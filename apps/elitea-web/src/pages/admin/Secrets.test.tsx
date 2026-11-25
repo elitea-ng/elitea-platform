@@ -37,6 +37,7 @@ import { server } from '@/test/setup';
 
 import { AdminSecrets } from './Secrets';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 /**
  * The listing body the Go handler returns: a bare array, every row masked.
@@ -316,13 +317,32 @@ describe('Admin › Secrets', () => {
     expect(within(dialog).getByLabelText(/Secret name/)).toHaveValue('new_marker');
   });
 
-  it('renders no write controls when the config advertises none, and still lists', async () => {
+  // R3.4b (issue 2613): a write the config does not advertise is shown
+  // disabled, no longer hidden.
+  it('disables the write controls the config does not advertise, and still lists', async () => {
     grantAdminUiPermissions(['configuration.secrets.secret.list']);
     renderAdminRoute(<AdminSecrets />);
 
     expect(await screen.findByText('shared_marker')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Create secret' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Edit: shared_marker' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Delete: shared_marker' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create secret' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Edit: shared_marker' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete: shared_marker' })).toBeDisabled();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `secrets` every
+// write is disabled, and the reveal, a read, still works.
+describe('Admin › Secrets - view only', () => {
+  it('disables create, edit and delete at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'secrets');
+    renderAdminRoute(<AdminSecrets />);
+
+    expect(await screen.findByText('shared_marker')).toBeInTheDocument();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create secret' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Edit: shared_marker' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete: shared_marker' })).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
   });
 });

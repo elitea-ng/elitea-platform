@@ -16,7 +16,7 @@
  *    keeping a hand-maintained list of the other's.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
@@ -33,6 +33,7 @@ import {
 } from './ConfigurationListEditor';
 import { widgetFor } from './ConfigurationSectionForm';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 interface RecordedRequest {
   readonly method: string;
@@ -630,5 +631,20 @@ describe('the list editor helpers', () => {
     // Zero is a legitimate project id and must survive a truthiness filter.
     expect(withoutBlankListEntries([0])).toEqual([0]);
     expect(withoutBlankListEntries('nope')).toEqual([]);
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `features` the
+// form and Save are disabled.
+describe('AdminFeatures — view only', () => {
+  it('disables the form and Save at the read level', async () => {
+    serveConsoleLevel('read', 'features');
+    renderAdminRoute(<AdminFeatures />);
+    await waitForMcpSection();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Enable MCP' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
   });
 });

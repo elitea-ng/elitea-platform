@@ -28,7 +28,7 @@ import { createContext, useContext } from 'react';
 
 import { t } from '@/shared/i18n';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { adminUiPermissionsKnown, adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminConsole } from './api/adminConsoleApi';
 import { ROLES_ITEM_ID, useTemporaryRolesAccess } from './temporaryRolesLink';
 
@@ -135,8 +135,9 @@ export interface AdminWriteControlState {
 }
 
 /**
- * The state of one mutation control. Outside an `AdminWritable` (a page not
- * converted yet, story R3.4b) the control is enabled, as it was before.
+ * The state of one mutation control. Outside an `AdminWritable` (a component
+ * rendered by no admin page, such as a unit test of the control alone) the
+ * control is enabled; the server still decides.
  */
 export function useAdminWriteControl(): AdminWriteControlState {
   const scope = useContext(AdminWriteScopeContext);
@@ -155,11 +156,13 @@ export function useAdminWriteControl(): AdminWriteControlState {
  * refuses. The action is disabled, never hidden, when the page is view only or
  * when the caller lacks the action's permission. Presentation only, read from
  * `window.admin_ui_config.permissions` as the hiding it replaces was; the
- * server still decides every write.
+ * server still decides every write. When that list is not the caller's (no
+ * config in dev, or a resolver failure the handler reports), the page's state
+ * stands: failure must not read as no access.
  */
 export function useAdminActionControl(permission: string): AdminWriteControlState {
   const page = useAdminWriteControl();
-  if (page.disabled || adminUiShowsControlFor(permission)) return page;
+  if (page.disabled || !adminUiPermissionsKnown() || adminUiShowsControlFor(permission)) return page;
   return {
     disabled: true,
     reason: t('pages.admin.viewOnly.actionReason', 'Your roles can change this page, but not with this action.'),

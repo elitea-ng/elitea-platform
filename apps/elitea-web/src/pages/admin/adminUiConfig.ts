@@ -112,6 +112,19 @@ export function adminUiShowsControlFor(permission: string): boolean {
 }
 
 /**
+ * Whether the injected permission list can be read as the caller's: the config
+ * is present, it carries a list, and the handler did not say the list is
+ * empty for another reason (`unavailable`, `unauthenticated`, `denied`). An
+ * absent `access` (an older handler) leaves the list as stated.
+ */
+export function adminUiPermissionsKnown(): boolean {
+  const config = globalThis.window?.admin_ui_config;
+  if (config?.permissions === undefined) return false;
+  const access = adminUiAccess();
+  return access === undefined || access === 'granted';
+}
+
+/**
  * The handler's stated access reason, or `undefined` when none was injected
  * (older handler, dev, tests). An unknown value reads as "denied": fail closed.
  */

@@ -19,6 +19,7 @@ import { server } from '@/test/setup';
 
 import { AdminSchedulesTasks } from './SchedulesTasks';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import type { AdminRoutineRow } from './api/adminSchedulesApi';
 
 interface RecordedRequest {
@@ -329,5 +330,22 @@ describe('AdminSchedulesTasks - routines only', () => {
 
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(recorded.filter((entry) => /tasks|audit/.test(entry.url))).toHaveLength(0);
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `schedules-tasks`
+// the switches are disabled and each schedule reads as text; search still works.
+describe('AdminSchedulesTasks - view only', () => {
+  it('disables the schedule writes at the read level', async () => {
+    serveConsoleLevel('read', 'schedules-tasks');
+    renderAdminRoute(<AdminSchedulesTasks />);
+    await waitForRoutines();
+    await findViewOnlyNotice();
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Schedule enabled: index.schedule.scan.v1' })).toBeDisabled(),
+    );
+    expect(screen.queryByRole('button', { name: '24h' })).toBeNull();
+    expect(screen.getByText('24h')).toBeInTheDocument();
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

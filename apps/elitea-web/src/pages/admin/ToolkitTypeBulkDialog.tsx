@@ -34,6 +34,8 @@ import TextField from '@mui/material/TextField';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   toolkitTypeFailureReason,
   useBulkToolkitTypePolicy,
@@ -48,7 +50,9 @@ export interface ToolkitTypeBulkDialogProps {
 }
 
 export function ToolkitTypeBulkDialog({ open, types, onClose }: ToolkitTypeBulkDialogProps) {
-  const bulk = useBulkToolkitTypePolicy();
+  const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage).disabled;
+  const bulk = access.guard(useBulkToolkitTypePolicy());
 
   const [availability, setAvailability] = useState<ToolkitTypeAvailability>('disabled');
   const [reason, setReason] = useState('');
@@ -56,7 +60,7 @@ export function ToolkitTypeBulkDialog({ open, types, onClose }: ToolkitTypeBulkD
 
   const trimmed = reason.trim();
   const reverting = availability === 'default';
-  const submittable = types.length > 0 && (reverting || trimmed !== '') && !bulk.isPending;
+  const submittable = !locked && types.length > 0 && (reverting || trimmed !== '') && !bulk.isPending;
 
   const close = useCallback(() => {
     setReason('');

@@ -42,6 +42,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { BrandingAssetFields } from './BrandingAssetFields';
 import { BrandingFontFacesEditor } from './BrandingFontFacesEditor';
 import { BrandingIdentityFields } from './BrandingIdentityFields';
@@ -64,6 +66,8 @@ interface BrandingActionsProps {
 function BrandingActions({ state, pkg }: BrandingActionsProps) {
   const busy = state.isSaving || state.uploadingKind !== undefined;
   const packageBusy = pkg.isDownloading || pkg.restoringDigest !== undefined;
+  // View only: the download still works; every write is disabled (R3.4b).
+  const writeBusy = busy || state.readOnly;
   return (
     <Box sx={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
       <Button
@@ -80,7 +84,7 @@ function BrandingActions({ state, pkg }: BrandingActionsProps) {
       <Button
         size="small"
         variant="secondary"
-        disabled={busy || packageBusy}
+        disabled={writeBusy || packageBusy}
         onClick={pkg.onRequestImport}
         data-testid="branding-package-import"
       >
@@ -90,7 +94,7 @@ function BrandingActions({ state, pkg }: BrandingActionsProps) {
         size="small"
         variant="elitea"
         color="primary"
-        disabled={!state.isDirty || busy}
+        disabled={!state.isDirty || writeBusy}
         onClick={state.onSave}
         data-testid="branding-save"
       >
@@ -110,7 +114,7 @@ function BrandingActions({ state, pkg }: BrandingActionsProps) {
       <Button
         size="small"
         variant="alarm"
-        disabled={busy}
+        disabled={writeBusy}
         onClick={state.onRequestReset}
         data-testid="branding-reset"
       >
@@ -121,7 +125,7 @@ function BrandingActions({ state, pkg }: BrandingActionsProps) {
 }
 
 function BrandingForm({ state }: { readonly state: AdminBrandingPageState }) {
-  const disabled = state.isSaving;
+  const disabled = state.isSaving || state.readOnly;
   const group = {
     values: state.values,
     basePack: state.basePack,
@@ -169,6 +173,14 @@ function BrandingForm({ state }: { readonly state: AdminBrandingPageState }) {
 }
 
 export function AdminBranding() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.branding}>
+      <BrandingPage />
+    </AdminWritable>
+  );
+}
+
+function BrandingPage() {
   const state = useAdminBrandingPage();
   const pkg = useBrandingPackage({
     isDirty: state.isDirty,
@@ -191,6 +203,8 @@ export function AdminBranding() {
           'Restyle the platform in your organisation’s name, colours and typography. Changes reach every user on their next page load; no rebuild or restart.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       {state.isLoading ? <LinearProgress aria-label={t('pages.admin.branding.loading', 'Loading branding')} /> : null}
 
@@ -219,7 +233,7 @@ export function AdminBranding() {
               isLoading={pkg.versionsLoading}
               error={pkg.versionsError}
               restoringDigest={pkg.restoringDigest}
-              disabled={state.isSaving || state.uploadingKind !== undefined}
+              disabled={state.readOnly || state.isSaving || state.uploadingKind !== undefined}
               onRestore={pkg.onRequestRestore}
             />
           </Box>

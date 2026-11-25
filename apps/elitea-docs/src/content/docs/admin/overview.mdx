@@ -26,7 +26,7 @@ The sidebar lists the console's pages in six labelled areas, in this order. Each
 
 **Schedules and tasks** is one item for two pages: the recurring schedules and the background tasks. A strip of two tabs at the top of either page links the other, and the item is marked on both. The old addresses `/admin/app/schedules` and `/admin/app/tasks` keep working.
 
-**Roles** is listed under **People and access** for a caller whose roles open it: the global and platform administrators, the security auditor, and any custom role that holds a role-management permission. Its address is `/admin/app/roles`. The link is temporary: when the page is rebuilt for the new roles, the **Access** item replaces it. The provider, pricing, usage and log tabs, and the identity, SCIM and client-application editors, are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
+**Roles** is listed under **People and access** for a caller whose roles open it and who can read the permission matrix (`configuration.roles.permissions.view` or `.edit`): the global and platform administrators, and any custom role that holds a matrix permission. The security auditor does not see it. Today's Roles page is the matrix, and the auditor's `access.roles.view` is for who holds which role, a view the **Access** item brings. Its address is `/admin/app/roles`. The link is temporary: when the page is rebuilt for the new roles, the **Access** item replaces it. The provider, pricing, usage and log tabs, and the identity, SCIM and client-application editors, are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
 
 ## What a narrow role sees
 
@@ -37,7 +37,7 @@ The areas and items in the sidebar come from the [capability document](#what-the
 | Global administrator, Platform administrator | All six areas and all their items |
 | LLM manager | Projects (Projects), Models and spend (LLM Governance, Budgets), Platform (Configuration) |
 | Project administrator (all projects) | Projects (Projects, App Requests), Models and spend (Budgets), Platform (Configuration) |
-| Security auditor | People and access (Roles), Security (Audit Trail) |
+| Security auditor | Security (Audit Trail) |
 | Emergency access | None: its one item, Break-glass, has no page yet |
 
 The console's landing page is Users. If your roles do not open Users, the console opens the first item they do open, passing over the temporary Roles link while there is another.
@@ -52,7 +52,13 @@ A role can open a page to read it without being able to change it. On such a pag
 
 The level comes from the same capability document as the sidebar: each item is open to you to read or to change. If the console cannot read the document, it does not turn a page read-only; the server answers each change for itself, as before. If it cannot read the roles that can change the page, the notice says the page is view only without naming a role.
 
-These pages are in view-only mode: **Budgets**, **Roles**, **Users**, **Identity providers**, **SCIM**, **Projects**, **App requests**, **LLM governance** and the LLM Proxy tabs. Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts) has its own level, so you can be able to change one tab and only read another. A control that used to be hidden from a role that cannot use it, such as **New role** on Roles or **Delete** on Users, is now shown disabled. The other pages follow in a later release; until then a role that can only read one of them still sees its controls, and the server refuses the change.
+Every page of the console that can change something has this mode; a page with nothing to change, such as **Agent registry** or **Audit Trail**, has no notice. An action whose permission is narrower than its page is checked on its own: on **Data retention**, for example, a role that holds only `legal_hold.manage` can place and release legal holds while the retention policy stays disabled. Some parts of a page have their own level, so you can be able to change one part and only read another:
+
+- Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts).
+- The identity providers and SCIM editors.
+- The editors that Configuration shows for E-mail (the **E-mail** item, also on its own page), MCP servers (the **Toolkits** item), and native clients and Microsoft apps (the **Client applications** item). Configuration's own **View only** notice sits above its ordinary section form, and each of these editors shows its own.
+
+A control that used to be hidden from a role that cannot use it, such as **New role** on Roles, **Delete** on Users or **Create secret** on Secrets, is now shown disabled. Some actions that look like changes only read, so they keep working on a view-only page: revealing a secret's value, downloading the branding package, showing resumed suspensions on the Kill switch, and listing a toolkit's project exceptions.
 
 While the console reads the capability document, the sidebar shows that it is loading. If the read fails, the sidebar says so and offers **Try again**; it never shows an empty menu for a failed read.
 

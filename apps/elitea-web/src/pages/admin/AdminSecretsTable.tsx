@@ -56,9 +56,12 @@ export interface AdminSecretsTableProps {
   readonly onReveal: (name: string) => Promise<string | null>;
   /** Absent ⇒ the reveal/copy affordances are not rendered at all. */
   readonly canReveal: boolean;
-  /** Absent ⇒ the control is not rendered (no permission, or the Internal tab). */
+  /** Absent ⇒ the control is not rendered: the Internal tab, read-only for everyone. */
   readonly onEdit: ((name: string) => void) | undefined;
   readonly onDelete: ((name: string) => void) | undefined;
+  /** Shown but disabled: view-only mode, or an action the roles lack (R3.4b). */
+  readonly editDisabled?: boolean;
+  readonly deleteDisabled?: boolean;
 }
 
 interface AdminSecretGridRow {
@@ -73,6 +76,8 @@ export const AdminSecretsTable = memo(function AdminSecretsTable({
   canReveal,
   onEdit,
   onDelete,
+  editDisabled = false,
+  deleteDisabled = false,
 }: AdminSecretsTableProps) {
   // name → plaintext. Presence in this map is what "revealed" means.
   const [revealed, setRevealed] = useState<Record<string, string>>({});
@@ -166,32 +171,38 @@ export const AdminSecretsTable = memo(function AdminSecretsTable({
           <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.125rem' }}>
             {onEdit ? (
               <Tooltip title={t('pages.admin.secrets.action.edit', 'Edit')}>
-                <IconButton
-                  size="small"
-                  aria-label={`${t('pages.admin.secrets.action.edit', 'Edit')}: ${params.row.name}`}
-                  onClick={() => onEdit(params.row.name)}
-                >
-                  <EditOutlinedIcon fontSize="small" />
-                </IconButton>
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={editDisabled}
+                    aria-label={`${t('pages.admin.secrets.action.edit', 'Edit')}: ${params.row.name}`}
+                    onClick={() => onEdit(params.row.name)}
+                  >
+                    <EditOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </span>
               </Tooltip>
             ) : null}
             {onDelete ? (
               <Tooltip title={t('pages.admin.secrets.action.delete', 'Delete')}>
-                <IconButton
-                  size="small"
-                  color="error"
-                  aria-label={`${t('pages.admin.secrets.action.delete', 'Delete')}: ${params.row.name}`}
-                  onClick={() => onDelete(params.row.name)}
-                >
-                  <DeleteOutlinedIcon fontSize="small" />
-                </IconButton>
+                <span>
+                  <IconButton
+                    size="small"
+                    color="error"
+                    disabled={deleteDisabled}
+                    aria-label={`${t('pages.admin.secrets.action.delete', 'Delete')}: ${params.row.name}`}
+                    onClick={() => onDelete(params.row.name)}
+                  >
+                    <DeleteOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </span>
               </Tooltip>
             ) : null}
           </Box>
         ),
       },
     ],
-    [revealed, canReveal, handleCopy, handleToggle, onEdit, onDelete],
+    [revealed, canReveal, handleCopy, handleToggle, onEdit, onDelete, editDisabled, deleteDisabled],
   );
 
   const rows = useMemo<AdminSecretGridRow[]>(

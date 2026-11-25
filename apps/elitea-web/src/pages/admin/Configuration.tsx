@@ -138,6 +138,8 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminEmailEditor } from './AdminEmailEditor';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
@@ -283,6 +285,9 @@ function SectionExtra({ id }: { readonly id: string | undefined }) {
 function SectionForm({ state }: { readonly state: AdminConfigurationPageState }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {/* The Configuration item's notice sits with its own form: a section
+          with a dedicated editor is its own item and brings its own (R3.4b). */}
+      <AdminViewOnlyNotice />
       {state.activeSection?.description !== undefined && state.activeSection.description !== '' ? (
         <Typography variant="bodySmall" color="text.secondary">
           {state.activeSection.description}
@@ -297,7 +302,7 @@ function SectionForm({ state }: { readonly state: AdminConfigurationPageState })
       <ConfigurationSectionForm
         fields={state.activeSection?.fields ?? []}
         values={state.values}
-        disabled={state.isSaving}
+        disabled={state.readOnly || state.isSaving}
         onChange={state.onFieldChange}
       />
       <ConfigurationSectionActions state={state} />
@@ -306,6 +311,14 @@ function SectionForm({ state }: { readonly state: AdminConfigurationPageState })
 }
 
 export function AdminConfiguration() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.configuration}>
+      <ConfigurationPage />
+    </AdminWritable>
+  );
+}
+
+function ConfigurationPage() {
   const state = useAdminConfigurationPage();
 
   return (

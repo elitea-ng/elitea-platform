@@ -30,6 +30,8 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { SchedulesTable } from './SchedulesTable';
 import { useAdminSchedulesPage, type AdminSchedulesPageState } from './useAdminSchedulesPage';
 
@@ -77,6 +79,14 @@ function SchedulesBody({ state }: { readonly state: AdminSchedulesPageState }) {
 }
 
 export function AdminSchedulesTasks() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.schedulesTasks}>
+      <SchedulesTasksPage />
+    </AdminWritable>
+  );
+}
+
+function SchedulesTasksPage() {
   const state = useAdminSchedulesPage();
 
   return (
@@ -100,6 +110,8 @@ export function AdminSchedulesTasks() {
           data-testid="admin-schedules-search"
         />
       </Box>
+
+      <AdminViewOnlyNotice />
 
       {state.isFetching ? <LinearProgress /> : null}
 

@@ -33,6 +33,8 @@ import {
   useImportBrandingPackage,
   useRestoreBrandingPackageVersion,
 } from './api/adminBrandingPackageApi';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { reportSummary } from './brandingPackage';
 import type { BrandingToast } from './useAdminBrandingPage';
 
@@ -85,9 +87,12 @@ function failureMessage(error: unknown, fallback: string): string {
 }
 
 export function useBrandingPackage({ isDirty, discardDraft, notify }: BrandingPackageDeps): BrandingPackageState {
+  // The download is a read (a GET), so it works at the read level; the import
+  // (its dry-run check included) and the restore are writes (R3.4b, issue 2613).
   const download = useDownloadBrandingPackage();
-  const importPackage = useImportBrandingPackage();
-  const restore = useRestoreBrandingPackageVersion();
+  const access = useAdminWritable(ADMIN_ITEM.branding);
+  const importPackage = access.guard(useImportBrandingPackage());
+  const restore = access.guard(useRestoreBrandingPackageVersion());
   const versions = useBrandingPackageVersions();
 
   const [importOpen, setImportOpen] = useState(false);

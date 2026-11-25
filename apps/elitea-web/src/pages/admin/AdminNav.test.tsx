@@ -847,6 +847,20 @@ function goldenDocument(role: string): ConsoleDocument {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${role}.golden.json`), 'utf8')) as ConsoleDocument;
 }
 
+/** The matrix permissions the TEMPORARY Roles link needs (issue 3042). */
+const MATRIX_PERMISSIONS = new Set(['configuration.roles.permissions.view', 'configuration.roles.permissions.edit']);
+
+/**
+ * The injected permissions of a built-in role, as far as the Roles link reads
+ * them: the security auditor holds no matrix permission; the other roles are
+ * served every permission, as before.
+ */
+function permissionsOf(role: string): readonly string[] {
+  return role === 'security_auditor'
+    ? ALL_PERMISSIONS.filter((permission) => !MATRIX_PERMISSIONS.has(permission))
+    : ALL_PERMISSIONS;
+}
+
 function serveDocument(document: ConsoleDocument): void {
   server.use(getGetAdminConsoleDocumentMockHandler(document));
 }
@@ -890,8 +904,9 @@ const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>>
     models_spend: ['budgets-alerts'],
     platform: ['configuration'],
   },
-  // access.roles.view opens Access, shown as the TEMPORARY Roles link.
-  security_auditor: { people_access: ['access'], security: ['audit-trail'] },
+  // access.roles.view opens Access, but the TEMPORARY Roles link needs a
+  // matrix permission, which the auditor does not hold (issue 3042).
+  security_auditor: { security: ['audit-trail'] },
   // Its one name opens Break-glass, whose page has not shipped.
   emergency_access: {},
 };
@@ -957,6 +972,7 @@ describe('the six labelled areas', () => {
 
   for (const role of Object.keys(EXPECTED_AREAS)) {
     it(`shows the ${role} persona exactly its areas, from its capability document`, async () => {
+      setPermissions(permissionsOf(role));
       serveDocument(goldenDocument(role));
       await mountAdmin('/projects');
       // The TEMPORARY Roles link lands after the Access item read answers.
@@ -986,15 +1002,25 @@ describe('the six labelled areas', () => {
     expect(within(denied).getByRole('heading', { level: 1 })).toHaveTextContent('Kill switch');
   }, testTimeout(30_000));
 
-  // The auditor's first item is the TEMPORARY Roles link; landing passes over
-  // it to the first item the document itself lists.
+  // The auditor has no Roles link (issue 3042), so it lands on Audit Trail.
   it('lands a caller the document does not open Users to on its first item', async () => {
+    setPermissions(permissionsOf('security_auditor'));
+    serveDocument(goldenDocument('security_auditor'));
+    await mountAdmin('/');
+    await screen.findByTestId('admin-nav-item-audit-trail');
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/audit'));
+    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
+  }, testTimeout(30_000));
+
+  // A caller whose first item is the TEMPORARY Roles link (a role that opens
+  // Access and reads the matrix, but not Users): landing passes over the link
+  // to the first item the document itself lists.
+  it('passes over the temporary Roles link when it lands', async () => {
     serveDocument(goldenDocument('security_auditor'));
     await mountAdmin('/');
     await screen.findByTestId('admin-nav-item-access');
     await screen.findByTestId('admin-nav-item-audit-trail');
     await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/audit'));
-    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
   }, testTimeout(30_000));
 
   it('still renders a page whose item the document cannot list yet (Roles, until R3.6)', async () => {

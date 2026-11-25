@@ -23,6 +23,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { RetentionLegalHolds } from './RetentionLegalHolds';
 import { RetentionPolicies } from './RetentionPolicies';
 import { retentionFailureReason, useRetentionPolicies } from './api/adminRetentionApi';
@@ -46,6 +48,14 @@ function PoliciesSection() {
 }
 
 export function AdminRetention() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.dataRetention}>
+      <RetentionPage />
+    </AdminWritable>
+  );
+}
+
+function RetentionPage() {
   const [tab, setTab] = useState<RetentionTab>('policies');
 
   return (
@@ -59,6 +69,7 @@ export function AdminRetention() {
           'How long the platform keeps each kind of data, and the legal holds that suspend deletion. The defaults keep conversations forever; nothing is deleted until you set a maximum age.',
         )}
       </Typography>
+      <AdminViewOnlyNotice />
       <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
         <Tabs value={tab} onChange={(_event, value: RetentionTab) => setTab(value)}>
           <Tab value="policies" label={t('pages.admin.retention.tab.policies', 'Retention policy')} />

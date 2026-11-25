@@ -57,6 +57,8 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminSecretDialog } from './AdminSecretDialog';
 import { AdminSecretsTable } from './AdminSecretsTable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { useAdminSecretsPage, type AdminSecretsPageState } from './useAdminSecretsPage';
 
 
@@ -98,11 +100,21 @@ function SecretsBody({ state }: { readonly state: AdminSecretsPageState }) {
       canReveal={state.canReveal}
       onEdit={state.onEdit}
       onDelete={state.onDelete}
+      editDisabled={state.editDisabled}
+      deleteDisabled={state.deleteDisabled}
     />
   );
 }
 
 export function AdminSecrets() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.secrets}>
+      <SecretsPage />
+    </AdminWritable>
+  );
+}
+
+function SecretsPage() {
   const state = useAdminSecretsPage();
 
   return (
@@ -127,7 +139,15 @@ export function AdminSecrets() {
             data-testid="admin-secrets-search"
           />
           {state.onCreate ? (
-            <Button variant="elitea" color="primary" size="small" startIcon={<AddIcon />} onClick={state.onCreate} sx={headerActionSx}>
+            <Button
+              variant="elitea"
+              color="primary"
+              size="small"
+              startIcon={<AddIcon />}
+              disabled={state.createDisabled}
+              onClick={state.onCreate}
+              sx={headerActionSx}
+            >
               {t('pages.admin.secrets.action.create', 'Create secret')}
             </Button>
           ) : null}
@@ -140,6 +160,8 @@ export function AdminSecrets() {
           'These secrets are shared across every project on this deployment.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Tabs value={state.activeTab} onChange={state.onTabChange} sx={{ minHeight: '2.5rem' }}>
         <Tab
