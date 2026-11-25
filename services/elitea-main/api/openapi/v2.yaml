@@ -19388,9 +19388,10 @@ components:
           type: string
           format: date
           description: >
-            The date an `inherit` token ends (the sunset date of ADR-0059
-            decision 2). ABSENT while that date is not set, and for every other
-            access.
+            The date an `inherit` token ends: the later of the sunset date of
+            ADR-0059 decision 2 and 30 days after its owner's notice was
+            delivered; the sunset date until the notice is delivered. ABSENT
+            while the sunset date is not set, and for every other access.
       description: >
         NOTE(W2): internal/api/v2/auth/tokens.go:42-66 (the `Token` struct) and
         presentToken, which decides whether `token` is revealed.
@@ -19531,7 +19532,10 @@ components:
         inherit_ends_on:
           type: string
           format: date
-          description: The sunset date of an `inherit` token, absent while it is not set.
+          description: >
+            The date an `inherit` token ends: the later of the sunset date and
+            30 days after its owner's notice was delivered (the sunset date
+            until then). Absent while the sunset date is not set.
         owner_id:
           type: integer
         owner_name:

@@ -31,7 +31,6 @@ import (
 	indexscheduleapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/indexschedule"
 	recoveryapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/noderecovery"
 	outputapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/pipelineruns"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/runbrief"
 	schedulingapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/scheduling"
@@ -2433,11 +2432,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			var patExpiryHandler schedulingapp.Handler
 			var patExpirySchedule schedulingapp.Schedule
 			if dependencies.AdmissionPool != nil {
-				patExpiryStore, patExpiryStoreErr := repos.NewPATExpiryNotificationRepository(dependencies.AdmissionPool)
-				if patExpiryStoreErr != nil {
-					return nil, fmt.Errorf("construct personal access token expiry repository: %w", patExpiryStoreErr)
-				}
-				patExpiryNotifier, patExpiryNotifierErr := patexpiry.New(patExpiryStore)
+				// Both halves: the expiry notice and the notice to owners of
+				// `inherit` tokens (ADR-0059 R3.15b), one pass.
+				patExpiryNotifier, patExpiryNotifierErr := repos.NewPATNotifier(dependencies.AdmissionPool)
 				if patExpiryNotifierErr != nil {
 					return nil, fmt.Errorf("construct personal access token expiry notifier: %w", patExpiryNotifierErr)
 				}

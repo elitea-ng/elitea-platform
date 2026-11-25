@@ -19,7 +19,7 @@ the Configuration sections, `runtime.plugins` with `configuration.governance`),
 so its holders see no change. The guardrail and circuit breaker sections keep
 their `llm.*` permissions: the pair does not open them.
 
-The shared migration `0277_agent_governance_permissions.sql` grants both
+The shared migration `0279_agent_governance_permissions.sql` grants both
 names to the `super_admin` and `admin` administration roles. No other role
 gets them: no built-in narrow role holds the pair, and the agent governance
 role is left for a later release.

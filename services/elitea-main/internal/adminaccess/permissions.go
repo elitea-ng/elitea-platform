@@ -6,7 +6,7 @@ package adminaccess
 //
 // The narrow names of ADR-0059 decision 2 enter the table in the story whose
 // migration grants them, so the grant gate stays green at every commit: 25 in
-// R0.2 (shared 0261), the agents.governance.* pair in R0.15 (shared 0277).
+// R0.2 (shared 0261), the agents.governance.* pair in R0.15 (shared 0279).
 const (
 	// People and access.
 	AdminAuthUsers                         = "admin.auth.users"
@@ -57,7 +57,7 @@ const (
 	SafetySuspend                = "safety.suspend"
 	ToolkitCatalogueTypeManage   = "toolkit_catalogue.type.manage"
 	// AgentsGovernanceView and AgentsGovernanceManage are the agent
-	// governance pair of ADR-0059 decision 2 (story R0.15, shared 0277): the
+	// governance pair of ADR-0059 decision 2 (story R0.15, shared 0279): the
 	// agent registry, the delegation review, the worker egress hosts and the
 	// agent governance Configuration sections. Each gate accepts them beside
 	// configuration.governance until the sunset; a read accepts either name

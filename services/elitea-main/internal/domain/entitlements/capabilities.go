@@ -274,7 +274,7 @@ var Capabilities = map[string][]Capability{
 	// Which SCIM clients read the entitlement tree (#3026): it narrows
 	// runtime.plugins and the export, and carries both.
 	adminaccess.EntitlementsExportManage: {AdministerPlatform, ExportEntitlements},
-	// The agent governance pair (R0.15, shared 0277): the write narrows
+	// The agent governance pair (R0.15, shared 0279): the write narrows
 	// configuration.governance and runtime.plugins, and carries both.
 	adminaccess.AgentsGovernanceManage: {OverrideCaps, AdministerPlatform},
 }

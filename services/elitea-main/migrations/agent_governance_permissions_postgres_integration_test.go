@@ -1,12 +1,12 @@
 package migrations_test
 
-// Shared 0277 (issue 2552, ADR-0059 R0.15): agents.governance.view and
+// Shared 0279 (issue 2552, ADR-0059 R0.15): agents.governance.view and
 // agents.governance.manage, granted to super_admin and admin. No existing
 // grant is removed, a second run writes nothing, and a database without the
 // auth_core tables is left alone.
 //
 // The two databases of the 0261 test (narrow_admin_permissions_..._test.go):
-// fresh (001_initial.sql and the corpus before 0277) and legacy (the central
+// fresh (001_initial.sql and the corpus before 0279) and legacy (the central
 // roles of testdata/postgres/legacy-rbac-matrix.json, upgraded through the
 // same corpus).
 
@@ -25,30 +25,30 @@ import (
 )
 
 const (
-	agentGovernanceFile      = "0277_agent_governance_permissions.sql"
+	agentGovernanceFile      = "0279_agent_governance_permissions.sql"
 	agentGovernanceMigration = "shared/" + agentGovernanceFile
 )
 
-// agentGovernancePermissions are the two names 0277 grants. Written out, not
+// agentGovernancePermissions are the two names 0279 grants. Written out, not
 // read from the registry: the test pins the grant.
 var agentGovernancePermissions = []string{"agents.governance.manage", "agents.governance.view"}
 
 func TestAgentGovernancePermissionsKeepEveryGrantAndAddOnlyTheirOwn(t *testing.T) {
 	for name, build := range map[string]func(*testing.T) *pgxpool.Pool{
-		"fresh":  newPoolBefore0277,
-		"legacy": newLegacyPoolBefore0277,
+		"fresh":  newPoolBefore0279,
+		"legacy": newLegacyPoolBefore0279,
 	} {
 		t.Run(name, func(t *testing.T) {
 			pool := build(t)
 			before := allRoleGrants(t, pool)
 			if len(before) == 0 {
-				t.Fatal("the database holds no grant before 0277; the fixture was not built")
+				t.Fatal("the database holds no grant before 0279; the fixture was not built")
 			}
 			applySharedCorpus(t, pool)
 			after := allRoleGrants(t, pool)
 
 			if lost := grantDifference(before, after); len(lost) > 0 {
-				t.Errorf("0277 removed %d grants:\n  %s", len(lost), strings.Join(lost, "\n  "))
+				t.Errorf("0279 removed %d grants:\n  %s", len(lost), strings.Join(lost, "\n  "))
 			}
 			want := map[string]bool{}
 			for _, permission := range agentGovernancePermissions {
@@ -58,12 +58,12 @@ func TestAgentGovernancePermissionsKeepEveryGrantAndAddOnlyTheirOwn(t *testing.T
 			}
 			for _, row := range grantDifference(after, before) {
 				if !want[row] {
-					t.Errorf("0277 added an unexpected grant %s", row)
+					t.Errorf("0279 added an unexpected grant %s", row)
 				}
 				delete(want, row)
 			}
 			for row := range want {
-				t.Errorf("0277 did not add %s", row)
+				t.Errorf("0279 did not add %s", row)
 			}
 			for _, permission := range agentGovernancePermissions {
 				holders := administrationGrantHolders(t, pool, permission)
@@ -90,7 +90,7 @@ func TestAgentGovernancePermissionsReapplyWritesNothing(t *testing.T) {
 	count, lastID := read()
 	execMigrationFile(t, pool, agentGovernanceMigration)
 	if gotCount, gotID := read(); gotCount != count || gotID != lastID {
-		t.Fatalf("re-applying 0277 wrote rows: %d grants (last id %d), was %d (last id %d)",
+		t.Fatalf("re-applying 0279 wrote rows: %d grants (last id %d), was %d (last id %d)",
 			gotCount, gotID, count, lastID)
 	}
 }
@@ -115,7 +115,7 @@ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LI
 		execMigrationFile(t, pool, agentGovernanceMigration)
 	}
 	if after := relations(); after != before {
-		t.Fatalf("0277 created %d relations on a database without auth_core", after-before)
+		t.Fatalf("0279 created %d relations on a database without auth_core", after-before)
 	}
 }
 
@@ -127,7 +127,7 @@ func TestAgentGovernancePermissionsAreRegistryRows(t *testing.T) {
 	for _, name := range agentGovernancePermissions {
 		row, ok := adminaccess.Lookup(name)
 		if !ok {
-			t.Errorf("0277 grants %q, which is not a row of internal/adminaccess", name)
+			t.Errorf("0279 grants %q, which is not a row of internal/adminaccess", name)
 			continue
 		}
 		if row.Area != adminaccess.AreaAgentsGovernance {
@@ -143,30 +143,30 @@ func TestAgentGovernancePermissionsAreRegistryRows(t *testing.T) {
 
 /* ── harness ───────────────────────────────────────────────────────────── */
 
-func newPoolBefore0277(t *testing.T) *pgxpool.Pool {
+func newPoolBefore0279(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newEmptyDatabase(t)
 	applyBootstrapSchema(t, pool)
-	applyCorpusWithout0277(t, pool)
+	applyCorpusWithout0279(t, pool)
 	return pool
 }
 
-func newLegacyPoolBefore0277(t *testing.T) *pgxpool.Pool {
+func newLegacyPoolBefore0279(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newEmptyDatabase(t)
 	applyBootstrapSchema(t, pool)
 	loadLegacyRBACMatrix(t, pool)
-	applyCorpusWithout0277(t, pool)
+	applyCorpusWithout0279(t, pool)
 	return pool
 }
 
-func applyCorpusWithout0277(t *testing.T, pool *pgxpool.Pool) {
+func applyCorpusWithout0279(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	corpus := withoutFile{FS: migrations.Files, hidden: agentGovernanceFile}
 	if err := migrate.New(pool, corpus).ApplyShared(ctx); err != nil {
-		t.Fatalf("apply the shared corpus before 0277: %v", err)
+		t.Fatalf("apply the shared corpus before 0279: %v", err)
 	}
 	var applied bool
 	if err := pool.QueryRow(ctx, `
@@ -176,6 +176,6 @@ SELECT EXISTS (
 		t.Fatalf("read the pre-upgrade grants: %v", err)
 	}
 	if applied {
-		t.Fatal("the pre-upgrade database already holds the agent governance pair: 0277 was not hidden")
+		t.Fatal("the pre-upgrade database already holds the agent governance pair: 0279 was not hidden")
 	}
 }

@@ -2767,10 +2767,9 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			// with nothing produced — which would read as "nobody was due".
 			var patExpiryNotifier *patexpiry.Notifier
 			if cfg.Pool != nil {
-				if store, err := dbrepos.NewPATExpiryNotificationRepository(cfg.Pool); err == nil {
-					if notifier, notifierErr := patexpiry.New(store); notifierErr == nil {
-						patExpiryNotifier = notifier
-					}
+				// Both halves (#940 A3, ADR-0059 R3.15b), as the scheduled sweep.
+				if notifier, err := dbrepos.NewPATNotifier(cfg.Pool); err == nil {
+					patExpiryNotifier = notifier
 				}
 			}
 			adminOptions := []admin.Option{}

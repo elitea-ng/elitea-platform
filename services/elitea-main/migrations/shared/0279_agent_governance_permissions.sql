@@ -1,4 +1,4 @@
--- 0277_agent_governance_permissions.sql — the agent governance pair of
+-- 0279_agent_governance_permissions.sql — the agent governance pair of
 -- ADR-0059 decision 2 (issue #2552, story R0.15): agents.governance.view and
 -- agents.governance.manage, granted to both administrator roles.
 --
@@ -26,7 +26,7 @@ DO $$
 BEGIN
     IF to_regclass('public.auth_core__role') IS NULL
        OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-        RAISE NOTICE '0277: auth_core tables absent, nothing to grant';
+        RAISE NOTICE '0279: auth_core tables absent, nothing to grant';
         RETURN;
     END IF;
 

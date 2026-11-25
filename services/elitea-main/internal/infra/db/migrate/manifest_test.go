@@ -1279,11 +1279,22 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the append-only guard by the row's own form (issue 2576, ADR-0059
 	// R1.4b). No permission.
 	//
-	// 277: shared/0277_agent_governance_permissions.sql, the grants
+	// 277: shared/0277_admin_access_notices.sql, the outbox of the
+	// break-glass access notices and of the inherit token notice
+	// (elitea_auth.admin_access_notices): one row per recipient and channel,
+	// written with the event, sent_at NULL while pending (issue 2519,
+	// ADR-0059 R2.5a). No permission.
+	//
+	// 278: shared/0278_token_lifecycle_inherit_notice.sql, the nullable
+	// inherit_notice_delivered_at of elitea_identity.token_lifecycle: when
+	// the notice to the owner of an inherit token was delivered, which its
+	// end date counts from (issue 2619, ADR-0059 R3.15b). No permission.
+	//
+	// 279: shared/0279_agent_governance_permissions.sql, the grants
 	// agents.governance.view and agents.governance.manage (super_admin, admin):
 	// the agent governance pair of ADR-0059 decision 2 (issue 2552, R0.15). No
 	// table.
-	require.EqualValues(t, 277, Head(shared))
+	require.EqualValues(t, 279, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
