@@ -114,7 +114,9 @@ func auditCoverageFailures(handler http.Handler, mutations []auditMutation, opts
 				"%s writes an admin audit row but %s exempts it: remove the exemption", m, auditExemptionsFile))
 		}
 		row := answer.Audited[len(answer.Audited)-1]
-		if len(row.ActingRoles) == 0 {
+		// nil is "not recorded"; an empty list is a recorded value (a
+		// credential that acts with no standing role, an elevation).
+		if row.ActingRoles == nil {
 			failures = append(failures, fmt.Sprintf(
 				"%s wrote an admin audit row without acting_roles: the administration check did not resolve "+
 					"with the request's context", m))

@@ -197,7 +197,11 @@ The reviewed exemption list is
 one `METHOD pattern: reason` per line, each with a written reason, and an
 entry that no longer matches a driven mutation fails the test. It is empty.
 A handler that panics on an audited mutation still writes its row (status
-500) before the panic reaches the recoverer.
+500, or the status it had already written) before the panic reaches the
+recoverer. The proof covers what the test can enumerate: the driven
+administration surface (a route whose check the composed router cannot
+reach is listed with a reason by the surface tests), the override pairs and
+the matrix writes, on the success path.
 
 ## Shared Libraries
 

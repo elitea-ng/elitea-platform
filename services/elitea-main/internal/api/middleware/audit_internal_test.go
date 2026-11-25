@@ -374,6 +374,31 @@ func TestAuditRecordsAMutationWhoseHandlerPanics(t *testing.T) {
 	}
 }
 
+// A handler that wrote its status and then aborted (a client that dropped a
+// stream: http.ErrAbortHandler) is recorded with the status the client got,
+// not as a failure.
+func TestAuditRecordsTheWrittenStatusOfAnAbortedMutation(t *testing.T) {
+	recorder := &captureRecorder{}
+	router := chi.NewRouter()
+	router.Use(Audit(recorder))
+	router.Put("/api/v2/admin/x", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic(http.ErrAbortHandler)
+	})
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != http.ErrAbortHandler {
+				t.Errorf("recovered %v, want http.ErrAbortHandler", recovered)
+			}
+		}()
+		router.ServeHTTP(httptest.NewRecorder(), authenticatedRequest(http.MethodPut, "/api/v2/admin/x"))
+	}()
+	events := recorder.all()
+	if len(events) != 1 || *events[0].StatusCode != http.StatusOK || events[0].IsError {
+		t.Fatalf("rows = %+v; want one row with status 200, not an error", events)
+	}
+}
+
 func TestAuditedSurfacesIsACopy(t *testing.T) {
 	surfaces := AuditedSurfaces()
 	if len(surfaces) == 0 {

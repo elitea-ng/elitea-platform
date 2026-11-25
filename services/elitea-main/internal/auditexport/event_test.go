@@ -10,6 +10,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -360,5 +361,44 @@ func TestAdminAuditRoleUseFieldsAreToleratedByAnOlderConsumer(t *testing.T) {
 			t.Fatalf("%s is out of order in the details", key)
 		}
 		last = at
+	}
+}
+
+// The schema's credential_kind enum is the closed list the recorder writes
+// (audit.KnownCredentialKind), and a stored value outside it is not exported.
+func TestCredentialKindEnumMatchesTheRecorder(t *testing.T) {
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	enum := doc.Defs["adminAuditDetails"].Properties["credential_kind"].Enum
+	kinds := []string{audit.CredentialKindSession, audit.CredentialKindForm, audit.CredentialKindSealed,
+		audit.CredentialKindToken, audit.CredentialKindNative, audit.CredentialKindRun,
+		audit.CredentialKindSystem, audit.CredentialKindSCIM}
+	if strings.Join(enum, ",") != strings.Join(kinds, ",") {
+		t.Fatalf("schema credential_kind enum %v, recorder kinds %v", enum, kinds)
+	}
+	for _, kind := range enum {
+		if !audit.KnownCredentialKind(kind) {
+			t.Errorf("%q is in the schema but not a known credential kind", kind)
+		}
+	}
+	at := time.Date(2026, 11, 25, 9, 30, 0, 0, time.UTC)
+	event := FromAuditRow(AuditRow{ID: 5, Timestamp: at, EventType: "api", Action: "PUT /x", CredentialKind: "password"})
+	if details := event.Details.(AdminAuditDetails); details.CredentialKind != "" {
+		t.Fatalf("an unknown stored kind was exported: %q", details.CredentialKind)
+	}
+	if err := validate(t, compileSchema(t), event); err != nil {
+		t.Fatal(err)
 	}
 }

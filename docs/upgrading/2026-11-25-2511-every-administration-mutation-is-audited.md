@@ -9,11 +9,13 @@ release:
 - `PATCH /api/v2/elitea_core/marketplace_listing/prompt_lib/{projectID}/{listingID}`
   (featuring and delisting a Marketplace listing, a platform administrator's
   action) now writes an admin audit row. The prefix
-  `/api/v2/elitea_core/marketplace_listing/` joins the audited surfaces; the
-  listing page under it is a GET and stays unrecorded when it succeeds.
+  `/api/v2/elitea_core/marketplace_listing/` joins the audited surfaces. The
+  listing page under it is a GET: a successful read stays unrecorded, and a
+  refused one (401 or 403) writes a row, as on every audited surface.
 - A mutation on any audited route whose handler fails with an unexpected
-  error (a panic) now writes its row, with status 500. Before, the row was
-  lost.
+  error (a panic) now writes its row, with status 500, or with the status the
+  handler had already sent (a client that dropped a response). Before, the
+  row was lost.
 
 **Who is affected.** The Audit Trail and the SIEM export show these rows from
 the upgrade on. A SIEM rule that counts admin audit rows may see a few more.

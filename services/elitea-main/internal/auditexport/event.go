@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -444,6 +445,13 @@ func FromAuditRow(row AuditRow) Event {
 			Hash:      hex.EncodeToString(row.Hash),
 		}
 	}
+	// The column is free text; the schema's enum is the closed list of
+	// audit.KnownCredentialKind. A value outside it is not exported rather
+	// than failing a receiver that validates the envelope.
+	credentialKind := row.CredentialKind
+	if !audit.KnownCredentialKind(credentialKind) {
+		credentialKind = ""
+	}
 	return Event{
 		Schema:      SchemaVersion,
 		EventID:     AuditEventID(row.ID),
@@ -461,7 +469,7 @@ func FromAuditRow(row AuditRow) Event {
 		Details: AdminAuditDetails{
 			RowID: row.ID, HTTPMethod: row.HTTPMethod, HTTPRoute: row.HTTPRoute,
 			StatusCode: row.StatusCode, DurationMS: row.DurationMS, IsError: row.IsError,
-			ActingRoles: row.ActingRoles, ElevationID: row.ElevationID, CredentialKind: row.CredentialKind,
+			ActingRoles: row.ActingRoles, ElevationID: row.ElevationID, CredentialKind: credentialKind,
 			CentralOverride: row.CentralOverride, ReasonCode: row.ReasonCode, ReasonMissing: row.ReasonMissing,
 			ElevationFlagged: row.ElevationFlagged,
 		},

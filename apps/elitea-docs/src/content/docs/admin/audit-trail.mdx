@@ -31,7 +31,9 @@ From the Users page's row menu, the activity drawer filters this same audit data
 
 ## What is recorded
 
-Every change made through the administration surface writes a row, wherever its route lives: the administration pages, budgets, project creation and deletion, secrets, configurations, and the Marketplace featuring and delisting of a listing. A request refused for lack of permission writes a row too. A change whose request fails on an unexpected error still writes its row, with status 500. A platform test checks this for every administration change, so a new one cannot ship without its row.
+A row is written for every change made on the audited areas of the platform: the administration pages, personal access tokens, SCIM, secrets, configurations, projects, budgets, the agent governance routes, and the Marketplace featuring and delisting of a listing. A request on these areas refused for lack of permission writes a row too, a read included. A change whose request fails on an unexpected error still writes its row, with status 500. A successful read writes none.
+
+A platform test drives every administration change it can list (the routes that check an administration permission, the central project-settings override, and the write paths of the role separation matrix) as an administrator, and fails when one writes no row. A new administration change mounted outside the audited areas therefore fails the build instead of going unrecorded.
 
 ## Role use on administration rows
 
