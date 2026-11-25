@@ -23,7 +23,7 @@
   session, answers `403 elevation_restricted`. A request with admin scopes is
   refused first by the scope rules, with their own codes
   (`token_scopes_elevated`, `token_scopes_sealed_session`).
-- Shared migration **0274** adds the column `centry.audit_events.elevation_flagged`
+- Shared migration **0275** adds the column `centry.audit_events.elevation_flagged`
   (boolean, nullable, outside the chain hash; existing rows stay null).
 
 **Who is affected.** No route starts an elevation yet, so on a deployment
@@ -31,7 +31,7 @@ without elevations nothing changes. A client that reads `403` codes should
 treat `elevation_restricted` as final for the elevation: the action needs a
 standing role.
 
-**What to do.** Nothing. Run the migrations as usual; 0274 is an
+**What to do.** Nothing. Run the migrations as usual; 0275 is an
 `ADD COLUMN IF NOT EXISTS` and takes no table rewrite.
 
 See [Break-glass access: what an elevation cannot do](../../apps/elitea-docs/src/content/docs/admin/break-glass.mdx).

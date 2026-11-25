@@ -1258,7 +1258,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.projectSettingsWriteForbidden(ctx, projectID, configType) {
-		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
+		apierr.WriteStatus(w, http.StatusForbidden, projectSettingsPermissionMessage)
 		return
 	}
 	// The api_key the caller sends must never reach the row. It goes to the
@@ -1495,7 +1495,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.projectSettingsWriteForbidden(ctx, projectID, storedType, requestedType) {
-		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
+		apierr.WriteStatus(w, http.StatusForbidden, projectSettingsPermissionMessage)
 		return
 	}
 	effectiveType := storedType
@@ -1812,7 +1812,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.projectSettingsWriteForbidden(ctx, projectID, storedType) {
-		apierr.WriteStatus(w, http.StatusForbidden, "this setting needs the project settings permission")
+		apierr.WriteStatus(w, http.StatusForbidden, projectSettingsPermissionMessage)
 		return
 	}
 

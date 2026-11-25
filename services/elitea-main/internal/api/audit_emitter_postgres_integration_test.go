@@ -422,10 +422,10 @@ func newAuditEmitterPool(t *testing.T) *pgxpool.Pool {
 	// sessions in the same transaction (ADR-0025 WP3), so their tables exist
 	// here as they do on every migrated deployment.
 	// 0268 adds the role-use columns the recorder writes (ADR-0059 R1.4a),
-	// and 0274 the elevation flag (R2.8a).
+	// and 0275 the elevation flag (R2.8a).
 	for _, migration := range []string{
 		"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql", "0141_native_auth.sql",
-		"0268_admin_audit_role_use.sql", "0274_admin_audit_elevation_flag.sql",
+		"0268_admin_audit_role_use.sql", "0275_admin_audit_elevation_flag.sql",
 	} {
 		file := filepath.Join("..", "..", "migrations", "shared", migration)
 		sql, err := os.ReadFile(file)

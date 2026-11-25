@@ -22,6 +22,10 @@ import (
 // person's other apps to the platform.
 const ProjectSettingsEditPermission = "models.project_settings.edit"
 
+// projectSettingsPermissionMessage is the 403 of a guarded setting write by a
+// caller the guarded-type rule refuses, on every implementation of the routes.
+const projectSettingsPermissionMessage = "this setting needs the project settings permission"
+
 // guardedProjectSettingTypes are the five guarded settings. The central
 // override's allowlist (adminaccess.GuardedSettingTypes) names the same five;
 // project_settings_central_test.go fails when the two lists differ.
@@ -34,11 +38,20 @@ var guardedProjectSettingTypes = []string{
 // projectSettingsWriteForbidden reports a write of a type that needs the
 // project settings permission by a caller who lacks it.
 func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID string, typeNames ...string) bool {
+	return projectSettingsWriteForbidden(ctx, h.permissionResolver, projectID, typeNames...)
+}
+
+// projectSettingsWriteForbidden is the guarded-type rule of every
+// implementation of the project configurations writes: the compatibility
+// Handler and the reviewed mutation route (#3024).
+func projectSettingsWriteForbidden(
+	ctx context.Context, resolver auth.PermissionResolver, projectID string, typeNames ...string,
+) bool {
 	// A request the gate admitted through the central override writes the
 	// guarded types and nothing else, whatever the gate read: the decision is
 	// made again on the types the handler is about to write.
 	if admittedCentrally(ctx) {
-		return !h.centralSettingsWrite(ctx, typeNames)
+		return !centralSettingsWrite(ctx, resolver, typeNames)
 	}
 	guarded := false
 	for _, name := range typeNames {
@@ -49,25 +62,25 @@ func (h *Handler) projectSettingsWriteForbidden(ctx context.Context, projectID s
 	if !guarded {
 		return false
 	}
-	if h.holdsProjectSettingsEdit(ctx, projectID) {
+	if holdsProjectSettingsEdit(ctx, resolver, projectID) {
 		return false
 	}
 	// The central branch (ADR-0059 R0.6b, project_settings_central.go): a
 	// holder of projects.settings.manage writes the guarded types of any
 	// project, and only those.
-	return !h.centralSettingsWrite(ctx, typeNames)
+	return !centralSettingsWrite(ctx, resolver, typeNames)
 }
 
 // holdsProjectSettingsEdit reports whether the caller holds
 // models.project_settings.edit in the project.
-func (h *Handler) holdsProjectSettingsEdit(ctx context.Context, projectID string) bool {
+func holdsProjectSettingsEdit(ctx context.Context, resolver auth.PermissionResolver, projectID string) bool {
 	permissions, ok := middleware.ResolvedProjectPermissions(ctx, auth.PermissionModeDefault, projectID)
 	if !ok {
 		user, hasUser := auth.UserFromContext(ctx)
-		if !hasUser || h.permissionResolver == nil {
+		if !hasUser || resolver == nil {
 			return false
 		}
-		resolution, err := h.permissionResolver.ResolvePermissions(ctx, user, auth.PermissionModeDefault, projectID)
+		resolution, err := resolver.ResolvePermissions(ctx, user, auth.PermissionModeDefault, projectID)
 		if err != nil {
 			return false
 		}

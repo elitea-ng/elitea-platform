@@ -19,6 +19,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 	v2adminconsole "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/adminaccess"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
+	v2configurations "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2credentialconsent "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialconsent"
 	v2credentialgrants "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialgrants"
 	v2credentialprobe "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/credentialprobe"
@@ -26,6 +27,7 @@ import (
 	v2mandateattachments "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/mandateattachments"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2safety "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/safety"
+	configurationapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/configurations"
 	safetyapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/safety"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -95,6 +97,22 @@ func ComposedRouter() (Composed, error) {
 	if err != nil {
 		return Composed{}, err
 	}
+	// The reviewed Configurations routes, which shadow the compatibility
+	// routes at the mode-less row patterns wherever cmd/elitea-main composes
+	// them (#3024): Drive reads the gate production serves there. They carry
+	// their own authentication, with this router's credential.
+	configurationAuth := apimw.AuthConfig{Validator: tokenValidator{}, PrincipalValidator: principalValidator{},
+		FormSessions: elevatedFormSessions{}}
+	configurationRead, err := v2configurations.NewCurrentConfigurationReadRoute(
+		guardedSettingRows{}, 1, configurationAuth, resolver)
+	if err != nil {
+		return Composed{}, err
+	}
+	configurationMutation, err := v2configurations.NewCurrentConfigurationMutationRoute(
+		acceptedMutations{}, guardedSettingRows{}, configurationAuth, resolver)
+	if err != nil {
+		return Composed{}, err
+	}
 	router := api.NewRouter(api.RouterConfig{
 		Pool:                   pool,
 		AppsRepo:               dbrepos.NewApplicationsRepo(pool),
@@ -147,6 +165,10 @@ func ComposedRouter() (Composed, error) {
 		// status route reports as a result. Set, the budget defaults answer
 		// with cost budgets on, as production does.
 		GatewayStatus: unreachableGateway{},
+		// Production composes these with ELITEA_CONFIGURATIONS_ENABLED (the
+		// read) and ELITEA_CONFIGURATIONS_MUTATION_ENABLED (the writes).
+		CurrentConfigurationRead:     configurationRead,
+		CurrentConfigurationMutation: configurationMutation,
 
 		// The Postgres recorder writes from a goroutine of its own, which
 		// panics on the unconnected pool.
@@ -223,6 +245,16 @@ func (c Composed) Options() (Options, error) {
 			}
 		}
 	}
+	// The central settings branch decides on the configuration type a
+	// request names (ADR-0059 R0.6b): the list's `type` filter and the
+	// create's body. A request that names none, or a credential type, is
+	// refused to every grant, so the matrix reads these routes with a guarded
+	// setting type. The row routes read the stored type: guardedSettingRows
+	// answers one for the reviewed routes, and the compatibility {mode} routes
+	// read the database this router does not have.
+	for route, variant := range CentralSettingsVariants() {
+		opts.Variants[route.String()] = append(opts.Variants[route.String()], variant)
+	}
 	// The checks the default request does not reach (ADR-0059 #2925).
 	for route, variants := range SessionAndWindowVariants() {
 		opts.Variants[route.String()] = append(opts.Variants[route.String()], variants...)
@@ -287,6 +319,66 @@ func SessionAndWindowVariants() map[Route][]Variant {
 		MaintenanceUserRoute:           {window},
 		MaintenanceAdministrationRoute: {{}, window},
 	}
+}
+
+// GuardedSettingType is the guarded project setting type the central
+// settings variants name, and the stored type of every row guardedSettingRows
+// answers.
+const GuardedSettingType = "cloud_executor"
+
+// VariantGuardedSetting names the variants of CentralSettingsVariants.
+const VariantGuardedSetting = "type=" + GuardedSettingType
+
+// CentralSettingsVariants are the variants of the configuration list and
+// create routes, with and without the {mode} segment: each names the guarded
+// setting type where the handler reads it.
+func CentralSettingsVariants() map[Route]Variant {
+	list := Variant{Name: VariantGuardedSetting, Query: "type=" + GuardedSettingType}
+	create := Variant{Name: VariantGuardedSetting,
+		Body: `{"elitea_title":"setting","type":"` + GuardedSettingType + `","data":{}}`}
+	variants := map[Route]Variant{}
+	for _, pattern := range []string{
+		"/api/v2/configurations/configurations/{projectID}",
+		"/api/v2/configurations/configurations/{mode}/{projectID}",
+	} {
+		variants[Route{Method: http.MethodGet, Pattern: pattern}] = list
+		variants[Route{Method: http.MethodPost, Pattern: pattern}] = create
+	}
+	return variants
+}
+
+// guardedSettingRows is the reader of the reviewed Configurations routes:
+// every row is a guarded setting, and every list is empty.
+type guardedSettingRows struct{}
+
+func (guardedSettingRows) List(
+	context.Context, configurationapp.CurrentConfigurationListRequest,
+) (configurationapp.CurrentConfigurationListResult, error) {
+	return configurationapp.CurrentConfigurationListResult{}, nil
+}
+
+func (guardedSettingRows) Get(_ context.Context, projectID, id int32) (configurationapp.CurrentConfiguration, error) {
+	return configurationapp.CurrentConfiguration{ID: id, ProjectID: projectID, Type: GuardedSettingType}, nil
+}
+
+// acceptedMutations is the mutator of the reviewed Configurations routes: it
+// accepts every write the route gate and the handler's rules admitted.
+type acceptedMutations struct{}
+
+func (acceptedMutations) Create(
+	_ context.Context, r configurationapp.CurrentConfigurationCreateRequest,
+) (configurationapp.CurrentConfiguration, error) {
+	return configurationapp.CurrentConfiguration{ProjectID: r.ProjectID, Type: r.Type}, nil
+}
+
+func (acceptedMutations) Update(
+	_ context.Context, r configurationapp.CurrentConfigurationUpdateRequest,
+) (configurationapp.CurrentConfiguration, error) {
+	return configurationapp.CurrentConfiguration{ID: r.ConfigurationID, ProjectID: r.ProjectID}, nil
+}
+
+func (acceptedMutations) Delete(context.Context, configurationapp.CurrentConfigurationDeleteRequest) error {
+	return nil
 }
 
 // Section is one Configuration section of the router's schema list.

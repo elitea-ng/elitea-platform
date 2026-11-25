@@ -133,7 +133,7 @@ type Event struct {
 	ReasonMissing *bool
 	// ElevationFlagged marks the row for the elevation review: an action the
 	// action table flags (or a sealed one under the sealed super_admin
-	// elevation) was done under an elevation (ADR-0059 R2.8a; shared 0274).
+	// elevation) was done under an elevation (ADR-0059 R2.8a; shared 0275).
 	ElevationFlagged bool
 }
 

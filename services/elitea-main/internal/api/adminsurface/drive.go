@@ -85,6 +85,10 @@ type Variant struct {
 	Name   string
 	Body   string
 	Params map[string]string
+	// Query is the request's query string, without the "?": what a handler
+	// reads to decide (the `type` filter of a configurations list, which the
+	// central settings branch decides on).
+	Query string
 	// OtherModes, when not nil, replaces Options.OtherModes for this variant:
 	// the grants of a gate in another mode in front of an in-handler
 	// administration check (the Marketplace moderation check sits behind
@@ -113,6 +117,13 @@ type Elevation struct {
 
 // ElevationID is the id of the elevation of an elevated variant.
 const ElevationID = "0b7c2d4e-0000-4000-8000-00000000e1e7"
+
+func (v Variant) query() string {
+	if v.Query == "" {
+		return ""
+	}
+	return "?" + v.Query
+}
 
 type maintenanceKey struct{}
 
@@ -482,7 +493,7 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	ctx, cancel := context.WithTimeout(base, d.opts.Timeout)
 	defer cancel()
 
-	req := httptest.NewRequestWithContext(ctx, route.Method, d.path(route.Pattern, variant.Params),
+	req := httptest.NewRequestWithContext(ctx, route.Method, d.path(route.Pattern, variant.Params)+variant.query(),
 		strings.NewReader(variant.Body))
 	if variant.Body != "" {
 		req.Header.Set("Content-Type", "application/json")

@@ -23,9 +23,6 @@ const (
 	reasonRuntimeRoute = "a reviewed runtime route (internal/api/production_router.go) that this command builds " +
 		"with its own Auth and its own Postgres permission resolver, so the recording resolver cannot answer it; " +
 		"it resolves the default mode only and makes no administration decision"
-	reasonShadowedConfiguration = reasonRuntimeRoute + ". It shadows the compatibility route at the same pattern, " +
-		"which Drive does see; the compatibility route's central settings branch (ADR-0059 R0.6b) is missing " +
-		"from this one (#3024)"
 	reasonSectionCache = "the cache of one administration Configuration section, dropped after a save the route " +
 		"gate admitted; nil skips the drop and changes no decision"
 	reasonMCP = "the MCP server and its governed inbound and outbound planes: tool calls decided in the default " +
@@ -92,8 +89,6 @@ var surfaceRouterUnsetFields = map[string]string{
 	"ConfigStoredResolver":          reasonConfigurationsRuntime,
 	"DelegatedAuthToolkitSettings":  reasonConfigurationsRuntime,
 	"InternalConfigurationTools":    reasonConfigurationsRuntime,
-	"CurrentConfigurationRead":      reasonShadowedConfiguration,
-	"CurrentConfigurationMutation":  reasonShadowedConfiguration,
 	"CurrentAgentCancel":            reasonRuntimeRoute,
 	"CurrentAgentStart":             reasonRuntimeRoute,
 	"CurrentAgentSteering":          reasonRuntimeRoute,

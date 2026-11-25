@@ -437,8 +437,8 @@ func TestEveryAdministrationRouteReachesTheElevationRestriction(t *testing.T) {
 			if len(administration) > 0 {
 				first = administration[0].Caller
 			}
-			t.Errorf("%s (%s): the first administration-mode resolution is %s, not the elevation restriction's",
-				entry.String(), entry.Variant, first)
+			t.Errorf("%s (%s): the first administration-mode resolution is %s, not the elevation restriction's (answer %d, calls %+v)",
+				entry.String(), entry.Variant, first, answer.Status, answer.Calls)
 			continue
 		}
 		reached++

@@ -1,0 +1,637 @@
+# The separation matrix of the write paths (ADR-0059 R0.9b, #2587).
+#
+# Generated; do not edit by hand. Regenerate against a database with
+#   UPDATE_GOLDEN=1 ELITEA_TEST_DATABASE_URL=... go test ./internal/api/ -run TestSeparationMatrixWritesMatchTheDatabase
+# and review every changed line: it is a write whose answer for a role changed.
+#
+# testdata/separation_matrix.txt pins the GATE of each route. This file pins
+# what the write itself answers, through the production router and the real
+# permission resolver, against a migrated database: the rules that decide
+# after the gate (no escalation, not yourself, the bound role's permissions in
+# the project, the configuration type of a central settings write).
+#
+# A block per write: the method, the route and the action, then one line per
+# actor. The action names what the write does and its target: "self" is the
+# actor itself, "target" a second account with no role, "member" a viewer of
+# project 2. No actor is a member of project 2 unless the action says so
+# ("self_viewer"). Each actor holds exactly one administration role: the six
+# built-in roles, and sso_settings_only, a custom role holding
+# identity.sso.settings.manage alone.
+#
+# The answers:
+#   allowed N   no authorization refusal; N is the status. The write may still
+#               be refused for another reason (400, 404, 409, 503).
+#   refused X   a 401 or 403; X is the refusal code, or the status when the
+#               refusal carries none (a route gate).
+
+POST /api/v2/admin/auth_users/{mode} set_admin_role:target:editor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/auth_users/{mode} set_admin_role:target:super_admin
+  super_admin            allowed 200
+  admin                  refused role_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/auth_users/{mode} set_admin_role:self:+super_admin
+  super_admin            allowed 200
+  admin                  refused role_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/auth_users/{mode} set_admin_role:self:none
+  super_admin            allowed 409
+  admin                  refused role_self_assignment
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/modes/administration assign:target:editor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/modes/administration assign:self:super_admin
+  super_admin            allowed 200
+  admin                  refused role_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/admin/modes/administration remove:target:editor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/admin/modes/administration remove:self:own_role
+  super_admin            allowed 409
+  admin                  refused role_self_assignment
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/permissions/{scope}/{mode} central_matrix:grant:sm_custom
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/permissions/{scope}/{mode} central_matrix:grant:sm_custom:sso_trust_name
+  super_admin            refused role_permission_reserved
+  admin                  refused role_permission_reserved
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/permissions/{scope}/{mode} central_matrix:grant:sm_custom:super_admin_name
+  super_admin            refused role_permission_reserved
+  admin                  refused role_permission_reserved
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/permissions/{scope}/{mode} central_matrix:grant:own_role
+  super_admin            refused role_set_locked
+  admin                  refused role_own_set_locked
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/permissions/{scope}/{mode} template:grant:viewer
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/roles/{scope}/{mode} create:administration
+  super_admin            allowed 201
+  admin                  allowed 201
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/roles/{scope}/{mode} create:template
+  super_admin            allowed 201
+  admin                  allowed 201
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/roles/{scope}/{mode} rename:administration:sm_from
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/admin/roles/{scope}/{mode} delete:administration:sm_gone
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/users/administration/{projectID} add:target:admin
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/users/administration/{projectID} add:self:admin
+  super_admin            allowed 200
+  admin                  refused role_self_escalation
+  llm_manager            refused 403
+  project_administrator  refused role_self_escalation
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/users/administration/{projectID} update:member:admin
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/users/administration/{projectID} update:self:admin
+  super_admin            allowed 200
+  admin                  refused role_self_escalation
+  llm_manager            refused 403
+  project_administrator  refused role_self_escalation
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/admin/users/administration/{projectID} remove:member
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/users/{mode}/{projectID} add:target:admin
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/users/{mode}/{projectID} update:member:admin
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/admin/users/{mode}/{projectID} remove:member
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/invites_bulk/administration invite:target:admin
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/invites_bulk/administration invite:self:admin
+  super_admin            allowed 200
+  admin                  refused role_self_escalation
+  llm_manager            refused 403
+  project_administrator  refused role_self_escalation
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/user_project_permissions/administration project_matrix:team:viewer
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/admin/user_project_permissions/administration project_matrix:self_viewer:viewer
+  super_admin            allowed 200
+  admin                  refused role_self_escalation
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/scim_group_bindings/administration bind:project:admin
+  super_admin            allowed 201
+  admin                  refused role_permission_not_held
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused role_permission_not_held
+
+PUT /api/v2/admin/scim_group_bindings/administration/{id} rebind:project:viewer->admin
+  super_admin            allowed 200
+  admin                  refused role_permission_not_held
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused role_permission_not_held
+
+DELETE /api/v2/admin/scim_group_bindings/administration/{id} unbind:project:viewer
+  super_admin            allowed 204
+  admin                  refused role_permission_not_held
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused role_permission_not_held
+
+POST /api/v2/admin/scim_clients/administration trust:create
+  super_admin            allowed 201
+  admin                  refused scim_client_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused scim_client_super_admin_required
+
+POST /api/v2/admin/scim_clients/administration/{id}/rotate trust:rotate
+  super_admin            allowed 200
+  admin                  refused scim_client_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused scim_client_super_admin_required
+
+PUT /api/v2/admin/identity_providers/administration/{key} trust:create
+  super_admin            allowed 200
+  admin                  refused identity_provider_trust_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_provider_trust_super_admin_required
+
+PUT /api/v2/admin/identity_providers/administration/{key} settings:rename
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      allowed 200
+
+PUT /api/v2/admin/identity_providers/administration/{key} trust:disable
+  super_admin            allowed 200
+  admin                  refused identity_provider_trust_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_provider_trust_super_admin_required
+
+PUT /api/v2/admin/identity_providers/administration/{key} trust:issuer
+  super_admin            allowed 200
+  admin                  refused identity_provider_trust_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_provider_trust_super_admin_required
+
+PUT /api/v2/admin/identity_providers/administration/{key} trust:secret
+  super_admin            allowed 200
+  admin                  refused identity_provider_trust_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_provider_trust_super_admin_required
+
+DELETE /api/v2/admin/identity_providers/administration/{key} trust:delete
+  super_admin            allowed 200
+  admin                  refused identity_provider_trust_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_provider_trust_super_admin_required
+
+POST /api/v2/admin/identity_providers/administration/{key}/rebind trust:rebind
+  super_admin            allowed 200
+  admin                  refused identity_binding_super_admin_required
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused identity_binding_super_admin_required
+
+GET /api/v2/configurations/configurations/{projectID} list:type=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configurations/{projectID} list:type=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{projectID} create:type=cloud_executor
+  super_admin            allowed 201
+  admin                  allowed 201
+  llm_manager            refused 403
+  project_administrator  allowed 201
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{projectID} create:type=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{projectID} create:type=open_ai
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{projectID} create:type=llm_model
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{projectID} create:type=jira
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configuration/{projectID}/{configID} read:stored=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/configurations/configuration/{projectID}/{configID} update:stored=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} delete:stored=cloud_executor
+  super_admin            allowed 204
+  admin                  allowed 204
+  llm_manager            refused 403
+  project_administrator  allowed 204
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configuration/{projectID}/{configID} read:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/configurations/configuration/{projectID}/{configID} update:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/configurations/configuration/{projectID}/{configID} delete:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configurations/{mode}/{projectID} list:type=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configurations/{mode}/{projectID} list:type=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{mode}/{projectID} create:type=cloud_executor
+  super_admin            allowed 201
+  admin                  allowed 201
+  llm_manager            refused 403
+  project_administrator  allowed 201
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{mode}/{projectID} create:type=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{mode}/{projectID} create:type=open_ai
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{mode}/{projectID} create:type=llm_model
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/configurations/configurations/{mode}/{projectID} create:type=jira
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} read:stored=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} update:stored=cloud_executor
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  allowed 200
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} delete:stored=cloud_executor
+  super_admin            allowed 204
+  admin                  allowed 204
+  llm_manager            refused 403
+  project_administrator  allowed 204
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} read:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} update:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} delete:stored=github
+  super_admin            refused 403
+  admin                  refused 403
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
+
+POST /api/v2/admin/permissions/{scope}/{mode} template:apply_to_projects
+  super_admin            allowed 200
+  admin                  allowed 200
+  llm_manager            refused 403
+  project_administrator  refused 403
+  security_auditor       refused 403
+  emergency_access       refused 403
+  sso_settings_only      refused 403
