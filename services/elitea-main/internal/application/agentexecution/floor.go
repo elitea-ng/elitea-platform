@@ -29,7 +29,8 @@ import (
 
 // ErrFloorAddressee refuses a message that addresses an agent that is not
 // in the conversation. The route answers 422 `addressee_not_in_conversation`.
-var ErrFloorAddressee = errors.New("an addressed agent is not in the conversation")
+// It is turntaking's, shared with the desktop Local work start.
+var ErrFloorAddressee = turntaking.ErrNotInConversation
 
 // ErrFloorTurnNotQueued refuses starting a floor turn that is no longer
 // QUEUED (a newer human message superseded it, or a failure skipped it).
@@ -194,19 +195,10 @@ func (service *CurrentApplicationStartService) planFloor(
 	for _, agent := range conversation.Agents {
 		ids = append(ids, agent.ParticipantID)
 	}
-	participant := request.TargetParticipantID
-	if len(request.AddressedTo) > 0 && !containsInt64(request.AddressedTo, participant) {
-		// The composer's sticky target is not one the person addressed:
-		// the address wins.
-		participant = 0
-	}
-	targets, err := turntaking.Route(conversation.Settings, participant, request.AddressedTo, ids)
-	switch {
-	case errors.Is(err, turntaking.ErrNoTarget):
-		return nil, ErrAgentTargetRequired
-	case errors.Is(err, turntaking.ErrNotInConversation):
-		return nil, ErrFloorAddressee
-	case err != nil:
+	// The rule the desktop Local work start uses too (turntaking.RouteMessage);
+	// its errors are ErrAgentTargetRequired and ErrFloorAddressee.
+	targets, err := turntaking.RouteMessage(conversation.Settings, request.TargetParticipantID, request.AddressedTo, ids)
+	if err != nil {
 		return nil, err
 	}
 	request.TargetParticipantID = targets[0]
@@ -260,15 +252,14 @@ func (service *CurrentApplicationStartService) adhocLead(ctx context.Context, re
 	if err != nil {
 		return 0, err
 	}
-	if len(conversation.Agents) < 2 || conversation.Settings.Policy != turntaking.PolicyLead {
+	if len(conversation.Agents) < 2 {
 		return 0, nil
 	}
+	ids := make([]int64, 0, len(conversation.Agents))
 	for _, agent := range conversation.Agents {
-		if agent.ParticipantID == conversation.Settings.Lead {
-			return agent.ParticipantID, nil
-		}
+		ids = append(ids, agent.ParticipantID)
 	}
-	return 0, nil
+	return turntaking.Lead(conversation.Settings, ids), nil
 }
 
 // leadStart is the agent start of a model-chat start that goes to the lead.
@@ -397,13 +388,4 @@ func validAddressedTo(ids []int64) bool {
 		seen[id] = true
 	}
 	return true
-}
-
-func containsInt64(ids []int64, id int64) bool {
-	for _, candidate := range ids {
-		if candidate == id {
-			return true
-		}
-	}
-	return false
 }
