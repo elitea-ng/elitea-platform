@@ -763,6 +763,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose outbound e-mail: %w", err)
 	}
+	// The access notices (ADR-0059 R2.5a, R3.15b): the
+	// main.access_notice_sender routine delivers the outbox through this
+	// composer. A mailer failure leaves a notice pending; it never reaches
+	// the elevation that wrote it.
+	if err := startAccessNoticeSender(ctx, pool, mailComposer, publicOrigin, logger); err != nil {
+		return err
+	}
 
 	// The Form document's trusted proxy CIDRs, kept for the SCIM token
 	// endpoint's caller-address resolver, which every plane builds below.

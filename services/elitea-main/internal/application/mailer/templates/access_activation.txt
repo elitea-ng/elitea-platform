@@ -1,0 +1,14 @@
+Break-glass access started - {{.ProductName}}
+
+{{.Notice.PersonName}} now holds break-glass access to {{.ProductName}}.
+{{if .Notice.NoApprover}}No approver was involved: {{if eq .Notice.Path "sealed"}}the sealed credential was used{{else}}approval is switched off{{end}}.
+{{end}}
+Person: {{.Notice.PersonName}}
+{{if .Notice.Level}}Level: {{.Notice.Level}}
+{{end}}Reason code: {{.Notice.ReasonCode}}
+{{if .Notice.Reason}}Reason: {{.Notice.Reason}}
+{{end}}{{if not .Notice.ExpiresAt.IsZero}}Expires: {{.Notice.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}}
+{{end}}
+{{.ActionURL}}
+{{if .SupportEmail}}
+Need help? {{.SupportEmail}}{{end}}
