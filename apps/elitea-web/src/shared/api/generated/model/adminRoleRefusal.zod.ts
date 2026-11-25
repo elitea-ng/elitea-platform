@@ -49,7 +49,7 @@ export const AdminRoleRefusal = zod
       .string()
       .optional()
       .describe(
-        "`role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation`, `role_caller_unresolved`, `role_self_assignment` or `role_set_locked` (403), or `permission_deprecated` (400: the save adds a legacy permission, `runtime.plugins` or `configuration.governance`, to a role that does not hold it; ADR-0059 R0.14a). Absent on a 403 of the route gate.\n",
+        "`role_permission_not_held`, `role_own_set_locked`, `role_permission_reserved`, `role_super_admin_required`, `role_self_escalation`, `role_caller_unresolved`, `role_self_assignment` or `role_set_locked` (403), or `permission_deprecated` (400: the save adds a legacy permission, `runtime.plugins` or `configuration.governance`, to a role that does not hold it; ADR-0059 R0.14a). `reserved_account` (403, ADR-0059 R2.6b): the target is the reserved break-glass account `break-glass@centry.user`, which holds no role, belongs to no project and creates no token. `elevation_restricted` (403, ADR-0059 R2.8a): the caller's active elevation may not do the action, which needs the permission by a standing role, or only a sealed break-glass elevation at the super_admin level. Absent on a 403 of the route gate.\n",
       ),
     role: zod
       .string()

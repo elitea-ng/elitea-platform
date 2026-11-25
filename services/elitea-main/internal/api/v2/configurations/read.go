@@ -49,15 +49,17 @@ func NewCurrentConfigurationReadRoute(
 	publicProjectID int32,
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
+	tracing TracingRule,
 ) (*CurrentConfigurationReadRoute, error) {
 	if reader == nil || publicProjectID <= 0 ||
-		!authConfig.CredentialPlaneComposed() || permissions == nil {
+		!authConfig.CredentialPlaneComposed() || permissions == nil || !tracing.composed() {
 		return nil, ErrInvalidCurrentConfigurationReadRoute
 	}
 
 	handler := &currentConfigurationReadHandler{
 		reader:          reader,
 		publicProjectID: publicProjectID,
+		tracing:         tracing,
 	}
 
 	// The same gate as the compatibility routes at these patterns, central
@@ -94,6 +96,10 @@ func (route *CurrentConfigurationReadRoute) ServeHTTP(w http.ResponseWriter, r *
 type currentConfigurationReadHandler struct {
 	reader          CurrentConfigurationReader
 	publicProjectID int32
+	// tracing hides a tracing row from a caller who does not manage tracing,
+	// with the answer an absent row gets, as the compatibility read by id
+	// does (#3032).
+	tracing TracingRule
 }
 
 func (h *currentConfigurationReadHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +160,10 @@ func (h *currentConfigurationReadHandler) get(w http.ResponseWriter, r *http.Req
 		// The same answer an absent row gets. Withholding the row from the
 		// list (#922) while serving it by id would leave the id itself as the
 		// whole access control, and ids here are small consecutive integers.
+		writeCurrentConfigurationServiceErrorContext(r.Context(), w, configurationapp.ErrCurrentConfigurationNotFound)
+		return
+	}
+	if h.tracing.forbidden(r.Context(), int64(projectID), configuration.Type) {
 		writeCurrentConfigurationServiceErrorContext(r.Context(), w, configurationapp.ErrCurrentConfigurationNotFound)
 		return
 	}

@@ -4,7 +4,7 @@
  * folders, date groups) and fills them through the slice's hooks — the grouped
  * listing (`useQueryFoldersList`, so one `['folder', 'list', …]` cache entry
  * serves both lists), the optimistic pin (`usePinConversation`), the per-bucket
- * pages (`mergeLoadMorePage`), the folders (`useCreateFolder`,
+ * pages (`appendLoadMorePage`, re-read from the top when stale), the folders (`useCreateFolder`,
  * `useMoveToFolderConversation`, see `useConversationRailFolders`), the rest
  * of the row and folder menus (`useConversationRailExtras`) — plus rename and
  * delete through `entities/conversation`'s API.
@@ -29,7 +29,7 @@ import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { LOCAL_WORK_SOURCE } from '@/shared/lib/localWork';
 
-import { mergeLoadMorePage, type LoadMorePage } from '../helpers/loadMorePage';
+import { appendLoadMorePage, mergeLoadMorePage, nextPageOffset, resyncBucket, resyncLimit, type LoadMoreBucket, type LoadMorePage, type MergedBucket } from '../helpers/loadMorePage';
 import { conversationListErrorMessage } from '../errorMessage';
 import type { DateGroupListItem, FolderListItem } from './conversationListState.types';
 import { useArchiveConversation } from './useArchiveConversation.hooks';
@@ -109,12 +109,25 @@ function useLoadMore(projectId: string | undefined, filter: ListingFilter, conta
   const { dateGroups, folders, pinned, setDateGroups, setFolders } = containers;
   const loading = useRef(new Set<string>());
   const { query, source } = filter;
+  /**
+   * Reads the page at the bucket's offset and merges it. A stale page (rows
+   * the bucket holds left it elsewhere, #3030) re-reads the bucket from the
+   * top instead, so the rows behind them are reached rather than skipped.
+   */
   const load = useCallback(
-    async (key: string, read: () => Promise<LoadMorePage>, apply: (page: LoadMorePage, pinnedIds: ReadonlySet<string>) => void) => {
+    async (key: string, bucket: LoadMoreBucket, read: (offset: number, limit: number) => Promise<LoadMorePage>, update: (change: (bucket: LoadMoreBucket) => MergedBucket) => void) => {
       if (loading.current.has(key)) return;
       loading.current.add(key);
       try {
-        apply(await read(), new Set(pinned.map((conversation) => conversation.id)));
+        const pinnedIds = new Set(pinned.map((conversation) => conversation.id));
+        const page = await read(nextPageOffset(bucket), PAGE_SIZE);
+        if (!mergeLoadMorePage(bucket, page, pinnedIds).refetch) {
+          update((current) => appendLoadMorePage(current, page, pinnedIds));
+          return;
+        }
+        const limit = resyncLimit(bucket, PAGE_SIZE);
+        const top = await read(0, limit);
+        update((current) => resyncBucket(current, top, pinnedIds, limit));
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
       } finally {
@@ -127,9 +140,11 @@ function useLoadMore(projectId: string | undefined, filter: ListingFilter, conta
     (groupName: string) => {
       const group = dateGroups.find((candidate) => candidate.name === groupName);
       if (projectId === undefined || group === undefined || !hasMore(group)) return;
-      const offset = group.offset ?? group.conversations.length;
-      void load(`group:${groupName}`, () => folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit: PAGE_SIZE, offset, ...pageFilter(query, source) }), (page, pinnedIds) =>
-        setDateGroups((prev) => prev.map((g) => (g.name === groupName ? { ...g, ...mergeLoadMorePage(g, page, pinnedIds) } : g))),
+      void load(
+        `group:${groupName}`,
+        group,
+        (offset, limit) => folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit, offset, ...pageFilter(query, source) }),
+        (change) => setDateGroups((prev) => prev.map((g) => (g.name === groupName ? { ...g, ...change(g) } : g))),
       );
     },
     [dateGroups, load, projectId, query, setDateGroups, source],
@@ -138,9 +153,11 @@ function useLoadMore(projectId: string | undefined, filter: ListingFilter, conta
     (folderId: string) => {
       const folder = folders.find((candidate) => candidate.id === folderId);
       if (projectId === undefined || folder === undefined || !hasMore(folder)) return;
-      const offset = folder.offset ?? folder.conversations.length;
-      void load(`folder:${folderId}`, () => folderApi.conversationsByFolder({ projectId, folderId, limit: PAGE_SIZE, offset, ...pageFilter(query, source) }), (page, pinnedIds) =>
-        setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, ...mergeLoadMorePage(f, page, pinnedIds) } : f))),
+      void load(
+        `folder:${folderId}`,
+        folder,
+        (offset, limit) => folderApi.conversationsByFolder({ projectId, folderId, limit, offset, ...pageFilter(query, source) }),
+        (change) => setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, ...change(f) } : f))),
       );
     },
     [folders, load, projectId, query, setFolders, source],

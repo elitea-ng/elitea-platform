@@ -53,20 +53,24 @@ type CurrentConfigurationMutationRoute struct {
 
 // reader reads the stored type of the row an update or a delete reaches: the
 // route gate's central branch and the guarded-type rule decide on it, as they
-// do on the compatibility routes this route shadows (#3024).
+// do on the compatibility routes this route shadows (#3024). tracing is the
+// compatibility routes' tracing rule, on the body type of a create and the
+// stored type of an update or a delete (#3032).
 func NewCurrentConfigurationMutationRoute(
 	mutator CurrentConfigurationMutator,
 	reader CurrentConfigurationReader,
 	authConfig apimw.AuthConfig,
 	permissions auth.PermissionResolver,
+	tracing TracingRule,
 ) (*CurrentConfigurationMutationRoute, error) {
-	if mutator == nil || reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil {
+	if mutator == nil || reader == nil || !authConfig.CredentialPlaneComposed() || permissions == nil ||
+		!tracing.composed() {
 		return nil, ErrInvalidCurrentConfigurationMutationRoute
 	}
 
 	override := currentSettingsOverride(reader, permissions)
 	handler := &currentConfigurationMutationHandler{
-		mutator: mutator, permissions: permissions, storedType: currentStoredType(reader),
+		mutator: mutator, permissions: permissions, storedType: currentStoredType(reader), tracing: tracing,
 	}
 	post := currentConfigurationMutationEndpoint(
 		handler.create,
@@ -120,6 +124,15 @@ func currentConfigurationMutationEndpoint(
 func (h *currentConfigurationMutationHandler) settingsWriteForbidden(
 	w http.ResponseWriter, r *http.Request, projectID int32, typeNames ...string,
 ) bool {
+	// The tracing rule before the guarded-type rule, as on the compatibility
+	// routes, so a caller who fails both rules gets the same 403 body from
+	// either route (#3032). Body validation runs before both on each route,
+	// with each route's own validator, so a malformed body may answer 400
+	// differently.
+	if h.tracing.forbidden(r.Context(), int64(projectID), typeNames...) {
+		writeCurrentConfigurationMutationError(w, http.StatusForbidden, tracingConfigurationsForbiddenMessage, "type")
+		return true
+	}
 	if !projectSettingsWriteForbidden(r.Context(), h.permissions, strconv.FormatInt(int64(projectID), 10), typeNames...) {
 		return false
 	}
@@ -156,6 +169,7 @@ type currentConfigurationMutationHandler struct {
 	mutator     CurrentConfigurationMutator
 	permissions auth.PermissionResolver
 	storedType  func(*http.Request) (string, error)
+	tracing     TracingRule
 }
 
 func (h *currentConfigurationMutationHandler) create(w http.ResponseWriter, r *http.Request) {

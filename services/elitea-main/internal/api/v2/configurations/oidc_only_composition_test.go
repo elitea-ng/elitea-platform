@@ -51,7 +51,7 @@ func TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment(t *testing.T) {
 		},
 		"read": func() error {
 			_, err := handler.NewCurrentConfigurationReadRoute(
-				&currentConfigurationReaderStub{}, 1, oidcOnly, permissions,
+				&currentConfigurationReaderStub{}, 1, oidcOnly, permissions, testTracingRule(t, true),
 			)
 			return err
 		},
@@ -76,6 +76,7 @@ func TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment(t *testing.T) {
 		"mutation": func() error {
 			_, err := handler.NewCurrentConfigurationMutationRoute(
 				&currentConfigurationMutatorStub{}, currentMutationReader{}, oidcOnly, permissions,
+				testTracingRule(t, true),
 			)
 			return err
 		},

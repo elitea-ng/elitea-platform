@@ -109,19 +109,26 @@ func TestCurrentConfigurationMutationRouteBindsExactPathsPermissionsAndDependenc
 		reader      handler.CurrentConfigurationReader
 		authConfig  apimw.AuthConfig
 		permissions auth.PermissionResolver
+		noTracing   bool
 	}{
 		"missing mutator":      {reader: reader, authConfig: authConfig, permissions: permissions},
 		"missing reader":       {mutator: mutator, authConfig: authConfig, permissions: permissions},
 		"missing principal":    {mutator: mutator, reader: reader, authConfig: apimw.AuthConfig{FormSessions: authtest.FormSessions{}}, permissions: permissions},
 		"no credential reader": {mutator: mutator, reader: reader, authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions},
 		"missing permissions":  {mutator: mutator, reader: reader, authConfig: authConfig},
+		"missing tracing rule": {mutator: mutator, reader: reader, authConfig: authConfig, permissions: permissions, noTracing: true},
 	} {
 		t.Run(name, func(t *testing.T) {
+			tracing := testTracingRule(t, true)
+			if test.noTracing {
+				tracing = handler.TracingRule{}
+			}
 			if _, err := handler.NewCurrentConfigurationMutationRoute(
 				test.mutator,
 				test.reader,
 				test.authConfig,
 				test.permissions,
+				tracing,
 			); !errors.Is(err, handler.ErrInvalidCurrentConfigurationMutationRoute) {
 				t.Fatalf("error=%v, want %v", err, handler.ErrInvalidCurrentConfigurationMutationRoute)
 			}
@@ -485,6 +492,7 @@ func newCurrentConfigurationMutationRoute(
 		currentMutationReader{},
 		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
+		testTracingRule(t, true),
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -56,7 +56,8 @@ func centralAuth() apimw.AuthConfig {
 
 func centralMutationRoute(t *testing.T, g grants, mutator handler.CurrentConfigurationMutator) http.Handler {
 	t.Helper()
-	route, err := handler.NewCurrentConfigurationMutationRoute(mutator, centralRows, centralAuth(), g.resolver())
+	route, err := handler.NewCurrentConfigurationMutationRoute(mutator, centralRows, centralAuth(), g.resolver(),
+		testTracingRule(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,8 @@ func centralMutationRoute(t *testing.T, g grants, mutator handler.CurrentConfigu
 
 func centralReadRoute(t *testing.T, g grants) http.Handler {
 	t.Helper()
-	route, err := handler.NewCurrentConfigurationReadRoute(centralRows, 1, centralAuth(), g.resolver())
+	route, err := handler.NewCurrentConfigurationReadRoute(centralRows, 1, centralAuth(), g.resolver(),
+		testTracingRule(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +235,7 @@ func TestCentralSettingsReadsSeeUnsharedGuardedRows(t *testing.T) {
 	viewerSeen := new(int32)
 	rows := authoredRows{listViewer: &viewerSeen}
 	route, err := handler.NewCurrentConfigurationReadRoute(rows, 1, centralAuth(),
-		grants{central: []string{adminaccess.ProjectsSettingsManage}}.resolver())
+		grants{central: []string{adminaccess.ProjectsSettingsManage}}.resolver(), testTracingRule(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}

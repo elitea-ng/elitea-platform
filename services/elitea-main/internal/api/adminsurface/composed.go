@@ -103,13 +103,23 @@ func ComposedRouter() (Composed, error) {
 	// their own authentication, with this router's credential.
 	configurationAuth := apimw.AuthConfig{Validator: tokenValidator{}, PrincipalValidator: principalValidator{},
 		FormSessions: elevatedFormSessions{}}
+	// The tracing rule over the same refused pool the compatibility handler
+	// reads it through, so both fail closed alike (#3032).
+	catalog, err := configurationapp.LoadPinnedCurrentAvailableCatalog()
+	if err != nil {
+		return Composed{}, err
+	}
+	configurationTracing, err := v2configurations.NewTracingRule(catalog, v2configurations.NewPostgresTracingAccess(pool))
+	if err != nil {
+		return Composed{}, err
+	}
 	configurationRead, err := v2configurations.NewCurrentConfigurationReadRoute(
-		guardedSettingRows{}, 1, configurationAuth, resolver)
+		guardedSettingRows{}, 1, configurationAuth, resolver, configurationTracing)
 	if err != nil {
 		return Composed{}, err
 	}
 	configurationMutation, err := v2configurations.NewCurrentConfigurationMutationRoute(
-		acceptedMutations{}, guardedSettingRows{}, configurationAuth, resolver)
+		acceptedMutations{}, guardedSettingRows{}, configurationAuth, resolver, configurationTracing)
 	if err != nil {
 		return Composed{}, err
 	}

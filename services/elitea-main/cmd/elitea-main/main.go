@@ -1401,6 +1401,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var toolkitSettingsValidator v2toolkits.ToolkitSettingsValidator
 	var delegatedAuthToolkitSettings *toolkitexecutionapp.CurrentDelegatedAuthToolkitSettings
 	var currentConfigurationRead http.Handler
+	var currentConfigurationTracing configurationapi.TracingRule
 	var currentConfigurationAvailable http.Handler
 	var currentConfigurationTypes http.Handler
 	var currentConfigurationMutation http.Handler
@@ -1496,11 +1497,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("compose current Configurations available route: %w", err)
 		}
+		// The compatibility routes' tracing rule, over the same pinned
+		// catalogue and the same tracing access query (#3032): the reviewed
+		// read by id and the reviewed writes shadow them.
+		currentConfigurationTracing, err = configurationapi.NewTracingRule(
+			currentConfigurationsRoot.AvailableCatalog(),
+			configurationapi.NewPostgresTracingAccess(pool),
+		)
+		if err != nil {
+			return fmt.Errorf("compose current Configurations tracing rule: %w", err)
+		}
 		currentConfigurationRead, err = configurationapi.NewCurrentConfigurationReadRoute(
 			currentConfigurationsRoot.Reader(),
 			currentConfigurationsConfig.PublicProjectID,
 			currentAuth,
 			currentPermissions,
+			currentConfigurationTracing,
 		)
 		if err != nil {
 			return fmt.Errorf("compose current Configurations read routes: %w", err)
@@ -2401,6 +2413,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 				currentConfigurationsRoot.Reader(),
 				apiGroupAuth,
 				legacyrbac.NewPostgresResolver(pool),
+				currentConfigurationTracing,
 			)
 			if mutationErr != nil {
 				return fmt.Errorf("compose current Configurations mutation routes: %w", mutationErr)
