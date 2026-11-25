@@ -14,10 +14,9 @@
  * of `useMutation` itself. A call is wrapped when it is the argument of a
  * `.guard(` call: `access.guard(useSaveProjectBudget())`.
  *
- * The pages not converted yet are a checked-in allowlist. It can only shrink:
- * a page that has an unwrapped mutation and is not on the list fails, and a
- * page on the list that no longer has one fails too, so the list is cut in
- * the change that converts the page (R3.4b, issue 2613, empties it).
+ * Every admin page is converted (R3.4b, issue 2613), so there is no
+ * allowlist: any unwrapped mutation fails. The one exception is a short list
+ * of mutation hooks that READ (`READ_MUTATIONS`).
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -30,15 +29,6 @@ const API_DIR = join(ADMIN_DIR, 'api');
 const GENERATED_DIR = fileURLToPath(new URL('../../../shared/api/generated', import.meta.url));
 
 /**
- * The admin pages with a mutation outside the guard, relative to
- * `src/pages/admin`. Remove a line when its page is converted; never add one.
- */
-const NOT_CONVERTED: readonly string[] = [
-  'useAdminBrandingPage.ts',
-  'useBrandingPackage.ts',
-];
-
-/**
  * Mutation hooks that READ: a GET the API module carries as a mutation so
  * its result never enters the query cache. They work at the read level, so
  * they are not guarded. Each entry says what it reads; never add a write.
@@ -46,6 +36,8 @@ const NOT_CONVERTED: readonly string[] = [
 const READ_MUTATIONS: ReadonlySet<string> = new Set([
   // GET of one global secret's plaintext, gated on configuration.secrets.secret.view.
   'useRevealAdminSecret',
+  // GET of the branding package, the browser's save-as.
+  'useDownloadBrandingPackage',
 ]);
 
 const SOURCE_RE = /\.(ts|tsx)$/;
@@ -223,23 +215,12 @@ describe('the mutation guard', () => {
 describe('admin pages run their mutations through the read-only guard', () => {
   const findings = pageFindings(mutationHooks(apiSources()));
 
-  it('no page outside the allowlist calls a mutation hook outside guard', () => {
-    const offending = [...findings.keys()].filter((path) => !NOT_CONVERTED.includes(path));
-    expect(offending).toEqual([]);
+  it('no page calls a mutation hook outside guard', () => {
+    expect(Object.fromEntries(findings)).toEqual({});
   });
 
-  it('every allowlisted page still has an unwrapped mutation, so the list only shrinks', () => {
-    const converted = NOT_CONVERTED.filter((path) => !findings.has(path));
-    expect(converted).toEqual([]);
-  });
-
-  it('keeps the allowlist sorted and free of duplicates', () => {
-    expect([...NOT_CONVERTED].sort()).toEqual(NOT_CONVERTED);
-    expect(new Set(NOT_CONVERTED).size).toBe(NOT_CONVERTED.length);
-  });
-
-  it('Budgets, the first converted page, is not on the list', () => {
-    expect(NOT_CONVERTED.some((path) => /budget/i.test(path))).toBe(false);
-    expect(findings.has('useAdminBudgetsPage.ts')).toBe(false);
+  it('names only real mutation hooks as reads, so a stale entry cannot linger', () => {
+    const hooks = mutationHooks(apiSources());
+    expect([...READ_MUTATIONS].filter((name) => !hooks.has(name))).toEqual([]);
   });
 });

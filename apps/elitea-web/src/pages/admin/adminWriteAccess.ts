@@ -135,8 +135,9 @@ export interface AdminWriteControlState {
 }
 
 /**
- * The state of one mutation control. Outside an `AdminWritable` (a page not
- * converted yet, story R3.4b) the control is enabled, as it was before.
+ * The state of one mutation control. Outside an `AdminWritable` (a component
+ * rendered by no admin page, such as a unit test of the control alone) the
+ * control is enabled; the server still decides.
  */
 export function useAdminWriteControl(): AdminWriteControlState {
   const scope = useContext(AdminWriteScopeContext);

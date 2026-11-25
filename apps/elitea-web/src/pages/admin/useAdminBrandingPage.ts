@@ -39,6 +39,8 @@ import {
   useUploadBrandingAsset,
   type BrandingAssetKind,
 } from './api/adminBrandingApi';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { useBrandingDirtyStore } from './brandingDirty.store';
 import {
   applyDraftToPack,
@@ -100,6 +102,8 @@ export interface AdminBrandingPageState {
    */
   readonly clearsSchemeTokens: boolean;
   readonly isSaving: boolean;
+  /** View-only mode (R3.4b, issue 2613): the Branding item is read for this caller. */
+  readonly readOnly: boolean;
   readonly fieldError: BrandingFieldError | undefined;
   readonly onFieldChange: <K extends BrandingScalarKey>(key: K, value: BrandingValues[K]) => void;
   readonly onFontFacesChange: (faces: readonly BrandingFontFace[]) => void;
@@ -139,9 +143,10 @@ function writeUploadedPath(
 
 export function useAdminBrandingPage(): AdminBrandingPageState {
   const query = useBrandingSettings();
-  const save = useSaveBrandingSettings();
-  const reset = useResetBrandingSettings();
-  const upload = useUploadBrandingAsset();
+  const access = useAdminWritable(ADMIN_ITEM.branding);
+  const save = access.guard(useSaveBrandingSettings());
+  const reset = access.guard(useResetBrandingSettings());
+  const upload = access.guard(useUploadBrandingAsset());
 
   const [draft, setDraft] = useState<Partial<BrandingValues>>({});
   const [toast, setToast] = useState<BrandingToast | undefined>(undefined);
@@ -313,6 +318,7 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
     isDirty,
     clearsSchemeTokens,
     isSaving: save.isPending || reset.isPending,
+    readOnly: !access.writable,
     fieldError,
     onFieldChange,
     onFontFacesChange,
