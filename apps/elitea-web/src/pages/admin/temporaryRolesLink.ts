@@ -19,9 +19,14 @@
 import { useGetAdminConsoleItem } from '@/shared/api/generated/admin/admin';
 import type { AdminConsoleGrantingRole, AdminConsoleRole } from '@/shared/api/generated/model';
 
-import type { AdminItemAccess } from './adminWriteAccess';
 
 /** The console item of the Roles page. */
+/**
+ * The level the derivation can answer: a subset of `AdminItemAccess`, kept
+ * local so this module does not import `./adminWriteAccess`, which imports it.
+ */
+export type TemporaryRolesLevel = 'read' | 'write';
+
 export const ROLES_ITEM_ID = 'access';
 
 /**
@@ -40,7 +45,7 @@ function roleKey(role: { readonly name: string; readonly built_in: boolean }): s
 export function temporaryRolesLevel(
   callerRoles: readonly AdminConsoleRole[],
   granting: readonly AdminConsoleGrantingRole[],
-): AdminItemAccess | undefined {
+): TemporaryRolesLevel | undefined {
   const mine = new Set(callerRoles.map((role) => roleKey(role)));
   const levels = granting.filter((role) => mine.has(roleKey(role))).map((role) => role.level);
   if (levels.includes('write')) return 'write';
@@ -75,7 +80,7 @@ export function useTemporaryRolesLink(callerRoles: readonly AdminConsoleRole[] |
 export function useTemporaryRolesAccess(
   callerRoles: readonly AdminConsoleRole[] | undefined,
   enabled: boolean,
-): AdminItemAccess | undefined {
+): TemporaryRolesLevel | undefined {
   const granting = useGrantingRoles(callerRoles, enabled);
   if (callerRoles === undefined || granting === undefined) return undefined;
   return temporaryRolesLevel(callerRoles, granting);
