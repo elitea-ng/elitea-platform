@@ -57,16 +57,13 @@
  *
  * ## Authorisation
  *
- * `window.admin_ui_config.permissions` is presentation state and never a gate —
- * see `./adminUiConfig`. It does now carry the caller's REAL
- * administration-mode permissions (the handler injecting it used to write a
- * fixed 37-permission list for every session), which is what makes hiding the
- * create and delete controls per operator meaningful rather than decorative.
- * Meaningful, still not load-bearing. The listing is gated server-side on
+ * The page is under the read-only wrapper (R3.4b, issue 2613): at the `read`
+ * level of the projects console item it shows the "View only" notice, every
+ * write control is disabled, and every write goes through the guard. That is
+ * presentation, never the gate. The listing is gated server-side on
  * `projects.projects.projects.view` and every write on its own permission,
- * resolved from `auth_core__user_role` per request. Projects are a tenancy
- * boundary: hiding a control here changes what an operator SEES, and a crafted
- * request is still refused by the server.
+ * resolved from `auth_core__user_role` per request; a crafted request is still
+ * refused by the server.
  */
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -91,11 +88,24 @@ import { AdminProjectDeleteDialog } from './AdminProjectDeleteDialog';
 import { AdminProjectsTable } from './AdminProjectsTable';
 import { ProjectActivityDrawer } from './ProjectActivityDrawer';
 import { ProjectMemberDialog } from './ProjectMemberDialog';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import { ADMIN_PROJECTS_PAGE_SIZE, useAdminProjectsPage } from './useAdminProjectsPage';
 
-
+/** The page under the read-only wrapper (R3.4b, issue 2613). */
 export function AdminProjects() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.projects}>
+      <ProjectsPage />
+    </AdminWritable>
+  );
+}
+
+function ProjectsPage() {
   const state = useAdminProjectsPage();
+  const createControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectCreate);
+  const deleteControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectDelete);
 
   const { total, page, provisioning } = state;
   const selectedCount = provisioning.selectedProjects.length;
@@ -148,11 +158,9 @@ export function AdminProjects() {
           </Box>
 
           {/*
-            Create and delete. Absent — not disabled — for an operator whose
-            resolved permissions do not carry them, which is the convention the
-            rest of this page already follows for the suspend and member
-            controls: "this user may not" and "this deployment cannot" render
-            identically, so the two can never disagree.
+            Create and delete. Disabled, not hidden, at the `read` level of
+            the projects item (R3.4b, issue 2613): the operator sees what a
+            role with `write` can do here.
 
             Delete is additionally disabled while nothing is selected. That is a
             different kind of unavailable and it reads as one: the tooltip says
@@ -164,6 +172,8 @@ export function AdminProjects() {
               color="primary"
               size="small"
               startIcon={<AddIcon fontSize="small" />}
+              disabled={createControl.disabled}
+              title={createControl.reason}
               onClick={provisioning.onOpenCreate}
               // flexShrink/nowrap from #587: every child of this row used to be
               // shrinkable, so a narrow viewport took the width out of the
@@ -186,7 +196,7 @@ export function AdminProjects() {
                 <IconButton
                   aria-label={deleteLabel}
                   color="error"
-                  disabled={selectedCount === 0}
+                  disabled={deleteControl.disabled || selectedCount === 0}
                   onClick={provisioning.onOpenDelete}
                   sx={{ flexShrink: 0 }}
                 >
@@ -216,6 +226,8 @@ export function AdminProjects() {
           </Tooltip>
         </Box>
       </Box>
+
+      <AdminViewOnlyNotice />
 
       <Tabs value={state.activeTab} onChange={state.onTabChange} sx={{ minHeight: '2.5rem' }}>
         <Tab

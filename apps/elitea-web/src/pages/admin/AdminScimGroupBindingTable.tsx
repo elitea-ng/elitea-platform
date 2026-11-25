@@ -27,6 +27,7 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { useAdminWriteControl } from "./adminWriteAccess";
 import {
   SCIM_GROUP_BINDING_PAGE_SIZE,
   type AdminScimGroupBinding,
@@ -101,6 +102,7 @@ export function AdminScimGroupBindingTable({
   onRemove,
   onOffset,
 }: AdminScimGroupBindingTableProps) {
+  const viewOnly = useAdminWriteControl().disabled;
   if (bindings.length === 0) return null;
   return (
     <>
@@ -143,6 +145,7 @@ export function AdminScimGroupBindingTable({
                 <Button
             variant="elitea" color="tertiary"
                   size="small"
+                  disabled={viewOnly}
                   onClick={() => {
                     onEdit(binding);
                   }}
@@ -153,7 +156,8 @@ export function AdminScimGroupBindingTable({
                 <Button
             variant="elitea" color="alarm"
                   size="small"
-                                    onClick={() => {
+                  disabled={viewOnly}
+                  onClick={() => {
                     onRemove(binding);
                   }}
                   sx={{ textTransform: "none" }}

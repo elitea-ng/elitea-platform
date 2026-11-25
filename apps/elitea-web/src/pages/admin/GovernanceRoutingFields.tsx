@@ -21,6 +21,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { useValidateCel } from './api/adminGovernanceApi';
 import {
   targetWeightSum,
@@ -38,7 +40,10 @@ export function RoutingFields({
   readonly draft: GovernanceDraft;
   readonly onChange: (patch: Partial<GovernanceDraft>) => void;
 }) {
-  const validate = useValidateCel();
+  // Validation writes nothing (the server gates it on llm.policy.view), but
+  // this form is reached only from New entry and Edit, both disabled at read,
+  // so the guard never refuses a check a reader could run.
+  const validate = useAdminWritable(ADMIN_ITEM.llmGovernance).guard(useValidateCel());
   const sum = targetWeightSum(draft.targets);
   const sumIsOne = Math.abs(sum - 1) <= WEIGHT_EPSILON;
 

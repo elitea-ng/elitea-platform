@@ -58,13 +58,25 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { GovernanceDialog } from './GovernanceDialog';
 import { GovernanceGuardrailPresetDialog } from './GovernanceGuardrailPresetDialog';
 import { GovernanceTable } from './GovernanceTable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { useGatewayGovernancePage } from './useGatewayGovernancePage';
 
 export function AdminGatewayGovernance() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.llmGovernance}>
+      <GatewayGovernancePage />
+    </AdminWritable>
+  );
+}
+
+function GatewayGovernancePage() {
   const state = useGatewayGovernancePage();
+  const writeControl = useAdminWriteControl();
   const [presetOpen, setPresetOpen] = useState(false);
 
   return (
@@ -86,6 +98,8 @@ export function AdminGatewayGovernance() {
             variant="outlined"
             size="small"
             startIcon={<ShieldOutlinedIcon />}
+            disabled={writeControl.disabled}
+            title={writeControl.reason}
             onClick={() => setPresetOpen(true)}
             data-testid="governance-guardrail-preset"
           >
@@ -95,6 +109,8 @@ export function AdminGatewayGovernance() {
             variant="elitea" color="primary"
             size="small"
             startIcon={<AddIcon />}
+            disabled={writeControl.disabled}
+            title={writeControl.reason}
             onClick={state.onCreate}
             data-testid="governance-create"
           >
@@ -102,6 +118,8 @@ export function AdminGatewayGovernance() {
           </Button>
         </Box>
       </Box>
+
+      <AdminViewOnlyNotice />
 
       <Typography variant="bodySmall" color="text.secondary">
         {t(

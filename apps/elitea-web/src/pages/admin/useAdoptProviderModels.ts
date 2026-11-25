@@ -14,6 +14,8 @@ import { t } from '@/shared/i18n';
 
 import type { AdoptFailure } from './LlmProviderAdoptModelsParts';
 import { adoptedModelIDs } from './LlmProviderAdoptModelsParts';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminPlatformModels,
@@ -65,7 +67,8 @@ export function useAdoptProviderModels(
   const open = provider !== undefined;
   const listing = useAdminLlmProviderModels(provider?.id);
   const catalogue = useAdminPlatformModels();
-  const createModel = useCreatePlatformModel();
+  // The dialog opens only from an enabled Adopt; the guard is the belt.
+  const createModel = useAdminWritable(ADMIN_ITEM.providersModels).guard(useCreatePlatformModel());
 
   const [selected, setSelected] = useState<readonly string[]>(NO_IDS);
   const [kind, setKind] = useState(FALLBACK_MODEL_TYPES[0] ?? '');

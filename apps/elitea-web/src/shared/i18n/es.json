@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "Para solicitar uno de estos roles, contacte con su soporte de TI:",
   "pages.admin.itemDenied.askFallback": "Para solicitar uno de estos roles, contacte con las personas que administran esta implementación.",
   "pages.admin.viewOnly.controlReason": "Solo lectura: sus roles pueden ver esta página, pero no cambiarla.",
+  "pages.admin.viewOnly.actionReason": "Sus roles pueden cambiar esta página, pero no con esta acción.",
   "pages.admin.viewOnly.noRole": "Puede ver esta página, pero no cambiarla. Ningún rol de esta implementación puede cambiarla.",
   "pages.admin.viewOnly.roles": "Puede ver esta página, pero no cambiarla. Estos roles pueden cambiarla: {{roles}}.",
   "pages.admin.viewOnly.title": "Solo lectura",

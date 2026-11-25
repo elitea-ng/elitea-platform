@@ -17,7 +17,9 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
 import type { AdminUserRowActions } from './AdminUsersTable';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { adminUiShowsControlFor } from './adminUiConfig';
+import { useAdminWritable } from './adminWriteAccess';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminUsersCsv } from './adminUsersCsv';
 import { useAdministrationRoles, type AdministrationRole } from './api/adminRoleOptionsApi';
@@ -37,8 +39,6 @@ import {
 const USER_TYPES: readonly AdminUserType[] = ['platform', 'system'];
 export const ADMIN_USERS_PAGE_SIZE = 20;
 
-/** The permission the admin-panel config advertises for this surface's writes. */
-const PERMISSION_USERS = 'admin.auth.users';
 
 /** No roles while the roles API has not answered (the picker then lists what each person holds). */
 const NO_ROLES: readonly AdministrationRole[] = [];
@@ -164,8 +164,10 @@ export function useAdminUsersPage(): AdminUsersPageState {
   const isSystemTab = activeTab === 1;
   const userType = USER_TYPES[activeTab] ?? 'platform';
 
-  const showsUserControls = adminUiShowsControlFor(PERMISSION_USERS);
-  const rolesQuery = useAdministrationRoles({ enabled: showsUserControls });
+  // At `read` the controls are disabled (R3.4b, issue 2613), and the picker
+  // lists only what each person holds.
+  const access = useAdminWritable(ADMIN_ITEM.users);
+  const rolesQuery = useAdministrationRoles({ enabled: access.writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.usersManage) });
 
   const listQuery = useAdminUsers({
     limit: ADMIN_USERS_PAGE_SIZE,
@@ -176,9 +178,9 @@ export function useAdminUsersPage(): AdminUsersPageState {
     sortOrder: sortDirection,
   });
 
-  const deleteUsers = useDeleteAdminUsers();
-  const setAdminRole = useSetAdminRoles();
-  const suspendUser = useSuspendAdminUser();
+  const deleteUsers = access.guard(useDeleteAdminUsers());
+  const setAdminRole = access.guard(useSetAdminRoles());
+  const suspendUser = access.guard(useSuspendAdminUser());
 
   const listing = useMemo(() => readListing(listQuery.data), [listQuery.data]);
 
@@ -339,7 +341,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
   // System users are the platform's own service accounts: the legacy runtime
   // offered no role, suspend or delete control for them, and neither does this
   // port.
-  const writable = showsUserControls && !isSystemTab;
+  const writable = !isSystemTab;
 
   const rowActions = useMemo<AdminUserRowActions>(
     () => ({

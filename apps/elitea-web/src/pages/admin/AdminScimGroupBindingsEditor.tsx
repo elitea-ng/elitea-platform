@@ -36,6 +36,8 @@ import { t } from "@/shared/i18n";
 
 import { AdminScimGroupBindingDialog } from "./AdminScimGroupBindingDialog";
 import { AdminScimGroupBindingTable } from "./AdminScimGroupBindingTable";
+import { ADMIN_ITEM } from "./adminItemIds";
+import { useAdminWritable } from "./adminWriteAccess";
 import { configFailureReason } from "./api/adminConfigurationApi";
 import {
   useAdminScimGroupBindings,
@@ -51,8 +53,9 @@ export function AdminScimGroupBindingsEditor() {
   // the unique group name then refuses it for a reason no screen explains.
   const [offset, setOffset] = useState(0);
   const listQuery = useAdminScimGroupBindings(offset);
-  const saveMutation = useSaveAdminScimGroupBinding();
-  const deleteMutation = useDeleteAdminScimGroupBinding();
+  const access = useAdminWritable(ADMIN_ITEM.scim);
+  const saveMutation = access.guard(useSaveAdminScimGroupBinding());
+  const deleteMutation = access.guard(useDeleteAdminScimGroupBinding());
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<AdminScimGroupBinding | undefined>(
@@ -167,6 +170,7 @@ export function AdminScimGroupBindingsEditor() {
             setSaveError(undefined);
             setDialogOpen(true);
           }}
+          disabled={!access.writable}
           sx={{ textTransform: "none" }}
           data-testid="admin-scim-group-bindings-add"
         >

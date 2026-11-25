@@ -27,6 +27,7 @@ import { server } from '@/test/setup';
 import { AdminAppRequests } from './AppRequests';
 import { ADMIN_APP_REQUESTS_PAGE_SIZE, useAdminAppRequestsPage } from './useAdminAppRequestsPage';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 /** Mirrors `./__tests__/testRouter`'s client, for the hook-only cases. */
 function createHookQueryClient(): QueryClient {
@@ -487,14 +488,15 @@ describe('AdminAppRequests — the decision', () => {
     expect(within(decided as HTMLElement).queryByRole('button')).toBeNull();
   });
 
-  it('offers no decision control at all when the panel advertises no edit permission', async () => {
-    // Presentation only — the server refuses regardless — but a button that
-    // always fails is worse than no button.
-    grantAdminUiPermissions(['admin.moderation']);
+  // Read-only mode (R3.4b, issue 2613): the decisions are disabled, not hidden.
+  it('disables every decision at the read level of the item and keeps the queue', async () => {
+    serveConsoleLevel('read', 'app-requests');
     renderAdminRoute(<AdminAppRequests />);
     await waitForQueue();
 
-    expect(screen.queryByRole('button', { name: /Approve request/ })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Reject request/ })).toBeNull();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Approve request/ })[0]).toBeDisabled());
+    expect(screen.getAllByRole('button', { name: /Reject request/ })[0]).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

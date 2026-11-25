@@ -30,6 +30,7 @@ import { server } from '@/test/setup';
 
 import { AdminProjects } from './Projects';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 /**
  * Measured against the Go handler in
@@ -644,53 +645,45 @@ describe('Admin › Projects', () => {
     expect(clickSpy).not.toHaveBeenCalled();
   });
 
-  describe('without the project-write permission', () => {
+  // Read-only mode (R3.4b, issue 2613): at the `read` level of the projects
+  // item every write is disabled, not hidden, and the reads keep working.
+  describe('view only', () => {
     beforeEach(() => {
-      grantAdminUiPermissions(['projects.projects.projects.view']);
+      serveConsoleLevel('read', 'projects');
     });
 
-    it('renders no suspend or member control at all', async () => {
+    it('disables every write control and keeps the reads', async () => {
+      const user = userEvent.setup();
       renderAdminRoute(<AdminProjects />);
       await screen.findByText('atlas');
 
-      expect(screen.queryByRole('button', { name: 'Suspend project' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Unsuspend project' })).not.toBeInTheDocument();
-      expect(
-        screen.queryByRole('button', { name: 'Manage project member' }),
-      ).not.toBeInTheDocument();
+      await findViewOnlyNotice();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).toBeDisabled());
+      expect(screen.getByRole('button', { name: 'Delete projects' })).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Suspend project' })[0]).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Manage project member' })[0]).toBeDisabled();
+      expect(enabledWriteControls()).toEqual([]);
+
+      // Reading is still reading: the activity drawer and the tabs work.
+      expect(screen.getAllByRole('button', { name: 'Project activity' })[0]).toBeEnabled();
+      await user.click(screen.getByRole('tab', { name: /Personal/ }));
+      expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
     });
+  });
 
-    it('still renders the read-only activity control', async () => {
-      renderAdminRoute(<AdminProjects />);
-      await screen.findByText('atlas');
+  // The item is `write` for any of Edit, Create or Delete, so each action
+  // still needs its own permission: disabled, no longer hidden, without it.
+  it('enables create and disables delete, suspend and members when only create is granted', async () => {
+    grantAdminUiPermissions(['projects.projects.projects.view', 'projects.projects.project.create']);
+    serveConsoleLevel('write', 'projects');
+    renderAdminRoute(<AdminProjects />);
+    await screen.findByText('atlas');
 
-      expect(screen.getAllByRole('button', { name: 'Project activity' })).not.toHaveLength(0);
-    });
-
-    it('renders neither provisioning control, nor the selection they arm', async () => {
-      renderAdminRoute(<AdminProjects />);
-      await screen.findByText('atlas');
-
-      // `projects.projects.projects.edit` is granted in this block's parent and
-      // NOT here — but even with it, create and delete are gated on their own
-      // permissions. Suspending is reversible and dropping a schema is not, so
-      // the two must not travel together.
-      expect(screen.queryByRole('button', { name: 'Create project' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Delete projects' })).not.toBeInTheDocument();
-      expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
-    });
-
-    it('shows create without delete when only create is granted', async () => {
-      grantAdminUiPermissions([
-        'projects.projects.projects.view',
-        'projects.projects.project.create',
-      ]);
-      renderAdminRoute(<AdminProjects />);
-      await screen.findByText('atlas');
-
-      expect(screen.getByRole('button', { name: 'Create project' })).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Delete projects' })).not.toBeInTheDocument();
-    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Delete projects' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Suspend project' })[0]).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Manage project member' })[0]).toBeDisabled();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
   });
 
   describe('the member dialog', () => {

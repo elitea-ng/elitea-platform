@@ -78,15 +78,34 @@ function WritingRoles({ itemId }: { readonly itemId: string }): ReactNode {
   );
 }
 
-/** The "View only" notice; nothing unless the page's item is at `read`. */
+/**
+ * The "View only" notice; nothing unless the item is at `read`, or at `none`.
+ * A page at `none` never renders (the console refuses its route), so `none`
+ * reaches here only for a section that is its own item inside a page the
+ * caller can open (SCIM under Identity providers): its controls are disabled,
+ * and the notice is what says why.
+ */
 export function AdminViewOnlyNotice(): ReactNode {
   const scope = useContext(AdminWriteScopeContext);
-  if (scope?.access !== 'read') return null;
+  if (scope?.access !== 'read' && scope?.access !== 'none') return null;
   return (
     <Alert severity="info" data-testid="admin-view-only" data-item-id={scope.itemId}>
       <AlertTitle>{t('pages.admin.viewOnly.title', 'View only')}</AlertTitle>
       <WritingRoles itemId={scope.itemId} />
     </Alert>
+  );
+}
+
+/**
+ * A part of a page that is its own console item (a Configuration tab that
+ * stands for one, R3.4b, issue 2613): its own wrapper, with its notice first.
+ */
+export function AdminWritableSection({ itemId, children }: AdminWritableProps): ReactNode {
+  return (
+    <AdminWritable itemId={itemId}>
+      <AdminViewOnlyNotice />
+      {children}
+    </AdminWritable>
   );
 }
 

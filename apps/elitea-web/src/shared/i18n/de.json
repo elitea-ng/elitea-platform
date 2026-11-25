@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "Um eine dieser Rollen anzufragen, wenden Sie sich an Ihren IT-Support:",
   "pages.admin.itemDenied.askFallback": "Um eine dieser Rollen anzufragen, wenden Sie sich an die Personen, die diese Bereitstellung verwalten.",
   "pages.admin.viewOnly.controlReason": "Nur ansehen: Ihre Rollen können diese Seite sehen, aber nicht ändern.",
+  "pages.admin.viewOnly.actionReason": "Ihre Rollen können diese Seite ändern, aber nicht mit dieser Aktion.",
   "pages.admin.viewOnly.noRole": "Sie können diese Seite sehen, aber nicht ändern. Keine Rolle in dieser Bereitstellung kann sie ändern.",
   "pages.admin.viewOnly.roles": "Sie können diese Seite sehen, aber nicht ändern. Diese Rollen können sie ändern: {{roles}}.",
   "pages.admin.viewOnly.title": "Nur ansehen",

@@ -27,6 +27,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import { providerTypeLabel } from './llmProviderForm';
 import { configFailureReason } from './api/adminConfigurationApi';
 import type { LlmProvider, LlmProviderCheckResult } from './api/adminLlmProvidersApi';
@@ -162,6 +163,8 @@ export function ProviderTable({
   readonly rowActions: ProviderRowActions;
 }): ReactNode {
   const { onCheck, onRevalidate, onAdopt, checkResults, checkingId, revalidatingId } = rowActions;
+  // View-only mode (R3.4b, issue 2613): every row action is disabled, not hidden.
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableContainer component={Paper} variant="outlined">
       {/* FIXED column widths, so a row's own content can never resize the
@@ -217,13 +220,13 @@ export function ProviderTable({
               </TableCell>
               <TableCell align="right">
                 <Button
-            variant="elitea" color="tertiary" size="small" onClick={() => onEdit(row)}>
+            variant="elitea" color="tertiary" size="small" disabled={viewOnly} onClick={() => onEdit(row)}>
                   {t('pages.admin.llmProviders.edit', 'Edit')}
                 </Button>
                 <Button
                   variant="elitea" color="tertiary" size="small"
                   data-testid={`admin-provider-check-${String(row.id)}`}
-                  disabled={checkingId === row.id}
+                  disabled={viewOnly || checkingId === row.id}
                   onClick={() => onCheck(row)}
                 >
                   {checkingId === row.id
@@ -233,7 +236,7 @@ export function ProviderTable({
                 <Button
                   variant="elitea" color="tertiary" size="small"
                   data-testid={`admin-provider-revalidate-${String(row.id)}`}
-                  disabled={revalidatingId === row.id}
+                  disabled={viewOnly || revalidatingId === row.id}
                   onClick={() => onRevalidate(row)}
                 >
                   {revalidatingId === row.id
@@ -243,12 +246,13 @@ export function ProviderTable({
                 <Button
                   variant="elitea" color="tertiary" size="small"
                   data-testid={`admin-provider-adopt-${String(row.id)}`}
+                  disabled={viewOnly}
                   onClick={() => onAdopt(row)}
                 >
                   {t('pages.admin.llmProviders.adopt', 'Adopt models…')}
                 </Button>
                 <Button
-            variant="elitea" color="alarm" size="small" onClick={() => onDelete(row)}>
+            variant="elitea" color="alarm" size="small" disabled={viewOnly} onClick={() => onDelete(row)}>
                   {t('pages.admin.llmProviders.delete', 'Delete')}
                 </Button>
               </TableCell>

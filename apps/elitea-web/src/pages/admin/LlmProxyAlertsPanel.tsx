@@ -32,6 +32,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
 import { useBudgetAlertConfig, useSaveBudgetAlertConfig } from './api/adminBudgetAlertsApi';
 
@@ -41,7 +43,9 @@ const MAX_THRESHOLD = 100;
 
 export function LlmProxyAlertsPanel() {
   const { data, isPending, error } = useBudgetAlertConfig();
-  const save = useSaveBudgetAlertConfig();
+  const access = useAdminWritable(ADMIN_ITEM.budgetsAlerts);
+  const save = access.guard(useSaveBudgetAlertConfig());
+  const locked = save.isPending || !access.writable;
 
   const [enabled, setEnabled] = useState(false);
   const [threshold, setThreshold] = useState('80');
@@ -104,7 +108,7 @@ export function LlmProxyAlertsPanel() {
           <Switch
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
-            disabled={save.isPending}
+            disabled={locked}
             data-testid="llm-proxy-alerts-enabled"
           />
         }
@@ -115,7 +119,7 @@ export function LlmProxyAlertsPanel() {
         label={t('pages.admin.llmProxy.alerts.threshold', 'Default alert threshold (%)')}
         value={threshold}
         onChange={(event) => setThreshold(event.target.value)}
-        disabled={save.isPending}
+        disabled={locked}
         type="number"
         size="small"
         error={!thresholdValid}
@@ -136,7 +140,7 @@ export function LlmProxyAlertsPanel() {
       <Box>
         <Button
           variant="elitea" color="primary"
-          disabled={!thresholdValid || save.isPending}
+          disabled={!thresholdValid || locked}
           onClick={() => save.mutate({ enabled, threshold_pct: parsed })}
           data-testid="llm-proxy-alerts-save"
         >

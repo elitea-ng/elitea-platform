@@ -49,15 +49,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { t } from '@/shared/i18n';
 
 import {
-  useAddProjectMember,
   useProjectMembers,
   useProjectRoles,
-  useRemoveProjectMember,
-  useUpdateProjectMemberRole,
   type AdminProjectRow,
   type ProjectRole,
   type ProjectMemberRow,
 } from './api/adminProjectsApi';
+import { useProjectMemberWrites } from './projectMemberWrites';
 
 export interface ProjectMemberDialogProps {
   /** The project to act on, or `null` when the dialog is closed. */
@@ -220,7 +218,7 @@ function RemoveMemberButton({
   readonly setFeedback: (feedback: Feedback) => void;
   readonly clearEmail: () => void;
 }) {
-  const removeMember = useRemoveProjectMember();
+  const { removeMember } = useProjectMemberWrites();
   // Two clicks: a removal takes every role the member has in the project.
   const [armedFor, setArmedFor] = useState<string | null>(null);
   if (member === undefined) return null;
@@ -292,8 +290,7 @@ function ProjectMemberForm({
   const projectId = project.id;
   const membersQuery = useProjectMembers(projectId);
   const rolesQuery = useProjectRoles(projectId);
-  const addMember = useAddProjectMember();
-  const updateRole = useUpdateProjectMemberRole();
+  const { addMember, updateRole } = useProjectMemberWrites();
 
   const roles = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
 

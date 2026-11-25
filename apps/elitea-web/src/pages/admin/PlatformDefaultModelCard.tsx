@@ -23,6 +23,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { platformDefaultImpact, platformDefaultImpactUnknown } from './platformDefaultImpact';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminPlatformDefaultModel,
@@ -90,7 +92,9 @@ function PlatformDefaultAlerts({
 
 export function PlatformDefaultModelCard(): ReactNode {
   const { data, error } = useAdminPlatformDefaultModel();
-  const save = useSavePlatformDefaultModel();
+  const access = useAdminWritable(ADMIN_ITEM.providersModels);
+  const save = access.guard(useSavePlatformDefaultModel());
+  const locked = save.isPending || !access.writable;
   const [picked, setPicked] = useState<string | undefined>(undefined);
   const selected = platformDefaultSelection(data, picked);
   const candidates = data?.candidates ?? [];
@@ -118,6 +122,7 @@ export function PlatformDefaultModelCard(): ReactNode {
           sx={{ minWidth: '16rem' }}
           label={t('pages.admin.platformDefault.title', 'Default model')}
           value={selected}
+          disabled={!access.writable}
           onChange={(event) => setPicked(event.target.value)}
           slotProps={{ htmlInput: { 'data-testid': 'platform-default-model-select' } }}
         >
@@ -132,7 +137,7 @@ export function PlatformDefaultModelCard(): ReactNode {
           color="primary"
           size="small"
           data-testid="platform-default-model-save"
-          disabled={save.isPending || saveDisabled(data, selected)}
+          disabled={locked || saveDisabled(data, selected)}
           onClick={() => submit(selected)}
         >
           {t('common.save', 'Save')}
@@ -142,7 +147,7 @@ export function PlatformDefaultModelCard(): ReactNode {
           color="tertiary"
           size="small"
           data-testid="platform-default-model-clear"
-          disabled={save.isPending || (data?.model_name ?? '') === ''}
+          disabled={locked || (data?.model_name ?? '') === ''}
           onClick={() => submit(null)}
         >
           {t('pages.admin.platformDefault.clear', 'Clear')}

@@ -24,6 +24,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import { isEditableGovernanceRow, type GovernanceRow } from './api/adminGovernanceApi';
 
 export interface GovernanceTableProps {
@@ -124,6 +125,8 @@ export const GovernanceTable = memo(function GovernanceTable({
   onEdit,
   onDelete,
 }: GovernanceTableProps) {
+  // View-only mode (R3.4b, issue 2613): the row actions stay, disabled.
+  const viewOnly = useAdminWriteControl().disabled;
   const gridRows: GovernanceGridRow[] = useMemo(
     () =>
       rows.map((row) => ({
@@ -217,6 +220,7 @@ export const GovernanceTable = memo(function GovernanceTable({
               <Tooltip title={t('common.edit', 'Edit')}>
                 <IconButton
                   size="small"
+                  disabled={viewOnly}
                   onClick={() => onEdit(params.row.source)}
                   aria-label={t('pages.admin.governance.action.edit', 'Edit entry')}
                 >
@@ -226,6 +230,7 @@ export const GovernanceTable = memo(function GovernanceTable({
               <Tooltip title={t('common.delete', 'Delete')}>
                 <IconButton
                   size="small"
+                  disabled={viewOnly}
                   onClick={() => onDelete(params.row.source)}
                   aria-label={t('pages.admin.governance.action.delete', 'Delete entry')}
                 >
@@ -237,7 +242,7 @@ export const GovernanceTable = memo(function GovernanceTable({
         },
       },
     ],
-    [onDelete, onEdit],
+    [onDelete, onEdit, viewOnly],
   );
 
   return (

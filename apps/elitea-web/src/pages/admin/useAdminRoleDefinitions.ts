@@ -12,8 +12,9 @@
  * Every gate here is PRESENTATION. `internal/api/v2/admin/roles_crud.go`
  * validates the name, refuses every built-in role as a rename or delete target,
  * and refuses a delete while the role still holds members — each of those
- * independently of anything in this file. `window.admin_ui_config.permissions`
- * decides what is SHOWN and never what is allowed (`./adminUiConfig`).
+ * independently of anything in this file. The page's console item level
+ * (R3.4b, issue 2613) disables the controls at `read`, and every write goes
+ * through the read-only guard.
  *
  * ## `onWritten` is called after the refetch, not after the request
  *
@@ -25,7 +26,7 @@
  */
 import { useCallback, useState } from 'react';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import type { AdminWriteAccess } from './adminWriteAccess';
 import { isBuiltInRole, type RoleNameDialogMode } from './AdminRoleDialogs';
 import {
   permissionMatrixFailureReason,
@@ -35,17 +36,6 @@ import {
   type PermissionMatrixTarget,
 } from './api/adminRolesApi';
 
-/**
- * The three permissions the role-definition routes carry
- * (`internal/api/router.go`, migrations/shared/0111). They are separate from
- * `configuration.roles.permissions.edit`, which governs the matrix: moving a
- * checkbox and deleting the role the checkbox belongs to are different
- * privileges, and the legacy runtime separates them too.
- */
-const PERMISSION_ROLE_CREATE = 'configuration.roles.roles.create';
-const PERMISSION_ROLE_EDIT = 'configuration.roles.roles.edit';
-const PERMISSION_ROLE_DELETE = 'configuration.roles.roles.delete';
-
 interface RoleDialogState {
   readonly mode: RoleNameDialogMode;
   /** The role being renamed. Empty for a create. */
@@ -53,11 +43,11 @@ interface RoleDialogState {
 }
 
 export interface AdminRoleDefinitionsState {
-  /** `undefined` ⇒ the "New role" control is not offered. */
-  readonly onCreateRole: (() => void) | undefined;
+  /** Offered on every tab; disabled at `read` by the page's write control. */
+  readonly onCreateRole: () => void;
   /**
-   * `undefined` ⇒ no rename control for this role — either the operator is not
-   * shown the permission, or the role is built in and the SERVER refuses it.
+   * `undefined` ⇒ no rename control for this role: the role is built in and
+   * the SERVER refuses it.
    */
   readonly renameHandlerFor: (role: string) => (() => void) | undefined;
   readonly deleteHandlerFor: (role: string) => (() => void) | undefined;
@@ -78,14 +68,15 @@ export function useAdminRoleDefinitions(
   target: PermissionMatrixTarget,
   /** Called once per successful write, AFTER the matrix refetch has settled. */
   onWritten: (message: string) => void,
+  access: AdminWriteAccess,
 ): AdminRoleDefinitionsState {
   const [roleDialog, setRoleDialog] = useState<RoleDialogState | null>(null);
   const [roleToDelete, setRoleToDelete] = useState<string | null>(null);
   const [roleWriteFailure, setRoleWriteFailure] = useState<string | undefined>(undefined);
 
-  const createRole = useCreateRole();
-  const renameRole = useRenameRole();
-  const deleteRole = useDeleteRole();
+  const createRole = access.guard(useCreateRole());
+  const renameRole = access.guard(useRenameRole());
+  const deleteRole = access.guard(useDeleteRole());
 
   const onCloseRoleDialog = useCallback(() => {
     setRoleDialog(null);
@@ -147,31 +138,27 @@ export function useAdminRoleDefinitions(
     );
   }, [roleToDelete, target, deleteRole, succeeded, failed]);
 
-  const canCreateRole = adminUiShowsControlFor(PERMISSION_ROLE_CREATE);
-  const canRenameRole = adminUiShowsControlFor(PERMISSION_ROLE_EDIT);
-  const canDeleteRole = adminUiShowsControlFor(PERMISSION_ROLE_DELETE);
-
   // A built-in role gets NO rename or delete control, because the server refuses
   // both. Rendering one anyway would be a button whose only outcome is a 409.
   const renameHandlerFor = useCallback(
     (role: string) =>
-      canRenameRole && !isBuiltInRole(role)
-        ? () => {
+      isBuiltInRole(role)
+        ? undefined
+        : () => {
             setRoleWriteFailure(undefined);
             setRoleDialog({ mode: 'rename', role });
-          }
-        : undefined,
-    [canRenameRole],
+          },
+    [],
   );
   const deleteHandlerFor = useCallback(
     (role: string) =>
-      canDeleteRole && !isBuiltInRole(role)
-        ? () => {
+      isBuiltInRole(role)
+        ? undefined
+        : () => {
             setRoleWriteFailure(undefined);
             setRoleToDelete(role);
-          }
-        : undefined,
-    [canDeleteRole],
+          },
+    [],
   );
 
   const onCreateRole = useCallback(() => {
@@ -180,7 +167,7 @@ export function useAdminRoleDefinitions(
   }, []);
 
   return {
-    onCreateRole: canCreateRole ? onCreateRole : undefined,
+    onCreateRole,
     renameHandlerFor,
     deleteHandlerFor,
     roleDialog,

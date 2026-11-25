@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "כדי לבקש אחד מהתפקידים האלה, פנה לתמיכת ה-IT:",
   "pages.admin.itemDenied.askFallback": "כדי לבקש אחד מהתפקידים האלה, פנה לאנשים שמנהלים את הפריסה הזו.",
   "pages.admin.viewOnly.controlReason": "צפייה בלבד: התפקידים שלך יכולים לראות את הדף הזה אך לא לשנות אותו.",
+  "pages.admin.viewOnly.actionReason": "התפקידים שלך יכולים לשנות את הדף הזה, אך לא באמצעות פעולה זו.",
   "pages.admin.viewOnly.noRole": "אפשר לראות את הדף הזה אך לא לשנות אותו. אין תפקיד בפריסה הזו שיכול לשנות אותו.",
   "pages.admin.viewOnly.roles": "אפשר לראות את הדף הזה אך לא לשנות אותו. התפקידים האלה יכולים לשנות אותו: {{roles}}.",
   "pages.admin.viewOnly.title": "צפייה בלבד",

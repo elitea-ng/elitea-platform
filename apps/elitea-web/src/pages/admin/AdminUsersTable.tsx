@@ -38,6 +38,8 @@ import { DataGrid } from '@mui/x-data-grid';
 import { t } from '@/shared/i18n';
 
 import { AdminUserRolesSelect } from './AdminUserRolesSelect';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import type { AdministrationRole } from './api/adminRoleOptionsApi';
 import type { AdminUserRow } from './api/adminUsersApi';
 
@@ -104,6 +106,8 @@ export const AdminUsersTable = memo(function AdminUsersTable({
   pendingIds,
 }: AdminUsersTableProps) {
   const theme = useTheme();
+  // View-only mode (R3.4b, issue 2613): the writes are disabled, not hidden.
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.usersManage).disabled;
 
   const sortModel: GridSortModel = useMemo(
     () => (sortField ? [{ field: sortField, sort: sortDirection }] : []),
@@ -180,7 +184,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
           <AdminUserRolesSelect
             held={params.row.admin_roles}
             roles={roleOptions}
-            disabled={pendingIds.has(params.row.id)}
+            disabled={viewOnly || pendingIds.has(params.row.id)}
             onSave={(roleNames) => onSetAdminRoles(params.row.id, roleNames)}
           />
         ),
@@ -198,7 +202,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
       disableColumnMenu: true,
       renderCell: (params: GridRenderCellParams<AdminUserRow>) => {
         const row = params.row;
-        const busy = pendingIds.has(row.id);
+        const busy = viewOnly || pendingIds.has(row.id);
         const suspendLabel = row.suspended
           ? t('pages.admin.users.action.unsuspend', 'Unsuspend user')
           : t('pages.admin.users.action.suspend', 'Suspend user');
@@ -282,7 +286,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
     });
 
     return definitions;
-  }, [rowActions, pendingIds, roleOptions]);
+  }, [rowActions, pendingIds, roleOptions, viewOnly]);
 
   if (!isLoading && users.length === 0) {
     return (
@@ -310,6 +314,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
       hideFooter
       getRowId={(row: AdminUserRow) => row.id}
       checkboxSelection={onSelectionChange !== undefined}
+      isRowSelectable={() => !viewOnly}
       rowSelectionModel={selectionModel}
       onRowSelectionModelChange={(model: GridRowSelectionModel) => {
         onSelectionChange?.(Array.from(model.ids).map((id) => Number(id)));

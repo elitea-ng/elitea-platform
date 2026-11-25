@@ -53,7 +53,8 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { t } from '@/shared/i18n';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import {
   failureReason,
   useAdminAppRequests,
@@ -63,14 +64,6 @@ import {
   type AppRequestsPage,
 } from './api/adminAppRequestsApi';
 
-/**
- * The permission the (hardcoded) admin-panel config advertises for deciding a
- * request — the same string `router.go` gates the PUT on.
- *
- * Presentation only. The server resolves it from `auth_core__user_role` on every
- * request and answers 403 regardless of what this says; see `./adminUiConfig`.
- */
-const PERMISSION_MODERATION_EDIT = 'admin.moderation.edit';
 
 export const ADMIN_APP_REQUESTS_PAGE_SIZE = 20;
 
@@ -178,7 +171,9 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
   const [savedMessage, setSavedMessage] = useState('');
   const [rejecting, setRejecting] = useState<AppRequestRow | null>(null);
 
-  const canDecide = adminUiShowsControlFor(PERMISSION_MODERATION_EDIT);
+  // At the `read` level of the item the decisions are disabled, not hidden,
+  // and go through the read-only guard (R3.4b, issue 2613).
+  const access = useAdminWritable(ADMIN_ITEM.appRequests);
 
   const listQuery = useAdminAppRequests({
     limit: ADMIN_APP_REQUESTS_PAGE_SIZE,
@@ -203,7 +198,7 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
     sortOrder: 'desc',
   });
 
-  const decide = useDecideAppRequest();
+  const decide = access.guard(useDecideAppRequest());
 
   const listing = useMemo(() => readListing(listQuery.data), [listQuery.data]);
 
@@ -312,7 +307,9 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
     pendingIds,
     errorMessage,
     savedMessage,
-    rejecting,
+    // A level that drops to read under an open reject dialog closes it
+    // (R3.4b): the dialog is a write, and its confirm would send nothing.
+    rejecting: access.writable ? rejecting : null,
 
     onSearchChange,
     onStatusFilterChange,
@@ -324,8 +321,8 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
     onDismissSaved: useCallback(() => setSavedMessage(''), []),
     onCancelReject: useCallback(() => setRejecting(null), []),
 
-    onApprove: canDecide ? onApprove : undefined,
-    onOpenReject: canDecide ? setRejecting : undefined,
-    onConfirmReject: canDecide ? onConfirmReject : undefined,
+    onApprove,
+    onOpenReject: setRejecting,
+    onConfirmReject,
   };
 }

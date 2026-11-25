@@ -44,6 +44,8 @@ import { memo, useMemo } from 'react';
 import { t } from '@/shared/i18n';
 
 import { PROJECT_STATUS_COLOUR, projectStatusLabel } from './adminProjectsStatus';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import type { AdminProjectRow } from './api/adminProjectsApi';
 
 export interface AdminProjectsTableProps {
@@ -114,6 +116,9 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
   onSelectionChange,
 }: AdminProjectsTableProps) {
   const theme = useTheme();
+  // View-only mode (R3.4b, issue 2613): the writes are disabled, not hidden.
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectsEdit).disabled;
+  const deleteDisabled = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectDelete).disabled;
 
   // MUI X 9's selection model is `{type, ids}`, not the flat id array v7 took.
   // Derived from the page's state rather than held here, so the toolbar's
@@ -201,7 +206,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
         disableColumnMenu: true,
         renderCell: (params: GridRenderCellParams<AdminProjectRow>) => {
           const row = params.row;
-          const busy = pendingIds.has(row.id);
+          const busy = viewOnly || pendingIds.has(row.id);
           const suspendLabel = row.suspended
             ? t('pages.admin.projects.action.unsuspend', 'Unsuspend project')
             : t('pages.admin.projects.action.suspend', 'Suspend project');
@@ -213,7 +218,12 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
               {onOpenMembers ? (
                 <Tooltip title={membersLabel}>
                   <span>
-                    <IconButton size="small" aria-label={membersLabel} onClick={() => onOpenMembers(row)}>
+                    <IconButton
+                      size="small"
+                      aria-label={membersLabel}
+                      disabled={viewOnly}
+                      onClick={() => onOpenMembers(row)}
+                    >
                       <PersonAddAlt1OutlinedIcon fontSize="small" />
                     </IconButton>
                   </span>
@@ -261,7 +271,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
         },
       },
     ],
-    [onToggleSuspended, onOpenMembers, onOpenActivity, onOpenCloudExecutor, pendingIds],
+    [onToggleSuspended, onOpenMembers, onOpenActivity, onOpenCloudExecutor, pendingIds, viewOnly],
   );
 
   if (!isLoading && projects.length === 0) {
@@ -292,6 +302,7 @@ export const AdminProjectsTable = memo(function AdminProjectsTable({
       hideFooter
       getRowId={(row: AdminProjectRow) => row.id}
       checkboxSelection={onSelectionChange !== undefined}
+      isRowSelectable={() => !deleteDisabled}
       rowSelectionModel={selectionModel}
       onRowSelectionModelChange={(model: GridRowSelectionModel) => {
         onSelectionChange?.(Array.from(model.ids).map((id) => Number(id)));

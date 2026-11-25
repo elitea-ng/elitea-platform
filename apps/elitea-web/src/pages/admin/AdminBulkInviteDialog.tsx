@@ -59,6 +59,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 
 import { BulkInviteResults } from './AdminBulkInviteResults';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { useAdminUsers, type AdminUserRow } from './api/adminUsersApi';
 import { useAdminProjects, useProjectRoles, type AdminProjectRow } from './api/adminProjectsApi';
 import { useBulkInviteMembers, type BulkInviteReport } from './api/adminBulkInviteApi';
@@ -201,11 +203,12 @@ function AdminBulkInviteForm({ onClose }: { readonly onClose: () => void }) {
     projectType: 'team',
   });
   const roleOptions = useRoleOptions(selectedProjects);
-  const invite = useBulkInviteMembers();
+  const access = useAdminWritable(ADMIN_ITEM.users);
+  const invite = access.guard(useBulkInviteMembers());
 
   const pairCount = selectedUsers.length * selectedProjects.length;
   const overCap = pairCount > MAX_PAIRS;
-  const canSubmit = pairCount > 0 && role !== '' && !overCap && !invite.isPending;
+  const canSubmit = access.writable && pairCount > 0 && role !== '' && !overCap && !invite.isPending;
 
   /* The picker rows. `useMemo` keeps the Autocomplete's option identity stable
      across the re-renders a selection causes; a fresh array each render makes

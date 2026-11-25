@@ -21,6 +21,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { governanceFailureReason, useCreateGovernanceRow } from './api/adminGovernanceApi';
 import {
   DEFAULT_PRESET,
@@ -76,7 +78,7 @@ export interface GovernanceGuardrailPresetDialogProps {
 }
 
 export function GovernanceGuardrailPresetDialog({ onClose }: GovernanceGuardrailPresetDialogProps) {
-  const create = useCreateGovernanceRow();
+  const create = useAdminWritable(ADMIN_ITEM.llmGovernance).guard(useCreateGovernanceRow());
   const [choice, setChoice] = useState<GuardrailPresetChoice>(DEFAULT_PRESET);
   const [error, setError] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);

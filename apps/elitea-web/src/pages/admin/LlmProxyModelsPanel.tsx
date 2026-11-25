@@ -39,6 +39,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import {
   USAGE_WINDOWS,
   type LlmModelRow,
@@ -88,6 +89,7 @@ export function UnpricedModelsAlert({
   readonly unpriced: readonly UnpricedLlmModel[];
   readonly onPrice: (model: UnpricedLlmModel) => void;
 }) {
+  const viewOnly = useAdminWriteControl().disabled;
   if (unpriced.length === 0) return null;
   return (
     <Alert severity="warning" data-testid="llm-proxy-unpriced">
@@ -124,7 +126,7 @@ export function UnpricedModelsAlert({
               })}
             </Typography>
             <Button
-            variant="elitea" color="tertiary" size="small" onClick={() => onPrice(model)}>
+            variant="elitea" color="tertiary" size="small" disabled={viewOnly} onClick={() => onPrice(model)}>
               {t('pages.admin.llmProxy.models.setPrice', 'Set a price')}
             </Button>
           </Box>
@@ -144,6 +146,7 @@ export function ModelCatalogueTable({
   readonly onEdit: (row: LlmModelRow) => void;
   readonly onClearOverride: (row: LlmModelRow) => void;
 }) {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableContainer>
       <Table
@@ -207,12 +210,12 @@ export function ModelCatalogueTable({
               </TableCell>
               <TableCell align="right">
                 <Button
-            variant="elitea" color="tertiary" size="small" onClick={() => onEdit(row)}>
+            variant="elitea" color="tertiary" size="small" disabled={viewOnly} onClick={() => onEdit(row)}>
                   {t('pages.admin.llmProxy.models.edit', 'Edit price')}
                 </Button>
                 {row.price_overridden ? (
                   <Button
-            variant="elitea" color="tertiary" size="small" onClick={() => onClearOverride(row)}>
+            variant="elitea" color="tertiary" size="small" disabled={viewOnly} onClick={() => onClearOverride(row)}>
                     {t('pages.admin.llmProxy.models.clear', 'Resume sync')}
                   </Button>
                 ) : null}

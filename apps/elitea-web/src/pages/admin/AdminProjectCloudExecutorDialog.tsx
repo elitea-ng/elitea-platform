@@ -31,6 +31,8 @@ import { setAdminProjectCloudExecutor, useGetAdminProjectCloudExecutor } from '@
 import type { ProjectCloudExecutorSwitch } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import type { AdminProjectRow } from './api/adminProjectsApi';
 
 export interface AdminProjectCloudExecutorDialogProps {
@@ -62,13 +64,15 @@ function ProjectSwitch({ project, canEdit }: { readonly project: AdminProjectRow
   const queryClient = useQueryClient();
   const query = useGetAdminProjectCloudExecutor(projectId);
   const state = query.data?.data as ProjectCloudExecutorSwitch | undefined;
-  const mutation = useMutation({
-    mutationFn: (enabled: boolean | null) => setAdminProjectCloudExecutor(projectId, { enabled }),
-    onSuccess: (response) => {
-      // Both keys: Settings › General caches the same switch.
-      storeSavedCloudExecutorSwitch(queryClient, projectId, response);
-    },
-  });
+  const mutation = useAdminWritable(ADMIN_ITEM.projects).guard(
+    useMutation({
+      mutationFn: (enabled: boolean | null) => setAdminProjectCloudExecutor(projectId, { enabled }),
+      onSuccess: (response) => {
+        // Both keys: Settings › General caches the same switch.
+        storeSavedCloudExecutorSwitch(queryClient, projectId, response);
+      },
+    }),
+  );
   const { mutate } = mutation;
   const onChange = useCallback((enabled: boolean | null) => mutate(enabled), [mutate]);
   const failure = mutation.error ?? query.error;

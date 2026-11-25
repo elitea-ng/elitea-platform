@@ -14,6 +14,7 @@ import { server } from '@/test/setup';
 
 import { AdminUsers } from './Users';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { serveConsoleLevel } from './__tests__/viewOnly';
 
 const USERS_BODY = {
   rows: [
@@ -85,11 +86,17 @@ afterEach(() => {
 });
 
 describe('Admin › Users → Devices', () => {
-  it('is offered only to an operator holding admin.auth.users', async () => {
-    window.admin_ui_config = { permissions: [], vite_server_url: '/api/v2' };
+  // Read-only mode (R3.4b, issue 2613): the list opens, its revoke is disabled.
+  it('opens at the read level of the users item with every revoke disabled', async () => {
+    serveConsoleLevel('read', 'users');
+    const user = userEvent.setup();
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Cy Client');
-    expect(screen.queryByRole('button', { name: 'Devices' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('admin-user-devices-12'));
+    const drawer = await screen.findByTestId('admin-user-devices-drawer');
+    expect(await within(drawer).findByText('Cy’s phone')).toBeVisible();
+    await waitFor(() => expect(within(drawer).getByRole('button', { name: /^Revoke/ })).toBeDisabled());
   });
 
   it('opens for the clicked user, lists live and revoked devices, and revokes after confirming', async () => {

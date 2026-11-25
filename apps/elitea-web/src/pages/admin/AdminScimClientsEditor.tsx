@@ -29,6 +29,8 @@ import { AdminScimClientCreateDialog } from "./AdminScimClientCreateDialog";
 import { AdminScimClientSecretDialog } from "./AdminScimClientSecretDialog";
 import { AdminScimClientTable } from "./AdminScimClientTable";
 import { AdminScimCopyField } from "./AdminScimCopyField";
+import { ADMIN_ITEM } from "./adminItemIds";
+import { useAdminWritable } from "./adminWriteAccess";
 import {
   configFailureReason,
   configFailureStatus,
@@ -83,11 +85,12 @@ function connectionUrls(
 }
 
 export function AdminScimClientsEditor() {
+  const access = useAdminWritable(ADMIN_ITEM.scim);
   const listQuery = useAdminScimClients();
-  const createMutation = useCreateAdminScimClient();
-  const rotateMutation = useRotateAdminScimClient();
-  const revokeMutation = useRevokeAdminScimClient();
-  const deleteMutation = useDeleteAdminScimClient();
+  const createMutation = access.guard(useCreateAdminScimClient());
+  const rotateMutation = access.guard(useRotateAdminScimClient());
+  const revokeMutation = access.guard(useRevokeAdminScimClient());
+  const deleteMutation = access.guard(useDeleteAdminScimClient());
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createError, setCreateError] = useState<string | undefined>(undefined);
@@ -208,6 +211,7 @@ export function AdminScimClientsEditor() {
             setCreateError(undefined);
             setCreateOpen(true);
           }}
+          disabled={!access.writable}
           sx={{ textTransform: "none" }}
           data-testid="admin-scim-clients-add"
         >
@@ -232,7 +236,7 @@ export function AdminScimClientsEditor() {
 
       <AdminScimClientTable
         clients={clients}
-        busy={busy}
+        busy={busy || !access.writable}
         onAction={(action, client) => {
           setPending({ action, client });
         }}

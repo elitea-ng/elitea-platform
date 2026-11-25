@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "Para solicitar uma dessas funções, entre em contato com o suporte de TI:",
   "pages.admin.itemDenied.askFallback": "Para solicitar uma dessas funções, entre em contato com as pessoas que gerenciam esta implantação.",
   "pages.admin.viewOnly.controlReason": "Somente visualização: suas funções podem ver esta página, mas não alterá-la.",
+  "pages.admin.viewOnly.actionReason": "Suas funções podem alterar esta página, mas não com esta ação.",
   "pages.admin.viewOnly.noRole": "Você pode ver esta página, mas não alterá-la. Nenhuma função desta implantação pode alterá-la.",
   "pages.admin.viewOnly.roles": "Você pode ver esta página, mas não alterá-la. Estas funções podem alterá-la: {{roles}}.",
   "pages.admin.viewOnly.title": "Somente visualização",

@@ -28,6 +28,8 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { ADMIN_ITEM } from "./adminItemIds";
+import { useAdminWritable } from "./adminWriteAccess";
 import { configFailureReason } from "./api/adminConfigurationApi";
 import {
   type MeteredPriceRow,
@@ -57,7 +59,8 @@ function unitHeading(unit: string): string {
 }
 
 function PriceRow({ row }: { readonly row: MeteredPriceRow }): ReactNode {
-  const save = useSaveAdminMeteredPrice();
+  const access = useAdminWritable(ADMIN_ITEM.toolPrices);
+  const save = access.guard(useSaveAdminMeteredPrice());
   // The price stays a decimal string end to end: a JS number would print a
   // price below 1e-6 as "5e-7", which the server refuses.
   const stored = priceText(row.price_per_unit_usd);
@@ -74,6 +77,7 @@ function PriceRow({ row }: { readonly row: MeteredPriceRow }): ReactNode {
         <TextField
           size="small"
           value={draft}
+          disabled={!access.writable}
           onChange={(event) => setDraft(event.target.value)}
           error={!valid}
           helperText={unitHeading(row.unit)}
@@ -118,7 +122,7 @@ function PriceRow({ row }: { readonly row: MeteredPriceRow }): ReactNode {
       <TableCell align="right">
         <Button
           size="small"
-          disabled={!changed || save.isPending}
+          disabled={!access.writable || !changed || save.isPending}
           onClick={() =>
             save.mutate({
               provider: row.provider,

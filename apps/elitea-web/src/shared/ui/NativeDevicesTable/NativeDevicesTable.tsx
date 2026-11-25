@@ -30,6 +30,8 @@ export interface NativeDevicesTableProps {
   readonly onRevoke: (device: NativeDevice) => void;
   /** Accessible name for the table. */
   readonly label: string;
+  /** Every revoke disabled: an admin page in view-only mode. */
+  readonly revokeDisabled?: boolean;
 }
 
 function StatusCell({ device }: { readonly device: NativeDevice }) {
@@ -48,7 +50,7 @@ function StatusCell({ device }: { readonly device: NativeDevice }) {
   );
 }
 
-export function NativeDevicesTable({ devices, busyId, onRevoke, label }: NativeDevicesTableProps) {
+export function NativeDevicesTable({ devices, busyId, onRevoke, label, revokeDisabled = false }: NativeDevicesTableProps) {
   return (
     <TableContainer>
       <Table size="small" aria-label={label} data-testid="native-devices-table">
@@ -89,7 +91,7 @@ export function NativeDevicesTable({ devices, busyId, onRevoke, label }: NativeD
                       variant="elitea"
                       color="alarm"
                       size="small"
-                      disabled={busyId === device.id}
+                      disabled={revokeDisabled || busyId === device.id}
                       onClick={() => {
                         onRevoke(device);
                       }}
