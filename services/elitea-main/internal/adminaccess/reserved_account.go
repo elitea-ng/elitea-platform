@@ -102,19 +102,30 @@ func EnsureReservedBreakGlassAccount(ctx context.Context, tx pgx.Tx) (int64, boo
 	if tx == nil {
 		return 0, false, errors.New("reserved break-glass account: no transaction")
 	}
+	// The existing row is looked up by lower(email) first, as every other
+	// reserved-account check matches: the unique index is on the address as
+	// written, so an insert alone would add a second row beside a row whose
+	// address differs only in case, and the state check below would read the
+	// new row instead of the one something else changed.
+	const existing = `
+SELECT id FROM public.auth_core__user WHERE lower(email) = $1
+ORDER BY id LIMIT 1
+FOR UPDATE`
 	var id int64
-	created := true
-	err := tx.QueryRow(ctx, `
+	created := false
+	err := tx.QueryRow(ctx, existing, ReservedBreakGlassEmail).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		created = true
+		err = tx.QueryRow(ctx, `
 INSERT INTO public.auth_core__user (email, name)
 VALUES ($1, $2)
 ON CONFLICT (email) DO NOTHING
 RETURNING id`, ReservedBreakGlassEmail, reservedBreakGlassName).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		created = false
-		err = tx.QueryRow(ctx, `
-SELECT id FROM public.auth_core__user WHERE lower(email) = $1
-ORDER BY id LIMIT 1
-FOR UPDATE`, ReservedBreakGlassEmail).Scan(&id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// A concurrent issue inserted it after the lookup.
+			created = false
+			err = tx.QueryRow(ctx, existing, ReservedBreakGlassEmail).Scan(&id)
+		}
 	}
 	if err != nil {
 		return 0, false, fmt.Errorf("reserved break-glass account: %w", err)

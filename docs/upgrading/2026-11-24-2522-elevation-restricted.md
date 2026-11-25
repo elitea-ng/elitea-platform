@@ -20,7 +20,9 @@
   from the sealed credential's full resolution; it stays closed to every
   approved elevation.
 - **Create token** from an elevated browser session, or from any sealed
-  session, answers `403 elevation_restricted`, with or without admin scopes.
+  session, answers `403 elevation_restricted`. A request with admin scopes is
+  refused first by the scope rules, with their own codes
+  (`token_scopes_elevated`, `token_scopes_sealed_session`).
 - Shared migration **0273** adds the column `centry.audit_events.elevation_flagged`
   (boolean, nullable, outside the chain hash; existing rows stay null).
 

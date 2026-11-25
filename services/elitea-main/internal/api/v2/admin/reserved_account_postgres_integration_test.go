@@ -7,6 +7,7 @@ package admin_test
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -53,4 +54,35 @@ func TestTheReservedAccountIsNotListedAndTakesNoRole(t *testing.T) {
 	if names := adminRoleNamesSQL(t, pool, id); len(names) != 0 {
 		t.Fatalf("the reserved account holds %v", names)
 	}
+
+	// No console write suspends or deletes it (review finding on PR 3036):
+	// either would leave every unbound envelope unusable. Lifting a
+	// suspension is not refused.
+	for name, send := range map[string]func() (int, string){
+		"suspend": func() (int, string) {
+			rec := adminDo(t, router, http.MethodPut, "/admin/user_suspend/administration/"+itoa(id),
+				map[string]any{"suspended": true})
+			return rec.Code, rec.Body.String()
+		},
+		"delete": func() (int, string) {
+			rec := adminDo(t, router, http.MethodPost, "/admin/auth_users/administration",
+				map[string]any{"action": "delete", "users": []map[string]any{{"id": id}}})
+			return rec.Code, rec.Body.String()
+		},
+	} {
+		if status, body := send(); status != http.StatusForbidden || !strings.Contains(body, adminaccess.CodeReservedAccount) {
+			t.Fatalf("%s the reserved account: %d %s; want 403 %s", name, status, body, adminaccess.CodeReservedAccount)
+		}
+	}
+	var suspended bool
+	if err := pool.QueryRow(t.Context(), `SELECT suspended FROM public.auth_core__user WHERE id = $1`, id).
+		Scan(&suspended); err != nil || suspended {
+		t.Fatalf("the reserved account: suspended %v (%v), want present and not suspended", suspended, err)
+	}
+	if rec := adminDo(t, router, http.MethodPut, "/admin/user_suspend/administration/"+itoa(id),
+		map[string]any{"suspended": false}); rec.Code != http.StatusOK {
+		t.Fatalf("lifting a suspension: %d %s, want 200", rec.Code, rec.Body.String())
+	}
 }
+
+func itoa[T ~int | ~int64](n T) string { return strconv.FormatInt(int64(n), 10) }

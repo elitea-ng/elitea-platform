@@ -20,7 +20,13 @@
   - a token create from its session: `403 token_mint_reserved_account`
     (the database refuses the row too);
   - an OIDC or SAML sign-in that asserts the address, or a subject linked to
-    the account: `403`. Form users in `@centry.user` were refused already.
+    the account: `403`. Form users in `@centry.user` were refused already;
+  - a console suspension or delete of the account (`user_suspend`,
+    `auth_users` `delete`): `403 reserved_account`. Lifting a suspension is
+    allowed. Revoke its credentials with `break-glass revoke` instead.
+- An existing account whose address differs only in case is the reserved
+  account: `issue --unbound` reuses it (and refuses it when it holds a role
+  or is suspended) rather than adding a second row.
 - The admin Users listing (both tabs and their counts) does not show the
   account.
 - A bound `issue --user` that names the account is refused: use `--unbound`.

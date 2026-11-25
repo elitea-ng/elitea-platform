@@ -51,6 +51,12 @@ func (g *elevationRestrictions) middleware(next http.Handler) http.Handler {
 			return
 		}
 		candidates, r = selectEntries(candidates, r, rctx)
+		// Every entry allows an elevation: nothing to refuse or flag, so the
+		// resolution is not read twice (the route gate reads it next).
+		if !anyRestricted(candidates) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		caller, resolved := g.elevationCaller(r, principal)
 		if !resolved {
 			if anyMayRestrict(candidates) {
@@ -105,6 +111,16 @@ func (g *elevationRestrictions) elevationCaller(r *http.Request, principal auth.
 		return adminaccess.ElevationCaller{}, false
 	}
 	return adminaccess.ElevationCallerOf(principal.Credential(), resolution), true
+}
+
+// anyRestricted reports whether an entry's elevation value is not allow.
+func anyRestricted(entries []adminaccess.Action) bool {
+	for _, entry := range entries {
+		if entry.Elevation != adminaccess.ElevationAllow {
+			return true
+		}
+	}
+	return false
 }
 
 // anyMayRestrict reports whether an entry can refuse an elevation at all.

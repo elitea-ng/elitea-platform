@@ -403,12 +403,22 @@ const maintenanceGateCaller = "/internal/api/middleware.(*maintenanceGate).admit
 // composed-router driver finds that an action table entry decides, sent as an
 // elevated Form session, reaches the restriction's decision before anything
 // else resolves: no in-handler check and no route gate decides first, so none
-// bypasses it. A route no entry decides (a read) makes no decision to bypass.
+// bypasses it. A route no entry decides (a read), or whose entries all allow
+// an elevation, makes no decision to bypass, and the restriction does not
+// read the resolution for it.
 func TestEveryAdministrationRouteReachesTheElevationRestriction(t *testing.T) {
 	driven := drivenComposedSurface(t)
 	reached := 0
 	for _, entry := range driven.result.Surface {
-		if len(adminaccess.ActionTable().Route(entry.Method, adminaccess.RoutePattern(entry.Pattern))) == 0 {
+		restricts := false
+		for _, action := range adminaccess.ActionTable().Route(entry.Method, adminaccess.RoutePattern(entry.Pattern)) {
+			// The entries the variant's request selects: every entry of a
+			// route without a selector, or the one whose selector value the
+			// variant sends.
+			selected := action.Selector.Value == "" || strings.HasSuffix(" "+entry.Variant, " "+action.Selector.Value)
+			restricts = restricts || (selected && action.Elevation != adminaccess.ElevationAllow)
+		}
+		if !restricts {
 			continue
 		}
 		variant := variantFor(driven.opts, entry)
@@ -433,7 +443,7 @@ func TestEveryAdministrationRouteReachesTheElevationRestriction(t *testing.T) {
 		}
 		reached++
 	}
-	if reached < 100 {
-		t.Fatalf("only %d routes reached the restriction; the action table decides more", reached)
+	if reached < 35 {
+		t.Fatalf("only %d routes reached the restriction; the action table restricts more", reached)
 	}
 }

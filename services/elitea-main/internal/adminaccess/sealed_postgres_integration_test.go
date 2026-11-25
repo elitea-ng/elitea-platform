@@ -447,3 +447,42 @@ SELECT $1, id FROM public.auth_core__role WHERE name = 'admin' AND mode = 'admin
 		t.Fatalf("%d credentials (%v), want only the first", rows, err)
 	}
 }
+
+// An existing account whose address differs from the reserved one only in
+// case is the reserved account: the first unbound issue reuses it rather than
+// adding a lower-case row beside it, and refuses it when it holds a role, as
+// the runbook says. Review finding on PR 3036.
+func TestUnboundIssueReusesAMixedCaseReservedAccount(t *testing.T) {
+	pool := newElevationDatabase(t)
+	var lookalike int64
+	if err := pool.QueryRow(t.Context(), `INSERT INTO public.auth_core__user (email, name)
+VALUES ('Break-Glass@Centry.User', 'look-alike') RETURNING id`).Scan(&lookalike); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT $1, id FROM public.auth_core__role WHERE name = 'admin' AND mode = 'administration'`, lookalike); err != nil {
+		t.Fatal(err)
+	}
+	unbound := adminaccess.SealedIssue{Unbound: true, Ticket: "INC-2", Label: "envelope B", At: sealedClock}
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, err := adminaccess.IssueSealedCredential(t.Context(), tx, auditAppender(t), unbound)
+		if !errors.Is(err, adminaccess.ErrReservedAccountUnusable) {
+			t.Errorf("issue beside a role-holding look-alike = %v, want ErrReservedAccountUnusable", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `DELETE FROM public.auth_core__user_role WHERE user_id = $1`, lookalike); err != nil {
+		t.Fatal(err)
+	}
+	issued := issueSealed(t, pool, unbound)
+	if issued.UserID != lookalike || issued.ReservedAccountCreated {
+		t.Fatalf("issued to %d (created %v), want the existing account %d", issued.UserID, issued.ReservedAccountCreated, lookalike)
+	}
+	var accounts int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.auth_core__user WHERE lower(email) = $1`,
+		adminaccess.ReservedBreakGlassEmail).Scan(&accounts); err != nil || accounts != 1 {
+		t.Fatalf("%d reserved accounts (%v), want 1", accounts, err)
+	}
+}

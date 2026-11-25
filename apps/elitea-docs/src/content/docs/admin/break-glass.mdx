@@ -62,7 +62,7 @@ An elevation must not make itself permanent or switch off the controls that watc
 - **deny**: refused with `403` and the code `elevation_restricted`, at either level.
 - **sealed**: the identity trust actions. Refused with `403 elevation_restricted` under an elevation a person approved, or one that started with approval off, at either level, and under a sealed elevation at the `admin` level. Allowed and flagged only under a sealed elevation at the `super_admin` level: repairing an identity provider while nobody can sign in is what the sealed path is for.
 
-The value belongs to the action, not to the permission: shortening a retention policy is refused, lengthening it with the same permission is not. A person whose **standing** roles already admit an action is not restricted by these values, elevated or not. An elevation also creates no personal access token (`403 elevation_restricted` on **Create token**), and a sealed session never does.
+The value belongs to the action, not to the permission: shortening a retention policy is refused, lengthening it with the same permission is not. A person whose **standing** roles already admit an action is not restricted by these values, elevated or not. An elevation also creates no personal access token (`403 elevation_restricted` on **Create token**; a request with admin scopes gets the scope rules' own codes `token_scopes_elevated` or `token_scopes_sealed_session` first), and a sealed session never does.
 
 The table lists every action whose value is not `allow`, with the action name a request carries in its body or path (`-` for a route that is one action). It is checked against the action table on every build.
 

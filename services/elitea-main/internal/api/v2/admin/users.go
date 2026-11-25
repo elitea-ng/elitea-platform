@@ -307,6 +307,19 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		}
 		ids = append(ids, user.ID)
 	}
+	// The reserved break-glass account is deleted by no console write: the
+	// delete would cascade its sealed credentials away (ADR-0059 R2.6b).
+	reservedIDs := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		reservedIDs = append(reservedIDs, int64(id))
+	}
+	if reserved, err := adminaccess.AnyReservedAccount(r.Context(), h.pool, reservedIDs); err != nil {
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+		return
+	} else if reserved {
+		adminaccess.Write(w, r, adminaccess.ReservedAccountRefusal())
+		return
+	}
 
 	// One transaction: a partial delete would leave the operator unable to tell
 	// which half of a bulk selection went through, and the journal row for the
@@ -712,6 +725,21 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	if body.Suspended == nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, "suspended field is required")
 		return
+	}
+	// The reserved break-glass account (ADR-0059 R2.6b) is suspended by no
+	// console write: a suspension would make every unbound envelope unusable
+	// for the next outage. Its credentials are revoked with the operator
+	// command instead. Lifting a suspension is not refused.
+	if *body.Suspended {
+		reserved, err := adminaccess.IsReservedAccount(r.Context(), h.pool, int64(userID))
+		if err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+			return
+		}
+		if reserved {
+			adminaccess.Write(w, r, adminaccess.ReservedAccountRefusal())
+			return
+		}
 	}
 
 	// One transaction: a suspension and the revocation of the account's
