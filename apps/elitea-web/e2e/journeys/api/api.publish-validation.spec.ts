@@ -69,8 +69,14 @@ import type { APIRequestContext, APIResponse } from '@playwright/test';
 test.use({ storageState: STORAGE_STATE.admin });
 
 /** A name no other worker, engine or run can collide with. */
+/**
+ * A unique agent name. The suffix is numeric only: a base-36 suffix can spell a
+ * placeholder marker the validator matches as a substring ("todo", "tbd",
+ * "xxx", `placeholderTextMarkers` in eliteacore/handler.go), and then the
+ * well-formed agent fails with "name looks like placeholder text".
+ */
 function autotestName(tag: string): string {
-  return `${AUTOTEST_PREFIX}${tag}_${Math.random().toString(36).slice(2, 8)}`;
+  return `${AUTOTEST_PREFIX}${tag}_${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
 }
 
 /** A version name in the alphabet the route accepts (`^[a-zA-Z0-9._-]+$`). */

@@ -11,9 +11,15 @@ import { server } from '@/test/setup';
 /**
  * The labels a write control carries: what a reader must never find enabled.
  * A filter's "Apply" reads, so only "Apply to …" is a write.
+ *
+ * Anchored to the start of the name, because a control names its action
+ * first ("Delete role: x", "Bulk invite", "Re-validate"), while a row that
+ * merely shows data can contain a verb anywhere. The audit trail lists
+ * traces named after their routes ("DELETE /api/v2/admin/..."), so a name
+ * that is an HTTP route is never a write control.
  */
 const WRITE_CONTROL =
-  /\b(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|bind|manage|test|validate|set|apply to)\b/i;
+  /^(?!(?:get|put|post|patch|delete)\s+\/)\s*(?:bulk\s+|re-?|un)?(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|bind|manage|test|validate|set|apply to)\b/i;
 
 /**
  * Serves `GET /admin/console` with `itemIds` at `level`, and the item read
