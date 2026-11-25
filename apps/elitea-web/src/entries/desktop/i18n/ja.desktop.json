@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "承認付きで変更",
   "workspace.mode.bypassHint": "承認なし",
   "workspace.mode.planHint": "計画のみ、変更しない",
-  "workspace.usage.context": "コンテキスト：ウィンドウの {{percent}}% を使用"
+  "workspace.usage.context": "コンテキスト：ウィンドウの {{percent}}% を使用",
+  "workspace.team.menu": "チームで実行",
+  "workspace.team.note": "チームのエージェントとリードで新しいスレッドを開始します。全員がこのコンピューターでこのフォルダーを使って作業します。",
+  "workspace.team.otherProject": "別のプロジェクトのエージェント",
+  "workspace.team.pipeline": "パイプラインを含む",
+  "workspace.team.noMembers": "エージェントなし",
+  "workspace.team.leadNotice": "チーム {{team}}: エージェントを指定しないメッセージは {{lead}}（リード）に届きます。別のメンバーに宛てるには @名前 と書きます。",
+  "workspace.team.addressedNotice": "チーム {{team}}: メンバーに宛てるには @名前 と書きます。エージェントを指定しないメッセージは、最後に回答したエージェント（最初は {{lead}}）に届きます。",
+  "workspace.team.folderNotice": "各メンバーはこのコンピューターで、このフォルダーとそのツールを使って作業します。メンバーがツールとして呼び出すエージェントはクラウドで実行され、フォルダーを受け取りません。",
+  "workspace.team.notListed": "ここに表示されないエージェントがあります"
 }

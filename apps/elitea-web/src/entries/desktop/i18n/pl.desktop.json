@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "Zmiany z zatwierdzeniem",
   "workspace.mode.bypassHint": "Bez zatwierdzeń",
   "workspace.mode.planHint": "Planuje, niczego nie zmienia",
-  "workspace.usage.context": "Kontekst: użyto {{percent}}% okna"
+  "workspace.usage.context": "Kontekst: użyto {{percent}}% okna",
+  "workspace.team.menu": "Uruchom jako zespół",
+  "workspace.team.note": "Rozpoczyna nowy wątek z agentami i liderem zespołu. Wszyscy pracują na tym komputerze z tym folderem.",
+  "workspace.team.otherProject": "Agenci innego projektu",
+  "workspace.team.pipeline": "Zawiera potok",
+  "workspace.team.noMembers": "Brak agentów",
+  "workspace.team.leadNotice": "Zespół {{team}}: wiadomość, która nie wskazuje żadnego agenta, trafia do {{lead}} (lider); napisz @Nazwa, aby zwrócić się do innego członka.",
+  "workspace.team.addressedNotice": "Zespół {{team}}: napisz @Nazwa, aby zwrócić się do członka; wiadomość, która nie wskazuje żadnego agenta, trafia do agenta, który odpowiedział ostatni (na początku {{lead}}).",
+  "workspace.team.folderNotice": "Każdy członek pracuje na tym komputerze z tym folderem i jego narzędziami. Agent, którego członek wywołuje jako narzędzie, działa w chmurze i nie otrzymuje folderu.",
+  "workspace.team.notListed": "Jeden agent nie jest tu wymieniony"
 }

@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "שינויים באישור",
   "workspace.mode.bypassHint": "ללא אישורים",
   "workspace.mode.planHint": "מתכנן, לא משנה דבר",
-  "workspace.usage.context": "הקשר: {{percent}}% מהחלון בשימוש"
+  "workspace.usage.context": "הקשר: {{percent}}% מהחלון בשימוש",
+  "workspace.team.menu": "הפעלה כצוות",
+  "workspace.team.note": "מתחיל שרשור חדש עם הסוכנים והמוביל של הצוות. כולם עובדים במחשב הזה עם התיקייה הזו.",
+  "workspace.team.otherProject": "סוכנים של פרויקט אחר",
+  "workspace.team.pipeline": "כולל צינור",
+  "workspace.team.noMembers": "אין סוכנים",
+  "workspace.team.leadNotice": "צוות {{team}}: הודעה שלא נוקבת בשם סוכן נשלחת אל {{lead}} (מוביל); כתבו @שם כדי לפנות לחבר אחר.",
+  "workspace.team.addressedNotice": "צוות {{team}}: כתבו @שם כדי לפנות לחבר; הודעה שלא נוקבת בשם סוכן נשלחת לסוכן שענה אחרון (בהתחלה {{lead}}).",
+  "workspace.team.folderNotice": "כל חבר עובד במחשב הזה עם התיקייה הזו והכלים שלה. סוכן שחבר קורא לו ככלי רץ בענן ואינו מקבל את התיקייה.",
+  "workspace.team.notListed": "סוכן אחד אינו מופיע כאן"
 }

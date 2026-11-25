@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "승인 후 변경",
   "workspace.mode.bypassHint": "승인 없음",
   "workspace.mode.planHint": "계획만, 변경 없음",
-  "workspace.usage.context": "컨텍스트: 창의 {{percent}}% 사용"
+  "workspace.usage.context": "컨텍스트: 창의 {{percent}}% 사용",
+  "workspace.team.menu": "팀으로 실행",
+  "workspace.team.note": "팀의 에이전트와 리드로 새 스레드를 시작합니다. 모두 이 컴퓨터에서 이 폴더로 작업합니다.",
+  "workspace.team.otherProject": "다른 프로젝트의 에이전트",
+  "workspace.team.pipeline": "파이프라인 포함",
+  "workspace.team.noMembers": "에이전트 없음",
+  "workspace.team.leadNotice": "팀 {{team}}: 에이전트를 지정하지 않은 메시지는 {{lead}}(리드)에게 갑니다. 다른 멤버에게 보내려면 @이름을 쓰세요.",
+  "workspace.team.addressedNotice": "팀 {{team}}: 멤버에게 보내려면 @이름을 쓰세요. 에이전트를 지정하지 않은 메시지는 마지막으로 답한 에이전트(처음에는 {{lead}})에게 갑니다.",
+  "workspace.team.folderNotice": "모든 멤버는 이 컴퓨터에서 이 폴더와 그 도구로 작업합니다. 멤버가 도구로 호출하는 에이전트는 클라우드에서 실행되며 폴더를 받지 않습니다.",
+  "workspace.team.notListed": "여기에 표시되지 않는 에이전트가 있습니다"
 }

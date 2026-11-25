@@ -1187,5 +1187,14 @@
   "workspace.composer.skillPinned": "Pinned",
   "workspace.composer.skillUnpin": "Unpin",
   "workspace.composer.skillGone": "Skill {{id}} is not available",
-  "workspace.composer.skillsGone": "Pinned skills you can no longer use"
+  "workspace.composer.skillsGone": "Pinned skills you can no longer use",
+  "workspace.team.menu": "Run as a team",
+  "workspace.team.note": "Starts a new thread with the team’s agents and lead. They all work on this computer with this folder.",
+  "workspace.team.otherProject": "Agents of another project",
+  "workspace.team.pipeline": "Has a pipeline",
+  "workspace.team.noMembers": "No agents",
+  "workspace.team.leadNotice": "Team {{team}}: a message that names no agent goes to {{lead}} (lead); write @Name to address another member.",
+  "workspace.team.addressedNotice": "Team {{team}}: write @Name to address a member; a message that names no agent goes to the agent that answered last ({{lead}} at first).",
+  "workspace.team.folderNotice": "Every member works on this computer with this folder and its tools. An agent a member calls as a tool runs in the cloud and does not get the folder.",
+  "workspace.team.notListed": "An agent is not listed here"
 }

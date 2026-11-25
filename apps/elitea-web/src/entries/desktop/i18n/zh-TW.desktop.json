@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "需核准後變更",
   "workspace.mode.bypassHint": "無需核准",
   "workspace.mode.planHint": "僅規劃，不做變更",
-  "workspace.usage.context": "上下文：已使用視窗的 {{percent}}%"
+  "workspace.usage.context": "上下文：已使用視窗的 {{percent}}%",
+  "workspace.team.menu": "以團隊執行",
+  "workspace.team.note": "用團隊的代理與負責人開始新的執行緒。它們都在這台電腦上使用此資料夾工作。",
+  "workspace.team.otherProject": "其他專案的代理",
+  "workspace.team.pipeline": "包含管線",
+  "workspace.team.noMembers": "沒有代理",
+  "workspace.team.leadNotice": "團隊 {{team}}：未指明代理的訊息會送給 {{lead}}（負責人）；寫 @名稱 可傳給其他成員。",
+  "workspace.team.addressedNotice": "團隊 {{team}}：寫 @名稱 可傳給某位成員；未指明代理的訊息會送給最後回答的代理（起初是 {{lead}}）。",
+  "workspace.team.folderNotice": "每位成員都在這台電腦上使用此資料夾及其工具工作。成員當作工具呼叫的代理在雲端執行，不會取得此資料夾。",
+  "workspace.team.notListed": "有代理未在此列出"
 }

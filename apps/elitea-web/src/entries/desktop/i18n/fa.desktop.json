@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "تغییر با تأیید",
   "workspace.mode.bypassHint": "بدون تأیید",
   "workspace.mode.planHint": "برنامه‌ریزی، بدون تغییر",
-  "workspace.usage.context": "بافت: {{percent}}٪ از پنجره استفاده شده"
+  "workspace.usage.context": "بافت: {{percent}}٪ از پنجره استفاده شده",
+  "workspace.team.menu": "اجرا به‌صورت تیم",
+  "workspace.team.note": "رشته‌ای تازه با عامل‌ها و سرپرست تیم آغاز می‌کند. همه روی این رایانه با این پوشه کار می‌کنند.",
+  "workspace.team.otherProject": "عامل‌های پروژه‌ای دیگر",
+  "workspace.team.pipeline": "دارای خط لوله",
+  "workspace.team.noMembers": "بدون عامل",
+  "workspace.team.leadNotice": "تیم {{team}}: پیامی که نام هیچ عاملی را نمی‌برد به {{lead}} (سرپرست) می‌رود؛ برای خطاب به عضوی دیگر ‎@نام بنویسید.",
+  "workspace.team.addressedNotice": "تیم {{team}}: برای خطاب به یک عضو ‎@نام بنویسید؛ پیامی که نام هیچ عاملی را نمی‌برد به عاملی می‌رود که آخرین بار پاسخ داد (در آغاز {{lead}}).",
+  "workspace.team.folderNotice": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند. عاملی که یک عضو به‌عنوان ابزار فرا می‌خواند در ابر اجرا می‌شود و پوشه را دریافت نمی‌کند.",
+  "workspace.team.notListed": "یکی از عامل‌ها اینجا فهرست نشده است"
 }

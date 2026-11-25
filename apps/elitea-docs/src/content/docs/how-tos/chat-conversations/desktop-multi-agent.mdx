@@ -15,6 +15,24 @@ A **Local work** thread in the Elitea desktop app can hold more than one agent. 
 
 The agents join the conversation when you send your next message. An agent joins on its first version. An agent of a saved team that names no version answers on its agent's default version.
 
+## Run a thread as a team
+
+A saved [team](/how-tos/agents-pipelines/agent-teams) can run a Local work thread.
+
+<Steps>
+1. Open a new thread in **Local work** and open the agent chip.
+2. Choose **Run as a team ›**, then the team. The chip shows the team and its agents, for example **Review crew: Reviewer · base + Coder**.
+3. Send your first message. The thread is created with every agent of the team, each on the version the team saved, and the team's lead. This is what **Start conversation** on the **Teams** tab writes for a chat.
+</Steps>
+
+- The composer's agent is the team's lead, or its first agent when the team has no lead.
+- Every agent of the team runs **on this computer**, with the folder and its tools. To have one run in the cloud, add it with **Add a cloud agent ›** instead.
+- An agent that a team member calls as a tool (a nested agent) runs in the cloud and does **not** get the folder. The composer says so above the message box while the team runs the thread.
+- A team is listed but cannot be picked when one of its agents is not an agent of the folder's project (**Agents of another project**) or is a pipeline (**Has a pipeline**): a pipeline never runs on this computer.
+- Picking a team always starts a new thread. You cannot add a team to a thread that already exists; a chat cannot take a team afterwards either. You can still add single agents to it.
+
+When you send the thread to the cloud, the cloud continues on the agent the floor routes to: the lead, or without a lead the agent of the last local turn. A message you write to the thread while it is in the cloud is routed the same way, and **@Name** addresses an agent there too.
+
 ## Address a message
 
 Write **@Name** in your message for each agent it is for, for example:

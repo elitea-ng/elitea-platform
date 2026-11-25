@@ -1019,5 +1019,14 @@
   "workspace.mode.actHint": "تغييرات بموافقة",
   "workspace.mode.bypassHint": "بلا موافقات",
   "workspace.mode.planHint": "يخطط ولا يغيّر شيئًا",
-  "workspace.usage.context": "السياق: {{percent}}٪ من النافذة مستخدم"
+  "workspace.usage.context": "السياق: {{percent}}٪ من النافذة مستخدم",
+  "workspace.team.menu": "التشغيل كفريق",
+  "workspace.team.note": "يبدأ سلسلة جديدة مع وكلاء الفريق وقائده. يعملون جميعًا على هذا الكمبيوتر بهذا المجلد.",
+  "workspace.team.otherProject": "وكلاء من مشروع آخر",
+  "workspace.team.pipeline": "يحتوي على خط معالجة",
+  "workspace.team.noMembers": "لا يوجد وكلاء",
+  "workspace.team.leadNotice": "الفريق {{team}}: الرسالة التي لا تسمّي وكيلًا تذهب إلى {{lead}} (القائد)؛ اكتب @الاسم لمخاطبة عضو آخر.",
+  "workspace.team.addressedNotice": "الفريق {{team}}: اكتب @الاسم لمخاطبة عضو؛ الرسالة التي لا تسمّي وكيلًا تذهب إلى الوكيل الذي أجاب أخيرًا ({{lead}} في البداية).",
+  "workspace.team.folderNotice": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته. الوكيل الذي يستدعيه عضو كأداة يعمل في السحابة ولا يحصل على المجلد.",
+  "workspace.team.notListed": "أحد الوكلاء غير مدرج هنا"
 }
