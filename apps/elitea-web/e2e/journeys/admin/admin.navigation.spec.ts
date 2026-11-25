@@ -33,6 +33,16 @@
  *    against the model and this one is against what a browser renders.
  *  - **Collapsing must survive a reload** — a preference that resets on every
  *    page load is not a preference.
+ *
+ * ## Six labelled areas (ADR-0059 decision 6, R3.2, issue 2532)
+ *
+ * A new install, which the E2E stack is, has the capability document's
+ * `admin_console_areas` switch on: the navigation is six labelled areas, each
+ * listing the items the document opens, and "Tasks" and "Schedules & Tasks"
+ * are one item whose page links both. J37g turns the switch off in its own
+ * page only (it rewrites that page's document read, so no other journey sees
+ * it) and asserts the two unlabelled groups an upgraded deployment keeps for
+ * one release.
  */
 import { test as adminTest, expect, type Page } from '@playwright/test';
 
@@ -43,128 +53,96 @@ import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 adminTest.use({ storageState: STORAGE_STATE.admin });
 
 /**
- * Every nav item, with the heading its page renders. The pairing is the point:
- * a nav label and a page heading that disagree cost the operator a click to
- * find out what the item was, which is why `schedules` is labelled
- * "Schedules & Tasks" here and not the reference's "System".
+ * Every nav item, in navigation order, with its area and the heading its page
+ * renders. The pairing is the point: a link whose page does not render its
+ * heading is a link to nowhere. e2e-admin holds `admin` (and the custom
+ * `e2e_admin_extras`), and its document opens every item the web table places;
+ * Roles is not among them until its Access item ships (R3.6).
  */
 const ITEMS = [
-  { id: 'users', label: 'Users', heading: 'Users', path: '/admin/app/users' },
-  { id: 'roles', label: 'Roles', heading: 'Roles', path: '/admin/app/roles' },
-  { id: 'projects', label: 'Projects', heading: 'Projects', path: '/admin/app/projects' },
-  { id: 'secrets', label: 'Secrets', heading: 'Secrets', path: '/admin/app/secrets' },
+  { area: 'people_access', id: 'users', heading: 'Users', path: '/admin/app/users' },
+  { area: 'projects', id: 'projects', heading: 'Projects', path: '/admin/app/projects' },
+  { area: 'projects', id: 'app-requests', heading: 'App Requests', path: '/admin/app/app-requests' },
+  { area: 'models_spend', id: 'llm-governance', heading: 'LLM Governance', path: '/admin/app/governance' },
+  { area: 'models_spend', id: 'budgets-alerts', heading: 'Budgets', path: '/admin/app/budgets' },
+  { area: 'agents_governance', id: 'agent-registry', heading: 'Agent registry', path: '/admin/app/agent-registry' },
   {
-    id: 'app-requests',
-    label: 'App Requests',
-    heading: 'App Requests',
-    path: '/admin/app/app-requests',
-  },
-  {
-    id: 'configuration',
-    label: 'Configuration',
-    heading: 'Configuration',
-    path: '/admin/app/configuration',
-  },
-  { id: 'branding', label: 'Branding', heading: 'Branding', path: '/admin/app/branding' },
-  { id: 'email', label: 'E-mail', heading: 'E-mail', path: '/admin/app/email' },
-  { id: 'features', label: 'Features', heading: 'Features', path: '/admin/app/features' },
-  {
-    id: 'service-descriptors',
-    label: 'Service Descriptors',
-    heading: 'Service Descriptors',
-    path: '/admin/app/service-descriptors',
-  },
-  // Toolkits renders for this persona because shared migration 0114 grants
-  // `toolkit_catalogue.type.manage` to the administration `admin` role, which
-  // `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin. The nav gate reads
-  // the same name.
-  {
-    id: 'toolkit-types',
-    label: 'Toolkits',
-    heading: 'Toolkits',
-    path: '/admin/app/toolkits',
-  },
-  { id: 'audit', label: 'Audit Trail', heading: 'Audit Trail', path: '/admin/app/audit' },
-  // Data retention and Kill switch render for this persona because shared
-  // migrations 0195 (`retention.manage`, `legal_hold.manage`) and 0194
-  // (`safety.suspend`) grant them to the administration `admin` role.
-  {
-    id: 'retention',
-    label: 'Data retention',
-    heading: 'Data retention',
-    path: '/admin/app/retention',
-  },
-  // Tasks is the platform's OWN background jobs (`pages/admin/Tasks.tsx`).
-  // The nav gate is `runtime.plugins` in administration
-  // mode, granted by shared migration 0060, so this item renders for every
-  // persona that reaches this nav at all. Listed in NAV ORDER so the page the
-  // loop leaves behind for `checkA11y` stays the one it always was.
-  { id: 'tasks', label: 'Tasks', heading: 'Tasks', path: '/admin/app/tasks' },
-  {
-    id: 'kill-switch',
-    label: 'Kill switch',
-    heading: 'Kill switch',
-    path: '/admin/app/kill-switch',
-  },
-  {
-    id: 'schedules',
-    label: 'Schedules & Tasks',
-    heading: 'Schedules & Tasks',
-    path: '/admin/app/schedules',
-  },
-  {
-    id: 'governance',
-    label: 'LLM Governance',
-    heading: 'LLM Governance',
-    path: '/admin/app/governance',
-  },
-  // Agent registry (ADR-0040 decision 1, issue 1497) shares LLM Governance's
-  // gate, `configuration.governance`, so it renders for the same persona.
-  {
-    id: 'agent-registry',
-    label: 'Agent registry',
-    heading: 'Agent registry',
-    path: '/admin/app/agent-registry',
-  },
-  // Connector requests (ADR-0044 decision 1, issue 1501) renders for this
-  // persona because shared migration 0207 grants `connector.approve` to the
-  // administration `admin` role.
-  {
+    area: 'agents_governance',
     id: 'connector-requests',
-    label: 'Connector requests',
     heading: 'Connector requests',
     path: '/admin/app/connector-requests',
   },
-  // Delegations awaiting review (ADR-0044 Amendment 1, epic 2156 story S6)
-  // shares the Delegation section's gate, `configuration.governance`, so it
-  // renders for the same persona as Agent registry.
   {
+    area: 'agents_governance',
     id: 'delegation-review',
-    label: 'Delegations awaiting review',
     heading: 'Delegations awaiting review',
     path: '/admin/app/delegation-review',
   },
-  // Credential inventory and Permission trimming (ADR-0044 decision 5, issue
-  // 1501): shared migration 0208 grants `credentials.inventory.read` to the
-  // administration `admin` role, the nav gate's name.
+  { area: 'agents_governance', id: 'toolkits', heading: 'Toolkits', path: '/admin/app/toolkits' },
   {
+    area: 'agents_governance',
     id: 'credential-inventory',
-    label: 'Credential inventory',
     heading: 'Credential inventory',
     path: '/admin/app/credential-inventory',
   },
   {
+    area: 'agents_governance',
     id: 'permission-trimming',
-    label: 'Permission trimming',
     heading: 'Permission trimming',
     path: '/admin/app/permission-trimming',
   },
-  // Budgets renders for this persona because shared migration 0062 grants
-  // `models.admin.project_budgets.view` to the administration `admin` role,
-  // and `apps/elitea-web/scripts/e2e-stack.sh` gives e2e-admin that role. The
-  // nav gate reads the same name. An item left out of this list does not make
-  // the suite ignore it — the count assertion below fails on it.
-  { id: 'budgets', label: 'Budgets', heading: 'Budgets', path: '/admin/app/budgets' },
+  { area: 'agents_governance', id: 'kill-switch', heading: 'Kill switch', path: '/admin/app/kill-switch' },
+  { area: 'security', id: 'audit-trail', heading: 'Audit Trail', path: '/admin/app/audit' },
+  { area: 'security', id: 'data-retention', heading: 'Data retention', path: '/admin/app/retention' },
+  { area: 'platform', id: 'configuration', heading: 'Configuration', path: '/admin/app/configuration' },
+  { area: 'platform', id: 'features', heading: 'Features', path: '/admin/app/features' },
+  { area: 'platform', id: 'branding', heading: 'Branding', path: '/admin/app/branding' },
+  { area: 'platform', id: 'email', heading: 'E-mail', path: '/admin/app/email' },
+  { area: 'platform', id: 'schedules-tasks', heading: 'Schedules & Tasks', path: '/admin/app/schedules' },
+  {
+    area: 'platform',
+    id: 'service-descriptors',
+    heading: 'Service Descriptors',
+    path: '/admin/app/service-descriptors',
+  },
+  { area: 'platform', id: 'secrets', heading: 'Secrets', path: '/admin/app/secrets' },
+] as const;
+
+const AREAS = [
+  { id: 'people_access', label: 'People and access' },
+  { id: 'projects', label: 'Projects' },
+  { id: 'models_spend', label: 'Models and spend' },
+  { id: 'agents_governance', label: 'Agents and governance' },
+  { id: 'security', label: 'Security' },
+  { id: 'platform', label: 'Platform' },
+] as const;
+
+/**
+ * The two unlabelled groups an upgraded deployment keeps while the switch is
+ * off, in their order: what J37g asserts.
+ */
+const TWO_GROUP_ITEMS = [
+  ['users', 'roles', 'projects', 'secrets', 'app-requests'],
+  [
+    'configuration',
+    'branding',
+    'email',
+    'features',
+    'service-descriptors',
+    'toolkit-types',
+    'governance',
+    'agent-registry',
+    'connector-requests',
+    'delegation-review',
+    'credential-inventory',
+    'permission-trimming',
+    'budgets',
+    'audit',
+    'retention',
+    'tasks',
+    'kill-switch',
+    'schedules',
+  ],
 ] as const;
 
 /** The ONE `goto` in this file: the landing page an operator actually opens. */
@@ -181,7 +159,7 @@ adminTest('J37: the landing page offers a nav, and marks the page it is showing'
   // the item that must be marked — without the index alias the LANDING screen
   // would be the one screen with nothing active, which reads as a broken nav on
   // first contact.
-  await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-nav-item-users')).toHaveAttribute('aria-current', 'page');
 
   // A landmark with a name, not an anonymous <div> of click handlers.
@@ -213,8 +191,9 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     // The URL moved…
     await page.waitForURL((url) => url.pathname === item.path, { timeout: 20_000 });
     // …the destination PAGE rendered — a link to a deleted route would satisfy
-    // the URL assertion and render nothing at all…
-    await expect(page.getByRole('heading', { name: item.heading, exact: true })).toBeVisible({
+    // the URL assertion and render nothing at all. Level 1: an area label
+    // ("Projects", "Security") is a heading of the navigation too…
+    await expect(page.getByRole('heading', { level: 1, name: item.heading, exact: true })).toBeVisible({
       timeout: 20_000,
     });
     // …and the nav says where you are.
@@ -224,8 +203,22 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     );
   }
 
-  // Exactly the items above. One more would mean an item nothing in this list covers.
+  // Exactly the items above, each under its area's label. One more would
+  // mean an item nothing in this list covers.
   await expect(nav.getByRole('link')).toHaveCount(ITEMS.length);
+  for (const area of AREAS) {
+    const section = nav.getByTestId(`admin-nav-area-${area.id}`);
+    await expect(section.getByRole('heading', { name: area.label, exact: true })).toBeVisible();
+    await expect(section.getByRole('link')).toHaveCount(ITEMS.filter((item) => item.area === area.id).length);
+  }
+
+  // "Schedules and tasks" is one item over two pages: the Tasks tab reaches
+  // `/tasks`, and the same item stays marked.
+  await nav.getByTestId('admin-nav-item-schedules-tasks').click();
+  await page.getByTestId('admin-schedules-tasks-tab-tasks').click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/tasks', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(nav.getByTestId('admin-nav-item-schedules-tasks')).toHaveAttribute('aria-current', 'page');
   await checkA11y(page);
 });
 
@@ -251,41 +244,41 @@ adminTest('J37d: keyboard alone reaches a page, because the items are real links
   await openAdminLanding(page);
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });
 
-  const roles = nav.getByTestId('admin-nav-item-roles');
+  const projects = nav.getByTestId('admin-nav-item-projects');
   // An anchor with an href is what makes this true; the reference's `Box` +
   // `onClick` is not focusable and not activatable by Enter.
-  await expect(roles).toHaveAttribute('href', '/admin/app/roles');
-  await roles.focus();
-  await expect(roles).toBeFocused();
+  await expect(projects).toHaveAttribute('href', '/admin/app/projects');
+  await projects.focus();
+  await expect(projects).toBeFocused();
   await page.keyboard.press('Enter');
 
-  await page.waitForURL((url) => url.pathname === '/admin/app/roles', { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Roles' })).toBeVisible({ timeout: 20_000 });
+  await page.waitForURL((url) => url.pathname === '/admin/app/projects', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Projects', exact: true })).toBeVisible({ timeout: 20_000 });
 });
 
 adminTest('J37e: collapsing the nav survives a full reload', async ({ page }) => {
   await openAdminLanding(page);
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });
 
-  await expect(nav.getByText('Schedules & Tasks')).toBeVisible();
+  await expect(nav.getByText('Schedules and tasks')).toBeVisible();
   await page.getByTestId('admin-nav-collapse-toggle').click();
-  await expect(nav.getByText('Schedules & Tasks')).toHaveCount(0);
+  await expect(nav.getByText('Schedules and tasks')).toHaveCount(0);
   // Collapsed hides the LABEL, never the link — the item must stay reachable.
-  await expect(nav.getByTestId('admin-nav-item-schedules')).toBeVisible();
+  await expect(nav.getByTestId('admin-nav-item-schedules-tasks')).toBeVisible();
 
   // A FULL RELOAD, not a re-render: an in-memory toggle passes everything above
   // and loses the preference the moment the operator opens a new tab.
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('admin-nav')).toBeVisible({ timeout: 20_000 });
   const reloadedNav = page.getByRole('navigation', { name: 'Admin navigation' });
-  await expect(reloadedNav.getByText('Schedules & Tasks')).toHaveCount(0);
+  await expect(reloadedNav.getByText('Schedules and tasks')).toHaveCount(0);
 
   // Expanding again is asserted rather than left as cleanup: the preference is
   // per-context localStorage and does not leak into other journeys (each test
   // builds a fresh context from the storage-state FILE), so this is here to
   // prove the toggle works in both directions, not to tidy up.
   await page.getByTestId('admin-nav-collapse-toggle').click();
-  await expect(reloadedNav.getByText('Schedules & Tasks')).toBeVisible();
+  await expect(reloadedNav.getByText('Schedules and tasks')).toBeVisible();
 });
 
 /*
@@ -310,4 +303,39 @@ adminTest('J37f: every admin page renders on the one type scale', async ({ page 
     });
     await expectTypeScale(page, item.path);
   }
+});
+
+/*
+ * The switch off: an upgraded deployment keeps the two unlabelled groups for
+ * one release (the upgrade note says so). The switch is a platform setting,
+ * and writing it would change the console of every journey running beside
+ * this one, so this page alone reads a document whose switch is off: the
+ * route answers the server's own document with the one field changed.
+ */
+adminTest('J37g: with admin_console_areas off, the two unlabelled groups render unchanged', async ({ page }) => {
+  await page.route('**/api/v2/admin/console', async (route) => {
+    const response = await route.fetch();
+    const document = (await response.json()) as Record<string, unknown>;
+    expect(document['admin_console_areas'], 'a new install has the six areas on').toBe(true);
+    await route.fulfill({ response, json: { ...document, admin_console_areas: false } });
+  });
+  await openAdminLanding(page);
+  const nav = page.getByRole('navigation', { name: 'Admin navigation' });
+
+  await expect(nav.getByTestId(/^admin-nav-area-/)).toHaveCount(0);
+  const links = nav.getByRole('link');
+  await expect(links).toHaveCount(TWO_GROUP_ITEMS.flat().length);
+  const ids = await links.evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('data-testid')));
+  expect(ids).toEqual(TWO_GROUP_ITEMS.flat().map((id) => `admin-nav-item-${id}`));
+  await expect(nav.getByText('Schedules & Tasks')).toBeVisible();
+
+  // Both groups' pages still open by clicking, Roles among them.
+  await nav.getByTestId('admin-nav-item-roles').click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/roles', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Roles', exact: true })).toBeVisible({ timeout: 20_000 });
+  await nav.getByTestId('admin-nav-item-tasks').click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/tasks', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
+  // The Tasks page shows no Schedules/Tasks strip with the switch off.
+  await expect(page.getByTestId('admin-schedules-tasks-tabs')).toHaveCount(0);
 });

@@ -32,6 +32,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 
+import { getGetAdminConsoleDocumentQueryKey } from '@/shared/api/generated/admin/admin';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
@@ -39,6 +40,9 @@ import { unwrapBody } from '@/shared/api/unwrap';
 const ADMIN_MODE = 'administration';
 
 const SCHEMAS_URL = `/admin/plugin_config_schemas/${ADMIN_MODE}`;
+
+/** The Features section whose `admin_console_areas` the console document carries. */
+const ADMIN_CONSOLE_SECTION = 'admin_console';
 
 function sectionValuesUrl(sectionId: string): string {
   return `/admin/plugin_config_values/${ADMIN_MODE}/${encodeURIComponent(sectionId)}`;
@@ -303,7 +307,14 @@ export function useSaveAdminConfigValues(): UseMutationResult<void, Error, Admin
         body: JSON.stringify({ values }),
       });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminConfigKeys.all }),
+    onSuccess: async (_, { sectionId }) => {
+      // The console capability document carries the `admin_console` section's
+      // switch (ADR-0059 R3.2), so saving it redraws the navigation at once.
+      if (sectionId === ADMIN_CONSOLE_SECTION) {
+        await queryClient.invalidateQueries({ queryKey: getGetAdminConsoleDocumentQueryKey(), exact: true });
+      }
+      await queryClient.invalidateQueries({ queryKey: adminConfigKeys.all });
+    },
   });
 }
 

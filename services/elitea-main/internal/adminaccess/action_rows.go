@@ -351,6 +351,7 @@ func actionRows() []Action {
 	// The Configuration sections.
 	maintenance := section("maintenance", RuntimePlugins)
 	rows = append(rows,
+		section("admin_console", RuntimePlugins),
 		section("agent_lifecycle", ConfigurationGovernance),
 		section("agent_publishing", RuntimePlugins),
 		section("agents", ConfigurationGovernance),

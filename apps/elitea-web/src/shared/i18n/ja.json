@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "再試行",
   "pages.admin.console.error.title": "コンソールを読み込めませんでした",
   "pages.admin.console.loading": "コンソールを読み込んでいます…",
-  "pages.admin.console.refused": "管理コンソールへのアクセス権がありません。"
+  "pages.admin.console.refused": "管理コンソールへのアクセス権がありません。",
+  "pages.admin.console.area.people_access": "ユーザーとアクセス",
+  "pages.admin.console.area.projects": "プロジェクト",
+  "pages.admin.console.area.models_spend": "モデルと費用",
+  "pages.admin.console.area.agents_governance": "エージェントとガバナンス",
+  "pages.admin.console.area.security": "セキュリティ",
+  "pages.admin.console.area.platform": "プラットフォーム",
+  "pages.admin.console.item.schedules-tasks": "スケジュールとタスク",
+  "pages.admin.schedulesTasks.tab.schedules": "スケジュール",
+  "pages.admin.itemDenied.title": "{{item}} を開くことはできません",
+  "pages.admin.itemDenied.explanation": "あなたの管理ロールには {{item}} が含まれていません。サーバーはそのページと変更を拒否します。",
+  "pages.admin.itemDenied.rolesLoading": "これを開けるロールを調べています…",
+  "pages.admin.itemDenied.rolesError": "これを開けるロールを読み込めませんでした。",
+  "pages.admin.itemDenied.noRole": "このデプロイでこれを開けるロールはありません。",
+  "pages.admin.itemDenied.rolesIntro": "これを開けるロール:",
+  "pages.admin.itemDenied.askSupport": "これらのロールを申請するには、IT サポートに連絡してください:",
+  "pages.admin.itemDenied.askFallback": "これらのロールを申請するには、このデプロイを管理している担当者に連絡してください。"
 }

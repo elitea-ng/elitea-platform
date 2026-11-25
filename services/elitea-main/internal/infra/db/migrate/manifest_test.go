@@ -1257,11 +1257,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elitea_auth.browser_sessions widened by `sealed`, the session kind of a
 	// sealed break-glass sign-in (issue 2521, ADR-0059 R2.7a). No permission.
 	//
-	// 273: shared/0273_admin_audit_elevation_flag.sql, the nullable
+	// 273: shared/0273_admin_console_areas_default.sql, the switch
+	// admin_console.admin_console_areas written off in centry.platform_config
+	// on a database that already holds an administration role assignment, so
+	// an upgrade keeps the two-group navigation for one release (issue 2532,
+	// ADR-0059 R3.2). No permission.
+	//
+	// 274: shared/0274_admin_audit_elevation_flag.sql, the nullable
 	// elevation_flagged column of centry.audit_events, the review mark of an
 	// action the action table flags under an elevation, outside the chain
 	// hash (issue 2522, ADR-0059 R2.8a). No permission.
-	require.EqualValues(t, 273, Head(shared))
+	require.EqualValues(t, 274, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

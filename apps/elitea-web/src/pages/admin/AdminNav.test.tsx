@@ -18,13 +18,21 @@
  * fixture disables `color-contrast` wholesale — nothing else in this repo would
  * notice an unreadable label in one of the two schemes.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { RouterProvider } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  getGetAdminConsoleDocumentMockHandler,
+  getGetAdminConsoleDocumentResponseMock,
+} from '@/shared/api/generated/admin/admin.msw';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { parseColor } from '@/shared/brand/color';
 import { remToPx } from '@/shared/ui/lib/testTheme';
@@ -35,6 +43,7 @@ import {
   adminNavGroups,
   visibleAdminNavGroups,
 } from './adminNavItems';
+import { adminConsoleNavAreas, adminConsoleNavItems, type AdminConsoleNavItem } from './adminConsoleAreas';
 import { readPersistedAdminNavCollapsed, useAdminNavCollapsedStore } from './adminNavCollapsed';
 import { adminApiBaseUrl } from './adminUiConfig';
 import registry from './adminPermissionRegistry.json';
@@ -43,6 +52,7 @@ import {
   COLLAPSED_SIDE_BAR_WIDTH_REM,
   SIDE_BAR_WIDTH_REM,
 } from '@/shared/ui/layout/sidebarWidth';
+import { server } from '@/test/setup';
 import { testTimeout } from '@/test/timeouts';
 
 installWebStorageShim();
@@ -97,11 +107,19 @@ function navItem(id: string): HTMLElement {
 }
 
 beforeEach(() => {
+  configureGeneratedClient({ baseUrl: 'https://elitea.example' });
   setPermissions(ALL_PERMISSIONS);
   useAdminNavCollapsedStore.setState({ collapsed: false });
+  // Most of this file is the two-group navigation, which renders while the
+  // capability document's `admin_console_areas` switch is off (ADR-0059
+  // R3.2). The last section turns the switch on for the six areas.
+  server.use(
+    getGetAdminConsoleDocumentMockHandler({ ...getGetAdminConsoleDocumentResponseMock(), admin_console_areas: false }),
+  );
 });
 
 afterEach(() => {
+  resetGeneratedClient();
   window.localStorage.clear();
   window.sessionStorage.clear();
   delete (window as unknown as AdminUiConfigWindow).admin_ui_config;
@@ -804,4 +822,169 @@ describe('user footer', () => {
     expect(window.sessionStorage.getItem('el.something')).toBeNull();
     expect(window.localStorage.getItem('unrelated')).toBe('keep');
   });
+});
+
+/* ── the six labelled areas (ADR-0059 decision 6, R3.2, issue 2532) ───── */
+
+/**
+ * The server's golden capability document of each built-in role held alone
+ * (`internal/api/v2/adminaccess` TestConsoleDocumentPerBuiltInRole). Read from
+ * the Go tree, so the documents these tests render are the ones the server
+ * test pins, not a copy that can drift.
+ */
+const GOLDEN_DIR = join(process.cwd(), '../../services/elitea-main/internal/api/v2/adminaccess/testdata/console');
+
+type ConsoleDocument = ReturnType<typeof getGetAdminConsoleDocumentResponseMock>;
+
+function goldenDocument(role: string): ConsoleDocument {
+  return JSON.parse(readFileSync(join(GOLDEN_DIR, `${role}.golden.json`), 'utf8')) as ConsoleDocument;
+}
+
+function serveDocument(document: ConsoleDocument): void {
+  server.use(getGetAdminConsoleDocumentMockHandler(document));
+}
+
+const EVERYTHING = {
+  people_access: ['users'],
+  projects: ['projects', 'app-requests'],
+  models_spend: ['llm-governance', 'budgets-alerts'],
+  agents_governance: [
+    'agent-registry',
+    'connector-requests',
+    'delegation-review',
+    'toolkits',
+    'credential-inventory',
+    'permission-trimming',
+    'kill-switch',
+  ],
+  security: ['audit-trail', 'data-retention'],
+  platform: ['configuration', 'features', 'branding', 'email', 'schedules-tasks', 'service-descriptors', 'secrets'],
+};
+
+/** What each built-in role sees: its areas, in console order, and the items of each. */
+const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>> = {
+  super_admin: EVERYTHING,
+  admin: EVERYTHING,
+  // The gateway tabs are still tabs of Configuration (R3.5a), which stands for them.
+  llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
+  // SCIM is still a tab of Configuration (R3.6).
+  project_administrator: {
+    projects: ['projects', 'app-requests'],
+    models_spend: ['budgets-alerts'],
+    platform: ['configuration'],
+  },
+  security_auditor: { security: ['audit-trail'] },
+  // Its one name opens Break-glass, whose page has not shipped.
+  emergency_access: {},
+};
+
+function renderedAreas(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const section of screen.queryAllByTestId(/^admin-nav-area-/)) {
+    const id = section.getAttribute('data-testid')!.replace('admin-nav-area-', '');
+    out[id] = within(section)
+      .queryAllByTestId(/^admin-nav-item-/)
+      .map((link) => link.getAttribute('data-testid')!.replace('admin-nav-item-', ''));
+  }
+  return out;
+}
+
+/** Items whose path, or any further path, no route declares. */
+function unroutedItems(items: readonly AdminConsoleNavItem[]): string[] {
+  const declared = new Set(Object.keys(createAdminRouter().routesById));
+  return items
+    .filter((entry) => [entry.path, ...(entry.alsoOn ?? [])].some((path) => !declared.has(path)))
+    .map((entry) => entry.id);
+}
+
+describe('the six labelled areas', () => {
+  beforeEach(() => {
+    serveDocument(goldenDocument('super_admin'));
+  });
+
+  it('point only at paths the admin router declares, and the check catches one that does not', () => {
+    expect(unroutedItems(adminConsoleNavItems())).toEqual([]);
+    const [first] = adminConsoleNavItems();
+    expect(unroutedItems([{ ...first!, id: 'litellm', path: '/litellm' }])).toEqual(['litellm']);
+  });
+
+  it('offers every page the router serves', () => {
+    const covered = new Set(adminConsoleNavItems().flatMap((entry) => [entry.path, ...(entry.alsoOn ?? [])]));
+    const routed = Object.keys(createAdminRouter().routesById).filter((id) => id !== '__root__' && id !== '/');
+    for (const route of routed) expect([...covered], `route "${route}" belongs to no item`).toContain(route);
+  });
+
+  it('hold no more than eight items in any area, and six areas in console order', () => {
+    const areas = adminConsoleNavAreas();
+    expect(areas.map((area) => area.id)).toEqual([
+      'people_access',
+      'projects',
+      'models_spend',
+      'agents_governance',
+      'security',
+      'platform',
+    ]);
+    for (const area of areas) expect(area.items.length, area.id).toBeLessThanOrEqual(8);
+  });
+
+  it('name only items of the server table, and leave none of its items without a place', () => {
+    // super_admin opens every available item of the server table.
+    const served = goldenDocument('super_admin').areas.flatMap((area) => area.items.map((entry) => entry.id));
+    const placed = adminConsoleNavItems()
+      .filter((entry) => entry.available)
+      .flatMap((entry) => [entry.id, ...(entry.standsFor ?? [])]);
+    expect([...placed].sort()).toEqual([...served].sort());
+  });
+
+  for (const role of Object.keys(EXPECTED_AREAS)) {
+    it(`shows the ${role} persona exactly its areas, from its capability document`, async () => {
+      serveDocument(goldenDocument(role));
+      await mountAdmin('/projects');
+      expect(renderedAreas()).toEqual(EXPECTED_AREAS[role]);
+    }, testTimeout(30_000));
+  }
+
+  it('labels each area', async () => {
+    await mountAdmin('/users');
+    const area = screen.getByTestId('admin-nav-area-models_spend');
+    expect(within(area).getByRole('heading', { name: 'Models and spend' })).toBeInTheDocument();
+    expect(area).toHaveAccessibleName('Models and spend');
+  });
+
+  it('shows one item, active, for both /schedules and /tasks', async () => {
+    await mountAdmin('/tasks');
+    expect(navItem('schedules-tasks')).toHaveAttribute('aria-current', 'page');
+    expect(screen.queryByTestId('admin-nav-item-tasks')).toBeNull();
+    expect(screen.queryByTestId('admin-nav-item-schedules')).toBeNull();
+  }, testTimeout(30_000));
+
+  it('shows the access-denied page for a typed URL whose item the document does not open', async () => {
+    serveDocument(goldenDocument('llm_manager'));
+    await mountAdmin('/kill-switch');
+    const denied = await screen.findByTestId('admin-item-denied');
+    expect(denied).toHaveAttribute('data-item-id', 'kill-switch');
+    expect(within(denied).getByRole('heading', { level: 1 })).toHaveTextContent('Kill switch');
+  }, testTimeout(30_000));
+
+  it('lands a caller the document does not open Users to on its first item', async () => {
+    serveDocument(goldenDocument('security_auditor'));
+    await mountAdmin('/');
+    await screen.findByTestId('admin-nav-item-audit-trail');
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/audit'));
+    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
+  }, testTimeout(30_000));
+
+  it('still renders a page whose item the document cannot list yet (Roles, until R3.6)', async () => {
+    await mountAdmin('/roles');
+    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
+    expect(screen.queryByTestId('admin-nav-item-access')).toBeNull();
+  }, testTimeout(30_000));
+
+  it('keeps the two unlabelled groups when the switch is off', async () => {
+    serveDocument({ ...goldenDocument('super_admin'), admin_console_areas: false });
+    await mountAdmin('/users');
+    expect(screen.queryAllByTestId(/^admin-nav-area-/)).toHaveLength(0);
+    expect(navItem('tasks')).toBeInTheDocument();
+    expect(navItem('schedules')).toBeInTheDocument();
+  }, testTimeout(30_000));
 });

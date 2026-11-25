@@ -108,6 +108,18 @@ describe('docs content', () => {
     }
   });
 
+  // ADR-0059 R3.2 (issue 2532): the six areas are off on an upgraded
+  // deployment, so the page that tells an operator to turn them on and the
+  // upgrade note that says why must both exist and name the same setting.
+  it('the admin console areas switch is documented and has its upgrade note', () => {
+    const notes = readdirSync(join(ROOT, '../../docs/upgrading')).filter((f) => /^\d{4}-\d{2}-\d{2}-2532-/.test(f));
+    assert.equal(notes.length, 1, `one upgrade note for issue 2532, found ${notes.join(', ') || 'none'}`);
+    const note = readFileSync(join(ROOT, '../../docs/upgrading', notes[0]), 'utf8');
+    const overview = readFileSync(join(CONTENT, 'admin/overview.mdx'), 'utf8');
+    for (const text of [note, overview]) assert.match(text, /admin_console_areas/);
+    assert.match(overview, /^## Six labelled areas$/m);
+  });
+
   it('every <Screenshot id> is in shots.manifest.ts', () => {
     for (const page of pages) {
       for (const id of page.screenshots) assert.ok(manifestIds.has(id), `${page.slug}: ${id} is not in shots.manifest.ts`);

@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Erneut versuchen",
   "pages.admin.console.error.title": "Die Konsole konnte nicht geladen werden",
   "pages.admin.console.loading": "Konsole wird geladen…",
-  "pages.admin.console.refused": "Sie haben keinen Zugriff auf die Verwaltungskonsole."
+  "pages.admin.console.refused": "Sie haben keinen Zugriff auf die Verwaltungskonsole.",
+  "pages.admin.console.area.people_access": "Personen und Zugriff",
+  "pages.admin.console.area.projects": "Projekte",
+  "pages.admin.console.area.models_spend": "Modelle und Kosten",
+  "pages.admin.console.area.agents_governance": "Agenten und Governance",
+  "pages.admin.console.area.security": "Sicherheit",
+  "pages.admin.console.area.platform": "Plattform",
+  "pages.admin.console.item.schedules-tasks": "Zeitpläne und Aufgaben",
+  "pages.admin.schedulesTasks.tab.schedules": "Zeitpläne",
+  "pages.admin.itemDenied.title": "Sie können {{item}} nicht öffnen",
+  "pages.admin.itemDenied.explanation": "Ihre Verwaltungsrollen umfassen {{item}} nicht. Der Server lehnt dessen Seiten und Änderungen für Sie ab.",
+  "pages.admin.itemDenied.rolesLoading": "Die Rollen, die es öffnen, werden ermittelt…",
+  "pages.admin.itemDenied.rolesError": "Die Rollen, die es öffnen, konnten nicht gelesen werden.",
+  "pages.admin.itemDenied.noRole": "Keine Rolle in dieser Bereitstellung öffnet es.",
+  "pages.admin.itemDenied.rolesIntro": "Diese Rollen öffnen es:",
+  "pages.admin.itemDenied.askSupport": "Um eine dieser Rollen anzufragen, wenden Sie sich an Ihren IT-Support:",
+  "pages.admin.itemDenied.askFallback": "Um eine dieser Rollen anzufragen, wenden Sie sich an die Personen, die diese Bereitstellung verwalten."
 }

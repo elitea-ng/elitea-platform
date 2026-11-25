@@ -770,7 +770,7 @@ CREATE TABLE IF NOT EXISTS centry.audit_events (
     is_error BOOLEAN NOT NULL DEFAULT FALSE, entity_type VARCHAR(32), entity_id INTEGER, entity_name VARCHAR(256),
     trace_id VARCHAR(32), span_id VARCHAR(16), parent_span_id VARCHAR(16),
     -- The role-use columns of shared 0268 (ADR-0059 R1.4a) and the
-    -- elevation flag of 0273 (R2.8a), which the recorder writes.
+    -- elevation flag of 0274 (R2.8a), which the recorder writes.
     acting_roles text[], elevation_id uuid, credential_kind text, central_override boolean,
     reason_code text, reason text, reason_missing boolean, elevation_flagged boolean)`); err != nil {
 		t.Fatal(err)

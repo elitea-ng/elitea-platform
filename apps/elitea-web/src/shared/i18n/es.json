@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Reintentar",
   "pages.admin.console.error.title": "No se pudo cargar la consola",
   "pages.admin.console.loading": "Cargando la consola…",
-  "pages.admin.console.refused": "No tiene acceso a la consola de administración."
+  "pages.admin.console.refused": "No tiene acceso a la consola de administración.",
+  "pages.admin.console.area.people_access": "Personas y acceso",
+  "pages.admin.console.area.projects": "Proyectos",
+  "pages.admin.console.area.models_spend": "Modelos y gasto",
+  "pages.admin.console.area.agents_governance": "Agentes y gobernanza",
+  "pages.admin.console.area.security": "Seguridad",
+  "pages.admin.console.area.platform": "Plataforma",
+  "pages.admin.console.item.schedules-tasks": "Programaciones y tareas",
+  "pages.admin.schedulesTasks.tab.schedules": "Programaciones",
+  "pages.admin.itemDenied.title": "No puede abrir {{item}}",
+  "pages.admin.itemDenied.explanation": "Sus roles de administración no incluyen {{item}}. El servidor rechaza sus páginas y cambios para usted.",
+  "pages.admin.itemDenied.rolesLoading": "Buscando los roles que lo abren…",
+  "pages.admin.itemDenied.rolesError": "No se pudieron leer los roles que lo abren.",
+  "pages.admin.itemDenied.noRole": "Ningún rol de esta implementación lo abre.",
+  "pages.admin.itemDenied.rolesIntro": "Estos roles lo abren:",
+  "pages.admin.itemDenied.askSupport": "Para solicitar uno de estos roles, contacte con su soporte de TI:",
+  "pages.admin.itemDenied.askFallback": "Para solicitar uno de estos roles, contacte con las personas que administran esta implementación."
 }

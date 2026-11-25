@@ -101,6 +101,7 @@ POST	/api/v2/admin/permission_trimming/remove	-	none	false	allow	allowed
 POST	/api/v2/admin/permissions/{scope}/{mode}	-	critical	true	deny	never
 PUT	/api/v2/admin/permissions/{scope}/{mode}	-	critical	true	deny	never
 PUT	/api/v2/admin/platform_routines/administration/{id}	-	none	false	allow	allowed
+PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	admin_console	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	agent_lifecycle	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	agent_publishing	none	false	allow	allowed
 PUT	/api/v2/admin/plugin_config_values/administration/{plugin}	agents	none	false	allow	allowed

@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "다시 시도",
   "pages.admin.console.error.title": "콘솔을 불러오지 못했습니다",
   "pages.admin.console.loading": "콘솔을 불러오는 중…",
-  "pages.admin.console.refused": "관리 콘솔에 접근할 권한이 없습니다."
+  "pages.admin.console.refused": "관리 콘솔에 접근할 권한이 없습니다.",
+  "pages.admin.console.area.people_access": "사용자 및 액세스",
+  "pages.admin.console.area.projects": "프로젝트",
+  "pages.admin.console.area.models_spend": "모델 및 비용",
+  "pages.admin.console.area.agents_governance": "에이전트 및 거버넌스",
+  "pages.admin.console.area.security": "보안",
+  "pages.admin.console.area.platform": "플랫폼",
+  "pages.admin.console.item.schedules-tasks": "일정 및 작업",
+  "pages.admin.schedulesTasks.tab.schedules": "일정",
+  "pages.admin.itemDenied.title": "{{item}}을(를) 열 수 없습니다",
+  "pages.admin.itemDenied.explanation": "관리 역할에 {{item}}이(가) 포함되어 있지 않습니다. 서버가 해당 페이지와 변경을 거부합니다.",
+  "pages.admin.itemDenied.rolesLoading": "이 항목을 여는 역할을 찾는 중…",
+  "pages.admin.itemDenied.rolesError": "이 항목을 여는 역할을 읽을 수 없습니다.",
+  "pages.admin.itemDenied.noRole": "이 배포에서 이 항목을 여는 역할이 없습니다.",
+  "pages.admin.itemDenied.rolesIntro": "다음 역할이 이 항목을 엽니다:",
+  "pages.admin.itemDenied.askSupport": "이 역할 중 하나를 요청하려면 IT 지원팀에 문의하세요:",
+  "pages.admin.itemDenied.askFallback": "이 역할 중 하나를 요청하려면 이 배포를 관리하는 담당자에게 문의하세요."
 }

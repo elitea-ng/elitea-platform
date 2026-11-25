@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "重試",
   "pages.admin.console.error.title": "無法載入主控台",
   "pages.admin.console.loading": "正在載入主控台…",
-  "pages.admin.console.refused": "您無權存取管理主控台。"
+  "pages.admin.console.refused": "您無權存取管理主控台。",
+  "pages.admin.console.area.people_access": "人員與存取",
+  "pages.admin.console.area.projects": "專案",
+  "pages.admin.console.area.models_spend": "模型與支出",
+  "pages.admin.console.area.agents_governance": "代理程式與治理",
+  "pages.admin.console.area.security": "安全性",
+  "pages.admin.console.area.platform": "平台",
+  "pages.admin.console.item.schedules-tasks": "排程與工作",
+  "pages.admin.schedulesTasks.tab.schedules": "排程",
+  "pages.admin.itemDenied.title": "你無法開啟{{item}}",
+  "pages.admin.itemDenied.explanation": "你的管理角色不包含{{item}}。伺服器會拒絕你存取其頁面和變更。",
+  "pages.admin.itemDenied.rolesLoading": "正在查詢可開啟它的角色…",
+  "pages.admin.itemDenied.rolesError": "無法讀取可開啟它的角色。",
+  "pages.admin.itemDenied.noRole": "此部署中沒有角色可開啟它。",
+  "pages.admin.itemDenied.rolesIntro": "以下角色可開啟它：",
+  "pages.admin.itemDenied.askSupport": "如需申請其中一個角色，請聯絡你的 IT 支援：",
+  "pages.admin.itemDenied.askFallback": "如需申請其中一個角色，請聯絡管理此部署的人員。"
 }

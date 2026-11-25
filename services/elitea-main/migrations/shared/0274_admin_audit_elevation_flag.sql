@@ -1,4 +1,4 @@
--- 0273_admin_audit_elevation_flag.sql — the review mark of an admin audit
+-- 0274_admin_audit_elevation_flag.sql — the review mark of an admin audit
 -- row written under an elevation (ADR-0059 decision 5, "What an elevation
 -- cannot do"; story R2.8a, issue 2522).
 --
@@ -27,7 +27,7 @@
 DO $$
 BEGIN
 IF to_regclass('centry.audit_events') IS NULL THEN
-    RAISE NOTICE '0273: centry.audit_events absent, no elevation flag column';
+    RAISE NOTICE '0274: centry.audit_events absent, no elevation flag column';
     RETURN;
 END IF;
 

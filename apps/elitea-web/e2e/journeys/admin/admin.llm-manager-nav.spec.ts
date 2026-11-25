@@ -7,8 +7,14 @@
  * an LLM manager saw Budgets and Projects and had to type every other URL.
  * Here the person opens `/admin/app/`, reaches the gateway editor
  * (Configuration, LLM Proxy) by clicking, and adds a platform provider, which
- * the server admits on `llm.catalogue.manage`. A typed URL to Users answers
- * the server's refusal.
+ * the server admits on `llm.catalogue.manage`. A typed URL to Users shows
+ * the access-denied page for that item.
+ *
+ * Since R3.2 (ADR-0059 decision 6, issue 2532) the navigation is the six
+ * labelled areas of the capability document: the LLM manager's document
+ * opens Projects, LLM Governance, Budgets and the gateway tabs, which are
+ * still tabs of Configuration, so those four items and their three areas are
+ * all it shows, and the landing page is the first of them.
  *
  * The subject is a seeded row (`scripts/e2e-stack.sh seed`, "administration
  * role fixtures"), one per browser project. The admin persona gives it the
@@ -81,12 +87,17 @@ adminTest('an LLM manager reaches the gateway editor through the navigation and 
     // The navigation shows the pages the role opens, and no other.
     const nav = page.getByTestId('admin-nav');
     await expect(nav).toBeVisible({ timeout: 30_000 });
-    for (const item of ['configuration', 'governance', 'budgets', 'projects']) {
-      await expect(page.getByTestId(`admin-nav-item-${item}`)).toBeVisible();
+    const expected = ['admin-nav-item-projects', 'admin-nav-item-llm-governance', 'admin-nav-item-budgets-alerts', 'admin-nav-item-configuration'];
+    await expect(nav.getByRole('link')).toHaveCount(expected.length);
+    const ids = await nav.getByRole('link').evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('data-testid')));
+    expect(ids).toEqual(expected);
+    for (const area of ['projects', 'models_spend', 'platform']) {
+      await expect(nav.getByTestId(`admin-nav-area-${area}`)).toBeVisible();
     }
-    for (const item of ['users', 'roles', 'email', 'features', 'tasks', 'branding']) {
-      await expect(page.getByTestId(`admin-nav-item-${item}`)).toHaveCount(0);
-    }
+    // The index renders Users, which the role does not open: it lands on the
+    // first item it does open instead of a refusal.
+    await page.waitForURL((url) => url.pathname === '/admin/app/projects', { timeout: 20_000 });
+    await expect(page.getByTestId('admin-nav-item-projects')).toHaveAttribute('aria-current', 'page');
 
     // Configuration → LLM Proxy → Providers & models, by clicking.
     await page.getByTestId('admin-nav-item-configuration').click();
@@ -110,12 +121,13 @@ adminTest('an LLM manager reaches the gateway editor through the navigation and 
     expect((await created).status(), 'the server must admit the create on llm.catalogue.manage').toBe(201);
     await expect(page.getByRole('row').filter({ hasText: PROVIDER_NAME })).toBeVisible({ timeout: 20_000 });
 
-    // A typed URL to a page the role does not open answers the refusal.
+    // A typed URL to an item the role does not open shows that item's
+    // access-denied page: the item, the roles that open it, and whom to ask.
     await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByTestId('admin-users-load-error')).toHaveText(
-      'You do not have the permission to see the users.',
-      { timeout: 20_000 },
-    );
+    const denied = page.getByTestId('admin-item-denied');
+    await expect(denied).toHaveAttribute('data-item-id', 'users', { timeout: 20_000 });
+    await expect(denied.getByRole('heading', { level: 1 })).toHaveText('You cannot open Users');
+    await expect(page.getByTestId('admin-item-denied-roles')).toContainText('Platform administrator', { timeout: 20_000 });
   } finally {
     await context.close();
     await sweepProvider(request);
