@@ -15,7 +15,9 @@
  *    no prompt of its own;
  *  - in a thread with a lead (#1917), a message that names no agent carries
  *    no `addressed_to` (a composer pick is not an address) and starts on the
- *    lead; a message naming an agent starts on that agent.
+ *    lead; a message naming an agent starts on that agent;
+ *  - a thread run by a saved team (#3053) writes the team's lead and starts
+ *    on it.
  *
  * The host's side — following the floor, the cloud relay with text only — is
  * D0's `floor_tests.rs`; Main's routing is `localturn/floor_test.go`.
@@ -32,6 +34,7 @@ interface HarnessWindow {
   __harness: {
     ipc: { calls: { started: Record<string, unknown>[] } };
     participantPosts: ParticipantRow[][];
+    metaWrites: unknown[];
     playFloor: () => void;
     setLead: (participantId: number) => void;
     playTurn: () => void;
@@ -41,6 +44,7 @@ interface HarnessWindow {
 const harness = (page: Page) => ({
   started: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.ipc.calls.started),
   posts: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.participantPosts),
+  metaWrites: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.metaWrites),
   playFloor: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.playFloor()),
   setLead: (id: number) => page.evaluate((lead) => (window as unknown as HarnessWindow).__harness.setLead(lead), id),
   playTurn: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.playTurn()),
@@ -143,5 +147,51 @@ test('in a lead thread an unaddressed message goes to the lead, an addressed one
   expect(addressed?.['addressed_to']).toEqual([77]);
   expect(addressed?.['application_id']).toBe(5);
   expect(addressed).not.toHaveProperty('cloud_agent');
+});
+
+/**
+ * A thread run by a saved team (#3053): "Run as a team ›" lists the project's teams; one with an agent of another
+ * project is disabled and says why. Picking "Review crew" (Coder and Reviewer, Reviewer leads) makes Reviewer the
+ * composer's agent on the team's version and Coder the thread's other agent, both on this computer. The first send adds
+ * both as Teams → Start adds them, writes Reviewer as the thread's lead (`meta.floor`), and starts on the lead.
+ */
+test('a thread run by a team writes its lead and starts on it', async ({ page }) => {
+  const h = harness(page);
+  await page.goto('/?harness&at=/workspaces/w1');
+
+  const chip = page.getByTestId('agent-chip');
+  await expect(chip).toContainText('Coder', { timeout: 150_000 });
+  await chip.click();
+  await page.getByTestId('agent-team').click();
+  await expect(page.getByTestId('agent-team-4')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('agent-team-4')).toContainText('Agents of another project');
+  await page.getByTestId('agent-team-3').click();
+  await expect(chip).toContainText('Review crew: Reviewer · base + Coder');
+  const notice = page.getByTestId('workspace-team-notice');
+  await expect(notice).toContainText('goes to Reviewer (lead)');
+  await expect(notice).toContainText('does not get the folder');
+
+  await page.getByRole('textbox').fill('fix the flaky test');
+  await page.getByTestId('workspace-send-button').click();
+
+  // The turn starts on the lead, on this computer, with no address (a message that names no agent).
+  await expect.poll(async () => (await h.started()).length).toBe(1);
+  const [request] = await h.started();
+  expect(request?.['application_id']).toBe(6);
+  expect(request?.['version_id']).toBe(10);
+  expect(request?.['participant_id']).toBe(88);
+  expect(request).not.toHaveProperty('addressed_to');
+  expect(request).not.toHaveProperty('cloud_agent');
+
+  // Both members joined on the team's versions, neither in the cloud; the lead was written once.
+  const agents = (await h.posts()).flat().filter((row) => row.entity_name === 'application');
+  expect(agents.map((row) => row.entity_meta?.id)).toEqual([6, 5]);
+  expect(agents.every((row) => row.entity_settings?.executor === undefined)).toBe(true);
+  const writes = await h.metaWrites();
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ floor: { policy: 'lead', lead_participant_id: 88 } });
+
+  await h.playTurn();
+  await expect(page.getByTestId('workspace-send-button')).toBeVisible();
 });
 

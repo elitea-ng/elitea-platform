@@ -16,8 +16,14 @@
  * The add keeps an existing mapping as it was, so a companion the person moved
  * between local and cloud has its mapping's `executor` rewritten afterwards
  * (`executorFixes`): Main reads where an agent runs from the mapping.
+ *
+ * A thread run by a saved team (#3053) is created the same way: the lead as the
+ * composer's agent, the other members as companions, on the team's versions,
+ * then the lead as `meta.floor` (`writeThreadLead`), as Teams → Start writes it.
  */
 import { useCallback } from 'react';
+
+import { metaWithLead } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
 import { useAddParticipantMutation, useUpdateParticipantSettingsMutation } from '@/entities/participant';
@@ -114,6 +120,8 @@ export interface EnsuredConversation {
   id: string;
   /** The thread's agents, the composer's first; empty when nothing was added (an existing thread of one agent). */
   agents: ThreadAgent[];
+  /** The thread's `meta` as this call wrote it (the lead, `meta.floor`); absent when it wrote none. */
+  meta?: Record<string, unknown>;
 }
 
 export interface EnsureConversationInput extends ConversationAgent {
@@ -136,6 +144,11 @@ export interface EnsureConversationInput extends ConversationAgent {
   folderName: string;
   /** The thread's other agents: added on every send (get-or-create), so a companion added later joins too. */
   companions?: readonly CompanionAgent[];
+  /**
+   * The composer's agent is the lead of the team the thread is run by (#3053): a thread this call creates (or
+   * completes) gets `meta.floor {policy: lead}` naming its participant, as Teams → Start writes it for a chat.
+   */
+  lead?: boolean;
 }
 
 /** A companion's APPLICATION participant: a cloud agent's mapping says `executor: cloud` (Main reads it when it routes). */
@@ -145,7 +158,8 @@ export function companionParticipant(projectId: number, companion: CompanionAgen
     entity_meta: { id: companion.applicationId, name: companion.applicationName, project_id: projectId },
     entity_settings: {
       version_id: companion.versionId,
-      agent_type: companion.agentType,
+      // A team's member is added as Teams → Start adds it: its type is the version's own, not written here.
+      ...(companion.agentType === '' ? {} : { agent_type: companion.agentType }),
       variables: [],
       icon_meta: {},
       ...(companion.cloud ? { executor: 'cloud' } : {}),
@@ -175,6 +189,7 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
   const { mutateAsync: createConversation } = conversationApi.useCreate();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
   const { mutateAsync: updateSettings } = useUpdateParticipantSettingsMutation();
+  const { mutateAsync: editConversation } = conversationApi.useEdit();
   const userId = useSignedInUserId();
 
   return useCallback(
@@ -214,8 +229,45 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
           await updateSettings({ projectId: input.projectId, conversationId: id, participantId: String(fix.participantId), settings: fix.settings });
         }
       }
-      return { id, agents };
+      return withTeamLead(input, { id, agents }, editConversation);
     },
-    [addParticipants, createConversation, updateSettings, userId],
+    [addParticipants, createConversation, editConversation, updateSettings, userId],
   );
+}
+
+/**
+ * The participant to write as the thread's lead: the composer's agent of a team thread under policy `lead`, only in a
+ * thread this call creates or completes (a later send never moves the lead the person may have changed since), and
+ * only with another agent beside it (one agent answers anyway). `undefined`: no lead to write.
+ */
+export function teamLeadOf(input: Pick<EnsureConversationInput, 'lead' | 'conversationId' | 'completeSetup' | 'applicationId'>, agents: readonly ThreadAgent[]): number | undefined {
+  if (input.lead !== true || (input.conversationId !== '' && input.completeSetup !== true) || agents.length < 2) return undefined;
+  const first = agents[0];
+  return first !== undefined && first.applicationId === input.applicationId ? first.participantId : undefined;
+}
+
+type EditMeta = (params: { projectId: number; id: string; meta: Record<string, unknown> }) => Promise<unknown>;
+
+/** The ensured thread, with the team's lead written when this call created it for a lead team (`teamLeadOf`). */
+async function withTeamLead(input: EnsureConversationInput, ensured: EnsuredConversation, edit: EditMeta): Promise<EnsuredConversation> {
+  const lead = teamLeadOf(input, ensured.agents);
+  if (lead === undefined) return ensured;
+  return { ...ensured, meta: await writeThreadLead(input.projectId, ensured.id, lead, edit) };
+}
+
+/**
+ * Writes `leadParticipantId` as the thread's lead (`meta.floor {policy: lead}`, what Teams → Start writes for a chat).
+ * A conversation update replaces its whole meta, so the meta is read first and every other key kept (`metaWithLead`,
+ * as the chat's lead control writes it). Answers the meta written.
+ */
+export async function writeThreadLead(
+  projectId: number,
+  conversationId: string,
+  leadParticipantId: number,
+  edit: EditMeta,
+): Promise<Record<string, unknown>> {
+  const detail = await conversationApi.details({ projectId, id: conversationId });
+  const meta = metaWithLead(detail.meta, leadParticipantId);
+  await edit({ projectId, id: conversationId, meta });
+  return meta;
 }

@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "Зміни зі схваленням",
   "workspace.mode.bypassHint": "Без схвалень",
   "workspace.mode.planHint": "Планує, нічого не змінює",
-  "workspace.usage.context": "Контекст: зайнято {{percent}}% вікна"
+  "workspace.usage.context": "Контекст: зайнято {{percent}}% вікна",
+  "workspace.team.menu": "Запустити командою",
+  "workspace.team.note": "Починає нову гілку з агентами та провідним команди. Усі вони працюють на цьому комп’ютері з цією папкою.",
+  "workspace.team.otherProject": "Агенти іншого проєкту",
+  "workspace.team.pipeline": "Має конвеєр",
+  "workspace.team.noMembers": "Немає агентів",
+  "workspace.team.leadNotice": "Команда {{team}}: повідомлення, у якому не названо агента, отримує {{lead}} (провідний); напишіть @Ім’я, щоб звернутися до іншого учасника.",
+  "workspace.team.addressedNotice": "Команда {{team}}: напишіть @Ім’я, щоб звернутися до учасника; повідомлення, у якому не названо агента, отримує {{lead}}.",
+  "workspace.team.folderNotice": "Кожен учасник працює на цьому комп’ютері з цією папкою та її інструментами. Агент, якого учасник викликає як інструмент, працює в хмарі й не отримує папку."
 }

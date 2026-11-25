@@ -5,6 +5,10 @@
  * (`floorHarness`) the bodies the adds sent (`participantPosts`, read by
  * e2e/desktop/desktop.multi-agent.spec.ts) and `playFloor()`, a message
  * addressed to Coder (local) and Reviewer (cloud) as the host plays it.
+ *
+ * A saved team (#3053): the project lists "Review crew" (Coder and Reviewer, Reviewer leads) and "Mixed crew" (an
+ * agent of another project, so it cannot run here); the caller may list teams. A thread's meta write (the lead a team
+ * thread's first send writes) is kept (`metaWrites`) and makes that lead the thread's from then on.
  */
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
@@ -24,8 +28,66 @@ const REVIEWER = { id: '6', name: 'Reviewer', description: '', versions: [{ id: 
 
 const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
-/** The thread's lead (`setLead`): its participant id, 0 for none. */
+/** The thread's lead (`setLead`, or a meta write naming one): its participant id, 0 for none. */
 let LEAD = 0;
+
+/** Every `meta` a conversation update sent, as sent. */
+const META_WRITES: unknown[] = [];
+
+/** The project's saved teams (`GET agent_teams`). */
+const TEAMS = {
+  rows: [
+    {
+      id: 3,
+      project_id: 42,
+      name: 'Review crew',
+      description: '',
+      floor_policy: 'lead',
+      lead_position: 2,
+      members: [
+        { application_id: 5, project_id: 42, version_id: 9, name: 'Coder' },
+        { application_id: 6, project_id: 42, version_id: 10, name: 'Reviewer' },
+      ],
+      created_by: 3,
+      created_at: '2026-11-20T08:00:00Z',
+      updated_at: '2026-11-20T08:00:00Z',
+    },
+    {
+      id: 4,
+      project_id: 42,
+      name: 'Mixed crew',
+      description: '',
+      floor_policy: 'addressed',
+      lead_position: null,
+      members: [
+        { application_id: 5, project_id: 42, version_id: 9, name: 'Coder' },
+        { application_id: 900, project_id: 1, version_id: 901, name: 'Public helper' },
+      ],
+      created_by: 3,
+      created_at: '2026-11-20T08:00:00Z',
+      updated_at: '2026-11-20T08:00:00Z',
+    },
+  ],
+  total: 2,
+};
+
+/** The caller's project permissions: the chat folders the shell reads, and listing teams. */
+const PERMISSIONS = [...['get', 'create', 'update', 'delete'].map((verb) => ({ name: `models.chat.folders.${verb}`, enabled: true })), { name: 'models.teams.list', enabled: true }];
+
+/** A conversation update's `meta`: kept, and its lead becomes the thread's. */
+function metaWritten(body: unknown): Response {
+  try {
+    const meta = (JSON.parse(typeof body === 'string' ? body : '{}') as { meta?: { floor?: { lead_participant_id?: unknown } } }).meta;
+    if (meta !== undefined) {
+      META_WRITES.push(meta);
+      const lead = Number(meta.floor?.lead_participant_id ?? 0);
+      LEAD = Number.isSafeInteger(lead) && lead > 0 ? lead : 0;
+    }
+  } catch {
+    // Not JSON: nothing kept.
+  }
+  return json({ id: 77 });
+}
 
 /**
  * The conversation the sends created (77), once it has a lead: its two agents and `meta.floor` (ADR-0050 decision 8:
@@ -43,13 +105,28 @@ function ledThread(): unknown {
     uuid: 'c0ffee00-0000-4000-8000-000000000077',
     name: 'fix the flaky test',
     meta: { floor: { policy: 'lead', lead_participant_id: LEAD } },
-    participants: [{ id: 7, entity_name: 'user', entity_meta: { id: 3 } }, agent(77, 5, 'Coder', 9, false), agent(88, 6, 'Reviewer', 10, true)],
+    participants: [{ id: 7, entity_name: 'user', entity_meta: { id: 3 } }, agent(77, 5, 'Coder', 9, false), agent(88, 6, 'Reviewer', 10, reviewerInCloud())],
   };
+}
+
+/** Reviewer was added as a cloud agent (a team's members are added on this computer). */
+function reviewerInCloud(): boolean {
+  return PARTICIPANT_POSTS.flat().some((row) => row.entity_meta?.id === 6 && row.entity_settings?.['executor'] === 'cloud');
+}
+
+/** The API answers a team thread needs (#3053): the teams, the permission to list them, and the lead's meta write. */
+function teamAnswer(method: string, path: string, body: unknown): Response | undefined {
+  if (method === 'GET' && path.endsWith('/elitea_core/agent_teams/prompt_lib/42')) return json(TEAMS);
+  if (method === 'GET' && path.endsWith('/auth/permissions/prompt_lib/42')) return json(PERMISSIONS);
+  if (method === 'PUT' && path.endsWith('/elitea_core/conversation/prompt_lib/42/77')) return metaWritten(body);
+  return undefined;
 }
 
 /** The API answers several agents in a thread need; `undefined`: the harness's own table answers. */
 export function floorAnswer(method: string, path: string, body: unknown): Response | undefined {
   if (method === 'POST' && /\/elitea_core\/participants\//.test(path)) return json(addedParticipants(body));
+  const team = teamAnswer(method, path, body);
+  if (team !== undefined) return team;
   if (method === 'GET' && path.endsWith('/elitea_core/application/prompt_lib/42/6')) return json(REVIEWER);
   if (LEAD > 0 && method === 'GET' && path.endsWith('/elitea_core/conversation/prompt_lib/42/77')) return json(ledThread());
   return undefined;
@@ -92,13 +169,21 @@ function playFloor(emit: (event: AgentEvent) => void, first: string): void {
   emit({ ...b(4), kind: 'status', payload: { phase: 'done' } });
 }
 
-/** What `__harness` gains: the adds' bodies, `playFloor()` on the next turn id, and `setLead(id)` (the thread's lead from now on). */
-export function floorHarness(emit: (event: AgentEvent) => void, turnId: () => string): { participantPosts: AddedRow[][]; playFloor: () => void; setLead: (participantId: number) => void } {
-  // A new harness starts with no lead and no adds: nothing carries over from an earlier one in the same page (#1932).
+/**
+ * What `__harness` gains: the adds' bodies, the meta writes, `playFloor()` on the next turn id, and `setLead(id)` (the
+ * thread's lead from now on).
+ */
+export function floorHarness(
+  emit: (event: AgentEvent) => void,
+  turnId: () => string,
+): { participantPosts: AddedRow[][]; metaWrites: unknown[]; playFloor: () => void; setLead: (participantId: number) => void } {
+  // A new harness starts with no lead, no adds and no writes: nothing carries over from an earlier one in the same page (#1932).
   LEAD = 0;
   PARTICIPANT_POSTS.length = 0;
+  META_WRITES.length = 0;
   return {
     participantPosts: PARTICIPANT_POSTS,
+    metaWrites: META_WRITES,
     playFloor: () => playFloor(emit, turnId()),
     setLead: (participantId) => {
       LEAD = participantId;

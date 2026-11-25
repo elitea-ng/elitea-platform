@@ -187,6 +187,12 @@ function companionsOf(selection: AgentSelection, agentId: string): CompanionAgen
     .map((c) => ({ applicationId: Number(c.agentId), applicationName: c.name, versionId: c.versionId, agentType: c.agentType, cloud: c.cloud }));
 }
 
+/** The composer's agent leads the team the thread is run by (policy `lead`, #3053): the new thread's floor names it. */
+export function leadsTheTeam(selection: Pick<AgentSelection, 'team'>, agentId: string): boolean {
+  const team = selection.team;
+  return team !== undefined && team.lead && String(team.primary.applicationId) === agentId;
+}
+
 /** How long a thread's agents and lead are kept before a send reads them again (#1928). */
 export const THREAD_FLOOR_STALE_MS = 30_000;
 
@@ -216,14 +222,16 @@ async function readFloor(queryClient: QueryClient, projectId: number, conversati
 }
 
 /**
- * The thread a message is routed in. A conversation created by this send has no lead and only the agents it added. An
+ * The thread a message is routed in. A conversation created by this send has only the agents it added, and the lead it
+ * wrote (a team thread's, `written`), else none. An
  * existing one is read (kept a short while, #1928; read again when this send added agents to it): a message that
  * names no agent there goes to the lead, when it has one. Unreadable, the agents this send added still route an
  * address, and the composer's agent answers otherwise (the host refuses a start Main routes elsewhere,
  * `floor_routed_elsewhere`).
  */
-async function threadFloor(queryClient: QueryClient, projectId: number, conversationId: string, existed: boolean, added: ThreadAgent[]): Promise<ThreadFloor> {
-  if (!existed) return { agents: added, meta: undefined };
+async function threadFloor(queryClient: QueryClient, projectId: number, conversationId: string, existed: boolean, added: ThreadAgent[], written?: unknown): Promise<ThreadFloor> {
+  // A team thread this send created has the lead it just wrote (#3053).
+  if (!existed) return { agents: added, meta: written };
   const read = await readFloor(queryClient, projectId, conversationId, added.length > 0);
   if (read !== undefined && read.agents.length > 0) return read;
   return { agents: added, meta: undefined };
@@ -314,9 +322,10 @@ export function useSendPrompt(
         agentType: version.agentType,
         folderName: workspace.name,
         companions: companionsOf(selection, agent.id),
+        lead: leadsTheTeam(selection, agent.id),
       });
       const conversationId = ensured.id;
-      const floor = await threadFloor(queryClient, projectId, conversationId, selection.conversationId !== '', ensured.agents);
+      const floor = await threadFloor(queryClient, projectId, conversationId, selection.conversationId !== '', ensured.agents, ensured.meta);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
       const base: TurnStartRequest = {
         workspace_id: workspace.id,

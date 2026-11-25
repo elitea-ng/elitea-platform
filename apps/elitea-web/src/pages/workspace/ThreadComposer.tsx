@@ -61,6 +61,7 @@ import { AgentChip, RunLocationControl, WorkInChip } from './ComposerControls';
 import { HandoffBanner } from './HandoffControls';
 import { CloudLeadNotice } from './CloudLeadNotice';
 import { RunInCloudNotice } from './RunInCloudNotice';
+import { TeamThreadNotice } from './TeamThreadNotice';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -296,6 +297,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <CloudLeadNotice projectId={projectId} conversationId={conversationId} local={local} />
+      <TeamThreadNotice team={session.selection.team} local={local} />
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}

@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "需批准后更改",
   "workspace.mode.bypassHint": "无需批准",
   "workspace.mode.planHint": "仅规划，不做更改",
-  "workspace.usage.context": "上下文：已用窗口的 {{percent}}%"
+  "workspace.usage.context": "上下文：已用窗口的 {{percent}}%",
+  "workspace.team.menu": "以团队运行",
+  "workspace.team.note": "用团队的智能体和负责人开始一个新线程。它们都在这台电脑上使用此文件夹工作。",
+  "workspace.team.otherProject": "其他项目的智能体",
+  "workspace.team.pipeline": "包含流水线",
+  "workspace.team.noMembers": "没有智能体",
+  "workspace.team.leadNotice": "团队 {{team}}：未指明智能体的消息发给 {{lead}}（负责人）；写 @名称 可发给其他成员。",
+  "workspace.team.addressedNotice": "团队 {{team}}：写 @名称 可发给某个成员；未指明智能体的消息发给 {{lead}}。",
+  "workspace.team.folderNotice": "每个成员都在这台电脑上使用此文件夹及其工具工作。成员作为工具调用的智能体在云端运行，不会获得此文件夹。"
 }

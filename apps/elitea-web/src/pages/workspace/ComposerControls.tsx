@@ -22,9 +22,10 @@ import type { WorkIn } from '@/features/workspace-worktrees';
 import type { HandoffExecutor } from '@/shared/desktop/handoffIpc';
 import { t } from '@/shared/i18n';
 import { ComposerMoreMenu, ComposerPicker } from '@/shared/ui/native-composer';
-import { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
 
 import type { AgentSelection } from './useAgentSelection';
+import type { TeamChoice, TeamUnavailable } from './workTeams';
 import type { ThreadHandoff } from './useThreadHandoff';
 
 /** A row with a check on the chosen one. */
@@ -75,7 +76,49 @@ function companionRows(selection: AgentSelection, pick: (action: () => void) => 
   ];
 }
 
-/** The agent menu's rows: the agents, then "Version ›", whose versions open beside it on hover, then the thread's other agents. */
+/** Why a team cannot run a thread here, as its row says. */
+function unavailableText(reason: TeamUnavailable): string {
+  switch (reason) {
+    case 'other_project':
+      return t('workspace.team.otherProject', 'Agents of another project');
+    case 'pipeline':
+      return t('workspace.team.pipeline', 'Has a pipeline');
+    case 'no_members':
+      return t('workspace.team.noMembers', 'No agents');
+  }
+}
+
+/** One team of "Run as a team ›": checked when it runs the thread; a team that cannot run here is disabled and says why. */
+function TeamRow({ choice, chosen, onPick }: { choice: TeamChoice; chosen: boolean; onPick: () => void }): React.JSX.Element {
+  const runnable = 'team' in choice;
+  return (
+    <MenuRow selected={chosen} disabled={!runnable} data-testid={`agent-team-${String(choice.id)}`} onClick={runnable ? onPick : undefined}>
+      <MenuRowIcon>{chosen && <CheckOutlinedIcon />}</MenuRowIcon>
+      <MenuRowText>{choice.name}</MenuRowText>
+      {!runnable && <MenuRowHint>{unavailableText(choice.unavailable)}</MenuRowHint>}
+    </MenuRow>
+  );
+}
+
+/**
+ * "Run as a team ›" (ADR-0050 decision 8, #3053): the project's saved teams. Picking one starts a new thread run by
+ * the team: its lead (or first member) is the composer's agent, the others join the thread, all on this computer.
+ */
+function teamRows(selection: AgentSelection, pick: (action: () => void) => () => void): React.JSX.Element[] {
+  const { teams, selectTeam } = selection;
+  if (teams === undefined || teams.length === 0 || selectTeam === undefined) return [];
+  return [
+    <MenuDivider key="team-divider" />,
+    <NativeSubmenu key="team" testId="agent-team" label={t('workspace.team.menu', 'Run as a team')} hint={selection.team?.name ?? ''}>
+      {() => [
+        ...teams.map((choice) => <TeamRow key={choice.id} choice={choice} chosen={selection.team?.id === choice.id} onPick={pick(() => selectTeam(choice.id))} />),
+        <MenuNote key="team-note">{t('workspace.team.note', 'Starts a new thread with the team’s agents and lead. They all work on this computer with this folder.')}</MenuNote>,
+      ]}
+    </NativeSubmenu>,
+  ];
+}
+
+/** The agent menu's rows: the agents, then "Version ›", whose versions open beside it on hover, then the thread's other agents, then the teams. */
 function AgentMenu({ selection, close }: { selection: AgentSelection; close: () => void }): React.JSX.Element[] {
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
   const pick = (action: () => void) => (): void => {
@@ -90,17 +133,24 @@ function AgentMenu({ selection, close }: { selection: AgentSelection; close: () 
       {() => selection.versions.map((v) => <ChoiceRow key={v.id} chosen={String(v.id) === selection.versionId} label={v.name} onClick={pick(() => selection.selectVersion(String(v.id)))} />)}
     </NativeSubmenu>,
     ...companionRows(selection, pick),
+    ...teamRows(selection, pick),
   ];
 }
 
-/** "developer · base ⌄": the agent and its version. `disabledHint`: why it cannot change (a thread in the cloud). */
-export function AgentChip({ selection, agentRef, disabledHint }: { selection: AgentSelection; agentRef?: Ref<HTMLDivElement> | undefined; disabledHint?: string | undefined }): React.JSX.Element | null {
-  if (selection.empty) return null;
+/** The chip's text: the agent and version, the thread's other agents, and the team that runs the thread. */
+export function agentChipLabel(selection: AgentSelection): string {
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
   const base = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
   const others = selection.companions ?? [];
   const label = others.length === 0 ? base : `${base} + ${others.map((c) => c.name).join(', ')}`;
+  return selection.team === undefined ? label : `${selection.team.name}: ${label}`;
+}
+
+/** "developer · base ⌄": the agent and its version. `disabledHint`: why it cannot change (a thread in the cloud). */
+export function AgentChip({ selection, agentRef, disabledHint }: { selection: AgentSelection; agentRef?: Ref<HTMLDivElement> | undefined; disabledHint?: string | undefined }): React.JSX.Element | null {
+  if (selection.empty) return null;
+  const label = agentChipLabel(selection);
   return (
     <Tooltip title={disabledHint ?? ''}>
       <Box ref={agentRef} sx={{ display: 'inline-flex', minWidth: 0 }}>

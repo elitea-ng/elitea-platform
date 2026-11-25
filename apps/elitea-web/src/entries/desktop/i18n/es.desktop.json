@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "Cambios con aprobación",
   "workspace.mode.bypassHint": "Sin aprobaciones",
   "workspace.mode.planHint": "Planifica, no cambia nada",
-  "workspace.usage.context": "Contexto: {{percent}} % de la ventana en uso"
+  "workspace.usage.context": "Contexto: {{percent}} % de la ventana en uso",
+  "workspace.team.menu": "Ejecutar como equipo",
+  "workspace.team.note": "Inicia un hilo nuevo con los agentes y el líder del equipo. Todos trabajan en este equipo con esta carpeta.",
+  "workspace.team.otherProject": "Agentes de otro proyecto",
+  "workspace.team.pipeline": "Tiene un pipeline",
+  "workspace.team.noMembers": "Sin agentes",
+  "workspace.team.leadNotice": "Equipo {{team}}: un mensaje que no nombra a ningún agente va a {{lead}} (líder); escribe @Nombre para dirigirte a otro miembro.",
+  "workspace.team.addressedNotice": "Equipo {{team}}: escribe @Nombre para dirigirte a un miembro; un mensaje que no nombra a ningún agente va a {{lead}}.",
+  "workspace.team.folderNotice": "Cada miembro trabaja en este equipo con esta carpeta y sus herramientas. Un agente al que un miembro llama como herramienta se ejecuta en la nube y no recibe la carpeta."
 }

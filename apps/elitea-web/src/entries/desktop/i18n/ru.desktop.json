@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "Изменения с одобрением",
   "workspace.mode.bypassHint": "Без одобрений",
   "workspace.mode.planHint": "Планирует, ничего не меняет",
-  "workspace.usage.context": "Контекст: занято {{percent}}% окна"
+  "workspace.usage.context": "Контекст: занято {{percent}}% окна",
+  "workspace.team.menu": "Запустить командой",
+  "workspace.team.note": "Начинает новую ветку с агентами и ведущим команды. Все они работают на этом компьютере с этой папкой.",
+  "workspace.team.otherProject": "Агенты другого проекта",
+  "workspace.team.pipeline": "Есть конвейер",
+  "workspace.team.noMembers": "Нет агентов",
+  "workspace.team.leadNotice": "Команда {{team}}: сообщение, в котором не назван агент, получает {{lead}} (ведущий); напишите @Имя, чтобы обратиться к другому участнику.",
+  "workspace.team.addressedNotice": "Команда {{team}}: напишите @Имя, чтобы обратиться к участнику; сообщение, в котором не назван агент, получает {{lead}}.",
+  "workspace.team.folderNotice": "Каждый участник работает на этом компьютере с этой папкой и её инструментами. Агент, которого участник вызывает как инструмент, работает в облаке и не получает папку."
 }

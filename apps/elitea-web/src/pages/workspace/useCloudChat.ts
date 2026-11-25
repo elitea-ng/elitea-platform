@@ -12,11 +12,17 @@
  *   stream into the transcript; `stop` cancels it server-side.
  * - Only a thread whose executor is `cloud` may send; a `returning` thread is
  *   read-only (its transcript still follows the server).
+ * - A thread of several agents (a team's, #3053) routes a message as the chat
+ *   does (`cloudRoute`): its `@Name` mentions are `addressed_to`, and the turn
+ *   is sent to the agent that answers first (the first addressed, else the
+ *   lead, else the thread's first agent). Main routes it by the same rule.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
+
+import { addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
 import { convertConversationToChatHistory, useChatStreamTransport, type ChatMessage, type ConversationDetails } from '@/features/chat-messages';
@@ -27,6 +33,7 @@ import { useActivityFeed } from '@/widgets/desktop-shell';
 import { useChatPageData } from '@/pages/chat/useChatPageData';
 
 import { cloudPrompt, continueBody, hitlBody, markDecided, type CloudPrompt, type HitlDecision } from './cloudPrompts';
+import { threadAgentsOf } from './useEnsureConversation';
 
 const SERVER_POLL_MS = 3000;
 
@@ -79,6 +86,25 @@ function agentParticipant(participants: readonly unknown[] | undefined): AgentPa
   return undefined;
 }
 
+/**
+ * Who a cloud thread's message goes to, as the chat routes it (client-core `firstAnswerer`, Main's
+ * `turntaking.RouteMessage`): the agents it names are `addressed_to`, and the start names the first of them, else the
+ * lead (`meta.floor`), else `fallback` (the thread's first agent). One agent: `fallback`, no address.
+ */
+export function cloudRoute(text: string, participants: readonly unknown[] | undefined, meta: unknown, fallback: number): { participant_id: number; addressed_to?: number[] } {
+  const agents = threadAgentsOf(participants as Parameters<typeof threadAgentsOf>[0]);
+  if (agents.length < 2) return { participant_id: fallback };
+  const addressed = addressedTo(text, agents);
+  const first = firstAnswerer(addressed, floorOf(meta), agents, fallback);
+  const participant = first > 0 ? first : fallback;
+  return addressed.length > 0 ? { participant_id: participant, addressed_to: addressed } : { participant_id: participant };
+}
+
+/** `cloudRoute` over the thread as last read (its participants and `meta`). */
+function cloudRouter(conversation: { readonly participants?: readonly unknown[]; readonly meta?: unknown } | undefined): (text: string, fallback: number) => ReturnType<typeof cloudRoute> {
+  return (text, fallback) => cloudRoute(text, conversation?.participants, conversation?.meta, fallback);
+}
+
 function questionMessage(text: string, questionId: string, userId: string | undefined, name: string | undefined): ChatMessage {
   return { id: questionId, questionId, role: 'user', name: name ?? '', content: text, createdAt: new Date().toISOString(), ...(userId !== undefined ? { userId } : {}) };
 }
@@ -116,6 +142,7 @@ export function useCloudChat({ conversationId, workspace, active, mayChat }: Clo
   }, [streaming, live, server]);
 
   const agent = agentParticipant(activeConversation?.participants);
+  const routeTo = useMemo(() => cloudRouter(activeConversation), [activeConversation]);
   const canSend = mayChat && projectId !== undefined && uuid !== undefined && agent !== undefined;
   const history = live ?? server;
   const historyRef = useRef(history);
@@ -195,7 +222,7 @@ export function useCloudChat({ conversationId, workspace, active, mayChat }: Clo
           question_id: questionId,
           interaction_uuid: crypto.randomUUID(),
           mcp_tokens: await getExecutionTokens(projectId),
-          participant_id: agent.id,
+          ...routeTo(text, agent.id),
           payload: { user_input: text },
         },
       });
@@ -204,7 +231,7 @@ export function useCloudChat({ conversationId, workspace, active, mayChat }: Clo
       setError(outcome.reason === 'rejected' ? outcome.message : t('workspace.cloud.noTransport', 'The cloud copy could not be reached.'));
       return false;
     },
-    [canSend, projectId, uuid, agent, streaming, user, transport],
+    [canSend, projectId, uuid, agent, streaming, user, transport, routeTo],
   );
 
   // The activity island, the tray and the Dock show a cloud turn while its stream runs, and while it waits on the person.

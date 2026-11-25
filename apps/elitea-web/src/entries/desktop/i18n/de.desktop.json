@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "Änderungen mit Freigabe",
   "workspace.mode.bypassHint": "Ohne Freigaben",
   "workspace.mode.planHint": "Plant, ändert nichts",
-  "workspace.usage.context": "Kontext: {{percent}} % des Fensters belegt"
+  "workspace.usage.context": "Kontext: {{percent}} % des Fensters belegt",
+  "workspace.team.menu": "Als Team ausführen",
+  "workspace.team.note": "Startet einen neuen Thread mit den Agenten und dem Lead des Teams. Alle arbeiten auf diesem Computer mit diesem Ordner.",
+  "workspace.team.otherProject": "Agenten eines anderen Projekts",
+  "workspace.team.pipeline": "Enthält eine Pipeline",
+  "workspace.team.noMembers": "Keine Agenten",
+  "workspace.team.leadNotice": "Team {{team}}: Eine Nachricht, die keinen Agenten nennt, geht an {{lead}} (Lead); schreiben Sie @Name, um ein anderes Mitglied anzusprechen.",
+  "workspace.team.addressedNotice": "Team {{team}}: Schreiben Sie @Name, um ein Mitglied anzusprechen; eine Nachricht, die keinen Agenten nennt, geht an {{lead}}.",
+  "workspace.team.folderNotice": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen. Ein Agent, den ein Mitglied als Werkzeug aufruft, läuft in der Cloud und erhält den Ordner nicht."
 }

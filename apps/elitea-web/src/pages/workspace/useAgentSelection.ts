@@ -13,6 +13,10 @@
  * (`companions`), each running on this computer with the workspace or in the
  * cloud with the conversation's text only. They join the conversation on the
  * next send; a message names the ones it is for with "@Name".
+ *
+ * A saved team (ADR-0050 decision 8, #3053): picking one of the project's teams starts a new thread run by the team
+ * (`workTeams.ts`): the composer's agent is its lead (or its first member), on the team's version, and the other
+ * members are the companions, each running on this computer. The first send writes the lead as the thread's floor.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -21,6 +25,9 @@ import { useListConversations } from '@/shared/api/generated/chat/chat';
 import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
 import { createStorage } from '@/shared/lib/storage';
+import { useAgentTeamList, useTeamAbilities } from '@/features/agent-teams';
+
+import { teamChoice, type TeamChoice, type WorkTeam } from './workTeams';
 
 interface LastUsed {
   projectId: number;
@@ -97,9 +104,28 @@ export interface AgentSelection {
   /** Add `id` to the thread, on its first version; `cloud`: it runs in the cloud. Absent = not offered. */
   addCompanion?: (id: string, cloud: boolean) => void;
   removeCompanion?: (id: string) => void;
+  /** The project's saved teams, as the picker lists them; absent = none offered. */
+  teams?: readonly TeamChoice[];
+  /** The team the thread is run by (a new thread, or the one its first send created); absent = none. */
+  team?: WorkTeam;
+  /** Run a new thread by the team `id` (a runnable one of `teams`). */
+  selectTeam?: (id: number) => void;
 }
 
 const NO_COMPANIONS: readonly ThreadCompanion[] = [];
+const NO_TEAMS: readonly TeamChoice[] = [];
+
+/** The version the team pinned its lead to, when `agentId` is that lead and the version is offered; else `undefined`. */
+function teamVersion(team: WorkTeam | undefined, agentId: string, versions: readonly VersionChoice[]): string | undefined {
+  if (team === undefined || String(team.primary.applicationId) !== agentId) return undefined;
+  const pinned = String(team.primary.versionId);
+  return versions.some((v) => String(v.id) === pinned) ? pinned : undefined;
+}
+
+/** A team's other members as the thread's companions: on the team's version, on this computer. */
+function teamCompanions(team: WorkTeam): ThreadCompanion[] {
+  return team.others.map((member) => ({ agentId: String(member.applicationId), name: member.name, versionId: member.versionId, agentType: '', cloud: false }));
+}
 
 /** The first version of an agent, read when the person adds it to a thread. */
 async function firstVersion(projectId: string, agentId: string): Promise<VersionChoice | undefined> {
@@ -124,6 +150,7 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
   const [versionId, setVersionId] = useState('');
   const [conversationId, setConversationId] = useState('');
   const [companions, setCompanions] = useState<readonly ThreadCompanion[]>(NO_COMPANIONS);
+  const [team, setTeam] = useState<WorkTeam | undefined>(undefined);
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
   const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });
@@ -141,6 +168,13 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     const detail = unwrapBody(detailQuery.data) as ApplicationDetail | undefined;
     return (detail?.versions ?? []).map((v) => ({ id: Number(v.id), name: v.name, agentType: v.agent_type }));
   }, [detailQuery.data]);
+
+  const { canList: canListTeams } = useTeamAbilities(enabled ? project : undefined);
+  const teamList = useAgentTeamList(enabled ? project : undefined, '', canListTeams);
+  const teams = useMemo(
+    () => (projectId === null || teamList.rows.length === 0 ? NO_TEAMS : teamList.rows.map((row) => teamChoice(row, projectId, agents, pipelineIds))),
+    [teamList.rows, projectId, agents, pipelineIds],
+  );
 
   const conversationsQuery = useListConversations(project, { mine: true, limit: 50, offset: 0 }, { query: { enabled } });
   const conversations = useMemo(
@@ -164,10 +198,15 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       return;
     }
     if (versions.some((v) => String(v.id) === versionId)) return;
+    const pinned = teamVersion(team, agentId, versions);
+    if (pinned !== undefined) {
+      setVersionId(pinned);
+      return;
+    }
     const last = readLastUsed(workspaceId, projectId);
     const remembered = last?.agentId === agentId && versions.some((v) => String(v.id) === last.versionId) ? last.versionId : undefined;
     setVersionId(remembered ?? String(versions[0]?.id ?? ''));
-  }, [versions, versionId, agentId, workspaceId, projectId]);
+  }, [versions, versionId, agentId, workspaceId, projectId, team]);
 
   // Remember a complete pick for the next time this workspace opens.
   useEffect(() => {
@@ -188,6 +227,19 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     [agents, project],
   );
   const removeCompanion = useCallback((id: string) => setCompanions((current) => current.filter((c) => c.agentId !== id)), []);
+  // A team always starts a new thread (chat cannot add a team to a conversation either).
+  const selectTeam = useCallback(
+    (id: number) => {
+      const choice = teams.find((row) => row.id === id);
+      if (choice === undefined || !('team' in choice)) return;
+      setTeam(choice.team);
+      setAgentId(String(choice.team.primary.applicationId));
+      setVersionId(String(choice.team.primary.versionId));
+      setConversationId('');
+      setCompanions(teamCompanions(choice.team));
+    },
+    [teams],
+  );
 
   return {
     agents,
@@ -208,6 +260,7 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       setVersionId('');
       setConversationId('');
       setCompanions((current) => current.filter((c) => c.agentId !== id));
+      setTeam(undefined);
     },
     selectVersion: (id) => {
       setVersionId(id);
@@ -215,11 +268,17 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     },
     // Another thread has its own agents: the companions stay only for the thread a first send just created.
     selectConversation: (id) => {
-      if (id === '' || (conversationId !== '' && id !== conversationId)) setCompanions(NO_COMPANIONS);
+      if (id === '' || (conversationId !== '' && id !== conversationId)) {
+        setCompanions(NO_COMPANIONS);
+        setTeam(undefined);
+      }
       setConversationId(id);
     },
     companions,
     addCompanion,
     removeCompanion,
+    teams,
+    ...(team === undefined ? {} : { team }),
+    selectTeam,
   };
 }

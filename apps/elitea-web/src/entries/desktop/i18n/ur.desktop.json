@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "منظوری کے ساتھ تبدیلیاں",
   "workspace.mode.bypassHint": "بغیر منظوری",
   "workspace.mode.planHint": "منصوبہ بندی، کوئی تبدیلی نہیں",
-  "workspace.usage.context": "سیاق: ونڈو کا {{percent}}٪ استعمال ہوا"
+  "workspace.usage.context": "سیاق: ونڈو کا {{percent}}٪ استعمال ہوا",
+  "workspace.team.menu": "ٹیم کے طور پر چلائیں",
+  "workspace.team.note": "ٹیم کے ایجنٹس اور لیڈ کے ساتھ نیا تھریڈ شروع کرتا ہے۔ سب اس کمپیوٹر پر اس فولڈر کے ساتھ کام کرتے ہیں۔",
+  "workspace.team.otherProject": "کسی دوسرے پروجیکٹ کے ایجنٹس",
+  "workspace.team.pipeline": "اس میں پائپ لائن ہے",
+  "workspace.team.noMembers": "کوئی ایجنٹ نہیں",
+  "workspace.team.leadNotice": "ٹیم {{team}}: جس پیغام میں کسی ایجنٹ کا نام نہ ہو وہ {{lead}} (لیڈ) کو جاتا ہے؛ کسی دوسرے رکن سے مخاطب ہونے کے لیے @نام لکھیں۔",
+  "workspace.team.addressedNotice": "ٹیم {{team}}: کسی رکن سے مخاطب ہونے کے لیے @نام لکھیں؛ جس پیغام میں کسی ایجنٹ کا نام نہ ہو وہ {{lead}} کو جاتا ہے۔",
+  "workspace.team.folderNotice": "ہر رکن اس کمپیوٹر پر اس فولڈر اور اس کے ٹولز کے ساتھ کام کرتا ہے۔ جس ایجنٹ کو کوئی رکن ٹول کے طور پر بلاتا ہے وہ کلاؤڈ میں چلتا ہے اور اسے فولڈر نہیں ملتا۔"
 }

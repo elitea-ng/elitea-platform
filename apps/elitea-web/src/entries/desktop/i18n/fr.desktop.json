@@ -1019,5 +1019,13 @@
   "workspace.mode.actHint": "Modifications avec approbation",
   "workspace.mode.bypassHint": "Sans approbation",
   "workspace.mode.planHint": "Planifie, ne modifie rien",
-  "workspace.usage.context": "Contexte : {{percent}} % de la fenêtre utilisé"
+  "workspace.usage.context": "Contexte : {{percent}} % de la fenêtre utilisé",
+  "workspace.team.menu": "Exécuter en équipe",
+  "workspace.team.note": "Démarre un nouveau fil avec les agents et le responsable de l’équipe. Tous travaillent sur cet ordinateur avec ce dossier.",
+  "workspace.team.otherProject": "Agents d’un autre projet",
+  "workspace.team.pipeline": "Contient un pipeline",
+  "workspace.team.noMembers": "Aucun agent",
+  "workspace.team.leadNotice": "Équipe {{team}} : un message qui ne nomme aucun agent va à {{lead}} (responsable) ; écrivez @Nom pour vous adresser à un autre membre.",
+  "workspace.team.addressedNotice": "Équipe {{team}} : écrivez @Nom pour vous adresser à un membre ; un message qui ne nomme aucun agent va à {{lead}}.",
+  "workspace.team.folderNotice": "Chaque membre travaille sur cet ordinateur avec ce dossier et ses outils. Un agent qu’un membre appelle comme outil s’exécute dans le cloud et ne reçoit pas le dossier."
 }
