@@ -52,7 +52,13 @@ A role can open a page to read it without being able to change it. On such a pag
 
 The level comes from the same capability document as the sidebar: each item is open to you to read or to change. If the console cannot read the document, it does not turn a page read-only; the server answers each change for itself, as before. If it cannot read the roles that can change the page, the notice says the page is view only without naming a role.
 
-These pages are in view-only mode: **Budgets**, **Roles**, **Users**, **Identity providers**, **SCIM**, **Projects**, **App requests**, **LLM governance** and the LLM Proxy tabs. Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts) has its own level, so you can be able to change one tab and only read another. A control that used to be hidden from a role that cannot use it, such as **New role** on Roles or **Delete** on Users, is now shown disabled. The other pages follow in a later release; until then a role that can only read one of them still sees its controls, and the server refuses the change.
+Every page of the console has this mode. Some parts of a page have their own level, so you can be able to change one part and only read another:
+
+- Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts).
+- The identity providers and SCIM editors.
+- The editors that Configuration shows for E-mail (the **E-mail** item, also on its own page), MCP servers (the **Toolkits** item), and native clients and Microsoft apps (the **Client applications** item). Configuration's own **View only** notice sits above its ordinary section form, and each of these editors shows its own.
+
+A control that used to be hidden from a role that cannot use it, such as **New role** on Roles, **Delete** on Users or **Create secret** on Secrets, is now shown disabled. Some actions that look like changes only read, so they keep working on a view-only page: revealing a secret's value, downloading the branding package, showing resumed suspensions on the Kill switch, and listing a toolkit's project exceptions.
 
 While the console reads the capability document, the sidebar shows that it is loading. If the read fails, the sidebar says so and offers **Try again**; it never shows an empty menu for a failed read.
 
