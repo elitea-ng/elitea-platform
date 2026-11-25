@@ -16,7 +16,7 @@ import type { AdminConfigurationPageState } from './useAdminConfigurationPage';
 
 export function ConfigurationSectionActions({ state }: { readonly state: AdminConfigurationPageState }): ReactNode {
   const guard = useCatalogueModeGuard(state.activeSection?.id, state.values, state.isDirty, state.onSave);
-  const idle = !state.isDirty || state.isSaving;
+  const idle = state.readOnly || !state.isDirty || state.isSaving;
   return (
     <>
       {guard.warning}

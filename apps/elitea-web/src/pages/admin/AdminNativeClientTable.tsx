@@ -25,6 +25,8 @@ import type { NativeClient } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { isEditableNativeClient } from './adminNativeClientForm';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 
 function SourceCell({ client }: { readonly client: NativeClient }) {
   if (!isEditableNativeClient(client)) {
@@ -59,6 +61,8 @@ export interface NativeClientTableProps {
 }
 
 export function NativeClientTable({ clients, busyIds, onEdit, onToggleEnabled, onRemove }: NativeClientTableProps) {
+  // View-only mode (R3.4b, issue 2613): every row control is disabled, not hidden.
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.nativeClients).disabled;
   return (
     <TableContainer>
       <Table
@@ -80,7 +84,7 @@ export function NativeClientTable({ clients, busyIds, onEdit, onToggleEnabled, o
         <TableBody>
           {clients.map((client) => {
             const editable = isEditableNativeClient(client);
-            const busy = busyIds.has(client.client_id);
+            const busy = viewOnly || busyIds.has(client.client_id);
             const name = client.display_name !== '' ? client.display_name : client.client_id;
             return (
               <TableRow key={client.client_id} hover data-testid={`native-client-row-${client.client_id}`}>

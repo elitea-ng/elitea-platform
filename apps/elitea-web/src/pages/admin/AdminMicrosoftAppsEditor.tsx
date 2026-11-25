@@ -30,6 +30,9 @@ import Typography from '@mui/material/Typography';
 import type { MicrosoftApp, MicrosoftAppRequest, MicrosoftAppTestResult } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { AdminWritableSection } from './AdminWritable';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import { DeploymentChecklist } from './AdminMicrosoftAppChecklist';
 import { AdminMicrosoftAppDialog } from './AdminMicrosoftAppDialog';
 import { AdminMicrosoftAppsTable } from './AdminMicrosoftAppsTable';
@@ -66,12 +69,24 @@ function refusalSentence(error: unknown, fallback: string): string {
   return failure.message ?? fallback;
 }
 
+/** Microsoft apps are the Client applications item (R3.4b, issue 2613). */
 export function AdminMicrosoftAppsEditor() {
+  return (
+    <AdminWritableSection itemId={ADMIN_ITEM.clientApplications}>
+      <MicrosoftAppsEditor />
+    </AdminWritableSection>
+  );
+}
+
+function MicrosoftAppsEditor() {
   const listQuery = useAdminMicrosoftApps();
-  const saveMutation = useSaveMicrosoftApp();
-  const enabledMutation = useSetMicrosoftAppEnabled();
-  const settingsMutation = useSaveMicrosoftAppSettings();
-  const testMutation = useTestMicrosoftApp();
+  const access = useAdminWritable(ADMIN_ITEM.clientApplications);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.microsoftApps).disabled;
+  const saveMutation = access.guard(useSaveMicrosoftApp());
+  const enabledMutation = access.guard(useSetMicrosoftAppEnabled());
+  const settingsMutation = access.guard(useSaveMicrosoftAppSettings());
+  // The test signs in to Entra with the stored secret: a write-level action.
+  const testMutation = access.guard(useTestMicrosoftApp());
 
   const [dialog, setDialog] = useState<DialogState>(CLOSED_DIALOG);
   const [notice, setNotice] = useState<{ severity: 'success' | 'error'; text: string } | undefined>(undefined);
@@ -183,7 +198,7 @@ export function AdminMicrosoftAppsEditor() {
           control={
             <Switch
               checked={listQuery.data.settings.custom_apps}
-              disabled={settingsMutation.isPending}
+              disabled={locked || settingsMutation.isPending}
               onChange={(event) => {
                 handleCustomApps(event.target.checked);
               }}
@@ -198,6 +213,7 @@ export function AdminMicrosoftAppsEditor() {
           size="small"
           variant="elitea"
           color="primary"
+          disabled={locked}
           onClick={() => setDialog({ ...CLOSED_DIALOG, open: true })}
           sx={{ textTransform: 'none' }}
           data-testid="admin-microsoft-apps-add"

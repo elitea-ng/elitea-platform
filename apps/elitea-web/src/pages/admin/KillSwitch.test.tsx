@@ -14,6 +14,7 @@ import { server } from '@/test/setup';
 import { MAX_SUSPENSION_ID, PLATFORM_STOP_CONFIRMATION, suspensionBody } from './AdminSuspendDialog';
 import { AdminKillSwitch } from './KillSwitch';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const ROW: ExecutionSuspensionRow = {
   id: 12,
@@ -197,5 +198,20 @@ describe('suspensionBody', () => {
     await waitFor(() => {
       expect(creates).toEqual([{ scope: 'platform', reason: 'incident', resume_requires: 'any_admin', confirm: 'STOP' }]);
     });
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `kill-switch` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'kill-switch');
+    renderAdminRoute(<AdminKillSwitch refetchInterval={false} />);
+    const row = await screen.findByTestId('kill-switch-row-12');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('kill-switch-open')).toBeDisabled());
+    expect(within(row).getByRole('button', { name: 'Resume' })).toBeDisabled();
+    // Showing the resumed suspensions is a read, and stays on.
+    expect(screen.getByRole('switch', { name: 'Show resumed suspensions' })).toBeEnabled();
   });
 });

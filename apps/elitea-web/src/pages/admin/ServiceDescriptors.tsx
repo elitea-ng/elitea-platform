@@ -102,6 +102,8 @@ import {
   type AdmissionDecision,
 } from './ServiceDescriptorDecisionDialog';
 import { AdminServiceDescriptorsTable } from './ServiceDescriptorsTable';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import {
   descriptorFailureReason,
   descriptorFailureStatus,
@@ -110,6 +112,14 @@ import {
 } from './api/adminServiceDescriptorsApi';
 
 export function AdminServiceDescriptors() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.serviceDescriptors}>
+      <ServiceDescriptorsPage />
+    </AdminWritable>
+  );
+}
+
+function ServiceDescriptorsPage() {
   const query = useAdminServiceDescriptors();
 
   // WHICH ROW is under decision lives here; WHAT IS SENT for it lives in the
@@ -137,6 +147,8 @@ export function AdminServiceDescriptors() {
       <Typography variant="headingLarge" component="h1">
         {t('pages.admin.serviceDescriptors.title', 'Service Descriptors')}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       {query.isPending ? <LinearProgress /> : null}
 

@@ -44,6 +44,9 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import { ToolkitTypeBulkDialog } from './ToolkitTypeBulkDialog';
 import { ToolkitTypeDecisionDialog } from './ToolkitTypeDecisionDialog';
 import { ToolkitTypeProjectsDialog } from './ToolkitTypeProjectsDialog';
@@ -137,6 +140,15 @@ function ToolkitTypeNotices({
 }
 
 export function AdminToolkitTypes() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.toolkits}>
+      <ToolkitTypesPage />
+    </AdminWritable>
+  );
+}
+
+function ToolkitTypesPage() {
+  const writeControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage);
   const query = useAdminToolkitTypes();
 
   const [search, setSearch] = useState('');
@@ -197,6 +209,8 @@ export function AdminToolkitTypes() {
         )}
       </Typography>
 
+      <AdminViewOnlyNotice />
+
       {query.isPending ? <LinearProgress /> : null}
 
       <ToolkitTypeNotices
@@ -235,7 +249,7 @@ export function AdminToolkitTypes() {
             </TextField>
             {/* The subject is the FILTERED set, so what the operator sees is
                 what they change. */}
-            <Button onClick={openBulk} disabled={visible.length === 0}>
+            <Button onClick={openBulk} disabled={writeControl.disabled || visible.length === 0}>
               {t('pages.admin.toolkitTypes.action.bulk', 'Apply to listed')}
             </Button>
           </Stack>

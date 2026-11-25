@@ -28,6 +28,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   toolkitTypeFailureReason,
   useRevokeToolkitTypeGrant,
@@ -43,8 +45,11 @@ export interface ToolkitTypeProjectsDialogProps {
 }
 
 export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeProjectsDialogProps) {
-  const saveGrant = useSaveToolkitTypeGrant();
-  const revokeGrant = useRevokeToolkitTypeGrant();
+  // The exceptions are listed at read too; adding and revoking are disabled.
+  const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage).disabled;
+  const saveGrant = access.guard(useSaveToolkitTypeGrant());
+  const revokeGrant = access.guard(useRevokeToolkitTypeGrant());
 
   const [projectId, setProjectId] = useState('');
   const [availability, setAvailability] = useState<ToolkitTypeGrantAvailability>('enabled');
@@ -151,7 +156,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
                 <Button
                   size="small"
                   color="warning"
-                  disabled={submitting}
+                  disabled={locked || submitting}
                   onClick={() => {
                     void revoke(grant.project_id);
                   }}
@@ -168,6 +173,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
             required
             label={t('pages.admin.toolkitTypes.projects.projectId', 'Project ID')}
             value={projectId}
+            disabled={locked}
             onChange={(event) => setProjectId(event.target.value)}
             sx={{ width: '10rem' }}
           />
@@ -175,6 +181,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
             select
             label={t('pages.admin.toolkitTypes.projects.availability', 'Exception')}
             value={availability}
+            disabled={locked}
             onChange={(event) => setAvailability(event.target.value as ToolkitTypeGrantAvailability)}
             sx={{ width: '10rem' }}
           >
@@ -194,6 +201,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
           sx={{ marginTop: '1rem' }}
           label={t('pages.admin.toolkitTypes.reason.label', 'Reason')}
           value={reason}
+          disabled={locked}
           onChange={(event) => setReason(event.target.value)}
         />
         {failure === null ? null : (
@@ -208,7 +216,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
         </Button>
         <Button
           variant="contained"
-          disabled={!submittable}
+          disabled={locked || !submittable}
           onClick={() => {
             void submit();
           }}

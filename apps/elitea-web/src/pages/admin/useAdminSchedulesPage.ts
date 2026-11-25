@@ -7,7 +7,8 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   scheduleFailureReason,
   useAdminRoutines,
@@ -70,9 +71,12 @@ export function useAdminSchedulesPage(): AdminSchedulesPageState {
   const [savedMessage, setSavedMessage] = useState('');
 
   const routinesQuery = useAdminRoutines();
-  const updateRoutine = useUpdateAdminRoutine();
+  const access = useAdminWritable(ADMIN_ITEM.schedulesTasks);
+  const updateRoutine = access.guard(useUpdateAdminRoutine());
 
-  const canEdit = adminUiShowsControlFor(PERMISSION_SCHEDULES_EDIT);
+  // View only (R3.4b, issue 2613), or a role without the schedules edit
+  // permission: the switch is disabled and the schedule reads as text.
+  const canEdit = !useAdminActionControl(PERMISSION_SCHEDULES_EDIT).disabled;
   const serverRows = routinesQuery.data;
 
   const rows = useMemo((): readonly AdminRoutineRow[] | undefined => {

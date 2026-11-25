@@ -32,6 +32,7 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 import { server } from '@/test/setup';
 
 import { AdminBranding } from './Branding';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import { useBrandingDirtyStore } from './brandingDirty.store';
 import { BRANDING_KEYS, emptyBrandingValues } from './brandingValues';
 
@@ -284,5 +285,26 @@ describe('AdminBranding', () => {
     await userEvent.click(screen.getByTestId('branding-save'));
     await waitFor(() => expect(savedBodies).toHaveLength(1));
     expect(savedBodies[0]).not.toHaveProperty('scheme_tokens');
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `branding` every
+// field, upload, Save, Reset, Import and Restore is disabled; the download, a
+// read, stays on, and the preview and the layers still read.
+describe('AdminBranding - view only', () => {
+  it('disables every branding write at the read level', async () => {
+    serveConsoleLevel('read', 'branding');
+    renderBranding();
+    const name = await productName();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(name).toBeDisabled());
+    expect(screen.getByTestId('branding-save')).toBeDisabled();
+    expect(screen.getByTestId('branding-reset')).toBeDisabled();
+    expect(screen.getByTestId('branding-package-import')).toBeDisabled();
+    expect(screen.getByTestId('branding-package-download')).toBeEnabled();
+    expect(screen.getByTestId('branding-layers')).toBeInTheDocument();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(savedBodies).toEqual([]);
+    expect(uploads).toEqual([]);
   });
 });

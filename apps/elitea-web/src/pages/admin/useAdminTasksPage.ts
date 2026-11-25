@@ -30,6 +30,8 @@ import {
   useCancelAdminTask,
   type AdminTaskRow,
 } from './api/adminTasksApi';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 
 /** The reference polls its Tasks tab; ten seconds — see `Tasks.tsx`. */
 const REFRESH_INTERVAL_MS = 10_000;
@@ -107,7 +109,8 @@ export function useAdminTasksPage(
   const [cancelFailed, setCancelFailed] = useState(false);
 
   const query = useAdminTasks({ kind, status, limit: PAGE_SIZE, offset }, interval);
-  const cancelTask = useCancelAdminTask();
+  const access = useAdminWritable(ADMIN_ITEM.schedulesTasks);
+  const cancelTask = access.guard(useCancelAdminTask());
 
   const page = query.data;
   const rows = page?.rows ?? [];

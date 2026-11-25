@@ -16,6 +16,7 @@ import { server } from '@/test/setup';
 
 import { AdminConnectorRequests } from './ConnectorRequests';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const ROW: ConnectorRequest = {
   id: 5,
@@ -150,5 +151,20 @@ describe('AdminConnectorRequests', () => {
     await user.click(confirm);
     expect(await screen.findByText('You made this request, so another approver must decide it.')).toBeInTheDocument();
     expect(decisions[0]?.body).toEqual({ reason: 'Not needed' });
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `connector-requests` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'connector-requests');
+    renderAdminRoute(<AdminConnectorRequests />);
+    await screen.findByTestId('connector-request-row-5');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('connector-request-approve-5')).toBeDisabled());
+    expect(screen.getByTestId('connector-request-reject-5')).toBeDisabled();
+    expect(screen.getByTestId('connector-inventory-create')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

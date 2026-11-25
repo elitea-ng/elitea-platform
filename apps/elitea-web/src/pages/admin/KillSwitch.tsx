@@ -38,6 +38,9 @@ import {
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { AdminSuspendDialog, resumeRuleLabel, scopeLabel } from './AdminSuspendDialog';
 import { useAdminSuspensions, useCreateAdminSuspension, useResumeAdminSuspension } from './api/adminKillSwitchApi';
 
@@ -63,14 +66,23 @@ export interface AdminKillSwitchProps {
 }
 
 export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.killSwitch}>
+      <KillSwitchPage {...props} />
+    </AdminWritable>
+  );
+}
+
+function KillSwitchPage(props: AdminKillSwitchProps): ReactNode {
   const [showHistory, setShowHistory] = useState(false);
   const [dialogKey, setDialogKey] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [error, setError] = useState<string>();
   const [info, setInfo] = useState<string>();
   const list = useAdminSuspensions(!showHistory, props.refetchInterval ?? 10_000);
-  const create = useCreateAdminSuspension();
-  const resume = useResumeAdminSuspension();
+  const access = useAdminWritable(ADMIN_ITEM.killSwitch);
+  const create = access.guard(useCreateAdminSuspension());
+  const resume = access.guard(useResumeAdminSuspension());
   const rows = list.data ?? [];
 
   const closeDialog = (): void => {
@@ -91,8 +103,15 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
         )}
       </Typography>
 
+      <AdminViewOnlyNotice />
+
       <Box sx={toolbarSx}>
-        <Button color="error" variant="contained" data-testid="kill-switch-open" onClick={() => setDialogOpen(true)}>
+        <Button
+          color="error"
+          variant="contained"
+          data-testid="kill-switch-open"
+          disabled={!access.writable}
+          onClick={() => setDialogOpen(true)}>
           {t('pages.admin.killSwitch.suspend', 'Suspend')}
         </Button>
         <FormControlLabel
@@ -160,7 +179,7 @@ export function AdminKillSwitch(props: AdminKillSwitchProps = {}): ReactNode {
                 {row.active ? (
                   <Button
                     size="small"
-                    disabled={resume.isPending}
+                    disabled={!access.writable || resume.isPending}
                     onClick={() =>
                       resume.mutate(
                         { id: row.id, reason: '' },

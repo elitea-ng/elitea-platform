@@ -78,8 +78,12 @@ async function navItems(page: Page): Promise<{ id: string; href: string }[]> {
 test('the security auditor walks every page it opens and finds no enabled write control', async ({ page }) => {
   await page.goto(`${BASE_URL}/admin/app/`, { waitUntil: 'domcontentloaded' });
   const items = await navItems(page);
-  // The document opens Audit Trail and the TEMPORARY Roles link (R3.6, issue 2537) at least.
-  expect(items.map((entry) => entry.id)).toEqual(expect.arrayContaining(['access', 'audit-trail']));
+  // The document opens Audit Trail at least. Roles is not listed: today's
+  // Roles page is the permission matrix, which access.roles.view does not
+  // read (issue 3042); the auditor's view of who holds what is R3.9's.
+  const ids = items.map((entry) => entry.id);
+  expect(ids).toEqual(expect.arrayContaining(['audit-trail']));
+  expect(ids).not.toContain('access');
 
   for (const entry of items) {
     await test.step(entry.id, async () => {
@@ -97,9 +101,11 @@ test('the security auditor walks every page it opens and finds no enabled write 
   }
 });
 
-test('the security auditor sees Roles as view only: notice, disabled writes, working tabs and search', async ({
+test('the security auditor opening Roles by its address finds it view only: notice, disabled writes, working tabs and search', async ({
   page,
 }) => {
+  // No link leads here (issue 3042), and the level is `none`: the page still
+  // opens by its address, so its writes must be disabled and say why.
   await page.goto(`${BASE_URL}/admin/app/roles`, { waitUntil: 'domcontentloaded' });
   const notice = page.getByTestId('admin-view-only');
   await expect(notice).toBeVisible({ timeout: 30_000 });
@@ -110,11 +116,9 @@ test('the security auditor sees Roles as view only: notice, disabled writes, wor
 
   const main = page.getByRole('main');
   await expect(page.getByTestId('admin-roles-new-role')).toBeDisabled();
-  // The matrix itself is not asserted: the auditor's access.roles.view does
-  // not open its read (GET /admin/permissions needs
-  // configuration.roles.permissions.view), so the server refuses it. Issue
-  // 3042 decides between widening that read and dropping the link; this
-  // journey then asserts the matrix disabled, or the link gone.
+  // The matrix is not the auditor's to read: GET /admin/permissions needs
+  // configuration.roles.permissions.view, so the server refuses it (by
+  // decision, issue 3042).
   await expect.poll(() => enabledWrites(main), { timeout: 20_000 }).toEqual([]);
 
   // Reading still works: the tabs switch, and the standard tab's Apply is disabled.

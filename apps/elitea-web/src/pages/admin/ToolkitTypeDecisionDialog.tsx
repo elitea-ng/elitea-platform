@@ -36,6 +36,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   toolkitTypeFailureReason,
   useSaveToolkitTypePolicy,
@@ -93,7 +95,9 @@ export function ToolkitTypeDecisionDialog({
   toolkitType,
   onClose,
 }: ToolkitTypeDecisionDialogProps) {
-  const save = useSaveToolkitTypePolicy();
+  const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage).disabled;
+  const save = access.guard(useSaveToolkitTypePolicy());
 
   const [availability, setAvailability] = useState<ToolkitTypeAvailability>('disabled');
   const [reason, setReason] = useState('');
@@ -197,7 +201,7 @@ export function ToolkitTypeDecisionDialog({
         </Button>
         <Button
           variant="contained"
-          disabled={!submittable || save.isPending}
+          disabled={locked || !submittable || save.isPending}
           onClick={() => {
             void submit();
           }}

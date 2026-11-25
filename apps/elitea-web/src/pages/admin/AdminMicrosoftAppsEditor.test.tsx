@@ -24,6 +24,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { AdminMicrosoftAppsEditor } from './AdminMicrosoftAppsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import { testTimeout } from '@/test/timeouts';
 
 const SECRET = 's3cr3t~value.from.Entra';
@@ -382,5 +383,25 @@ describe('AdminMicrosoftAppsEditor', { timeout: testTimeout(20_000) }, () => {
     useHandlers({ listStatus: 503 });
     renderAdminRoute(<AdminMicrosoftAppsEditor />);
     expect(await screen.findByTestId('admin-microsoft-apps-error')).toHaveTextContent('vault master key');
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): Microsoft apps are the Client
+// applications item. At its read level every write, the test included, is
+// disabled; the checklist still reads.
+describe('AdminMicrosoftAppsEditor - view only', () => {
+  it('disables the app writes at the read level', async () => {
+    useHandlers({ apps: [APP] });
+    serveConsoleLevel('read', 'client-applications');
+    renderAdminRoute(<AdminMicrosoftAppsEditor />);
+
+    const row = await screen.findByTestId(`microsoft-app-row-${APP_ID}`);
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('admin-microsoft-apps-add')).toBeDisabled());
+    expect(within(screen.getByTestId('admin-microsoft-apps-custom')).getByRole('switch')).toBeDisabled();
+    for (const button of within(row).getAllByRole('button')) expect(button).toBeDisabled();
+    expect(screen.getByTestId('microsoft-deployment-checklist')).toBeVisible();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 });

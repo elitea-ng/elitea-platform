@@ -139,6 +139,7 @@ export function AdminEmailFields({
   onChange,
   onPasswordChange,
   onClearPassword,
+  disabled = false,
 }: {
   readonly values: EmailFormValues;
   /** The merged document, for the placeholders that show what is inherited. */
@@ -154,6 +155,8 @@ export function AdminEmailFields({
   readonly onChange: (field: keyof EmailFormValues, value: string) => void;
   readonly onPasswordChange: (value: string) => void;
   readonly onClearPassword: () => void;
+  /** Every field disabled, not hidden: view-only mode (R3.4b, issue 2613). */
+  readonly disabled?: boolean;
 }) {
   const sourceOf = (field: string): AdminEmailSource => sources[field] ?? 'unset';
   const passwordTagSource = passwordSourceOf(sources, passwordSet, passwordSource);
@@ -162,6 +165,7 @@ export function AdminEmailFields({
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '44rem' }}>
       <EmailField field="host" source={sourceOf('host')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.host', 'SMTP host')}
@@ -174,6 +178,7 @@ export function AdminEmailFields({
 
       <EmailField field="port" source={sourceOf('port')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.port', 'Port')}
@@ -190,6 +195,7 @@ export function AdminEmailFields({
 
       <EmailField field="tls" source={sourceOf('tls')}>
         <TextField
+          disabled={disabled}
           select
           fullWidth
           size="small"
@@ -207,6 +213,7 @@ export function AdminEmailFields({
 
       <EmailField field="username" source={sourceOf('username')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.username', 'User name')}
@@ -226,6 +233,7 @@ export function AdminEmailFields({
           operator gets instead is whether one is set, and a way to clear it. */}
       <EmailField field="password" source={passwordTagSource}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           type="password"
@@ -248,9 +256,10 @@ export function AdminEmailFields({
             type="button"
             variant="bodySmall"
             color="error"
+            disabled={disabled}
             onClick={onClearPassword}
             data-testid="admin-email-clear-password"
-            sx={{ background: 'none', border: 0, cursor: 'pointer', padding: 0, marginTop: '0.25rem' }}
+            sx={{ background: 'none', border: 0, cursor: 'pointer', padding: 0, marginTop: '0.25rem', '&:disabled': { cursor: 'default', opacity: 0.5 } }}
           >
             {t('pages.admin.email.field.passwordClear', 'Remove the stored password')}
           </Typography>
@@ -259,6 +268,7 @@ export function AdminEmailFields({
 
       <EmailField field="from" source={sourceOf('from')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.from', 'From')}
@@ -271,6 +281,7 @@ export function AdminEmailFields({
 
       <EmailField field="reply_to" source={sourceOf('reply_to')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.replyTo', 'Reply-to')}
@@ -283,6 +294,7 @@ export function AdminEmailFields({
 
       <EmailField field="public_base_url" source={sourceOf('public_base_url')}>
         <TextField
+          disabled={disabled}
           fullWidth
           size="small"
           label={t('pages.admin.email.field.publicBaseUrl', 'Public base URL')}

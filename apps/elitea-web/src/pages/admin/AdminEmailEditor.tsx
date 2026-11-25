@@ -54,6 +54,9 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { AdminWritableSection } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { AdminEmailFields, type EmailFormValues } from './AdminEmailFields';
 import { configFailureField, configFailureReason } from './api/adminConfigurationApi';
 import {
@@ -111,10 +114,27 @@ function EmailSaveError({ error }: { readonly error: Error | null }) {
   );
 }
 
+/**
+ * The editor wraps itself in the E-mail item (R3.4b, issue 2613), so this page
+ * and the Configuration section read one level and show one notice.
+ */
 export function AdminEmailEditor() {
+  return (
+    <AdminWritableSection itemId={ADMIN_ITEM.email}>
+      <EmailEditor />
+    </AdminWritableSection>
+  );
+}
+
+function EmailEditor() {
   const state = useAdminEmailSettings();
-  const save = useSaveAdminEmailSettings();
-  const test = useSendAdminEmailTest();
+  // The E-mail item's level on both entry points, this page and the
+  // Configuration section (R3.4b, issue 2613). A test message is sent through
+  // the relay, so it is a write too.
+  const access = useAdminWritable(ADMIN_ITEM.email);
+  const locked = !access.writable;
+  const save = access.guard(useSaveAdminEmailSettings());
+  const test = access.guard(useSendAdminEmailTest());
 
   const [values, setValues] = useState<EmailFormValues | undefined>(undefined);
   // `undefined` means the operator has not touched the password, which is what
@@ -216,12 +236,14 @@ export function AdminEmailEditor() {
         onChange={change}
         onPasswordChange={(value) => editPassword(value)}
         onClearPassword={() => editPassword('')}
+        disabled={locked}
       />
 
       <Box>
         <Button
           variant="elitea"
           color="primary"
+          disabled={locked}
           onClick={submit}
           loading={save.isPending}
           data-testid="admin-email-save"
@@ -251,6 +273,7 @@ export function AdminEmailEditor() {
             size="small"
             label={t('pages.admin.email.test.to', 'Send to')}
             value={testTo}
+            disabled={locked}
             onChange={(event) => setTestTo(event.target.value)}
             sx={{ flex: 1 }}
             slotProps={{ htmlInput: { 'data-testid': 'admin-email-test-to' } }}
@@ -258,7 +281,7 @@ export function AdminEmailEditor() {
           <Button
             variant="outlined"
             color="primary"
-            disabled={testTo.trim() === ''}
+            disabled={locked || testTo.trim() === ''}
             loading={test.isPending}
             data-testid="admin-email-test-send"
             onClick={() =>

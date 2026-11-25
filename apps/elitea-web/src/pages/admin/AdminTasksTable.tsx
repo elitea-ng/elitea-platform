@@ -31,6 +31,8 @@ export interface AdminTasksTableProps {
   readonly rows: readonly AdminTaskRow[];
   readonly isCancelling: boolean;
   readonly onCancel: (row: AdminTaskRow) => void;
+  /** Stop is shown but disabled: view-only mode (R3.4b, issue 2613). */
+  readonly cancelDisabled?: boolean;
 }
 
 /**
@@ -115,7 +117,7 @@ export function AdminTasksTable(props: AdminTasksTableProps): ReactNode {
                       <IconButton
                         size="small"
                         color="tertiary"
-                        disabled={props.isCancelling}
+                        disabled={props.cancelDisabled === true || props.isCancelling}
                         aria-label={`Stop ${row.task_id}`}
                         onClick={() => props.onCancel(row)}
                       >
