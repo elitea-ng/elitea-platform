@@ -253,6 +253,17 @@ func (m *Manager) Validate(ctx context.Context, cookieValue string) (Session, er
 	if err != nil {
 		return Session{}, err
 	}
+	if session.Provider == ProviderSealed {
+		// A sealed session authenticates through its own cookie only
+		// (ValidateSealed). Its identifier in the ordinary cookie is no
+		// credential at all, so it reads as a session that does not exist.
+		return Session{}, ErrNotFound
+	}
+	return m.usable(ctx, id, session)
+}
+
+// usable holds a session that was read to its deadlines, and touches it.
+func (m *Manager) usable(ctx context.Context, id string, session Session) (Session, error) {
 	bounds, err := m.Bounds(ctx)
 	if err != nil {
 		return Session{}, fmt.Errorf("browsersession: read the session policy: %w", err)
@@ -301,13 +312,19 @@ func (m *Manager) markEnded(ctx context.Context, session Session, bounds Bounds)
 // is.
 func (s Session) User() auth.User {
 	id := fmt.Sprintf("%d", s.UserID)
+	kind := auth.CredentialKindSession
+	if s.Provider == ProviderSealed {
+		// The credentials table of ADR-0059 decision 7: a sealed session's
+		// administration set is its elevation only.
+		kind = auth.CredentialKindSealed
+	}
 	return auth.User{
 		ID:                id,
 		UserID:            id,
 		Email:             s.Email,
 		AuthType:          "session",
 		BrowserSessionRef: s.Ref,
-		CredentialKind:    auth.CredentialKindSession,
+		CredentialKind:    kind,
 	}
 }
 

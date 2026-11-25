@@ -1,13 +1,83 @@
 ---
 title: "Break-glass runbook"
-description: "How to end a break-glass elevation from the workload when the console cannot be used, check that access stopped, and what is recorded."
+description: "How to issue, list and revoke the sealed break-glass credentials that work when single sign-on is down, and how to end an elevation from the workload when the console cannot be used."
 ---
 
-This runbook is the operator procedure for ending a break-glass elevation without the console. [Break-glass access](/admin/break-glass) explains what an elevation is and how it runs out by itself. This page says what to do when an elevation is misused and the console is the thing that was taken, or cannot be reached.
+This runbook is the operator procedure for the sealed break-glass credentials and for ending a break-glass elevation without the console. [Break-glass access](/admin/break-glass) explains what an elevation is and how it runs out by itself. This page says how to prepare the way in for when the identity provider is down, and what to do when an elevation is misused and the console is the thing that was taken, or cannot be reached.
 
 ## Who can run it
 
-The control is access to the workload: whoever can run `kubectl exec` in the `elitea-main` Deployment (or a one-off Job from the same image and Secret) can run the command. It reads `DATABASE_URL`, talks to the database directly and exits. It is not reachable over HTTP or gRPC, and no console permission, token or elevation reaches it.
+The control is access to the workload: whoever can run `kubectl exec` in the `elitea-main` Deployment (or a one-off Job from the same image and Secret) can run the commands. They read `DATABASE_URL`, talk to the database directly and exit. They are not reachable over HTTP or gRPC, and no console permission, token or elevation reaches them.
+
+## Sealed credentials
+
+A sealed credential is the governed way in when the identity provider is down. It has the form `bg_<selector>.<verifier>`. The selector finds the credential; the verifier is the secret. Only an Argon2id digest of the verifier is stored: the command prints the credential **once**, and nobody, including the platform, can show it again. A lost credential is revoked and replaced, never recovered.
+
+The sign-in page that takes a credential comes in a later release. This release ships the store and the three commands, so that credentials can be issued, listed and revoked ahead of an outage.
+
+### Levels
+
+The operator is the approver on this path, so the operator chooses the level of the elevation the credential starts:
+
+| `--level` | The elevation gives | Use it for |
+| --- | --- | --- |
+| `admin` (the default) | The permissions of the `admin` role | Most repairs: a broken provider setting, a stuck user, a mis-set role |
+| `super_admin` | The permissions of the `super_admin` role | Repairs that need the global administrator, such as identity trust (identity providers and SCIM clients) |
+
+The level is recorded on the credential and in its issue event. An elevation gives the level's permissions, not the role's name: it does not open project content.
+
+### Custody
+
+- **Issue during the outage when you can.** Running the command needs access to the workload, which is the second control on this path. An operator who can reach the workload issues a credential for the named person at the moment it is needed, and the person uses it at once.
+- **Pre-issue for people without workload access.** Issue one credential per person, bind each to that person (`--user`), print it, and seal it in an envelope that names the label. Keep two credentials for two people, so one lost envelope does not close the path.
+- **Split knowledge** (`--split`) prints the verifier as two halves instead of the whole credential. Give each half to a different custodian; the sign-in page asks for the selector and both halves. It restores two people on a path that has no approver.
+- **Never store a credential** in a Kubernetes Secret, a ConfigMap, a Helm value, a GitOps repository, a ticket or a chat. The chart never creates one and runs no Job that issues one (a chart render test fails if it does).
+- **Lifetime.** A credential lives at most 365 days (the default). Replace a credential before it expires; an expired one does not count as an emergency path. A drill that uses a credential and replaces it also proves the path works.
+- A credential is bound to an active account. A suspended account is refused at issue.
+
+### Issue a credential
+
+```bash
+# Bound to a person (an id or an e-mail address), at the admin level, for 365 days
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main break-glass issue --user ops-lead@example.com --label "envelope A, safe 2"
+
+# At the super_admin level, for 90 days, as two halves for two custodians
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main break-glass issue --user 42 --level super_admin --expires 90d --split --label "split pair 1"
+```
+
+`--expires` takes a lifetime (`90d`, `720h`) or a date (`2027-06-30`, or an RFC 3339 time). More than 365 days, or a time in the past, is refused before anything is read.
+
+The output names the credential id, the person, the level and the expiry, then the credential itself on its own line. With `--split` it prints `selector: bg_<selector>`, `half 1: …` and `half 2: …` instead. Copy it to its envelope or custodians, then clear the terminal: the credential is in no log line, no audit event and no database row.
+
+### List the credentials
+
+```bash
+kubectl -n <ns> exec deploy/elitea-main -- /elitea-main break-glass list
+```
+
+One line per credential, active or not: its id, its state (`active`, `used`, `revoked` or `expired`), its level, its person, whether it is split, its issue and expiry times, its use or revocation time, and its label. The list never shows a credential, its selector or its digest. Reading it is recorded in the security audit.
+
+### Revoke a credential
+
+```bash
+# Several ids may follow; they are revoked together or not at all
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main break-glass revoke 0b7f3c1e-2a4d-4f6e-9c8b-1d2e3f4a5b6c
+```
+
+Revoke a credential when its envelope is lost or opened without an incident, when a custodian leaves, and when you replace it. The row is kept with its revocation time, so the list and the review still show it. A revoked credential can never be used.
+
+### What is recorded
+
+| Command | Security audit event |
+| --- | --- |
+| `issue` | `admin.elevation` with the action `credential_issued`, the source `operator`, the credential id, the person and the level |
+| `list` | a `decision` event with the action `admin.elevation.credential_list`, the source `operator` and the number of credentials listed |
+| `revoke` | `admin.elevation` with the action `credential_revoked`, the source `operator`, the credential id, the person and the level |
+
+Each event is written in the same transaction as the change: if it cannot be written, nothing is issued or revoked, and an issued credential is printed only after its row is committed. See [the audit event schema](/reference/audit-event-schema#adminelevation).
 
 ## End an elevation
 
@@ -32,7 +102,7 @@ Access stops with the end: the next request of the elevated session resolves onl
 </Step>
 </Steps>
 
-## What is recorded
+## What an end records
 
 Each end is written through the ledger's end function, like an end from the console:
 
@@ -43,9 +113,9 @@ Each end is written through the ledger's end function, like an end from the cons
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Done: every id was ended (or `--all` found nothing active). |
+| `0` | Done: every id was ended or revoked (or `--all` found nothing active), or the credential was issued. |
 | `1` | Failed: the database could not be reached or a write failed. Nothing changed. |
-| `2` | Invalid invocation: no sub-command, an id that is not a UUID, or both ids and `--all`. Nothing was read. |
-| `3` | Refused: an id is unknown, is a request that never started, already ended or already ran out. Nothing changed, the other ids included. |
+| `2` | Invalid invocation: no sub-command, an id that is not a UUID, both ids and `--all`, an `issue` without `--user`, an unknown `--level`, or an `--expires` beyond 365 days. Nothing was read. |
+| `3` | Refused: an id is unknown; an elevation is a request that never started, already ended or already ran out; a credential is already revoked or used; or the person of an `issue` is suspended. Nothing changed, the other ids included. |
 
 An elevation that already ran out needs no command: access stopped at its expiry, and the `main.elevation_reconciler` routine records it as `expired` within a minute (see [When an elevation or a request runs out](/admin/break-glass#when-an-elevation-or-a-request-runs-out)).

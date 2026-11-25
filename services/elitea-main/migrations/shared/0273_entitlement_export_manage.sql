@@ -1,4 +1,4 @@
--- 0271_entitlement_export_manage.sql — the write permission of the
+-- 0273_entitlement_export_manage.sql — the write permission of the
 -- entitlement_export Configuration section (issue #3026, ADR-0059 decision 2).
 --
 -- The section lists the SCIM clients that may read the entitlement tree
@@ -21,7 +21,7 @@ DO $$
 BEGIN
     IF to_regclass('public.auth_core__role') IS NULL
        OR to_regclass('public.auth_core__role_permission') IS NULL THEN
-        RAISE NOTICE '0271: auth_core tables absent, nothing to grant';
+        RAISE NOTICE '0273: auth_core tables absent, nothing to grant';
         RETURN;
     END IF;
 

@@ -47,7 +47,6 @@ func TestKindsWithoutAStandingSetResolveNothing(t *testing.T) {
 	for _, principal := range []auth.User{
 		{ID: "1", UserID: "1"},
 		{ID: "1", UserID: "1", AuthType: "session"},
-		{ID: "1", UserID: "1", CredentialKind: auth.CredentialKindSealed, BrowserSessionRef: 4},
 		// A browser kind that names a token row was not built by a browser
 		// plane.
 		{ID: "1", UserID: "1", CredentialKind: auth.CredentialKindSession},
@@ -72,6 +71,49 @@ func TestKindsWithoutAStandingSetResolveNothing(t *testing.T) {
 		if principal.CredentialKind != auth.CredentialKindSealed && resolution.ElevationSessionRef != 0 {
 			t.Fatalf("%+v exposes elevation ref %d", principal, resolution.ElevationSessionRef)
 		}
+	}
+}
+
+// A sealed session holds no standing set (ADR-0059 R2.7a): the standing-set
+// call and the developer and default modes answer empty without reading a
+// role, and the elevated call reads the elevation ledger only (the
+// PostgreSQL suite proves what it answers).
+func TestSealedSessionHasNoStandingSet(t *testing.T) {
+	principal := auth.User{ID: "1", UserID: "1", CredentialKind: auth.CredentialKindSealed, BrowserSessionRef: 4}
+	store := &userOnlyStore{}
+	resolver := &PostgresResolver{store: store}
+	standing, err := resolver.ResolveStandingAdministration(context.Background(), principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(standing.Permissions) != 0 || standing.Permissions == nil || len(standing.Roles) != 0 {
+		t.Fatalf("the standing set of a sealed session is %+v, want empty", standing)
+	}
+	for _, mode := range []string{auth.PermissionModeDeveloper, auth.PermissionModeDefault} {
+		resolution, err := resolver.ResolvePermissions(context.Background(), principal, mode, "5")
+		if err != nil {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if len(resolution.Permissions) != 0 {
+			t.Fatalf("%s: a sealed session resolves %v", mode, resolution.Permissions)
+		}
+		members, err := resolver.ResolveMembershipPermissions(context.Background(), principal, mode)
+		if err != nil {
+			t.Fatalf("%s membership: %v", mode, err)
+		}
+		if len(members.Permissions) != 0 {
+			t.Fatalf("%s membership: a sealed session resolves %v", mode, members.Permissions)
+		}
+	}
+	if store.queries != 0 {
+		t.Fatalf("a sealed session read the role tables %d times", store.queries)
+	}
+	// The elevated call asks the ledger once, and nothing else.
+	if _, err := resolver.ResolvePermissions(context.Background(), principal, auth.PermissionModeAdministration, ""); err == nil {
+		t.Fatal("the elevated call of a sealed session did not read the elevation ledger")
+	}
+	if store.queries != 1 {
+		t.Fatalf("the elevated call read %d times, want the ledger once", store.queries)
 	}
 }
 

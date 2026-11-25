@@ -134,6 +134,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash deploy/helm/tests/render-secret-strength.sh
 
+      # ADR-0059 R2.6a (#2520): a sealed break-glass credential is issued in
+      # the workload and printed once. The chart never creates one, runs no
+      # Job that issues one, and stores none in a Secret.
+      - name: The chart holds no sealed break-glass credential
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-break-glass.sh
+
       - name: The chart edge publishes /healthz with no authenticating filter
         if: ${{ !cancelled() }}
         run: bash deploy/helm/tests/render-edge-healthz.sh

@@ -54,11 +54,16 @@ const CookieValuePrefix = "s1."
 const IDRandomBytes = 32
 
 // Provider names the plane that created a session. The migration's check
-// constraint lists exactly these three.
+// constraint (shared 0117, widened by 0272) lists exactly these four.
 const (
 	ProviderOIDC = "oidc"
 	ProviderSAML = "saml"
 	ProviderForm = "form"
+	// ProviderSealed is a sealed break-glass sign-in (ADR-0059 R2.7a): its
+	// row is read from SealedCookieName only, on the administration surface
+	// only, and lives as long as its elevation (sealed.go). The ordinary
+	// cookie never authenticates it, and Create never writes one.
+	ProviderSealed = "sealed"
 )
 
 // The reasons a session does not authenticate anybody. They are separate

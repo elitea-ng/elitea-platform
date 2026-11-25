@@ -127,8 +127,9 @@ func BrowserAuthenticationOf(r *http.Request) (BrowserAuthentication, bool) {
 		// row for it, and such a row would be unproven.
 		kind = SessionKindForm
 	default:
-		// A provider this file does not know (the sealed session of R2.7)
-		// cannot be told apart from a kind a caller must refuse.
+		// The sealed session (R2.7a) vouches for no recent authentication,
+		// and a provider this file does not know cannot be told apart from
+		// a kind a caller must refuse.
 		return BrowserAuthentication{}, false
 	}
 	return BrowserAuthentication{

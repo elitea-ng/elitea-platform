@@ -33,6 +33,12 @@ func TestPlatformListenerRegistersOnlyAllowlistedServices(t *testing.T) {
 			t.Errorf("platform service %+v is not fully declared", service)
 		}
 		names[service.Name] = true
+		// The break-glass operator commands (ADR-0059 R2.13, R2.6a) run in
+		// the workload only: no gRPC service reaches them.
+		if lower := strings.ToLower(service.Name); strings.Contains(lower, "breakglass") ||
+			strings.Contains(lower, "break_glass") || strings.Contains(lower, "sealed") {
+			t.Errorf("platform service %s exposes break-glass over gRPC", service.Name)
+		}
 		if !service.Clients.Allows("dns:elitea-worker") || service.Clients.Allows("dns:elitea-scheduler") {
 			t.Errorf("platform service %s does not admit exactly the configured clients", service.Name)
 		}

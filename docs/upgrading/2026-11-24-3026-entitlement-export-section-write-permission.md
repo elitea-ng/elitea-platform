@@ -15,7 +15,7 @@ such as an auditor, could then have changed which tools read the same data.
 - The legacy path, `runtime.plugins` together with `entitlements.export`, still
   reads and saves the section.
 
-The shared migration `0271_entitlement_export_manage.sql` grants
+The shared migration `0273_entitlement_export_manage.sql` grants
 `entitlements.export.manage` to the `super_admin` and `admin` administration
 roles. No other role gets it.
 
