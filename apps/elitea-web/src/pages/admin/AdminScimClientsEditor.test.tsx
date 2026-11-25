@@ -12,6 +12,9 @@
  *
  * No fixture value here is or resembles a real credential.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -447,5 +450,49 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.type(dateInput, "2020-01-01");
     expect(screen.getByTestId("admin-scim-client-create-submit")).toBeDisabled();
     expect(daysUntil("2020-01-01T00:00:00Z")).toBeLessThan(0);
+  });
+});
+
+/**
+ * The trust split (ADR-0059 decision 6, R3.6): creating, rotating and
+ * deleting a SCIM client are trust actions, open only through the
+ * identity-trust item. The documents are the server's own goldens, for a
+ * holder of identity.sso.settings.manage alone and for admin.
+ */
+describe("the SCIM client trust actions", () => {
+  const GOLDEN_DIR = join(
+    process.cwd(),
+    "../../services/elitea-main/internal/api/v2/adminaccess/testdata/console",
+  );
+
+  for (const holder of ["identity_settings", "admin"]) {
+    it(`are read-only for ${holder}, with the notice, while revoke stays open`, async () => {
+      const document = JSON.parse(
+        readFileSync(join(GOLDEN_DIR, `${holder}.golden.json`), "utf8"),
+      ) as Record<string, unknown>;
+      server.use(http.get("*/admin/console", () => HttpResponse.json(document)));
+      renderAdminRoute(<AdminScimClientsEditor />);
+
+      expect(await screen.findByTestId("admin-identity-trust-notice")).toHaveTextContent(
+        /global administrator/i,
+      );
+      await waitFor(() => expect(screen.getByTestId("admin-scim-clients-add")).toBeDisabled());
+      expect(await screen.findByTestId("admin-scim-client-rotate-c1")).toBeDisabled();
+      expect(screen.getByTestId("admin-scim-client-delete-c1")).toBeDisabled();
+      expect(screen.getByTestId("admin-scim-client-revoke-c1")).toBeEnabled();
+      expect(writes()).toEqual([]);
+    });
+  }
+
+  it("are open to the global administrator", async () => {
+    const document = JSON.parse(
+      readFileSync(join(GOLDEN_DIR, "super_admin.golden.json"), "utf8"),
+    ) as Record<string, unknown>;
+    server.use(http.get("*/admin/console", () => HttpResponse.json(document)));
+    renderAdminRoute(<AdminScimClientsEditor />);
+
+    expect(await screen.findByTestId("admin-scim-client-rotate-c1")).toBeEnabled();
+    expect(screen.getByTestId("admin-scim-clients-add")).toBeEnabled();
+    expect(screen.queryByTestId("admin-identity-trust-notice")).toBeNull();
   });
 });

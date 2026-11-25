@@ -429,15 +429,30 @@ describe('view only', () => {
  * The document is the server's own golden for that holder.
  */
 describe('the trust fields', () => {
-  function serveSettingsHalf(): void {
+  function serveGolden(holder: string): void {
     const document = JSON.parse(
       readFileSync(
-        join(process.cwd(), '../../services/elitea-main/internal/api/v2/adminaccess/testdata/console/identity_settings.golden.json'),
+        join(process.cwd(), `../../services/elitea-main/internal/api/v2/adminaccess/testdata/console/${holder}.golden.json`),
         'utf8',
       ),
     ) as Record<string, unknown>;
     server.use(http.get('*/admin/console', () => HttpResponse.json(document)));
   }
+
+  function serveSettingsHalf(): void {
+    serveGolden('identity_settings');
+  }
+
+  it('locks the trust fields of the platform administrator too, with the notice', async () => {
+    serveGolden('admin');
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+
+    expect(await screen.findByTestId('admin-identity-trust-notice')).toHaveTextContent(/global administrator/i);
+    expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled();
+    await openEditFor('Corporate SSO');
+    expect(await screen.findByLabelText(/Issuer/)).toBeDisabled();
+    expect(screen.getByLabelText(/Display name/)).toBeEnabled();
+  });
 
   it('locks the trust fields and actions of a settings-only holder, with the notice', async () => {
     serveSettingsHalf();

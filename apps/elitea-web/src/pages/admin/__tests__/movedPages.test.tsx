@@ -97,6 +97,28 @@ describe('the pages of People and access and Platform', () => {
   }, testTimeout(30_000));
 });
 
+describe('a holder of identity.sso.settings.manage alone', () => {
+  beforeEach(() => {
+    server.use(http.get('*/admin/console', () => HttpResponse.json(golden('console/identity_settings.golden.json'))));
+  });
+
+  it('reaches Identity providers and SCIM, and no other page of People and access', async () => {
+    await mountAdmin('/identity-providers');
+    const area = await screen.findByTestId('admin-nav-area-people_access');
+    const items = within(area)
+      .getAllByTestId(/^admin-nav-item-/)
+      .map((link) => link.getAttribute('data-testid'));
+    expect(items).toEqual(['admin-nav-item-identity-providers', 'admin-nav-item-scim']);
+    expect(screen.queryAllByTestId(/^admin-nav-area-/)).toHaveLength(1);
+    expect(await screen.findByTestId('admin-identity-providers-page')).toBeInTheDocument();
+  }, testTimeout(30_000));
+
+  it('is refused Access by its address', async () => {
+    await mountAdmin('/access');
+    expect(await screen.findByTestId('admin-item-denied')).toHaveAttribute('data-item-id', 'access');
+  }, testTimeout(30_000));
+});
+
 describe('the Configuration sections whose editors moved', () => {
   function serveSections(): void {
     server.use(
