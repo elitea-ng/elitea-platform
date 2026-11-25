@@ -82,8 +82,8 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 	loop := &routines.Loop{
 		Backend: backend,
 		Def: routines.Definition{
-			ID:              adminaccess.AccessNoticeSenderRoutineID,
-			Owner:           routines.OwnerMain,
+			ID:    adminaccess.AccessNoticeSenderRoutineID,
+			Owner: routines.OwnerMain,
 			// The text is shown on the Schedules page and held by its
 			// visual baseline (admin-schedules). It does not name the
 			// out-of-band webhook (#2598), which the same pass delivers.
