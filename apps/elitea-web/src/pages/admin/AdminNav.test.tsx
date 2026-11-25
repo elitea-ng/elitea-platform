@@ -246,6 +246,12 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // 001_initial.sql grants the next two in the administration mode.
   'configuration.native_clients',
   'configuration.microsoft_apps',
+  // The entitlement_export Configuration section (#3026): its read half from
+  // 001_initial.sql and migrations/shared/0209_entitlement_export.sql, its
+  // write half from migrations/shared/0273_entitlement_export_manage.sql,
+  // administration mode, super_admin and admin.
+  'entitlements.export',
+  'entitlements.export.manage',
 ]);
 
 /**
