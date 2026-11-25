@@ -340,3 +340,79 @@ func assertReasonRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Errorf("body = %s (%v), want code %s and a message", rec.Body, err, adminaccess.CodeReasonInvalid)
 	}
 }
+
+// A control character in the text is refused: a NUL would fail the audit
+// row's insert and lose the row of the very action the reason is for. Tab
+// and line breaks are text.
+func TestAReasonWithAControlCharacterIsRefused(t *testing.T) {
+	recorder := &captureRecorder{}
+	router, _ := newReasonRouter(t, recorder)
+	assertReasonRefusal(t, serveReason(t, router, http.MethodDelete, brandingResetPath, "", http.Header{
+		adminaccess.ReasonCodeHeader: {adminaccess.ReasonIncident}, adminaccess.ReasonHeader: {"x%00y"}}))
+	assertReasonRefusal(t, serveReason(t, router, http.MethodPost, "/api/v2/admin/legal_holds/1/release",
+		`{"reason_code":"incident","reason":"x\u0000y"}`, nil))
+	assertReasonRefusal(t, serveReason(t, router, http.MethodPost, "/api/v2/admin/legal_holds/1/release",
+		`{"reason_code":"incident","reason":"bell\u0007"}`, nil))
+	rec := serveReason(t, router, http.MethodDelete, brandingResetPath, "", http.Header{
+		adminaccess.ReasonCodeHeader: {adminaccess.ReasonIncident}, adminaccess.ReasonHeader: {"line%0Anext%09tab"}})
+	if rec.Code != reasonServedStatus || lastEvent(t, recorder).Reason != "line\nnext\ttab" {
+		t.Errorf("a reason with a line break = %d %q, want it served and kept", rec.Code, lastEvent(t, recorder).Reason)
+	}
+}
+
+// An empty body field (a form default) falls back to its header.
+func TestAnEmptyBodyFieldFallsBackToTheHeader(t *testing.T) {
+	recorder := &captureRecorder{}
+	router, _ := newReasonRouter(t, recorder)
+	rec := serveReason(t, router, http.MethodPost, "/api/v2/admin/auth_users/administration",
+		`{"action":"delete","users":[5],"reason_code":"","reason":" "}`,
+		http.Header{adminaccess.ReasonCodeHeader: {adminaccess.ReasonOffboarding}, adminaccess.ReasonHeader: {"left"}})
+	event := lastEvent(t, recorder)
+	if rec.Code != reasonServedStatus || rec.Header().Get(adminaccess.ReasonMissingHeader) != "" ||
+		event.ReasonCode != adminaccess.ReasonOffboarding || event.Reason != "left" {
+		t.Errorf("= %d, missing %q, audit %q %q, want the header's reason", rec.Code,
+			rec.Header().Get(adminaccess.ReasonMissingHeader), event.ReasonCode, event.Reason)
+	}
+}
+
+// A request the gate or the handler refuses is not an action served without
+// a reason: no header, no reason_missing.
+func TestARefusedRequestIsNotFlagged(t *testing.T) {
+	recorder := &captureRecorder{}
+	check := NewReasonCheck()
+	r := chi.NewRouter()
+	r.Use(Audit(recorder))
+	r.Use(check.Middleware)
+	r.Delete(brandingResetPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	check.Mark(r)
+	rec := serveReason(t, r, http.MethodDelete, brandingResetPath, "", nil)
+	if rec.Code != http.StatusForbidden || rec.Header().Get(adminaccess.ReasonMissingHeader) != "" {
+		t.Errorf("= %d with %q, want 403 and no header", rec.Code, rec.Header().Get(adminaccess.ReasonMissingHeader))
+	}
+	if event := lastEvent(t, recorder); event.ReasonMissing != nil {
+		t.Errorf("reason_missing = %v on a refused request, want NULL", *event.ReasonMissing)
+	}
+}
+
+// An outcome the body decides is resolved: an unsuspend and a scoped
+// suspension ask for no reason, a suspend and a platform stop do, and a body
+// that does not say keeps the closed failure.
+func TestTheBodyDecidesTheOutcome(t *testing.T) {
+	router, _ := newReasonRouter(t, &captureRecorder{})
+	for _, tc := range []struct {
+		method, path, body string
+		flagged            bool
+	}{
+		{http.MethodPut, "/api/v2/admin/user_suspend/administration/7", `{"suspended":false}`, false},
+		{http.MethodPut, "/api/v2/admin/user_suspend/administration/7", `{"suspended":true}`, true},
+		{http.MethodPut, "/api/v2/admin/user_suspend/administration/7", `{"suspended":false,"Suspended":true}`, true},
+		{http.MethodPut, "/api/v2/admin/user_suspend/administration/7", `{}`, true},
+		{http.MethodPost, "/api/v2/admin/execution_suspensions", `{"scope":"project","project_id":1,"reason":"x"}`, false},
+		{http.MethodPost, "/api/v2/admin/execution_suspensions", `{"scope":"platform","reason":"x"}`, true},
+	} {
+		rec := serveReason(t, router, tc.method, tc.path, tc.body, nil)
+		if got := rec.Header().Get(adminaccess.ReasonMissingHeader) == "1"; got != tc.flagged || rec.Code != reasonServedStatus {
+			t.Errorf("%s %s %s = %d flagged %v, want flagged %v", tc.method, tc.path, tc.body, rec.Code, got, tc.flagged)
+		}
+	}
+}

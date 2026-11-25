@@ -159,8 +159,8 @@ components:
       description: >-
         The reason code of a dangerous administration action (ADR-0059
         decision 6, R3.8a). Where the operation's request body declares
-        `reason_code`, the body field may carry it instead and wins over this
-        header; otherwise (a DELETE, the permission matrix save) send this
+        `reason_code`, a non-empty body field may carry it instead and wins
+        over this header; otherwise (a DELETE, the permission matrix save) send this
         header. During the warning period a request without a code
         is served and answers `Elitea-Reason-Missing: 1`. An unknown code
         answers 400 `reason_invalid`.
@@ -24951,8 +24951,8 @@ components:
   headers:
     EliteaReasonMissing:
       description: >-
-        `1` on a dangerous administration action served without a reason
-        code during the warning period of ADR-0059 decision 6 (R3.8a).
+        `1` on a dangerous administration action served (below 400) without
+        a reason code during the warning period of ADR-0059 decision 6 (R3.8a).
         After the sunset date the same request answers 400
         `reason_required` instead.
       schema:
@@ -24964,7 +24964,8 @@ components:
         400: the request is invalid, or (code reason_invalid) its reason is:
         an unknown reason code, `other` without a text, a reason header that
         is not percent-encoded UTF-8, is sent twice or is over 500 bytes
-        after decoding, a body reason field that is not a string, or a body
+        after decoding, a text with a control character other than tab and
+        line breaks, a body reason field that is not a string, or a body
         reason over 2000 bytes (ADR-0059 R3.8a).
       content:
         application/json:

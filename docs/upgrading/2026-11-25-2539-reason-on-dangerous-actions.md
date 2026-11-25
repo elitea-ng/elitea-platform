@@ -6,8 +6,8 @@ period of ADR-0059 decision 6: a missing reason is not refused yet.
 
 - Send the reason in the JSON body fields `reason_code` and `reason`, or in
   the request headers `Elitea-Reason-Code` and `Elitea-Reason` when the
-  request has no body (most `DELETE` requests). A body field wins over its
-  header. The server takes both fields out of the body before the handler
+  request has no body (most `DELETE` requests). A non-empty body field wins
+  over its header; an empty one falls back to the header. The server takes both fields out of the body before the handler
   reads it, except `reason` on a route whose own request already has one (a
   credential revoke, a suspension, a legal hold release). The permission
   matrix save (`PUT /api/v2/admin/user_project_permissions/administration`)
@@ -19,10 +19,12 @@ period of ADR-0059 decision 6: a missing reason is not refused yet.
   most 2000 bytes.
 - A request without a reason code is served as before, and its response
   carries `Elitea-Reason-Missing: 1`. Its audit row has
-  `reason_missing = true`. Personal access tokens are treated the same way.
+  `reason_missing = true`. A request the permission check or the handler
+  refuses carries neither. Personal access tokens are treated the same way.
 - A reason the server cannot accept answers `400` with the code
   `reason_invalid`: an unknown code, `other` without a text, a header that
-  does not decode, is sent twice or is too long, or a body field that is not a
+  does not decode, is sent twice or is too long, a text with a control
+  character other than tab and line breaks, or a body field that is not a
   string. This applies now, during the warning period.
 - The reason text is stored on the admin audit row only. It is not part of
   the tamper-evident chain and is never exported. The reason code is also
@@ -45,8 +47,10 @@ with the code `reason_required` (story R4.8, issue 2554).
    See the deployment hardening checklist.
 
 **The marked actions.** A route that carries several actions is marked per
-action; a `{mode}` route is marked in the `administration` mode only. A
-retention write that may shorten the policy is marked as a whole: send a
+action; a `{mode}` route is marked in the `administration` mode only. An
+unsuspend and a project, agent or toolkit suspension take no reason: the
+server reads the body to tell them apart. A retention write that may shorten
+the policy is marked as a whole, because only the stored row tells: send a
 reason on every write of it.
 
 | Route | Action | Danger |

@@ -63,11 +63,11 @@ A caller gives the reason in two parts:
 | `reason_code` | `Elitea-Reason-Code` | One of `incident`, `request`, `maintenance`, `correction`, `offboarding` or `other`. |
 | `reason` | `Elitea-Reason` | Free text. Required with `other`. In a header it is percent-encoded UTF-8 of at most 500 bytes after decoding; in a body at most 2000 bytes. |
 
-A body field wins over its header. The permission matrix save reads the headers only. A reason the server cannot accept, such as an unknown code or a header over 500 bytes, is refused with `400` and the code `reason_invalid`.
+A non-empty body field wins over its header. The permission matrix save reads the headers only. A reason the server cannot accept, such as an unknown code, a header over 500 bytes or a text with a control character, is refused with `400` and the code `reason_invalid`.
 
 The admin audit row records `reason_code`, `reason` and `reason_missing`. The reason code is also recorded on the security event of an access change (`admin.access.changed`); the text is not, so it stays erasable.
 
-During the warning period, until the sunset date of the old permission names, an action without a reason code is still served. Its response carries the header `Elitea-Reason-Missing: 1` and its audit row has `reason_missing` set. After the sunset date such a request will be refused. Personal access tokens are treated like any other caller. Proxy and ingress access logs must not record the `Elitea-Reason` header: see the [hardening checklist](/deployment/hardening-checklist#identity-and-credentials).
+During the warning period, until the sunset date of the old permission names, an action without a reason code is still served. Its response carries the header `Elitea-Reason-Missing: 1` and its audit row has `reason_missing` set. A request that is refused, for example for a missing permission, is not flagged. After the sunset date such a request will be refused. Personal access tokens are treated like any other caller. Proxy and ingress access logs must not record the `Elitea-Reason` header: see the [hardening checklist](/deployment/hardening-checklist#identity-and-credentials).
 
 ## Export to your SIEM
 

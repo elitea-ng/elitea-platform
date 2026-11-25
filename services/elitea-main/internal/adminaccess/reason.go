@@ -42,10 +42,14 @@ const (
 // ReasonOptionalUntilSunset is the warning period of ADR-0059 decision 6: until
 // the sunset date of decision 2 (SunsetAfter) a marked action without a reason
 // is served, answers ReasonMissingHeader and is audited as reason_missing.
-// Story R4.8 removes it in the removal pull request, and a request without a
-// reason then answers 400 reason_required. It is the legacy marker the sunset
-// check reads (scripts/ci/check-sunset.mjs).
+// The reason check branches on it: false answers 400 CodeReasonRequired.
+// Story R4.8 removes it in the removal pull request. It is the legacy marker
+// the sunset check reads (scripts/ci/check-sunset.mjs).
 const ReasonOptionalUntilSunset = true
+
+// CodeReasonRequired is the refusal of a marked action without a reason code
+// once the warning period is over.
+const CodeReasonRequired = "reason_required"
 
 // MaxReasonHeaderBytes bounds a reason header after percent-decoding. A
 // longer value answers 400 CodeReasonInvalid.
