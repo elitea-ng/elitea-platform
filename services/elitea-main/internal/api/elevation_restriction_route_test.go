@@ -280,6 +280,27 @@ func TestEveryDeniedActionIsRestrictedUnderAnElevation(t *testing.T) {
 	}
 }
 
+// The sealed credential list, named (ADR-0059 R2.17): an elevation never
+// reads it, at either level and on either path, the sealed super_admin one
+// included; a standing holder of access.breakglass.manage is not restricted.
+func TestAnElevatedSessionCannotReadTheSealedCredentialList(t *testing.T) {
+	router := newElevationRouter(t)
+	const path = "/api/v2/admin/access/sealed_credentials"
+	for name, scenario := range map[string]elevationScenario{
+		"approved admin": approvedAdmin, "approved super_admin": approvedSuperAdmin,
+		"sealed admin": sealedAdmin, "sealed super_admin": sealedSuperAdmin,
+	} {
+		if answer := router.send(t, scenario, http.MethodGet, path, ""); !answer.restricted() {
+			t.Errorf("%s: %d %s, want 403 %s", name, answer.status, answer.body, adminaccess.CodeElevationRestricted)
+		}
+	}
+	standing := elevationScenario{standing: []string{adminaccess.AccessBreakglassManage},
+		level: adminaccess.ElevationLevelAdmin, path: adminaccess.ElevationPathApproved}
+	if answer := router.send(t, standing, http.MethodGet, path, ""); answer.restricted() {
+		t.Errorf("a standing holder under an elevation: %d %s, want it not restricted", answer.status, answer.body)
+	}
+}
+
 // The SCIM group bindings, named: an elevated session that creates or changes
 // one is refused.
 func TestAnElevatedSessionCannotCreateOrChangeASCIMGroupBinding(t *testing.T) {

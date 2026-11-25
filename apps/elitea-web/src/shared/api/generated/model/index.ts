@@ -41,6 +41,10 @@
  * OpenAPI spec version: 2.0.0
  */
 
+export * from "./accessPosture.zod";
+export * from "./accessPostureCheck.zod";
+export * from "./accessPostureFacts.zod";
+export * from "./accessPosturePerson.zod";
 export * from "./addConversationParticipantsBody.zod";
 export * from "./addConversationParticipantsHeaders.zod";
 export * from "./adminAuthUserRow.zod";
@@ -1029,6 +1033,9 @@ export * from "./runStepsPage.zod";
 export * from "./runStepsVerification.zod";
 export * from "./runtimeCapabilities.zod";
 export * from "./saveApplicationNewVersionBody.zod";
+export * from "./sealedCredential.zod";
+export * from "./sealedCredentialBoundUser.zod";
+export * from "./sealedCredentialList.zod";
 export * from "./searchMarketplaceListingsHeaders.zod";
 export * from "./searchMarketplaceListingsParams.zod";
 export * from "./searchOption.zod";

@@ -1761,8 +1761,13 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 	got := routeSet.Patterns()
 	// The break-glass operator commands (ADR-0059 R2.13, R2.6a: end, issue,
 	// list, revoke) run in the workload and are reachable over no route: the
-	// snapshot below is unchanged by them, and no pattern names them.
+	// snapshot below is unchanged by them, and no pattern names them. The one
+	// exception is the console's READ of the list, metadata only (R2.17):
+	// issue and revoke never get a route.
 	for _, pattern := range got {
+		if pattern == "GET /api/v2/admin/access/sealed_credentials" {
+			continue
+		}
 		lower := strings.ToLower(pattern)
 		if strings.Contains(lower, "break-glass") || strings.Contains(lower, "break_glass") ||
 			strings.Contains(lower, "sealed_credential") {
@@ -1850,7 +1855,9 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/openapi.json",
 		"GET /api/openapi.yaml",
 		"GET /api/v2/admin/access/history",
+		"GET /api/v2/admin/access/posture",
 		"GET /api/v2/admin/access/roles",
+		"GET /api/v2/admin/access/sealed_credentials",
 		"GET /api/v2/admin/access/tokens",
 		"GET /api/v2/admin/agent_registry",
 		"GET /api/v2/admin/auth_users/{mode}",
