@@ -41,6 +41,12 @@ describe('the inspector layout', () => {
     ]);
   });
 
+  it('puts a team thread\'s Participants tab first and a one-agent thread\'s after the others (issue 3055)', () => {
+    expect(defaultInspectorLayout('local').groups[0]?.tabs).not.toContain('team');
+    expect(viewOf(defaultInspectorLayout('local'), [...LOCAL, 'team'])[0]?.tabs).toEqual(['team', 'changes', 'approvals', 'index']);
+    expect(viewOf(defaultInspectorLayout('local'), [...LOCAL, 'participants'])[0]?.tabs).toEqual(['changes', 'approvals', 'index', 'participants']);
+  });
+
   it('closes a tab until it is reopened, in its place', () => {
     const closed = closeTab(moveTab(defaultInspectorLayout('local'), 'index', 1), 'index');
     // The bottom group has nothing to show: it collapses on screen.

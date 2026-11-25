@@ -26,12 +26,15 @@ import { createPortal } from 'react-dom';
 import { ThemeProvider, type Theme } from '@mui/material/styles';
 
 /** Every tab a page can contribute. Ids are unique across pages, so a tab id names its page too. */
-export type InspectorTabId = 'changes' | 'approvals' | 'plan' | 'processes' | 'index' | 'context' | 'browser' | 'conversation' | 'cloud-browser' | 'filters' | 'list';
+export type InspectorTabId = 'team' | 'participants' | 'changes' | 'approvals' | 'plan' | 'processes' | 'index' | 'context' | 'browser' | 'conversation' | 'cloud-browser' | 'filters' | 'list';
 
 /** The kind of page an inspector belongs to: the layout (groups, widths) is remembered per kind. `browse`: the list pages (their Filters). */
 export type InspectorPage = 'local' | 'chat' | 'browse';
 
 export const INSPECTOR_TAB_PAGE: Readonly<Record<InspectorTabId, InspectorPage>> = {
+  // The thread's agents (ADR-0061 decision 2a): `team` leads the tabs with two or more agents, `participants` follows them with one.
+  team: 'local',
+  participants: 'local',
   changes: 'local',
   approvals: 'local',
   plan: 'local',

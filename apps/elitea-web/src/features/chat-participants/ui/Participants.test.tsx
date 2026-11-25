@@ -33,6 +33,8 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 
 import { server } from '../../../test/setup';
 
+import { ParticipantDetailsProvider } from '../lib/context/ParticipantDetailsContext';
+
 import { Participants } from './Participants';
 
 const BASE = '/api/v2';
@@ -160,5 +162,43 @@ describe('Participants — the header', () => {
     const header = screen.getByTestId('participants-add-button').parentElement as HTMLElement;
     expect(header.querySelectorAll('[data-testid="participants-add-button"]')).toHaveLength(1);
     expect(header.querySelectorAll('svg[data-testid$="AddAltOutlinedIcon"], svg[data-testid^="GroupAdd"]')).toHaveLength(1);
+  });
+});
+
+describe('Participants — a Local work thread (issue 3055)', () => {
+  const rows = [
+    { id: 21, entity_name: 'application', entity_meta: { id: 5, name: 'Coder' }, entity_settings: {} },
+    { id: 22, entity_name: 'application', entity_meta: { id: 7, name: 'Flow' }, entity_settings: { agent_type: 'pipeline' } },
+    { id: 23, entity_name: 'toolkit', entity_meta: { id: 4, name: 'Jira' }, entity_settings: { toolkit_type: 'jira' } },
+  ];
+
+  const sections = (): string[] => [...document.querySelectorAll('[data-testid^="participants-section-"]')].map((node) => node.getAttribute('data-testid') ?? '');
+
+  function renderContext(context: 'chat' | 'local_work'): void {
+    configureGeneratedClient({ baseUrl: BASE });
+    server.use(
+      http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: '1', name: 'Reader' })),
+      http.get(`${BASE}/elitea_core/application/prompt_lib/:project/:id`, ({ params }) => HttpResponse.json({ id: params['id'], name: 'Agent', versions: [] })),
+      http.get(`${BASE}/elitea_core/tool/prompt_lib/:project/:id`, ({ params }) => HttpResponse.json({ id: params['id'], name: 'Jira', type: 'jira', settings: {} })),
+    );
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ParticipantDetailsProvider participants={rows as never}>
+            <Participants participants={rows as never} inspector context={context} />
+          </ParticipantDetailsProvider>
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('lists the agents only: no toolkit or pipeline section', () => {
+    renderContext('local_work');
+    expect(sections()).toEqual(['participants-section-Agents']);
+  });
+
+  it('keeps every section in the chat', () => {
+    renderContext('chat');
+    expect(sections()).toEqual(['participants-section-Agents', 'participants-section-Pipelines', 'participants-section-Toolkits']);
   });
 });

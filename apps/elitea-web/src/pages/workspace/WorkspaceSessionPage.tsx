@@ -43,7 +43,9 @@ import { ForkNotices } from './forkNotices';
 import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
 
 import { EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
+import { ParticipantsTab } from './ParticipantsTab';
 import { SessionInspector } from './SessionPanel';
+import { requestAddress } from './useComposerMentions';
 import { ThreadComposer } from './ThreadComposer';
 import { ThreadToolbar } from './ThreadToolbar';
 import { UnboundFolder } from './UnboundFolder';
@@ -192,6 +194,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         conversationId={conversationId}
         cloudBrowserSession={cloudBrowser}
       />
+      <ParticipantsTab projectId={projectId} conversationId={conversationId} subject={subject} executorLocked={handoff.offLaptop} onAddress={(name) => requestAddress(conversationId, name)} turn={turn} ipc={ipc} />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
         open={createAgentOpen}
@@ -206,9 +209,14 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           session.selection.selectAgent(String(result.id));
         }}
       />
-      <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} />
+      <approval.Dialog request={pendingApproval} queued={waiting.length} onRespond={session.answer} agentName={askingAgentName(turn.view)} />
     </Box>
   );
+}
+
+/** The agent whose turn asks for approval, in a message of several agents (ADR-0061 decision 2c). */
+function askingAgentName(view: WorkspaceTurn['view']): string | undefined {
+  return view.agent?.name;
 }
 
 function Session({ ipc, workspaceId, conversationId }: { ipc: WorkspaceIpc; workspaceId: string; conversationId: string }): React.JSX.Element {

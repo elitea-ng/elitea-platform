@@ -102,15 +102,13 @@ function useIsSmallWindow(): UseIsSmallWindowResult {
 }
 
 export interface ParticipantsWrapperProps {
-  /**
-   * When true, hide the entire participants panel.
-   * Ported from the old-app prop that checked `activeConversation` visibility.
-   */
+  /** When true, hide the entire participants panel (the old-app prop that checked `activeConversation` visibility). */
   readonly hidden?: boolean;
-  /**
-   * When true, show the collapsed (icon-only) row.
-   */
+  /** When true, show the collapsed (icon-only) row. */
   readonly collapsed?: boolean;
+  /** `local_work`: a Local work thread's agents only (ADR-0061 decision 2a); `readOnly`: a viewer, no edits (#3069). */
+  readonly context?: 'chat' | 'local_work';
+  readonly readOnly?: boolean;
   /**
    * Width in pixels for the non-collapsed panel on large screens.
    * Defaults to `320` when not provided.
@@ -242,7 +240,7 @@ export const ParticipantsWrapper = memo(
     maxVisibleUsers = 5,
     selectedManager,
     newConversationSelectedManager,
-    appearance = 'rail',
+    appearance = 'rail', context, readOnly,
   }: ParticipantsWrapperProps) => {
     const theme = useTheme();
     const { isSmallWindow } = useIsSmallWindow();
@@ -263,8 +261,8 @@ export const ParticipantsWrapper = memo(
     // Fixes adversarial review C5-wrapper #5: old-app `disabledAdd` gates on
     // BOTH playback state and `users.view` permission, not playback alone.
     const disabledAdd = useMemo(
-      () => derived.isPlayback || !checkPermission(PERMISSIONS.users.view),
-      [derived.isPlayback, checkPermission],
+      () => editProps(derived.isPlayback, readOnly).disabledEdit || !checkPermission(PERMISSIONS.users.view),
+      [derived.isPlayback, readOnly, checkPermission],
     );
 
     // Fixes adversarial review C5-wrapper #6: `hidden` was previously
@@ -285,11 +283,10 @@ export const ParticipantsWrapper = memo(
             collapsed={inspector ? false : collapsed}
             onCollapsed={inspector ? undefined : onCollapsed}
             inspector={inspector}
-            disabledEdit={derived.isPlayback}
+            {...editProps(derived.isPlayback, readOnly, onDeleteParticipant)} context={context}
             disabledAdd={disabledAdd}
             activeParticipantId={derived.activeParticipantId}
             onSelectParticipant={onSelectParticipant}
-            onDeleteParticipant={onDeleteParticipant}
             onEditParticipant={onEditParticipant}
             onUpdateParticipant={onUpdateParticipant}
             onAddParticipants={onAddParticipants}
@@ -309,6 +306,9 @@ export const ParticipantsWrapper = memo(
     );
   },
 );
+
+/** A viewer (`readOnly`) or a playback edits nothing: no edit, and no delete for a viewer. */
+const editProps = (isPlayback, readOnly, onDelete) => ({ disabledEdit: isPlayback || readOnly === true, onDeleteParticipant: readOnly === true ? undefined : onDelete });
 
 /** The web chat's right column: a grid cell sized by the collapse state and the window. */
 function RailFrame({ theme, responsive, children }) {

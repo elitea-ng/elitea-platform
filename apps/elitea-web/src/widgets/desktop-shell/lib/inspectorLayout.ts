@@ -31,14 +31,14 @@ export interface InspectorLayout {
 export const INSPECTOR_WIDTH = { min: 260, max: 720 } as const;
 export const SPLIT_RANGE = { min: 0.2, max: 0.8 } as const;
 
-const TAB_ORDER: readonly InspectorTabId[] = ['changes', 'approvals', 'plan', 'processes', 'index', 'context', 'browser', 'conversation', 'cloud-browser', 'list', 'filters'];
+const TAB_ORDER: readonly InspectorTabId[] = ['team', 'changes', 'approvals', 'plan', 'processes', 'index', 'context', 'browser', 'participants', 'conversation', 'cloud-browser', 'list', 'filters'];
 const TAB_IDS = new Set<string>(TAB_ORDER);
 /**
  * Tabs a page offers only some of the time (Plan: once the agent keeps a
  * checklist, or in plan mode; Processes: once a background process started), and Context, which came later, Browser (opened by the person) and the chat's Cloud browser (a cloud run that opened one): left out of
  * the default layout, they join the top group when first offered (`viewOf`), so they never hold a group open.
  */
-const ON_DEMAND: ReadonlySet<InspectorTabId> = new Set<InspectorTabId>(['plan', 'processes', 'context', 'browser', 'cloud-browser']);
+const ON_DEMAND: ReadonlySet<InspectorTabId> = new Set<InspectorTabId>(['team', 'participants', 'plan', 'processes', 'context', 'browser', 'cloud-browser']);
 
 /** The tabs in their one fixed order (Changes, Approvals, Plan, Processes, Index, Context, Browser, Conversation, Cloud browser, Filters), however the page registered them. */
 export function byTabOrder<T extends { readonly id: InspectorTabId }>(tabs: readonly T[]): T[] {
@@ -148,7 +148,10 @@ export function viewOf(layout: InspectorLayout, available: readonly InspectorTab
   const closed = new Set(layout.closed);
   const views: InspectorGroupView[] = [];
   layout.groups.forEach((group, index) => {
-    const tabs = [...group.tabs, ...(index === 0 ? unplaced : [])].filter((id) => offered.has(id) && !closed.has(id));
+    // A team thread's Participants tab (`team`) leads the top group when it joins it (ADR-0061 decision 2a).
+    const leading = index === 0 ? unplaced.filter((id) => id === 'team') : [];
+    const trailing = index === 0 ? unplaced.filter((id) => id !== 'team') : [];
+    const tabs = [...leading, ...group.tabs, ...trailing].filter((id) => offered.has(id) && !closed.has(id));
     const first = tabs[0];
     if (first === undefined) return;
     views.push({ index, tabs, active: group.active !== null && tabs.includes(group.active) ? group.active : first });
