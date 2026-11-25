@@ -25,9 +25,11 @@
 //! whose value equals a secret the app holds. Only the names of dropped
 //! variables are ever logged.
 
+#[cfg(unix)]
 use std::process::Stdio;
 use std::time::Duration;
 
+#[cfg(unix)]
 use tokio::io::AsyncReadExt;
 
 use crate::credentials::Secret;
@@ -36,10 +38,12 @@ use crate::credentials::Secret;
 pub const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The most bytes of environment read from the shell.
+#[cfg(unix)]
 const MAX_CAPTURE_BYTES: usize = 4 * 1024 * 1024;
 
 /// What the shell prints before the environment, so a profile that echoes
 /// something cannot shift it.
+#[cfg(any(unix, test))]
 const MARKER: &[u8] = b"\0ELITEA_HOST_ENV\0";
 
 /// Prefixes of names never passed to a host command (compared ignoring
@@ -135,6 +139,10 @@ fn dropped_name(name: &str) -> bool {
 /// Capture the person's environment for this app session (see the module
 /// documentation). Never fails: a capture that does not work is
 /// [`HostEnvironment::failed`].
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unused_async, reason = "awaits the login shell on unix only")
+)]
 pub async fn capture() -> HostEnvironment {
     #[cfg(unix)]
     {
@@ -239,6 +247,7 @@ pub async fn capture_login_shell(shell: &std::path::Path, timeout: Duration) -> 
 }
 
 /// The `NAME=value` entries after [`MARKER`], NUL-separated.
+#[cfg(any(unix, test))]
 fn parse(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     let start = bytes
         .windows(MARKER.len())
