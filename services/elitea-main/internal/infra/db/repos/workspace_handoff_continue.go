@@ -234,8 +234,8 @@ func (r *RunChainsRepository) LatestChainLink(ctx context.Context, root string) 
 }
 
 // HandoffContinueTarget reads the send's thread (the caller's own send) and
-// the participant its last local turn addressed; a thread without one takes
-// its agent participant, else its model participant.
+// the participant its cloud turn addresses (threadParticipant: the floor's
+// target in a thread of several agents).
 func (r *WorkspaceHandoffsRepository) HandoffContinueTarget(
 	ctx context.Context, projectID int64, handoffID string, actorUserID int64,
 ) (handoffcontinue.Target, error) {
@@ -259,25 +259,25 @@ WHERE project_id = $1 AND handoff_id = $2::uuid`, projectID, handoffID).Scan(&ou
 	return participant.Target, nil
 }
 
-// threadParticipant reads the participant the thread's last local turn
-// addressed; a thread without one takes its agent participant, else its
-// model participant. VersionID is the agent participant's mapped version.
+// threadParticipant reads the participant the thread's next cloud turn
+// addresses (handoffcontinue.RouteThread): in a thread of two or more agents
+// the conversation's floor routes it (under `lead` the lead, under
+// `addressed` the participant the last local turn addressed); otherwise that
+// participant, else the agent, else the model. A floor that does not parse is
+// the default floor. VersionID is the agent participant's mapped version.
 func threadParticipant(
-	ctx context.Context, db rowQueryer, projectID int64, conversationUUID string,
+	ctx context.Context, db floorQueryer, projectID int64, conversationUUID string,
 ) (handoffcontinue.ThreadTarget, error) {
 	out := handoffcontinue.ThreadTarget{Target: handoffcontinue.Target{ConversationUUID: conversationUUID}}
 	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
 	if err != nil {
 		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrInvalid
 	}
-	var (
-		entity  string
-		version *int64
-	)
-	err = db.QueryRow(ctx, fmt.Sprintf(`
-SELECT participant.id, participant.entity_name,
+	rows, err := db.Query(ctx, fmt.Sprintf(`
+SELECT participant.id, participant.entity_name = 'application',
        CASE WHEN mapping.entity_settings ->> 'version_id' ~ '^[0-9]{1,18}$'
-            THEN (mapping.entity_settings ->> 'version_id')::bigint END
+            THEN (mapping.entity_settings ->> 'version_id')::bigint END,
+       participant.id IS NOT DISTINCT FROM last_turn.target_participant_id
 FROM %[1]s.chat_conversations AS conversation
 JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
 JOIN %[1]s.chat_participants AS participant
@@ -288,19 +288,45 @@ LEFT JOIN LATERAL (
     ORDER BY turn.started_at DESC LIMIT 1
 ) AS last_turn ON TRUE
 WHERE conversation.uuid = $1::uuid
-ORDER BY participant.id = last_turn.target_participant_id DESC NULLS LAST,
-         participant.entity_name = 'application' DESC, participant.id
-LIMIT 1`, schema), conversationUUID, projectID).Scan(&out.ParticipantID, &entity, &version)
-	if errors.Is(err, pgx.ErrNoRows) {
+ORDER BY participant.id`, schema), conversationUUID, projectID)
+	if err != nil {
+		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread's participants: %w", err)
+	}
+	var (
+		candidates []handoffcontinue.ThreadCandidate
+		sticky     int64
+	)
+	for rows.Next() {
+		var (
+			candidate handoffcontinue.ThreadCandidate
+			version   *int64
+			last      bool
+		)
+		if err := rows.Scan(&candidate.ParticipantID, &candidate.Agent, &version, &last); err != nil {
+			rows.Close()
+			return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: scan the thread's participant: %w", err)
+		}
+		if candidate.Agent && version != nil {
+			candidate.VersionID = *version
+		}
+		if last {
+			sticky = candidate.ParticipantID
+		}
+		candidates = append(candidates, candidate)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread's participants: %w", err)
+	}
+	if len(candidates) == 0 {
 		return handoffcontinue.ThreadTarget{}, workspacehandoff.ErrNotLocalWork
 	}
+	floor, err := readConversationFloor(ctx, db, projectID, conversationUUID)
 	if err != nil {
-		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread's participant: %w", err)
+		return handoffcontinue.ThreadTarget{}, fmt.Errorf("workspace handoff: read the thread's floor: %w", err)
 	}
-	out.Agent = entity == "application"
-	if out.Agent && version != nil {
-		out.VersionID = *version
-	}
+	routed, _ := handoffcontinue.RouteThread(floor.Settings, sticky, candidates)
+	out.ParticipantID, out.Agent, out.VersionID = routed.ParticipantID, routed.Agent, routed.VersionID
 	return out, nil
 }
 
