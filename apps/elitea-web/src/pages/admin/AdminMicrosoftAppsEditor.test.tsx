@@ -21,7 +21,7 @@ import { HttpResponse, http } from 'msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { AdminConfiguration } from './Configuration';
+import { AdminClientApplications } from './ClientApplications';
 import { AdminMicrosoftAppsEditor } from './AdminMicrosoftAppsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
@@ -180,29 +180,17 @@ async function fillNewApp(user: ReturnType<typeof userEvent.setup>): Promise<voi
   await user.type(screen.getByTestId('microsoft-app-secret'), SECRET);
 }
 
-describe('AdminConfiguration → Microsoft apps (composition)', () => {
-  it('renders this editor for the server-declared managed surface, not the refusal', async () => {
+describe('Client applications → Microsoft apps (composition)', () => {
+  // The registrations left the Configuration page for Platform › Client
+  // applications (ADR-0059 R3.6), where they are the second tab.
+  it('renders this editor on the Microsoft tab of Client applications', async () => {
+    const user = userEvent.setup();
     useHandlers();
-    server.use(
-      http.get('*/admin/plugin_config_schemas/administration', () =>
-        HttpResponse.json({
-          sections: [
-            {
-              id: 'microsoft_apps',
-              title: 'Microsoft apps',
-              managed_surface: 'microsoft_apps',
-              unavailable_reason: 'Microsoft apps are registered on their own editor',
-              fields: [],
-            },
-          ],
-        }),
-      ),
-    );
+    renderAdminRoute(<AdminClientApplications />);
 
-    renderAdminRoute(<AdminConfiguration />);
-
+    expect(screen.queryByTestId('admin-microsoft-apps-editor')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('admin-client-applications-tab-microsoft'));
     expect(await screen.findByTestId('admin-microsoft-apps-editor')).toBeVisible();
-    expect(screen.queryByTestId('admin-configuration-unavailable')).not.toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,5 @@
 /**
- * Journey: Admin › Configuration › Native clients — register, refuse a bad
+ * Journey: Admin › Client applications › Native clients — register, refuse a bad
  * redirect URI, edit, disable and remove a native client (ADR-0025 WP2).
  *
  * The server shipped the registry routes (`/admin/native_clients/administration`)
@@ -40,10 +40,9 @@ async function listClients(request: APIRequestContext): Promise<NativeClientWire
 }
 
 async function openNativeClients(page: Page): Promise<void> {
-  await page.goto(BASE_URL + '/admin/app/configuration', { waitUntil: 'domcontentloaded' });
-  const sections = page.getByRole('navigation', { name: 'Configuration sections' });
-  // Anchored: "Native client policy" is a sibling section.
-  await sections.getByRole('button', { name: /^Native clients/ }).click({ timeout: 20_000 });
+  // Platform › Client applications since ADR-0059 R3.6 (issue 2537); the
+  // native registry is its first tab.
+  await page.goto(BASE_URL + '/admin/app/client-applications', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('admin-native-clients-editor')).toBeVisible({ timeout: 15_000 });
 }
 

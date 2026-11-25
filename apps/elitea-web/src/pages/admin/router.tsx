@@ -106,6 +106,11 @@ const AdminPermissionTrimming = lazyRouteComponent(() => import('./PermissionTri
 const AdminBudgets = lazyRouteComponent(() => import('./Budgets'), 'AdminBudgets');
 const AdminBranding = lazyRouteComponent(() => import('./Branding'), 'AdminBranding');
 const AdminEmail = lazyRouteComponent(() => import('./Email'), 'AdminEmail');
+// People and access, and Platform, since R3.6 (issue 2537).
+const AdminAccess = lazyRouteComponent(() => import('./Access'), 'AdminAccess');
+const AdminIdentityProviders = lazyRouteComponent(() => import('./IdentityProviders'), 'AdminIdentityProviders');
+const AdminScim = lazyRouteComponent(() => import('./Scim'), 'AdminScim');
+const AdminClientApplications = lazyRouteComponent(() => import('./ClientApplications'), 'AdminClientApplications');
 
 /**
  * The root route renders `AdminLayout` — the nav plus an `<Outlet/>` — rather
@@ -315,6 +320,18 @@ const emailRoute = createRoute({
   component: AdminEmail,
 });
 
+/**
+ * People and access › Access, Identity providers and SCIM, and Platform ›
+ * Client applications (ADR-0059 decision 6, R3.6). The identity and client
+ * editors used to be sections of Configuration, whose rows now link here.
+ */
+const pageRoute = (path: string, component: typeof AdminAccess) =>
+  createRoute({ getParentRoute: () => rootRoute, path, component });
+const accessRoute = pageRoute('/access', AdminAccess);
+const identityProvidersRoute = pageRoute('/identity-providers', AdminIdentityProviders);
+const scimRoute = pageRoute('/scim', AdminScim);
+const clientApplicationsRoute = pageRoute('/client-applications', AdminClientApplications);
+
 const adminRouteTree = rootRoute.addChildren([
   brandingRoute,
   emailRoute,
@@ -340,6 +357,10 @@ const adminRouteTree = rootRoute.addChildren([
   credentialInventoryRoute,
   permissionTrimmingRoute,
   budgetsRoute,
+  accessRoute,
+  identityProvidersRoute,
+  scimRoute,
+  clientApplicationsRoute,
 ]);
 
 export function createAdminRouter(): AnyRouter {

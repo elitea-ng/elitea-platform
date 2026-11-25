@@ -478,7 +478,7 @@ describe('Admin › Roles', () => {
   // so every write control is disabled, not hidden, and reading still works.
   it('is view only for a role that reads the access item: every write control disabled', async () => {
     const user = userEvent.setup();
-    serveConsoleLevel('read');
+    serveConsoleLevel('read', 'access');
     renderAdminRoute(<AdminRoles />);
 
     expect(await findViewOnlyNotice()).toHaveTextContent('Platform administrator');
@@ -502,7 +502,7 @@ describe('Admin › Roles', () => {
       'configuration.roles.permissions.edit',
       'configuration.roles.roles.create',
     ]);
-    serveConsoleLevel('write');
+    serveConsoleLevel('write', 'access');
     renderAdminRoute(<AdminRoles />);
 
     await expandGroup(user, 'models.alpha');
@@ -515,7 +515,7 @@ describe('Admin › Roles', () => {
   // narrower one is disabled, not hidden, for a caller without it.
   it('disables New role for a writer without roles.create, and keeps the matrix editable', async () => {
     const user = userEvent.setup();
-    serveConsoleLevel('write');
+    serveConsoleLevel('write', 'access');
     renderAdminRoute(<AdminRoles />);
 
     await expandGroup(user, 'models.alpha');

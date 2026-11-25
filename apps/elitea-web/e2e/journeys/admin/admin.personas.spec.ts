@@ -66,8 +66,7 @@ for (const persona of ADMIN_PERSONAS) {
 
 /** Every item the web table places, by area: what a global or platform administrator sees. */
 const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
-  // `access` is the TEMPORARY Roles link until R3.6 (issue 2537) ships the Access item.
-  people_access: ['users', 'access'],
+  people_access: ['users', 'access', 'identity-providers', 'scim'],
   projects: ['projects', 'app-requests'],
   models_spend: ['llm-governance', 'budgets-alerts'],
   agents_governance: [
@@ -80,27 +79,34 @@ const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
     'kill-switch',
   ],
   security: ['audit-trail', 'data-retention'],
-  platform: ['configuration', 'features', 'branding', 'email', 'schedules-tasks', 'service-descriptors', 'secrets'],
+  platform: [
+    'configuration',
+    'features',
+    'branding',
+    'email',
+    'schedules-tasks',
+    'service-descriptors',
+    'secrets',
+    'client-applications',
+  ],
 };
 
 /**
- * Each persona's areas and items in the navigation. The gateway tabs and
- * SCIM are still tabs of Configuration, which stands for them. Access shows as
- * the TEMPORARY Roles link for the roles that open it and read the permission
- * matrix (the administrators) until R3.6 ships its item. The security auditor
- * opens Access through access.roles.view but holds no matrix permission, so it
- * has no link (issue 3042).
+ * Each persona's areas and items in the navigation. The gateway tabs are
+ * still tabs of Configuration, which stands for them. SCIM and Access are
+ * pages of their own since R3.6 (issue 2537); the security auditor opens
+ * Access at read through access.roles.view.
  */
 const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, readonly string[]>>>> = {
   super_admin: EVERY_AREA,
   admin: EVERY_AREA,
   llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
   project_administrator: {
+    people_access: ['scim'],
     projects: ['projects', 'app-requests'],
     models_spend: ['budgets-alerts'],
-    platform: ['configuration'],
   },
-  security_auditor: { security: ['audit-trail'] },
+  security_auditor: { people_access: ['access'], security: ['audit-trail'] },
   emergency_access: {},
 };
 

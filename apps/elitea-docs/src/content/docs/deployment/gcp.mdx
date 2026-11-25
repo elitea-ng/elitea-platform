@@ -174,7 +174,7 @@ Run every check of the from-scratch Step 9 before go-live.
 
 Install with OIDC configured in the values file (`OIDC_*` in from-scratch Step 6). That is what makes the sign-in routes exist. Any identity provider with OIDC works, including Google Workspace (`OIDC_ISSUER_URL: https://accounts.google.com`), Entra ID, Okta and Keycloak. Name the first administrator as `email:<address>`. That form matches when the provider marks the address as verified.
 
-After the first sign-in, everything else is in the admin console, under **Configuration › Authentication**, with no restart:
+After the first sign-in, everything else is in the admin console, under **People and access** (**Identity providers** and **SCIM**), with no restart:
 
 - **SAML.** Add a SAML 2.0 provider. Give the identity provider this service's metadata URL, `https://<host>/auth/saml/metadata`, and copy its entity ID, SSO URL and certificate back into the form. Signing authentication requests is optional.
 - **SCIM.** Create a SCIM client, put its Tenant URL and token into the identity provider, then bind directory groups to a project and a role.

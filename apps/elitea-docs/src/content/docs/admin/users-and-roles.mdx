@@ -3,7 +3,7 @@ title: "Users and roles"
 description: "Manage every account on the deployment and edit the permission matrix that defines each role."
 ---
 
-Users and Roles are two related admin pages: Users acts on individual accounts, and Roles defines what each role is allowed to do.
+Users and Access are two related admin pages of **People and access**: Users acts on individual accounts, and Access shows every administration role, what it opens and who may assign it. The permission matrix that defines each role is reached from Access.
 
 For an access review, **Export entitlements** on the Users page downloads who holds which role on the platform, each project and each agent, with the governance capabilities each role carries. Identity governance tools can read the same data over SCIM. See [Entitlement export](/admin/enterprise-controls/least-privilege-and-trust#entitlement-export-for-access-reviews) for the format.
 
@@ -65,9 +65,20 @@ Almost every administration check tests a permission. A few test the role **name
 
 Giving or taking the role `super_admin` needs the permission `admin.auth.users.super_admin`, not a role of that name, and no role other than `super_admin` holds that permission (the legacy `system` role also holds it on an upgraded deployment, and is never assigned). A source test lists every check by the names `super_admin` and `admin` with its decision, so a new one cannot appear unreviewed.
 
+## Role definitions
+
+**People and access › Access** lists every role of the central administration mode, built-in and custom. Any role that opens the Access item can read it, the security auditor included (`access.roles.view`, view only). For each role it shows:
+
+- **Kind**: **Built-in** for a role whose set Elitea defines; **Built-in, kept as found** for a built-in role whose set an upgrade found changed and kept (`elitea-main admin-role reset <role>` puts it back); **Never assigned** for the legacy `system` role, which no one can be given; **Custom** for a role your deployment created. A locked set cannot be edited in the matrix.
+- **Permissions**: how many permissions the role holds.
+- **What it opens**: the console items the role opens, each at **view** or **change**, from the same table as the sidebar. A role that opens none says so.
+- **Assignment**: whether you can give the role to another person, and if not, why: only a global administrator assigns `super_admin`; `system` is never assigned; or you do not hold every permission of the role (the [no-escalation](#no-escalation) rules). Your own roles are marked **You hold this role**. Only a global administrator may change their own roles; anyone else is refused with `role_self_assignment`.
+
+The page reads `GET /api/v2/admin/access/role-definitions`. `GET /api/v2/admin/access/role-definitions/compare?a=<role>&b=<role>` compares two roles: the console items each opens, at which level, and the permissions that both, only the first or only the second hold. Both need a permission that opens the Access item. Assigning a role is done on the Users page; a later release brings assignment and the comparison to the Access page.
+
 ## Edit roles and permissions
 
-Open **Roles**. It shows a permission matrix across three scopes, each a tab:
+On **Access**, select **Permission matrix** (shown when you can read the matrix: `configuration.roles.permissions.view` or `.edit`). Its address is `/admin/app/roles`. It shows a permission matrix across three scopes, each a tab:
 
 - **Central** — the administration-mode roles used across the deployment (the ones this admin console itself is gated on).
 - **Public Project** — roles available inside the shared public project.

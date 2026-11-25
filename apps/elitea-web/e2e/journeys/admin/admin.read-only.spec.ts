@@ -78,12 +78,10 @@ async function navItems(page: Page): Promise<{ id: string; href: string }[]> {
 test('the security auditor walks every page it opens and finds no enabled write control', async ({ page }) => {
   await page.goto(`${BASE_URL}/admin/app/`, { waitUntil: 'domcontentloaded' });
   const items = await navItems(page);
-  // The document opens Audit Trail at least. Roles is not listed: today's
-  // Roles page is the permission matrix, which access.roles.view does not
-  // read (issue 3042); the auditor's view of who holds what is R3.9's.
+  // The document opens Access (access.roles.view, ADR-0059 R3.6) and Audit
+  // Trail at least, both at read.
   const ids = items.map((entry) => entry.id);
-  expect(ids).toEqual(expect.arrayContaining(['audit-trail']));
-  expect(ids).not.toContain('access');
+  expect(ids).toEqual(expect.arrayContaining(['access', 'audit-trail']));
 
   for (const entry of items) {
     await test.step(entry.id, async () => {
@@ -101,11 +99,25 @@ test('the security auditor walks every page it opens and finds no enabled write 
   }
 });
 
+test('the security auditor reads Access: the role definitions, view only, and no way to the matrix', async ({ page }) => {
+  await page.goto(`${BASE_URL}/admin/app/access`, { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('admin-access-page')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('admin-view-only')).toBeVisible({ timeout: 20_000 });
+  // Every built-in role is listed, with what it opens; the auditor's own row
+  // shows Access at read.
+  await expect(page.getByTestId('admin-access-role-super_admin')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('admin-access-item-security_auditor-access')).toHaveAttribute('data-level', 'read');
+  // The auditor gives no role to anyone, and the permission matrix is not its to read.
+  await expect(page.getByTestId('admin-access-assignable-admin')).toHaveAttribute('data-assignable', 'false');
+  await expect(page.getByTestId('admin-access-matrix-link')).toHaveCount(0);
+  await expect.poll(() => enabledWrites(page.getByRole('main')), { timeout: 20_000 }).toEqual([]);
+});
+
 test('the security auditor opening Roles by its address finds it view only: notice, disabled writes, working tabs and search', async ({
   page,
 }) => {
-  // No link leads here (issue 3042), and the level is `none`: the page still
-  // opens by its address, so its writes must be disabled and say why.
+  // No link leads here (issue 3042): the page still opens by its address,
+  // under Access at read, so its writes must be disabled and say why.
   await page.goto(`${BASE_URL}/admin/app/roles`, { waitUntil: 'domcontentloaded' });
   const notice = page.getByTestId('admin-view-only');
   await expect(notice).toBeVisible({ timeout: 30_000 });

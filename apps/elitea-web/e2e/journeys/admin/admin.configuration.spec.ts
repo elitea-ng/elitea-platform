@@ -110,9 +110,7 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
     'Maintenance',
     'Guardrails',
     'LLM Proxy',
-    'Authentication',
     'Native client policy',
-    'Native clients',
   ];
   for (const section of live) {
     await expect(
@@ -146,13 +144,18 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
   await expect(mcpServers).toBeVisible();
   await expect(mcpServers.getByText('Not available here')).toHaveCount(0);
 
-  // Authentication is the third exception, and the same shape as MCP Servers:
-  // it keeps its `unavailable_reason` — true of the plugin-config value
-  // endpoints, which cannot hold an OIDC client secret — and declares a
-  // `managed_surface` that this build renders.
-  const authentication = page.getByRole('button', { name: /Authentication/ });
-  await expect(authentication).toBeVisible();
-  await expect(authentication.getByText('Not available here')).toHaveCount(0);
+  // Authentication, Native clients and Microsoft apps keep their
+  // `unavailable_reason` and their `managed_surface`, but their editors have
+  // pages of their own since ADR-0059 R3.6 (issue 2537): each row is a link to
+  // that page, and none is marked.
+  for (const [section, path] of [
+    ['Authentication', '/admin/app/identity-providers'],
+    ['Native clients', '/admin/app/client-applications'],
+  ] as const) {
+    const row = sections.getByRole('link', { name: new RegExp(section) });
+    await expect(row, `${section} links to its page`).toHaveAttribute('href', path);
+    await expect(row.getByText('Not available here')).toHaveCount(0);
+  }
 
   await checkA11y(page);
 });
@@ -263,31 +266,28 @@ adminTest('J34c: an unavailable section refuses its write rather than discarding
   expect(status, 'an unavailable section must refuse its write, not accept and discard it').toBe(501);
 });
 
-adminTest('J34f: the Authentication section renders its editor, not a refusal', async ({ page }) => {
+adminTest('J34f: the Authentication row opens the Identity providers page, and SCIM has its own', async ({ page }) => {
   await openConfiguration(page);
 
-  await page.getByRole('button', { name: /Authentication/ }).click();
+  await page
+    .getByRole('navigation', { name: 'Configuration sections' })
+    .getByRole('link', { name: /Authentication/ })
+    .click();
+  await expect(page).toHaveURL(/\/admin\/app\/identity-providers$/);
 
-  // The editor's own control, so this proves the dedicated surface MOUNTED —
-  // not merely that the refusal notice is absent, which a blank pane would also
-  // satisfy.
+  // The editor's own control, so this proves the page MOUNTED. The provider
+  // read is authorised and answered: this stack federates its logins through
+  // the environment rather than an authored row, so the empty state is the
+  // truthful branch, and the error alert would mean the route refused.
   await expect(page.getByTestId('admin-identity-providers-add')).toBeVisible();
-  await expect(page.getByTestId('admin-configuration-unavailable')).toHaveCount(0);
-
-  // The provider read is authorised and answered. This stack federates its
-  // logins through the environment rather than an authored row, so the empty
-  // state is the truthful branch here; the error alert would mean the route
-  // refused, which is what this asserts is NOT happening.
   await expect(page.getByTestId('admin-identity-providers-empty')).toBeVisible();
   await expect(page.getByTestId('admin-identity-providers-error')).toHaveCount(0);
+  await checkA11y(page);
 
-  // SCIM group provisioning renders in the SAME section: a provider federates
-  // the login and SCIM pushes the directory, and one of the two is not
-  // configuration an operator finds on another screen.
-  //
-  // Its own read is authorised and answered too. The empty state is the
-  // truthful branch on this stack — no group is bound — and the error alert
-  // would mean the route refused, which is what this asserts is NOT happening.
+  // SCIM group provisioning is a page of its own in People and access. Its
+  // read is authorised and answered too; no group is bound on this stack.
+  await page.getByTestId('admin-nav-item-scim').click();
+  await expect(page).toHaveURL(/\/admin\/app\/scim$/);
   await expect(page.getByTestId('admin-scim-group-bindings-add')).toBeVisible();
   await expect(page.getByTestId('admin-scim-group-bindings-empty')).toBeVisible();
   await expect(page.getByTestId('admin-scim-group-bindings-error')).toHaveCount(0);

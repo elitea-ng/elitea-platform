@@ -17,16 +17,16 @@ The sidebar lists the console's pages in six labelled areas, in this order. Each
 
 | Area | Items |
 | --- | --- |
-| **People and access** | Users, Roles |
+| **People and access** | Users, Access, Identity providers, SCIM |
 | **Projects** | Projects, App Requests |
 | **Models and spend** | LLM Governance, Budgets |
 | **Agents and governance** | Agent registry, Connector requests, Delegations awaiting review, Toolkits, Credential inventory, Permission trimming, Kill switch |
 | **Security** | Audit Trail, Data retention |
-| **Platform** | Configuration, Features, Branding, E-mail, Schedules and tasks, Service Descriptors, Secrets |
+| **Platform** | Configuration, Features, Branding, E-mail, Schedules and tasks, Service Descriptors, Secrets, Client applications |
 
 **Schedules and tasks** is one item for two pages: the recurring schedules and the background tasks. A strip of two tabs at the top of either page links the other, and the item is marked on both. The old addresses `/admin/app/schedules` and `/admin/app/tasks` keep working.
 
-**Roles** is listed under **People and access** for a caller whose roles open it and who can read the permission matrix (`configuration.roles.permissions.view` or `.edit`): the global and platform administrators, and any custom role that holds a matrix permission. The security auditor does not see it. Today's Roles page is the matrix, and the auditor's `access.roles.view` is for who holds which role, a view the **Access** item brings. Its address is `/admin/app/roles`. The link is temporary: when the page is rebuilt for the new roles, the **Access** item replaces it. The provider, pricing, usage and log tabs, and the identity, SCIM and client-application editors, are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
+**Access** lists every administration role: what it opens, and whether you may give it to someone (see [Users and roles](/admin/users-and-roles#role-definitions)). The permission matrix, `/admin/app/roles`, is reached from Access by a caller who can read it. **Identity providers**, **SCIM** and **Client applications** are the editors that used to be sections of **Configuration**; their Configuration sections now link to these pages. The provider, pricing, usage and log tabs are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
 
 ## What a narrow role sees
 
@@ -36,11 +36,11 @@ The areas and items in the sidebar come from the [capability document](#what-the
 | --- | --- |
 | Global administrator, Platform administrator | All six areas and all their items |
 | LLM manager | Projects (Projects), Models and spend (LLM Governance, Budgets), Platform (Configuration) |
-| Project administrator (all projects) | Projects (Projects, App Requests), Models and spend (Budgets), Platform (Configuration) |
-| Security auditor | Security (Audit Trail) |
+| Project administrator (all projects) | People and access (SCIM), Projects (Projects, App Requests), Models and spend (Budgets) |
+| Security auditor | People and access (Access, view only), Security (Audit Trail) |
 | Emergency access | None: its one item, Break-glass, has no page yet |
 
-The console's landing page is Users. If your roles do not open Users, the console opens the first item they do open, passing over the temporary Roles link while there is another.
+The console's landing page is Users. If your roles do not open Users, the console opens the first item they do open.
 
 If you type the address of a page your roles do not open, the console shows an access-denied page for that item instead. It names the item, lists the roles that open it, and says whom to ask: the IT support contact your deployment has set, or otherwise the people who manage the deployment. It never names an administrator. If the roles cannot be read, the page says so rather than claiming that no role opens the item.
 
@@ -55,8 +55,8 @@ The level comes from the same capability document as the sidebar: each item is o
 Every page of the console that can change something has this mode; a page with nothing to change, such as **Agent registry** or **Audit Trail**, has no notice. An action whose permission is narrower than its page is checked on its own: on **Data retention**, for example, a role that holds only `legal_hold.manage` can place and release legal holds while the retention policy stays disabled. Some parts of a page have their own level, so you can be able to change one part and only read another:
 
 - Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts).
-- The identity providers and SCIM editors.
-- The editors that Configuration shows for E-mail (the **E-mail** item, also on its own page), MCP servers (the **Toolkits** item), and native clients and Microsoft apps (the **Client applications** item). Configuration's own **View only** notice sits above its ordinary section form, and each of these editors shows its own.
+- The **Identity providers** and **SCIM** pages. On both, the trust controls have a level of their own: adding, deleting, turning on or off a provider and changing its issuer, metadata, certificates, secret or identity attributes, and creating, rotating or deleting a SCIM client, need `identity.sso.trust.manage` or a global administrator. A role with only `identity.sso.settings.manage`, and the platform administrator, see those controls disabled with a notice that says so, and keep the provider's name, scopes and login domains, revoking a SCIM client, and the group bindings.
+- The editors that Configuration shows for E-mail (the **E-mail** item, also on its own page) and MCP servers (the **Toolkits** item). Configuration's own **View only** notice sits above its ordinary section form, and each of these editors shows its own.
 
 A control that used to be hidden from a role that cannot use it, such as **New role** on Roles, **Delete** on Users or **Create secret** on Secrets, is now shown disabled. Some actions that look like changes only read, so they keep working on a view-only page: revealing a secret's value, downloading the branding package, showing resumed suspensions on the Kill switch, and listing a toolkit's project exceptions.
 
@@ -74,7 +74,9 @@ The console has no theme switch of its own. It uses the theme that you choose in
 
 <CardGroup cols={2}>
   <Card title="Users" icon="users">Delete, promote, suspend, and review activity for any account.</Card>
-  <Card title="Roles" icon="shield">The permission matrix, across the central, public, and support scopes.</Card>
+  <Card title="Access" icon="shield">Every administration role, what it opens, and who may assign it; the permission matrix across the central, public, and support scopes.</Card>
+  <Card title="Identity providers" icon="fingerprint">Single sign-on: the OIDC and SAML providers this deployment trusts.</Card>
+  <Card title="SCIM" icon="refresh-cw">Directory provisioning: the SCIM client credentials and the group bindings.</Card>
   <Card title="Projects" icon="folder">Suspend, create, delete, and manage membership for every project.</Card>
   <Card title="App Requests" icon="inbox">Application access requests waiting on a decision.</Card>
   <Card title="LLM Governance" icon="scale">Budgets, rate limits, allowlists, credential policy, and routing rules the LLM gateway enforces.</Card>
@@ -84,7 +86,8 @@ The console has no theme switch of its own. It uses the theme that you choose in
 </CardGroup>
 
 <CardGroup cols={2}>
-  <Card title="Configuration" icon="settings">Authentication, LLM Proxy, MCP servers, banner, maintenance, e-mail, and more, as a set of schema-driven sections.</Card>
+  <Card title="Configuration" icon="settings">LLM Proxy, MCP servers, banner, maintenance, e-mail, and more, as a set of schema-driven sections.</Card>
+  <Card title="Client applications" icon="monitor-smartphone">The native desktop and mobile clients, and the Microsoft app registrations.</Card>
   <Card title="Branding" icon="palette">The white-label pack — colors, assets, and fonts.</Card>
   <Card title="E-mail" icon="mail">The outbound mail relay.</Card>
   <Card title="Features" icon="toggle-left">Feature toggles: MCP exposure, publishing, analytics, Help Center, Support Assistant, Voice.</Card>

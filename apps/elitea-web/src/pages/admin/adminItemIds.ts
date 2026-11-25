@@ -30,7 +30,10 @@ export const ADMIN_ACTION_PERMISSION = {
 
 export const ADMIN_ITEM = {
   users: 'users',
+  access: 'access',
   identityProviders: 'identity-providers',
+  /** Not a page: the trust half of Identity providers and SCIM (R3.6). */
+  identityTrust: 'identity-trust',
   scim: 'scim',
   projects: 'projects',
   appRequests: 'app-requests',

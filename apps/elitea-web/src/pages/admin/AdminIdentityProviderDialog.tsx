@@ -67,20 +67,19 @@ export interface AdminIdentityProviderDialogProps {
   readonly serverError: string | undefined;
   readonly onClose: () => void;
   readonly onSubmit: (draft: AdminIdentityProviderDraft) => void;
+  /** Settings half only (R3.6): every trust field is read-only. */
+  readonly trustLocked?: boolean;
 }
 
-/**
- * The OpenID Connect fields.
- *
- * Split out so the dialog itself stays a state machine and each protocol's
- * fields are one thing. Both were over the complexity gate as one component.
- */
+/** The OpenID Connect fields, split out to keep the dialog a state machine. */
 function OidcFields({
   form,
   update,
+  locked,
 }: {
   readonly form: IdentityProviderForm;
   readonly update: FormUpdate;
+  readonly locked: boolean;
 }) {
   return (
     <>
@@ -90,11 +89,10 @@ function OidcFields({
         onChange={(event) => {
           update('issuer', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
-        // The discovery URL is what an operator moving across from the legacy
-        // page has in hand. The server accepts it and stores the issuer, so
-        // this says so rather than refusing a paste that will work.
+        // A discovery URL works too: the server stores the issuer it names.
         helperText={t(
           'pages.admin.identityProviders.dialog.issuerHelp',
           'For example https://idp.example.com. A .well-known/openid-configuration URL is accepted and reduced to its issuer.',
@@ -107,6 +105,7 @@ function OidcFields({
         onChange={(event) => {
           update('clientId', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
       />
@@ -116,6 +115,7 @@ function OidcFields({
         onChange={(event) => {
           update('redirectUri', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
         helperText={t(
@@ -139,6 +139,7 @@ function OidcFields({
         control={
           <BaseCheckbox
             checked={form.requireEmailVerified}
+            disabled={locked}
             onChange={(event) => {
               update('requireEmailVerified', event.target.checked);
             }}
@@ -159,11 +160,13 @@ function SecretFields({
   update,
   isEdit,
   hasSealedSecret,
+  locked,
 }: {
   readonly form: IdentityProviderForm;
   readonly update: FormUpdate;
   readonly isEdit: boolean;
   readonly hasSealedSecret: boolean;
+  readonly locked: boolean;
 }) {
   const label =
     form.kind === 'oidc'
@@ -178,7 +181,7 @@ function SecretFields({
         onChange={(event) => {
           update('secret', event.target.value);
         }}
-        disabled={form.clearSecret}
+        disabled={locked || form.clearSecret}
         fullWidth
         autoComplete="new-password"
         helperText={
@@ -199,6 +202,7 @@ function SecretFields({
           control={
             <BaseCheckbox
               checked={form.clearSecret}
+              disabled={locked}
               onChange={(event) => {
                 update('clearSecret', event.target.checked);
               }}
@@ -222,6 +226,7 @@ export function AdminIdentityProviderDialog({
   serverError,
   onClose,
   onSubmit,
+  trustLocked = false,
 }: AdminIdentityProviderDialogProps) {
   const isEdit = editing !== undefined;
   const [form, setForm] = useState<IdentityProviderForm>(() => initialProviderForm(undefined));
@@ -325,6 +330,7 @@ export function AdminIdentityProviderDialog({
           control={
             <BaseCheckbox
               checked={form.adoptScimUsers}
+              disabled={trustLocked}
               onChange={(event) => {
                 update('adoptScimUsers', event.target.checked);
               }}
@@ -344,9 +350,9 @@ export function AdminIdentityProviderDialog({
         </FormHelperText>
 
         {form.kind === 'oidc' ? (
-          <OidcFields form={form} update={update} />
+          <OidcFields form={form} update={update} locked={trustLocked} />
         ) : (
-          <SamlFields form={form} update={update} />
+          <SamlFields form={form} update={update} locked={trustLocked} />
         )}
 
         <SecretFields
@@ -354,12 +360,14 @@ export function AdminIdentityProviderDialog({
           update={update}
           isEdit={isEdit}
           hasSealedSecret={editing?.secret !== undefined && editing.secret !== ''}
+          locked={trustLocked}
         />
 
         <FormControlLabel
           control={
             <BaseCheckbox
               checked={form.enabled}
+              disabled={trustLocked}
               onChange={(event) => {
                 update('enabled', event.target.checked);
               }}

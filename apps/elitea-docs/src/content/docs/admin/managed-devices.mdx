@@ -16,7 +16,7 @@ An MDM or EMM can configure the mobile app on the devices it manages. On iOS the
 | `allow_screenshots` | boolean | `false` blocks screenshots and screen recording of the app. |
 | `support_contact` | string | The IT support line the app shows in Settings and About, for example `IT Service Desk, +1 555 0100`. It replaces the workspace's [support contact](#it-support-contact). |
 
-The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
+The app signs in only as a registered native client: register it on **Admin › Platform › Client applications › Native clients** (see [Branded apps](/admin/brand-apps)). The lock keys only ever tighten the workspace's [native client policy](/admin/features-and-configuration); they never loosen it. A value of the wrong type is ignored. The configuration belongs to the device: signing out of a workspace does not remove it.
 
 ### What the app reports back
 

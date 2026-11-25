@@ -60,10 +60,9 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { RoleDeleteDialog, RoleNameDialog } from './AdminRoleDialogs';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
-import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { useAdminActionControl } from './adminWriteAccess';
 import { PermissionMatrix } from './PermissionMatrix';
-import { ROLES_ITEM_ID } from './temporaryRolesLink';
 import { useAdminRolesPage, type AdminRolesPageState } from './useAdminRolesPage';
 
 
@@ -194,7 +193,7 @@ function RolesBody({ state }: { readonly state: AdminRolesPageState }) {
 /** The page under the read-only wrapper (R3.4b, issue 2613). */
 export function AdminRoles() {
   return (
-    <AdminWritable itemId={ROLES_ITEM_ID}>
+    <AdminWritable itemId={ADMIN_ITEM.access}>
       <RolesPage />
     </AdminWritable>
   );
