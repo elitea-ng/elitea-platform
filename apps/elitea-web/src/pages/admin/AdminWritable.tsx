@@ -90,6 +90,19 @@ export function AdminViewOnlyNotice(): ReactNode {
   );
 }
 
+/**
+ * A part of a page that is its own console item (a Configuration tab that
+ * stands for one, R3.4b, issue 2613): its own wrapper, with its notice first.
+ */
+export function AdminWritableSection({ itemId, children }: AdminWritableProps): ReactNode {
+  return (
+    <AdminWritable itemId={itemId}>
+      <AdminViewOnlyNotice />
+      {children}
+    </AdminWritable>
+  );
+}
+
 export interface AdminWriteControlProps {
   /** The control's name, its tooltip while enabled. */
   readonly label: string;

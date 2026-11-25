@@ -21,6 +21,8 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import {
   governanceFailureReason,
   isGlobalGovernanceType,
@@ -325,9 +327,10 @@ export interface GatewayGovernancePageState {
 
 export function useGatewayGovernancePage(): GatewayGovernancePageState {
   const query = useGovernanceRows();
-  const create = useCreateGovernanceRow();
-  const update = useUpdateGovernanceRow();
-  const remove = useDeleteGovernanceRow();
+  const access = useAdminWritable(ADMIN_ITEM.llmGovernance);
+  const create = access.guard(useCreateGovernanceRow());
+  const update = access.guard(useUpdateGovernanceRow());
+  const remove = access.guard(useDeleteGovernanceRow());
 
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<GovernanceDraft | undefined>(undefined);

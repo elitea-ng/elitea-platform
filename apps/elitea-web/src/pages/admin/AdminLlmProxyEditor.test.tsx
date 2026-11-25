@@ -33,6 +33,7 @@ import { server } from '@/test/setup';
 
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const REACHABLE_STATUS = {
   reachable: true,
@@ -296,5 +297,39 @@ describe('Admin › LLM Proxy › Models', () => {
     // "Resume sync" button here would report success for a click that changed
     // nothing, which is how an operator concludes a synced row is pinned.
     expect(screen.queryByRole('button', { name: 'Resume sync' })).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * Read-only mode (R3.4b, issue 2613). Each tab that writes is its own console
+ * item: at `read` its notice shows, its writes are disabled, and the tab still
+ * reads.
+ */
+describe('Admin › LLM Proxy › view only', () => {
+  it('disables the catalogue writes at the read level of models-pricing', async () => {
+    serveConsoleLevel('read', 'models-pricing');
+    renderAdminRoute(<AdminLlmProxyEditor />);
+    await openModelsTab();
+
+    await screen.findByTestId('llm-proxy-models-table');
+    expect(await findViewOnlyNotice()).toHaveAttribute('data-item-id', 'models-pricing');
+    await waitFor(() => expect(screen.getByTestId('llm-proxy-add-price')).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes()).toEqual([]);
+  });
+
+  it('disables the alert settings at the read level of budgets-alerts', async () => {
+    server.use(
+      http.get('*/admin/gateway/budget-alerts', () => HttpResponse.json({ enabled: true, threshold_pct: 80 })),
+    );
+    serveConsoleLevel('read', 'budgets-alerts');
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminLlmProxyEditor />);
+    await user.click(await screen.findByRole('tab', { name: 'Budget alerts' }));
+
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('llm-proxy-alerts-save')).toBeDisabled());
+    expect(screen.getByTestId('llm-proxy-alerts-enabled').querySelector('input')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

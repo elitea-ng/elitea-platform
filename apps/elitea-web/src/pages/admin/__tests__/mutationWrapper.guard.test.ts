@@ -35,22 +35,14 @@ const GENERATED_DIR = fileURLToPath(new URL('../../../shared/api/generated', imp
  */
 const NOT_CONVERTED: readonly string[] = [
   'AdminEmailEditor.tsx',
-  'AdminLlmProxyEditor.tsx',
   'AdminMcpServersEditor.tsx',
   'AdminMicrosoftAppsEditor.tsx',
   'AdminNativeClientsEditor.tsx',
   'ConnectorRequests.tsx',
   'CredentialRevokeDialog.tsx',
   'DelegationReview.tsx',
-  'GovernanceGuardrailPresetDialog.tsx',
-  'GovernanceRoutingFields.tsx',
   'KillSwitch.tsx',
-  'LlmProxyAlertsPanel.tsx',
-  'LlmProxyProvidersPanel.tsx',
-  'LlmProxyToolPricesPanel.tsx',
   'PermissionTrimming.tsx',
-  'PlatformDefaultModelCard.tsx',
-  'PlatformModelsPanel.tsx',
   'RetentionLegalHolds.tsx',
   'RetentionPolicies.tsx',
   'ServiceDescriptorDecisionDialog.tsx',
@@ -62,9 +54,7 @@ const NOT_CONVERTED: readonly string[] = [
   'useAdminSchedulesPage.ts',
   'useAdminSecretsPage.ts',
   'useAdminTasksPage.ts',
-  'useAdoptProviderModels.ts',
   'useBrandingPackage.ts',
-  'useGatewayGovernancePage.ts',
 ];
 
 const SOURCE_RE = /\.(ts|tsx)$/;
