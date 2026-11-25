@@ -1,0 +1,84 @@
+{
+  // theme-gate check 10 ONLY — the style ratchet (ADR-0062 decision 3).
+  // Run by scripts/theme-gate.mjs over the PR head and over its base tree,
+  // both with THIS file (the head's), cwd = the tree. It counts findings per
+  // folder and kind; it is not a lint and its findings never fail by
+  // themselves — only a count that grows does (scripts/lib/style-ratchet-core.mjs).
+  //
+  // Every message carries its ratchet kind in brackets ([spacing-rem], …);
+  // the core reads the kind from there. A new kind is a new bracketed tag.
+  //
+  // Folders where .oxlintrc.json turns elitea/raw-px-spacing off are counted
+  // here on purpose (decision 3.6): the ratchet stops growth there and asks
+  // for no rewrite. Globs are anchored with ** so they hold for src/ and for
+  // the self-test's fixture trees alike.
+  "plugins": [],
+  "jsPlugins": ["../tools/lint-rules/index.mjs"],
+  "categories": {
+    "correctness": "off"
+  },
+  "options": {
+    "typeAware": false
+  },
+  "ignorePatterns": [
+    // Tests, stories and mocks are not screens.
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "**/*.stories.tsx",
+    "**/*.stories.ts",
+    "**/__tests__/**",
+    "**/__mocks__/**",
+    "**/*.d.ts",
+    // The ported source of @eliteaai/elitea-assistant owns its own styling
+    // (see theme-gate.oxlintrc.json); the only folder the ratchet skips.
+    "**/widgets/support-assistant/vendor/**"
+  ],
+  "rules": {
+    // R-T9 as amended by ADR-0062 decision 2: rem and px lengths in spacing,
+    // and numbers MUI multiplies that are off the brand scale (unit 8 =
+    // buildTheme.ts `spacing`, comfortable density).
+    "elitea/raw-px-spacing": ["error", { "units": ["px", "rem"], "unit": 8 }],
+    // R-T14: Dialog and Switch go through their shared/ui wrappers.
+    // A type-only import is not counted.
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@mui/material",
+            "importNames": ["Dialog"],
+            "allowTypeImports": true,
+            "message": "[mui-dialog] use BaseModal from shared/ui; if it is not enough, extend BaseModal in shared/ui"
+          },
+          {
+            "name": "@mui/material/Dialog",
+            "importNames": ["default", "Dialog"],
+            "allowTypeImports": true,
+            "message": "[mui-dialog] use BaseModal from shared/ui; if it is not enough, extend BaseModal in shared/ui"
+          },
+          {
+            "name": "@mui/material",
+            "importNames": ["Switch"],
+            "allowTypeImports": true,
+            "message": "[mui-switch] use BaseSwitch from shared/ui; if it is not enough, extend BaseSwitch in shared/ui"
+          },
+          {
+            "name": "@mui/material/Switch",
+            "importNames": ["default", "Switch"],
+            "allowTypeImports": true,
+            "message": "[mui-switch] use BaseSwitch from shared/ui; if it is not enough, extend BaseSwitch in shared/ui"
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      // The wrappers themselves.
+      "files": ["**/shared/ui/**"],
+      "rules": { "no-restricted-imports": "off" }
+    }
+  ]
+}

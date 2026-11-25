@@ -661,9 +661,26 @@ jobs:
         run: node scripts/check-visual-coverage.mjs
 
       # ── Theme gate ──────────────────────────────────────────────────────
+      # Check 10, the style ratchet (ADR-0062 decision 3), compares the PR
+      # with its base: per folder, no more spacing in rem/px or off the scale
+      # and no more MUI Dialog/Switch past their wrappers than the base has.
+      # On a pull request the checkout is GitHub's merge commit, so its first
+      # parent is the base branch the PR lands on; style-ratchet-base.mjs
+      # fetches it (the checkout has depth 1) and writes its src/ with renamed
+      # files under their new paths. A nightly or dispatch run has no base:
+      # check 10 then prints the counts per folder and does not fail.
       - name: Theme gate
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run theme-gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$RUNNER_TEMP/style-ratchet-base"
+            node scripts/style-ratchet-base.mjs --out "$base"
+            npm run theme-gate -- --base "$base"
+          else
+            npm run theme-gate
+          fi
 
       # ── Contract coverage ───────────────────────────────────────────────
       - name: Contract coverage

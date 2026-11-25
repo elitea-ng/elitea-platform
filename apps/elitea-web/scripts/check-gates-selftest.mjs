@@ -243,6 +243,43 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   recordDelegated('THEME/7-brand-pack', 'vitest brand-pack contract test (§4.6 check 7; theme-gate invokes when present)', 'unit T1');
 }
 
+// ── section 5b: theme-gate check 10, the style ratchet (ADR-0062 decision 3.8) ──
+// Each fixture is a base tree and a head tree. RED: the head adds a rem value,
+// an off-scale number and a Dialog import in one folder, and the message names
+// the fix. GREEN: the head removes one rem value and adds another in the same
+// folder, adds a step on the scale, a type-only Dialog import and Dialog
+// inside shared/ui.
+{
+  const RATCHET = join(FIXTURES, 'theme-gate-ratchet');
+  const run = (dir) =>
+    spawnSync(process.execPath, [join(SCRIPT_DIR, 'theme-gate.mjs'), '--root', join(dir, 'head'), '--base', join(dir, 'base')], {
+      encoding: 'utf8',
+    });
+  const bad = run(join(RATCHET, 'bad'));
+  const badOut = bad.stdout + bad.stderr;
+  const good = run(join(RATCHET, 'good'));
+  const goodOut = good.stdout + good.stderr;
+  const expected = [
+    'theme-gate 10-style-ratchet: FAIL',
+    'src/features/foo spacing-rem: 0 → 1',
+    "[spacing-rem] p: '1rem' → 2",
+    'src/features/foo spacing-off-scale: 0 → 1',
+    'gap: 0.75 is off the scale → nearest steps 0.5 or 1',
+    'src/features/foo mui-dialog: 0 → 1',
+    '[mui-dialog] use BaseModal from shared/ui',
+  ];
+  const missing = expected.filter((line) => !badOut.includes(line));
+  const greenOk = good.status === 0 && goodOut.includes('theme-gate 10-style-ratchet: PASS');
+  record(
+    'THEME/10-style-ratchet',
+    'scripts/theme-gate.mjs check 10 (ADR-0062 decision 3; --base tree vs head tree)',
+    bad.status !== 0 && missing.length === 0,
+    greenOk,
+  );
+  if (missing.length > 0) console.error(`\n[style ratchet] bad fixture did not print: ${missing.join(' | ')}\n${badOut}`);
+  if (!greenOk) console.error(`\n[style ratchet] good fixture failed:\n${goodOut}`);
+}
+
 // ── section 6: R-M5 (vitest fixtures booting the REAL src/test/setup.ts) ──
 {
   const run = (file) =>
