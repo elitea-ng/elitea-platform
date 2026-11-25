@@ -215,6 +215,6 @@ func (tx *startTx) QueryRow(context.Context, string, ...any) pgx.Row {
 		uuid.New(), s.UserID, s.BrowserSessionRef, s.Level, s.Path, s.ReasonCode, s.Reason,
 		s.Ticket, s.UserID, s.ApproverUserID, at,
 		"approved", &at, &at, &expires, none,
-		"", "",
+		"", "", int64(0), "",
 	}}
 }

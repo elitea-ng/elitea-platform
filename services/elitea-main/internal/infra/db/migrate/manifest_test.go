@@ -1294,7 +1294,17 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// agents.governance.view and agents.governance.manage (super_admin, admin):
 	// the agent governance pair of ADR-0059 decision 2 (issue 2552, R0.15). No
 	// table.
-	require.EqualValues(t, 279, Head(shared))
+	//
+	// 280: shared/0280_admin_elevation_requests.sql, the duration and the
+	// denial reason code of an elevation request, the pending and requester
+	// indexes, and 0269's trigger function with the reason code in its
+	// decision group (issue 2596, ADR-0059 R2.2b). No permission.
+	//
+	// 281: shared/0281_admin_access_notice_webhook.sql, the `webhook` channel
+	// of the access notice outbox: a row with no recipient person, for the
+	// five events the webhook reports (issue 2598, ADR-0059 R2.5b). No
+	// permission.
+	require.EqualValues(t, 281, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

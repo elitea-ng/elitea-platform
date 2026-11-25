@@ -26,6 +26,40 @@ pub(crate) use super::openai_compatible_facade::{
 /// No tool call leaves the facade when a requested name is not declared.
 pub(crate) const TOOL_NOT_ADMITTED_CODE: &str = "model_facade.tool_not_admitted";
 
+/// The longest tool name an unadmitted-call note or log line repeats.
+const MAX_NOTED_TOOL_NAME: usize = 64;
+
+/// A model-chosen tool name as a note or a log field may repeat it: only
+/// `[A-Za-z0-9_.:-]`, at most [`MAX_NOTED_TOOL_NAME`] characters. The name is
+/// model output, so nothing else of it is echoed.
+pub(crate) fn noted_tool_name(name: &str) -> String {
+    let noted: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '-'))
+        .take(MAX_NOTED_TOOL_NAME)
+        .collect();
+    if noted.is_empty() {
+        "unnamed".to_owned()
+    } else {
+        noted
+    }
+}
+
+/// Issue 3050: the answer's closing note when the model asked, after its
+/// answer had already streamed, only for tools the agent does not have. The
+/// call is never emitted (no tool outside the request's declared set leaves
+/// the facade); the turn ends on the text the person already read, and the
+/// note says why the agent stopped instead of an INTERNAL failure card.
+/// `after_text`: answer text already streamed, so the note starts a new
+/// paragraph; after reasoning alone it is the whole answer.
+pub(crate) fn unadmitted_tool_note(name: &str, after_text: bool) -> String {
+    format!(
+        "{}_The agent stopped here: it asked for a tool it does not have (`{}`)._",
+        if after_text { "\n\n" } else { "" },
+        noted_tool_name(name)
+    )
+}
+
 /// Explicit provider dialect selected from the frozen model configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModelAdapterKind {
@@ -289,5 +323,19 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
             BoundProviderModel::OpenAiCompatible(model) => model.durable_completion(),
             BoundProviderModel::Anthropic(model) => model.durable_completion(),
         }
+    }
+}
+
+#[cfg(test)]
+mod noted_tool_name_tests {
+    use super::{noted_tool_name, unadmitted_tool_note};
+
+    #[test]
+    fn a_model_chosen_name_is_cut_to_safe_characters_and_bounded() {
+        assert_eq!(noted_tool_name("gh <pr list>"), "ghprlist");
+        assert_eq!(noted_tool_name("`;\n"), "unnamed");
+        assert_eq!(noted_tool_name(&"a".repeat(200)).len(), 64);
+        assert!(unadmitted_tool_note("gh", true).starts_with("\n\n_"));
+        assert!(unadmitted_tool_note("gh", false).starts_with('_'));
     }
 }

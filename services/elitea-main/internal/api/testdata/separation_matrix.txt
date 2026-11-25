@@ -54,6 +54,12 @@
 # The columns: super_admin admin llm_manager project_administrator
 # security_auditor emergency_access, elevated admin, elevated super_admin,
 # then class, method, route and action.
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/elevations browser_session
+allowed allowed refused refused refused allowed restricted restricted write   POST /api/v2/admin/access/elevations browser_session
+allowed allowed refused refused refused allowed allowed    allowed    read    GET /api/v2/admin/access/elevations/mine browser_session
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/access/elevations/pending browser_session
+allowed allowed refused refused refused refused restricted restricted approve POST /api/v2/admin/access/elevations/{elevationID}/approve browser_session
+allowed allowed refused refused refused refused restricted restricted approve POST /api/v2/admin/access/elevations/{elevationID}/deny browser_session
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/history -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/posture -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/role-definitions -

@@ -307,7 +307,26 @@ const (
 	VariantNativeSession = "native_session"
 	VariantModeration    = "moderation"
 	VariantMaintenance   = "maintenance_window"
+	// VariantBrowserSession drives a route as a standing Form browser
+	// session: the elevation request routes refuse every other credential
+	// before their gate (ADR-0059 R2.2b).
+	VariantBrowserSession = "browser_session"
 )
+
+// ElevationRequestRoutes are the elevation request routes (ADR-0059 R2.2b).
+// They take a browser session only and refuse the bearer token of the
+// default request before any decision, so the browser session variant is the
+// one that reaches their gates.
+func ElevationRequestRoutes() []Route {
+	return []Route{
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations"},
+		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/elevations"},
+		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/elevations/mine"},
+		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/elevations/pending"},
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/approve"},
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/deny"},
+	}
+}
 
 // MarketplaceReadPermission is the default-mode permission of the Marketplace
 // project gate (router.go, requireMarketplaceRead).
@@ -321,7 +340,7 @@ const MarketplaceReadPermission = "models.applications.applications.list"
 // its own.
 func SessionAndWindowVariants() map[Route][]Variant {
 	window := Variant{Name: VariantMaintenance, Maintenance: true}
-	return map[Route][]Variant{
+	variants := map[Route][]Variant{
 		TokenMint: {{Name: VariantNativeSession, Authenticate: AuthenticateNative}},
 		MarketplaceListingUpdate: {{Name: VariantModeration, Body: `{"featured":true}`,
 			OtherModes: []string{MarketplaceReadPermission}}},
@@ -329,6 +348,10 @@ func SessionAndWindowVariants() map[Route][]Variant {
 		MaintenanceUserRoute:           {window},
 		MaintenanceAdministrationRoute: {{}, window},
 	}
+	for _, route := range ElevationRequestRoutes() {
+		variants[route] = []Variant{{Name: VariantBrowserSession, Authenticate: AuthenticateFormSession}}
+	}
+	return variants
 }
 
 // GuardedSettingType is the guarded project setting type the central

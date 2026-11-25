@@ -17,6 +17,20 @@
   elitea-main.masterKeyRef). An explicit main.secrets entry is already in
   $secrets and wins; otherwise the shared reference is added here.
 */ -}}
+{{- /*
+  The break-glass notice webhook (ADR-0059 R2.5b): the URL is a credential,
+  so both values come from the operator's existing Secret, never from a
+  chart value.
+*/ -}}
+{{- $noticeWebhook := ((.Values.main.breakGlass | default dict).noticeWebhook | default dict) }}
+{{- if and $noticeWebhook.egressAllowlist (not $noticeWebhook.existingSecret) }}
+{{- fail "main.breakGlass.noticeWebhook.egressAllowlist is set without existingSecret: set the Secret reference of the webhook too, or unset the allowlist" }}
+{{- end }}
+{{- if $noticeWebhook.existingSecret }}
+{{- $secrets = merge (deepCopy $secrets) (dict
+      "ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_URL" (dict "secretName" $noticeWebhook.existingSecret "key" (required "main.breakGlass.noticeWebhook.key is required when existingSecret is set" $noticeWebhook.key))
+      "ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_SECRET" (dict "secretName" $noticeWebhook.existingSecret "key" (required "main.breakGlass.noticeWebhook.signingSecretKey is required when existingSecret is set" $noticeWebhook.signingSecretKey))) }}
+{{- end }}
 {{- $masterKeyRef := include "elitea-main.masterKeyRef" . }}
 {{- if and $masterKeyRef (not (hasKey $secrets "SECRETS_MASTER_KEY")) }}
 {{- $secrets = merge (deepCopy $secrets) (dict "SECRETS_MASTER_KEY" (fromJson $masterKeyRef)) }}
@@ -220,6 +234,10 @@ spec:
                   name: {{ $ref.secretName }}
                   key: {{ $ref.key }}
                   optional: {{ $ref.optional | default false }}
+            {{- end }}
+            {{- if and $noticeWebhook.existingSecret $noticeWebhook.egressAllowlist }}
+            - name: ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_EGRESS_ALLOWLIST
+              value: {{ $noticeWebhook.egressAllowlist | quote }}
             {{- end }}
             {{- include "elitea-main.microsoftOAuthApps" . | nindent 12 }}
             {{- if .Values.main.fileConfig.authConfig.enabled }}

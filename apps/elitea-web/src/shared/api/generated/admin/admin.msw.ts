@@ -84,6 +84,8 @@ import type {
   CredentialUseGrantListResponse,
   DelegationReview,
   DelegationScanResult,
+  Elevation,
+  ElevationList,
   EntitlementGrantList,
   ExecutionSuspension,
   ExecutionSuspensionList,
@@ -111,6 +113,7 @@ import type {
   NativeClientList,
   NativeClientWriteResult,
   OkResponse,
+  OwnElevationRequest,
   PermissionTrimmingRemoveResult,
   PermissionTrimmingReport,
   PlatformRoutine,
@@ -893,6 +896,160 @@ export const getListSealedCredentialsResponseMock =
       },
     ],
   });
+
+export const getCreateElevationRequestResponseMock = (): Elevation => ({
+  id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+  state: "requested",
+  path: "approved",
+  level: null,
+  reason_code: "incident",
+  reason: "The model provider is down and the routing must be changed now.",
+  ticket: "INC-4711",
+  duration_minutes: 60,
+  person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+  approver: null,
+  denial_reason_code: null,
+  requested_at: "2026-11-25T10:00:00Z",
+  request_expires_at: "2026-11-25T10:30:00Z",
+  decided_at: null,
+  started_at: null,
+  expires_at: null,
+  ended_at: null,
+  end_reason: null,
+  review_state: null,
+  time_left_seconds: 1800,
+});
+
+export const getListElevationsResponseMock = (): ElevationList => ({
+  total: 1,
+  rows: [
+    {
+      id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+      state: "denied",
+      path: "approved",
+      level: null,
+      reason_code: "incident",
+      reason: null,
+      ticket: "INC-4711",
+      duration_minutes: 60,
+      person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+      approver: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+      denial_reason_code: "standing_access_suffices",
+      requested_at: "2026-11-25T10:00:00Z",
+      request_expires_at: null,
+      decided_at: "2026-11-25T10:05:00Z",
+      started_at: null,
+      expires_at: null,
+      ended_at: null,
+      end_reason: null,
+      review_state: null,
+      time_left_seconds: 0,
+    },
+  ],
+});
+
+export const getGetOwnElevationRequestResponseMock =
+  (): OwnElevationRequest => ({
+    request: {
+      id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+      state: "requested",
+      path: "approved",
+      level: null,
+      reason_code: "incident",
+      reason: "The model provider is down and the routing must be changed now.",
+      ticket: "INC-4711",
+      duration_minutes: 60,
+      person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+      approver: null,
+      denial_reason_code: null,
+      requested_at: "2026-11-25T10:00:00Z",
+      request_expires_at: "2026-11-25T10:30:00Z",
+      decided_at: null,
+      started_at: null,
+      expires_at: null,
+      ended_at: null,
+      end_reason: null,
+      review_state: null,
+      time_left_seconds: 1200,
+    },
+    approving_roles: ["admin", "super_admin"],
+  });
+
+export const getListPendingElevationRequestsResponseMock =
+  (): ElevationList => ({
+    total: 1,
+    rows: [
+      {
+        id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+        state: "requested",
+        path: "approved",
+        level: null,
+        reason_code: "incident",
+        reason:
+          "The model provider is down and the routing must be changed now.",
+        ticket: "INC-4711",
+        duration_minutes: 60,
+        person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+        approver: null,
+        denial_reason_code: null,
+        requested_at: "2026-11-25T10:00:00Z",
+        request_expires_at: "2026-11-25T10:30:00Z",
+        decided_at: null,
+        started_at: null,
+        expires_at: null,
+        ended_at: null,
+        end_reason: null,
+        review_state: null,
+        time_left_seconds: 1500,
+      },
+    ],
+  });
+
+export const getApproveElevationRequestResponseMock = (): Elevation => ({
+  id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+  state: "approved",
+  path: "approved",
+  level: "admin",
+  reason_code: "incident",
+  reason: "The model provider is down and the routing must be changed now.",
+  ticket: "INC-4711",
+  duration_minutes: 60,
+  person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+  approver: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+  denial_reason_code: null,
+  requested_at: "2026-11-25T10:00:00Z",
+  request_expires_at: null,
+  decided_at: "2026-11-25T10:05:00Z",
+  started_at: null,
+  expires_at: null,
+  ended_at: null,
+  end_reason: null,
+  review_state: null,
+  time_left_seconds: 0,
+});
+
+export const getDenyElevationRequestResponseMock = (): Elevation => ({
+  id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+  state: "denied",
+  path: "approved",
+  level: null,
+  reason_code: "incident",
+  reason: "The model provider is down and the routing must be changed now.",
+  ticket: "INC-4711",
+  duration_minutes: 60,
+  person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+  approver: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+  denial_reason_code: "standing_access_suffices",
+  requested_at: "2026-11-25T10:00:00Z",
+  request_expires_at: null,
+  decided_at: "2026-11-25T10:05:00Z",
+  started_at: null,
+  expires_at: null,
+  ended_at: null,
+  end_reason: null,
+  review_state: null,
+  time_left_seconds: 0,
+});
 
 export const getListUserModeRolesResponseMock = (
   overrideResponse: Partial<Extract<ModeRoleListing, object>> = {},
@@ -5219,6 +5376,162 @@ export const getListSealedCredentialsMockHandler = (
   );
 };
 
+export const getCreateElevationRequestMockHandler = (
+  overrideResponse?:
+    | Elevation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Elevation> | Elevation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/elevations",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCreateElevationRequestResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListElevationsMockHandler = (
+  overrideResponse?:
+    | ElevationList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ElevationList> | ElevationList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/elevations",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListElevationsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getGetOwnElevationRequestMockHandler = (
+  overrideResponse?:
+    | OwnElevationRequest
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<OwnElevationRequest> | OwnElevationRequest),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/elevations/mine",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetOwnElevationRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListPendingElevationRequestsMockHandler = (
+  overrideResponse?:
+    | ElevationList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ElevationList> | ElevationList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/elevations/pending",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListPendingElevationRequestsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getApproveElevationRequestMockHandler = (
+  overrideResponse?:
+    | Elevation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Elevation> | Elevation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/elevations/:elevationID/approve",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getApproveElevationRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getDenyElevationRequestMockHandler = (
+  overrideResponse?:
+    | Elevation
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<Elevation> | Elevation),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/elevations/:elevationID/deny",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getDenyElevationRequestResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListUserModeRolesMockHandler = (
   overrideResponse?:
     | ModeRoleListing
@@ -8025,6 +8338,12 @@ export const getAdminMock = () => [
   getGetAccessRoleDefinitionsMockHandler(),
   getCompareAccessRoleDefinitionsMockHandler(),
   getListSealedCredentialsMockHandler(),
+  getCreateElevationRequestMockHandler(),
+  getListElevationsMockHandler(),
+  getGetOwnElevationRequestMockHandler(),
+  getListPendingElevationRequestsMockHandler(),
+  getApproveElevationRequestMockHandler(),
+  getDenyElevationRequestMockHandler(),
   getListUserModeRolesMockHandler(),
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),

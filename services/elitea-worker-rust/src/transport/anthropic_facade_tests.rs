@@ -1808,3 +1808,59 @@ fn tool_schemas_reach_anthropic_without_references_or_a_root_union() {
     assert_eq!(schema["properties"]["b"]["type"], "integer");
     assert!(!schema.to_string().contains("$ref"));
 }
+
+/// Issue 3050, as on the OpenAI-compatible facade: a tool use outside the
+/// admitted toolset after the answer streamed is dropped, the turn ends on the
+/// answer, and a note names the tool. Before any output it stays refused
+/// (`event_name_order_tool_and_citation_surfaces_fail_closed`).
+#[tokio::test(flavor = "current_thread")]
+async fn an_unadmitted_tool_use_after_streamed_text_ends_the_turn_cleanly() {
+    let raw = format!(
+        concat!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg\",\"content\":[],\"model\":\"{}\",\"role\":\"assistant\",\"type\":\"message\",\"usage\":{{\"input_tokens\":1,\"output_tokens\":0}}}}}}\n\n",
+            "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n",
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"Hello team!\"}}}}\n\n",
+            "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n",
+            "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":1,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"tool\",\"name\":\"gh\",\"input\":{{}}}}}}\n\n",
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"input_json_delta\",\"partial_json\":\"{{}}\"}}}}\n\n",
+            "event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":1}}\n\n",
+            "event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\",\"stop_sequence\":null}},\"usage\":{{\"output_tokens\":4}}}}\n\n",
+            "event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",
+        ),
+        MODEL
+    );
+    let (client, _) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(raw)))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_anthropic_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            invocation(MODEL, None),
+        )
+        .expect("bound native model");
+    let responses = drain(
+        bound
+            .generate_for_test(request(MODEL, Some(0.7)))
+            .await
+            .expect("native stream"),
+    )
+    .await
+    .expect("an unadmitted tool use after streamed text does not fail the turn");
+    let terminal = responses.last().expect("terminal");
+    assert!(terminal.turn_complete && !terminal.partial);
+    assert!(
+        responses
+            .iter()
+            .filter_map(|response| response.content.as_ref())
+            .flat_map(|content| content.parts.iter())
+            .all(|part| !matches!(part, Part::FunctionCall { .. }))
+    );
+    let completion = bound.take_completion_for_test().expect("completion");
+    assert!(completion.starts_with("Hello team!"), "{completion}");
+    assert!(completion.contains("`gh`"), "{completion}");
+}

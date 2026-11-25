@@ -992,7 +992,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // MANIFEST_ENTRY_COUNT is unchanged.
 // 596 -> 598 (issue 2540, ADR-0059 R3.9a, 2026-11-25): getAccessRoleDefinitions and
 // compareAccessRoleDefinitions, what a role can do and two roles side by side.
-const GENERATED_OPERATION_COUNT = 598;
+// 598 -> 604 (issue 2596, ADR-0059 R2.2b): createElevationRequest, listElevations,
+// getOwnElevationRequest, listPendingElevationRequests, approveElevationRequest and
+// denyElevationRequest, the break-glass request routes. The console pages that call them are
+// R3.10 (issue 2541), so MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 604;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

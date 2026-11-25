@@ -48,10 +48,12 @@ var (
 	// ErrAgentTargetRequired: the conversation holds several agents and the
 	// message names none, has no lead, and no participant. The route
 	// answers 422 `agent_target_required`.
-	ErrAgentTargetRequired = errors.New("conversation holds several agents and the start names none")
+	// It is turntaking's, shared with the cloud start
+	// (agentexecution.ErrAgentTargetRequired).
+	ErrAgentTargetRequired = turntaking.ErrAgentTargetRequired
 	// ErrAddressee: an addressed agent is not an agent of the conversation.
 	// The route answers 422 `addressee_not_in_conversation`.
-	ErrAddressee = errors.New("an addressed agent is not in the conversation")
+	ErrAddressee = turntaking.ErrNotInConversation
 	// ErrFloorTurn: the later turn names no routed message of this caller,
 	// a position the message has no target at, or another agent than the
 	// one at that position. The route answers 409 `floor_turn_refused`.
@@ -144,22 +146,10 @@ func routeFloor(request StartRequest, conversation ConversationFloor) (floorPlan
 		}
 		return plan, nil
 	}
-	participant := request.ParticipantID
-	if len(request.AddressedTo) > 0 && !containsID(request.AddressedTo, participant) {
-		// The composer's sticky target is not one the person addressed:
-		// the address wins.
-		participant = 0
-	}
-	if participant > 0 && !containsID(ids, participant) {
-		participant = 0
-	}
-	targets, err := turntaking.Route(conversation.Settings, participant, request.AddressedTo, ids)
-	switch {
-	case errors.Is(err, turntaking.ErrNoTarget):
-		return floorPlan{}, ErrAgentTargetRequired
-	case errors.Is(err, turntaking.ErrNotInConversation):
-		return floorPlan{}, ErrAddressee
-	case err != nil:
+	// The rule the cloud start uses too (turntaking.RouteMessage); its errors
+	// are ErrAgentTargetRequired and ErrAddressee.
+	targets, err := turntaking.RouteMessage(conversation.Settings, request.ParticipantID, request.AddressedTo, ids)
+	if err != nil {
 		return floorPlan{}, err
 	}
 	plan.participant = targets[0]

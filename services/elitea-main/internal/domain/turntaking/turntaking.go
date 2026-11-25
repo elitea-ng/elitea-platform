@@ -152,13 +152,52 @@ func positiveInteger(value any) (int64, bool) {
 	return 0, false
 }
 
-// ErrNoTarget is a message to several agents with no address, no lead and
-// no participant: the person picks (agent_target_required).
-var ErrNoTarget = errors.New("the message has no agent to answer it")
+// ErrAgentTargetRequired is a message to several agents with no address, no
+// lead and no participant: the person picks. It is the one error the cloud
+// start (agentexecution.ErrAgentTargetRequired) and the desktop Local work
+// start (localturn.ErrAgentTargetRequired) both answer, and both routes map
+// it to 422 `agent_target_required`.
+var ErrAgentTargetRequired = errors.New("conversation holds several agents and the start names none")
+
+// ErrNoTarget is ErrAgentTargetRequired under the name Route documents.
+var ErrNoTarget = ErrAgentTargetRequired
 
 // ErrNotInConversation names an addressee that is not an agent of the
-// conversation.
+// conversation (agentexecution.ErrFloorAddressee, localturn.ErrAddressee:
+// 422 `addressee_not_in_conversation`).
 var ErrNotInConversation = errors.New("an addressed agent is not in the conversation")
+
+// Lead is the lead of settings when it is still one of agents, else 0: under
+// `lead` it answers a message that addresses no one (issue 3049: also a
+// model-chat start that names no participant).
+func Lead(settings Settings, agents []int64) int64 {
+	if settings.Policy == PolicyLead && containsID(agents, settings.Lead) {
+		return settings.Lead
+	}
+	return 0
+}
+
+// RouteMessage routes a person's message from a start: the one place the
+// cloud start (agentexecution.planFloor) and the desktop Local work start
+// (localturn.routeFloor) decide who answers, so a chat and a work thread with
+// several agents route the same way.
+//
+// participant is the start's target (the composer's pick or sticky target).
+// It yields to the address when it is not one of the addressees, and is
+// ignored when it is not an agent of the conversation; then Route decides:
+// the addressees in order, else the lead, else the target, else
+// ErrAgentTargetRequired.
+func RouteMessage(settings Settings, participant int64, addressed []int64, agents []int64) ([]int64, error) {
+	if len(addressed) > 0 && !containsID(addressed, participant) {
+		// The composer's sticky target is not one the person addressed: the
+		// address wins.
+		participant = 0
+	}
+	if participant > 0 && !containsID(agents, participant) {
+		participant = 0
+	}
+	return Route(settings, participant, addressed, agents)
+}
 
 // Route answers who answers a human message, in order: the first starts
 // now, the rest queue behind it.
@@ -211,8 +250,8 @@ func Route(settings Settings, participant int64, addressed []int64, agents []int
 		}
 		return targets, nil
 	}
-	if settings.Policy == PolicyLead && isAgent[settings.Lead] {
-		return []int64{settings.Lead}, nil
+	if lead := Lead(settings, agents); lead > 0 {
+		return []int64{lead}, nil
 	}
 	if participant > 0 {
 		return []int64{participant}, nil

@@ -15,6 +15,11 @@
 #   * anything, including base64-decoded Secret data, that has the shape of a
 #     credential (`bg_<24 hex>.<64 hex>`).
 #
+# It also checks the notice webhook (story R2.5b, #2598): its URL is a
+# credential, so main.breakGlass.noticeWebhook mounts an existing Secret's
+# keys as secretKeyRef variables of Main, and a plain URL value fails the
+# render.
+#
 # Usage: deploy/helm/tests/render-break-glass.sh
 # Needs: helm, python3 with PyYAML. No cluster, no network.
 set -euo pipefail
@@ -127,3 +132,68 @@ then
   exit 1
 fi
 echo "ok: the checks catch a credential in a Secret and a Job that runs break-glass"
+
+# The notice webhook (ADR-0059 R2.5b, #2598). Its URL carries the
+# receiver's token, so it is a credential: the chart takes a reference to an
+# existing Secret and mounts both values (the URL and the signing secret) as
+# secretKeyRef environment variables of Main; a plain URL value is refused by
+# the schema, and an allowlist without the Secret is refused by the template.
+helm template bg "$CHART" "${standalone[@]}" > "$work/webhook-off.yaml"
+helm template bg "$CHART" "${standalone[@]}" \
+  --set main.breakGlass.noticeWebhook.existingSecret=bg-notice-webhook \
+  --set main.breakGlass.noticeWebhook.egressAllowlist=10.20.0.0/16 > "$work/webhook.yaml"
+
+cat > "$work/webhook.py" <<'PY'
+import sys, yaml
+
+def main_env(path):
+    for doc in yaml.safe_load_all(open(path)):
+        if doc and doc.get('kind') == 'Deployment' and doc['metadata']['name'].endswith('main'):
+            for container in doc['spec']['template']['spec']['containers']:
+                if container['name'].endswith('main'):
+                    return {e['name']: e for e in container.get('env') or []}
+    sys.exit(f'FAIL: {path}: no Main container rendered')
+
+failures = []
+off = main_env(sys.argv[1])
+for name in off:
+    if name.startswith('ELITEA_BREAK_GLASS_NOTICE_WEBHOOK'):
+        failures.append(f'without the Secret reference the chart still sets {name}')
+on = main_env(sys.argv[2])
+for name, key in (('ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_URL', 'url'),
+                  ('ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_SECRET', 'signing-secret')):
+    entry = on.get(name)
+    ref = ((entry or {}).get('valueFrom') or {}).get('secretKeyRef') or {}
+    if not entry or 'value' in entry or ref.get('name') != 'bg-notice-webhook' or ref.get('key') != key \
+            or ref.get('optional'):
+        failures.append(f'{name} is not a required secretKeyRef to bg-notice-webhook/{key}: {entry}')
+allow = on.get('ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_EGRESS_ALLOWLIST') or {}
+if allow.get('value') != '10.20.0.0/16':
+    failures.append(f'the egress allowlist is not set: {allow}')
+if failures:
+    print('\n'.join('FAIL: ' + f for f in failures), file=sys.stderr)
+    sys.exit(1)
+print('ok: the notice webhook is mounted from the Secret reference only')
+PY
+python3 "$work/webhook.py" "$work/webhook-off.yaml" "$work/webhook.yaml"
+
+refused() {
+  local what="$1" want="$2"; shift 2
+  if helm template bg "$CHART" "${standalone[@]}" "$@" > /dev/null 2> "$work/refused.txt"; then
+    echo "FAIL: the chart rendered $what" >&2
+    exit 1
+  fi
+  if ! grep -q -- "$want" "$work/refused.txt"; then
+    echo "FAIL: the refusal of $what does not say '$want':" >&2
+    cat "$work/refused.txt" >&2
+    exit 1
+  fi
+  echo "ok: the chart refuses $what"
+}
+refused "a plain webhook URL value" "url" \
+  --set main.breakGlass.noticeWebhook.existingSecret=bg-notice-webhook \
+  --set-string main.breakGlass.noticeWebhook.url=https://hooks.invalid/T0KEN
+refused "a plain webhook URL value without a Secret" "url" \
+  --set-string main.breakGlass.noticeWebhook.url=https://hooks.invalid/T0KEN
+refused "an egress allowlist without the Secret reference" "egressAllowlist is set without existingSecret" \
+  --set main.breakGlass.noticeWebhook.egressAllowlist=10.20.0.0/16

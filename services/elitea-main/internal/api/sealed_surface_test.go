@@ -40,6 +40,12 @@ func drivenSurfaceRoutes(t *testing.T) []string {
 			// route a sealed session needs, so a route reached ONLY this way
 			// stays off its surface.
 			continue
+		case adminsurface.VariantBrowserSession:
+			// The elevation request routes (ADR-0059 R2.2b): a sealed
+			// session cannot request or approve (decision 7), and the routes
+			// refuse it at their own credential check. Off the sealed
+			// surface, the session is refused before it reaches them.
+			continue
 		}
 		routes = append(routes, entry.Method+" "+adminaccess.RoutePattern(entry.Pattern))
 	}

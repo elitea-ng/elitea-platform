@@ -4493,6 +4493,31 @@ main:
     keysSecret: ""
     mountPath: /etc/elitea/agent-assertion
 
+  # Break-glass (ADR-0059). noticeWebhook is the out-of-band channel of the
+  # break-glass notices (#2598): an activation, a critical change under an
+  # elevation, an overdue review, an elevation left with no reviewer and an
+  # `unauthorized` review each make one signed HTTPS POST to it, beside the
+  # e-mail. A Slack, Teams or PagerDuty webhook URL carries its token, so the
+  # URL is a credential: the chart takes a reference to an existing Secret
+  # and never a URL value (the schema refuses a `url` key), and no console
+  # setting or elevation can change it. The Secret holds two keys: the URL
+  # (`key`) and the signing secret (`signingSecretKey`, at least 32 random
+  # bytes; the receiver checks X-Webhook-Signature against it). Empty
+  # existingSecret sends no webhook.
+  #   kubectl create secret generic elitea-break-glass-webhook \
+  #     --from-literal=url='https://hooks.example/...' \
+  #     --from-literal=signing-secret="$(openssl rand -base64 32)"
+  breakGlass:
+    noticeWebhook:
+      existingSecret: ""
+      key: url
+      signingSecretKey: signing-secret
+      # The private destinations the webhook may reach (hosts, `*.`
+      # wildcards, CIDR blocks; comma-separated). Empty permits public
+      # destinations only: loopback, private, link-local and metadata
+      # addresses are refused.
+      egressAllowlist: ""
+
   # SIEM audit export (#1494). The settings are the ELITEA_AUDIT_EXPORT_* keys
   # of main.env above; this block mounts the Secret that holds the webhook
   # signing keys and the OTLP headers, and shapes the monitoring.

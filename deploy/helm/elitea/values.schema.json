@@ -60,6 +60,27 @@
           "type": "object"
         }
       }
+    },
+    "main": {
+      "type": "object",
+      "properties": {
+        "breakGlass": {
+          "type": "object",
+          "properties": {
+            "noticeWebhook": {
+              "description": "The out-of-band webhook of the break-glass notices (ADR-0059 R2.5b). Its URL carries the receiver's token, so it is a credential: only a reference to an existing Secret is accepted, never a URL value. A `url` key, or any other key, is refused here, before any template.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingSecret": {"type": "string", "description": "The Secret that holds the webhook URL and its signing secret. Empty sends no webhook."},
+                "key": {"type": "string", "minLength": 1, "description": "The Secret's key holding the https URL."},
+                "signingSecretKey": {"type": "string", "minLength": 1, "description": "The Secret's key holding the signing secret (at least 32 random bytes)."},
+                "egressAllowlist": {"type": "string", "description": "Private destinations the webhook may reach (hosts, *. wildcards, CIDR blocks), comma-separated; empty permits public destinations only."}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {

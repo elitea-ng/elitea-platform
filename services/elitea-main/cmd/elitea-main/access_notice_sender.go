@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,8 +34,41 @@ func startAccessNoticeSender(ctx context.Context, pool *pgxpool.Pool, mailer adm
 	if err != nil {
 		return fmt.Errorf("compose the access notice sender: %w", err)
 	}
+	webhook, err := noticeWebhookFromEnv(os.Getenv, logger)
+	if err != nil {
+		return err
+	}
+	if webhook != nil {
+		sender.WithWebhook(webhook)
+	}
 	runAccessNoticeSender(ctx, routines.NewStore(pool), sender.Pass, logger)
 	return nil
+}
+
+// noticeWebhookFromEnv reads the out-of-band notice webhook (ADR-0059
+// R2.5b) and, when it is set, turns on its rows in the outbox: it runs
+// before the router is built, so every event written afterwards has its
+// webhook row. Unset, it answers nil and the outbox stays e-mail only. A URL
+// that is not https, a weak signing secret, a secret or an allowlist without
+// a URL, or a malformed allowlist refuses the start: a deployment that meant
+// to configure the webhook never runs silently without it. No error names
+// the URL.
+func noticeWebhookFromEnv(getenv func(string) string, logger *slog.Logger) (adminaccess.NoticeWebhookSender, error) {
+	config, ok, err := adminaccess.NoticeWebhookConfigFromEnv(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("break-glass notice webhook: %w", err)
+	}
+	if !ok {
+		adminaccess.SetNoticeWebhookEnabled(false)
+		return nil, nil
+	}
+	webhook, err := adminaccess.NewNoticeWebhook(config, logger)
+	if err != nil {
+		return nil, fmt.Errorf("break-glass notice webhook: %w", err)
+	}
+	adminaccess.SetNoticeWebhookEnabled(true)
+	logger.Info("break-glass notice webhook configured")
+	return webhook, nil
 }
 
 // accessNoticeWaitWarnEvery spaces the "notices wait for a mailer" warning.
@@ -48,8 +82,11 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 	loop := &routines.Loop{
 		Backend: backend,
 		Def: routines.Definition{
-			ID:              adminaccess.AccessNoticeSenderRoutineID,
-			Owner:           routines.OwnerMain,
+			ID:    adminaccess.AccessNoticeSenderRoutineID,
+			Owner: routines.OwnerMain,
+			// The text is shown on the Schedules page and held by its
+			// visual baseline (admin-schedules). It does not name the
+			// out-of-band webhook (#2598), which the same pass delivers.
 			Description:     "Sends the break-glass access notices and the notice to owners of inherit tokens by e-mail, and retries the ones the mailer refused.",
 			DefaultSchedule: adminaccess.AccessNoticeSenderDefaultSchedule,
 			MinInterval:     10 * time.Second,
@@ -59,7 +96,7 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 	done := make(chan struct{})
 	// The "no mailer" warning is logged when the waiting starts and then at
 	// most every accessNoticeWaitWarnEvery, not on every 30-second pass.
-	var lastWaitWarn time.Time
+	var lastWaitWarn, lastWebhookWarn time.Time
 	go func() {
 		defer close(done)
 		loop.Run(ctx, func(ctx context.Context) (string, error) {
@@ -78,6 +115,19 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 			case result.Sent > 0 || result.Failed > 0:
 				logger.Info("access notice sender pass",
 					"sent", result.Sent, "failed", result.Failed, "pending", result.Pending)
+			}
+			if !result.WebhookConfigured && result.WebhookPending > 0 {
+				if lastWebhookWarn.IsZero() || time.Since(lastWebhookWarn) >= accessNoticeWaitWarnEvery {
+					lastWebhookWarn = time.Now()
+					logger.Warn("break-glass webhook notices wait for a webhook: the notice webhook is no longer configured",
+						"pending", result.WebhookPending)
+				}
+			} else {
+				lastWebhookWarn = time.Time{}
+			}
+			if result.WebhookSent > 0 || result.WebhookFailed > 0 {
+				logger.Info("access notice webhook pass", "sent", result.WebhookSent,
+					"failed", result.WebhookFailed, "pending", result.WebhookPending)
 			}
 			if err != nil {
 				logger.Error("access notice sender pass failed", "err", err)

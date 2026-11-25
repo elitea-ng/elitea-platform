@@ -2176,6 +2176,12 @@ mod taxonomy_tests {
                 "anthropic_gateway.incomplete_stream",
                 RuntimeFailureKind::ModelResponseInvalid,
             ),
+            // Issue 3050: an unadmitted tool call the repair did not correct
+            // was INTERNAL ("The runtime operation failed.").
+            (
+                "model_facade.tool_not_admitted",
+                RuntimeFailureKind::ModelResponseInvalid,
+            ),
             (
                 "anthropic_gateway.provider_error",
                 RuntimeFailureKind::ModelProviderFailure,

@@ -1243,7 +1243,7 @@ impl NativeAgentRuntimeError {
     pub(crate) fn diagnostic_detail(&self) -> &str {
         self.diagnostic
             .as_deref()
-            .unwrap_or("disabled_or_rate_limited")
+            .unwrap_or(crate::diagnostics::failure::NOT_CAPTURED)
     }
 
     pub(crate) fn failure_message(&self) -> Option<String> {

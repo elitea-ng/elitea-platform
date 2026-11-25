@@ -100,7 +100,7 @@ const ChatBoxInner = memo(function ChatBox({
   const data = useChatBoxData(buildChatBoxDataParams({ activeConversation, activeParticipant, projectId, userId, userName, userAvatar, isAgentsPage }));
   const messages = data.messageList.messages;
   // ADR-0050 D7c: who an unaddressed message goes to, derived once for the send, the stream identity, the attachments gate and "To:".
-  const target = useResolvedTarget(activeParticipant, conversationParticipants, messages);
+  const target = useResolvedTarget(activeParticipant, conversationParticipants, messages, conversationMeta);
   const { participantForEditor, normalisedParticipants, agentEditorParticipantDetails, isFetchingParticipantDetails, assistantName, areAttachmentsGated, grantableTools, welcomeMessage, participantStarters } = useChatBoxParticipant({ activeParticipant, conversationParticipants, target, isAgentsPage });
   const activeParticipantVersions = agentEditorParticipantDetails?.versions;
   // #1988: the bound agent's own starters, unless the caller supplied a list (the editor's test pane passes its live form).
