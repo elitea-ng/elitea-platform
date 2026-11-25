@@ -33,6 +33,10 @@
 //!   the `lsp://event` channel;
 //! * [`recorder`] — what the commit and the changed-files card report;
 //! * [`events`] — the `agent://event` stream;
+//! * [`agent_state`] — a turn's live avatar state, derived from its events
+//!   (ADR-0061 decision 4b);
+//! * [`exchange`] — the person's Stop and Skip of a routed message's
+//!   remaining agents (ADR-0061 decision 2c);
 //! * [`mentions`] — the "@" file picker and a turn's referenced paths;
 //! * [`skills`] — a skill picked with "/", applied to one turn;
 //! * [`slash_commands`] — a custom command picked with "/", expanded and
@@ -52,6 +56,7 @@
 //!   defaults, and the chain of automatic continuations (ADR-0045);
 //! * [`goal`] — a chain's run brief and goal check (ADR-0045 decision 11).
 
+pub mod agent_state;
 pub mod api;
 pub mod approvals;
 pub mod attachments;
@@ -64,6 +69,7 @@ pub mod context;
 pub mod definition;
 pub mod environment;
 pub mod events;
+pub mod exchange;
 pub mod floor;
 pub mod framing;
 pub mod goal;

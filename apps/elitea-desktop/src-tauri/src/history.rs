@@ -2794,7 +2794,9 @@ impl TurnTap {
         // A background process's streamed output (#1223) is live view only:
         // the tool's own result carries what the model saw, and the stream
         // would spend the turn's event budget on terminal noise.
-        if event.kind == "tool_output_delta" {
+        // The live avatar state and the exchange's queue (ADR-0061) are live
+        // view only too: a reopened thread shows committed state.
+        if matches!(event.kind, "tool_output_delta" | "agent_state" | "exchange") {
             return;
         }
         // `usage_total` too: the thread's token totals are the sum of its

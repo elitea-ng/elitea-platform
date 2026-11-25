@@ -954,6 +954,32 @@ pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Resul
     Ok(state.agents.cancel(&turn_id)?)
 }
 
+/// Stop the exchange `turn_id` belongs to (ADR-0061 decision 2c): its
+/// running turn is cancelled and no later agent of the message answers
+/// (IPC.md, "Several agents in a thread").
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_exchange_stop(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
+    Ok(state.agents.exchange_stop(&turn_id)?)
+}
+
+/// `agent_exchange_skip`'s answer: the agents still queued, in order.
+#[derive(Serialize)]
+pub struct ExchangeQueue {
+    pub remaining: Vec<i64>,
+}
+
+/// Skip one agent still queued in the exchange of `turn_id`.
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_exchange_skip(
+    state: State<'_, LocalState>,
+    turn_id: String,
+    participant_id: i64,
+) -> Result<ExchangeQueue, IpcError> {
+    Ok(ExchangeQueue {
+        remaining: state.agents.exchange_skip(&turn_id, participant_id)?,
+    })
+}
+
 /// `agent_turn_steer`'s answer: the queued message's id.
 #[derive(Serialize)]
 pub struct SteerQueued {

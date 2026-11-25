@@ -469,3 +469,212 @@ fn a_messages_hops_share_default_versions_and_a_new_message_starts_empty() {
         "a new message re-reads"
     );
 }
+
+// Watching and stepping into an exchange (ADR-0061 decision 2c, #3058).
+
+const EXECUTION_3: &str = "abababababababababababababababab";
+
+/// The thread with a third agent: Writer (99, cloud, application 7 on
+/// version 11).
+fn three_agent_detail() -> Value {
+    let mut detail = two_agent_detail();
+    detail["participants"].as_array_mut().unwrap().push(json!(
+        {"id": 99, "entity_name": "application", "entity_meta": {"id": 7, "project_id": 1, "name": "Writer"},
+         "entity_settings": {"version_id": 11, "executor": "cloud"}}
+    ));
+    detail
+}
+
+fn three_agents() -> Value {
+    let mut agents = agents();
+    agents
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"participant_id": 99, "name": "Writer", "executor": "cloud"}));
+    agents
+}
+
+/// Main of a three-agent thread: a message to all three routes to all
+/// three, and a later start runs the agent it names at the position it
+/// names. The local agent's model call takes `llm_delay`.
+fn three_agent_platform(llm_delay: Duration) -> impl Fn(&Req) -> Res {
+    let inner = floor_platform(Later::Started);
+    let first_question = Mutex::new(FIRST_QUESTION.to_owned());
+    move |req: &Req| {
+        let path = req.path.as_str();
+        if path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/7/11" {
+            return Res::json(200, &resolved_for(7, 11));
+        }
+        if path == "/api/v2/elitea_core/conversation/prompt_lib/1/42"
+            || path == format!("/api/v2/elitea_core/conversation/prompt_lib/1/{UUID}")
+        {
+            return Res::json(200, &three_agent_detail());
+        }
+        if path == "/llm/v1/chat/completions" {
+            std::thread::sleep(llm_delay);
+        }
+        if path == format!("/api/v2/elitea_core/local_turn/prompt_lib/1/{UUID}") {
+            let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
+            let question = body["question_id"].as_str().unwrap_or_default().to_owned();
+            let participant = body["participant_id"].as_i64().unwrap_or_default();
+            let (execution, position, floor_question) = if participant == 77 {
+                first_question.lock().unwrap().clone_from(&question);
+                (EXECUTION, 0, question.clone())
+            } else {
+                let position = body["floor_turn"]["position"].as_u64().unwrap_or_default();
+                let execution = if participant == 88 {
+                    EXECUTION_2
+                } else {
+                    EXECUTION_3
+                };
+                (execution, position, first_question.lock().unwrap().clone())
+            };
+            return Res::json(
+                200,
+                &json!({
+                    "execution_id": execution, "question_id": question,
+                    "response_message_id": "11111111-2222-4333-8444-555555555555",
+                    "conversation_uuid": UUID, "participant_id": participant, "created": true,
+                    "expires_at": "2026-10-10T00:00:00Z",
+                    "memory_recall": {"text": ""},
+                    "executor": if participant == 77 { "local" } else { "cloud" },
+                    "floor": {"question_id": floor_question, "position": position,
+                              "targets": [77, 88, 99], "agents": three_agents()}
+                }),
+            );
+        }
+        if path == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION_3}") {
+            return Res::json(
+                202,
+                &json!({"child_execution_id": "child-1",
+                "response_message_id": "33333333-2222-4333-8444-555555555555",
+                "conversation_uuid": "44444444-2222-4333-8444-555555555555"}),
+            );
+        }
+        if path
+            == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION_3}/child-1")
+        {
+            return Res::json(200, &json!({"status": "completed", "output": "Written."}));
+        }
+        if path == format!("/api/v2/elitea_core/local_turn_commit/prompt_lib/1/{EXECUTION_3}") {
+            return Res::json(
+                200,
+                &json!({"execution_id": EXECUTION_3, "created": true,
+                "conversation_uuid": UUID, "question_message_id": "q", "response_message_id": "r",
+                "memories_used": 0, "committed_at": "2026-10-09T00:00:00Z"}),
+            );
+        }
+        inner(req)
+    }
+}
+
+fn to_all_three(h: &Harness) -> TurnRequest {
+    TurnRequest {
+        prompt: "@Coder @Reviewer @Writer ship it".into(),
+        addressed_to: vec![77, 88, 99],
+        ..request(&h.workspace_id)
+    }
+}
+
+/// The `floor` of `turn_id`'s `status` `running`, once sent.
+async fn floor_status(h: &Harness, turn_id: &str) -> Value {
+    for _ in 0..SETTLE_POLLS {
+        let found = h.emitter.all().into_iter().find(|event| {
+            event.turn_id == turn_id
+                && event.kind == "status"
+                && event.payload.get("floor").is_some()
+        });
+        if let Some(event) = found {
+            return event.payload["floor"].clone();
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("no floor status: {:?}", h.emitter.kinds());
+}
+
+/// Stop exchange during the first agent's turn: that turn is cancelled,
+/// the host starts no later agent of the message, and the first turn says
+/// `floor_stopped` (`stopped_by_person`) once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_exchange_cancels_the_turn_and_starts_no_later_agent() {
+    let server = serve(three_agent_platform(Duration::from_secs(2))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(to_all_three(&h)).await.unwrap();
+    let floor = floor_status(&h, &started.turn_id).await;
+    assert_eq!(floor["exchange"], json!([88, 99]));
+    h.host.exchange_stop(&started.turn_id).unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let stopped = first_event(&h, "floor_stopped").await;
+    assert_eq!(stopped.turn_id, started.turn_id);
+    assert_eq!(stopped.payload["code"], "stopped_by_person");
+    assert_eq!(stopped.payload["message"], "You stopped the exchange.");
+    assert_eq!(settled_done(&h, &started.turn_id)["commit"], "none");
+    // Nothing else starts, however long we wait.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(starts_of(&h).len(), 1, "{:?}", starts_of(&h));
+    let kinds = h.emitter.kinds();
+    assert!(!kinds.contains(&"turn_continued"), "{kinds:?}");
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == "floor_stopped")
+            .count(),
+        1
+    );
+    // The avatar ends idle, not success.
+    let states = h.emitter.states();
+    assert_eq!(states.first().unwrap()["state"], "thinking");
+    assert_eq!(states.last().unwrap()["state"], "idle");
+    assert!(states.iter().all(|state| state["participant_id"] == 77));
+}
+
+/// Skip of the second agent during the first agent's turn: the host starts
+/// the third next, at its own position, and the second never answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skip_drops_one_queued_agent_and_the_next_one_answers() {
+    let server = serve(three_agent_platform(Duration::from_millis(500))).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(to_all_three(&h)).await.unwrap();
+    floor_status(&h, &started.turn_id).await;
+    assert_eq!(
+        h.host.exchange_skip(&started.turn_id, 88).unwrap(),
+        vec![99]
+    );
+    assert_eq!(
+        h.host.exchange_skip(&started.turn_id, 77).unwrap_err().code,
+        "exchange_not_queued"
+    );
+    assert_eq!(
+        h.host.exchange_skip("unknown", 99).unwrap_err().code,
+        "exchange_unknown"
+    );
+    let queue = first_event(&h, "exchange").await;
+    assert_eq!(queue.turn_id, started.turn_id);
+    assert_eq!(queue.payload, json!({"remaining": [99]}));
+    until_done_of(&h, &started.turn_id).await;
+    let done = settled_done(&h, &started.turn_id);
+    assert_eq!(done["floor_next"]["participant_id"], 99);
+    assert_eq!(done["floor_next"]["position"], 2);
+    let continued = first_event(&h, "turn_continued").await;
+    assert_eq!(continued.payload["participant_id"], 99);
+    let next = continued.payload["next_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_done_of(&h, &next).await;
+    assert_eq!(floor_status(&h, &next).await["exchange"], json!([]));
+    let starts = starts_of(&h);
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert_eq!(starts[1]["participant_id"], 99);
+    assert_eq!(starts[1]["floor_turn"]["position"], 2);
+    // The third agent's turn reports its own avatar; the skipped one none.
+    let states = h.emitter.states();
+    assert!(
+        states.iter().any(|state| state["participant_id"] == 99),
+        "{states:?}"
+    );
+    assert!(
+        states.iter().all(|state| state["participant_id"] != 88),
+        "{states:?}"
+    );
+}

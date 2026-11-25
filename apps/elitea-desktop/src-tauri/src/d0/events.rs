@@ -147,6 +147,9 @@ pub struct TurnEvents {
     clock: Mutex<Clock>,
     context: Mutex<Option<ContextMeter>>,
     usage: Mutex<Ledger>,
+    /// The turn's live avatar state (ADR-0061 decision 4b): every event
+    /// sent passes through it, and a change goes out as `agent_state`.
+    avatar: Mutex<super::agent_state::AvatarTracker>,
 }
 
 /// One model call's token usage as the gateway reported it (#1227).
@@ -309,7 +312,17 @@ impl TurnEvents {
             }),
             context: Mutex::new(None),
             usage: Mutex::new(Ledger::default()),
+            avatar: Mutex::new(super::agent_state::AvatarTracker::default()),
         }
+    }
+
+    /// The participant whose turn this is, as Main routed it: from here on
+    /// the turn's events also report its avatar state (`agent_state`).
+    pub fn set_participant(&self, participant_id: i64) {
+        self.avatar
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_participant(participant_id);
     }
 
     /// The occupancy of the model call about to be made; a `compacted`
@@ -457,10 +470,18 @@ impl TurnEvents {
         &self.turn_id
     }
 
+    /// Sends `kind`, then the `agent_state` it causes, if the agent's state
+    /// changed; both in the one critical section, so the state follows its
+    /// cause in sequence order.
     pub fn send(&self, kind: &'static str, payload: Value) {
         let Ok(mut seq) = self.seq.lock() else {
             return;
         };
+        let state = self
+            .avatar
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe(kind, &payload);
         self.emitter.emit(AgentEvent {
             turn_id: self.turn_id.clone(),
             seq: *seq,
@@ -468,6 +489,15 @@ impl TurnEvents {
             payload,
         });
         *seq += 1;
+        if let Some(state) = state {
+            self.emitter.emit(AgentEvent {
+                turn_id: self.turn_id.clone(),
+                seq: *seq,
+                kind: super::agent_state::KIND,
+                payload: state,
+            });
+            *seq += 1;
+        }
     }
 
     pub fn status(&self, phase: Phase, message: Option<&str>) {
@@ -655,12 +685,33 @@ pub struct VecEmitter {
 
 #[cfg(test)]
 impl VecEmitter {
+    /// The turn's events, without the `agent_state` events derived from
+    /// them (most tests read a turn's own sequence; [`Self::raw`] has all).
     pub fn all(&self) -> Vec<AgentEvent> {
+        self.raw()
+            .into_iter()
+            .filter(|event| event.kind != super::agent_state::KIND)
+            .collect()
+    }
+
+    /// Every event emitted, `agent_state` included.
+    pub fn raw(&self) -> Vec<AgentEvent> {
         self.events.lock().expect("lock").clone()
     }
 
+    /// The kinds of the turn's events, without the `agent_state` events
+    /// derived from them (see [`Self::states`]).
     pub fn kinds(&self) -> Vec<&'static str> {
         self.all().iter().map(|event| event.kind).collect()
+    }
+
+    /// The `agent_state` payloads, in order.
+    pub fn states(&self) -> Vec<Value> {
+        self.raw()
+            .into_iter()
+            .filter(|event| event.kind == super::agent_state::KIND)
+            .map(|event| event.payload)
+            .collect()
     }
 
     pub fn processes(&self) -> Vec<super::processes::ProcessEvent> {
