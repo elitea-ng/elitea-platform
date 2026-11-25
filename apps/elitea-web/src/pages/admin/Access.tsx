@@ -96,9 +96,12 @@ function RoleRow({ role }: { readonly role: AccessRoleDefinition }): ReactNode {
   return (
     <TableRow data-testid={`admin-access-role-${role.name}`}>
       <TableCell>
-        <Typography variant="bodyMedium">{label}</Typography>
+        {/* Block elements: these variants render as inline spans in this theme. */}
+        <Typography variant="bodyMedium" component="div">
+          {label}
+        </Typography>
         {role.held_by_caller ? (
-          <Typography variant="bodySmall" color="text.secondary">
+          <Typography variant="bodySmall" component="div" color="text.secondary" data-testid="admin-access-yours">
             {t('pages.admin.access.yours', 'You hold this role')}
           </Typography>
         ) : null}
