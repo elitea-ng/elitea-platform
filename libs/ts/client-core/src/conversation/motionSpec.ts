@@ -8,7 +8,7 @@
  * the `motion.avatar` and `motion.handoff` tokens (ADR-0061 decision 4c), so a
  * brand re-times them in `tokens.json` with the rest of its motion.
  */
-import { BRAND_TOKENS } from '../brand/tokens.gen';
+import { MOTION_TOKENS } from '../brand/motion.gen';
 import { AGENT_STATE, type AgentState } from '../stream/frameTypes';
 
 /** The brand token role a motion is drawn in. */
@@ -65,7 +65,7 @@ export function tokenMs(value: unknown, fallback: number): number {
   return match[2] === 's' ? amount * 1000 : amount;
 }
 
-const AVATAR = BRAND_TOKENS.motion.avatar;
+const AVATAR = MOTION_TOKENS.avatar;
 
 /** One state's timing from `motion.avatar`. */
 function timing(slot: { readonly duration: string; readonly loop: boolean }, defaultMs: number): Pick<MotionSpec, 'durationMs' | 'loop'> {
@@ -73,10 +73,10 @@ function timing(slot: { readonly duration: string; readonly loop: boolean }, def
 }
 
 /** How long the hand-off baton travels between two avatars (`motion.handoff`, on `motion.easing`). */
-export const HANDOFF_MS: number = tokenMs(BRAND_TOKENS.motion.handoff, 400);
+export const HANDOFF_MS: number = tokenMs(MOTION_TOKENS.handoff, 400);
 
 /** The easing of every avatar and hand-off motion (`motion.easing`). */
-export const MOTION_EASING: string = BRAND_TOKENS.motion.easing;
+export const MOTION_EASING: string = MOTION_TOKENS.easing;
 
 /** The motion of each state. `idle` breathes; the list never animates it (`isAnimatedState`). */
 export const MOTION_SPEC: Readonly<Record<AgentState, MotionSpec>> = {

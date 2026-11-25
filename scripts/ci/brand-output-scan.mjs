@@ -137,12 +137,17 @@ export function matchers(identifiers) {
  * four letters turns up in one now and then (`BCePam0p` holds `epam`); it is
  * not text. Only a token of exactly eight URL-safe characters, set off by `-`
  * and followed by a file extension, counts: `Epam.js` or `x-EPAM.js` is still
- * a finding.
+ * a finding. The hash alphabet is base64url, so a token may hold `-` itself
+ * (`railroad-ebnf-DWYD2UWJ-nePAm-w5.js`); such a token counts only when it also
+ * holds a digit, so a name like `foo-bar-EPAM.js` is still a finding.
  */
 export function insideContentHash(text, index, length) {
   const from = Math.max(0, index - 12);
   const window = text.slice(from, index + length + 12);
-  for (const m of window.matchAll(/-([A-Za-z0-9_]{8})(?=\.[a-z0-9]{2,5}(?![A-Za-z0-9]))/g)) {
+  // Every `-` may open a token (a token can hold `-`), so the match is a lookahead and the tokens may overlap.
+  for (const m of window.matchAll(/-(?=([A-Za-z0-9_-]{8})\.[a-z0-9]{2,5}(?![A-Za-z0-9]))/g)) {
+    const token = m[1];
+    if (token.includes('-') && !/\d/.test(token)) continue;
     const start = from + m.index + 1;
     if (index >= start && index + length <= start + 8) return true;
   }

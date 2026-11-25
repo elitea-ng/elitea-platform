@@ -59,6 +59,10 @@ test('a bundler content hash holding the term passes; a real EPAM still fails', 
   assert.deepEqual(find('assets/App-BW66ApSD.js dist/app/assets/webhooks-BCePam0p.js'), []);
   assert.deepEqual(find('a{background:url(./logo-BCePam0p.svg)}'), []);
   assert.equal(insideContentHash('x-BCePam0p.js', 3, 4), true);
+  // The hash alphabet is base64url: a hash may hold `-` (a mermaid chunk, `railroad-ebnf-DWYD2UWJ-nePAm-w5.js`).
+  assert.deepEqual(find('rt(`./railroad-ebnf-DWYD2UWJ-nePAm-w5.js`)'), []);
+  // A name of words with `-` and no digit is not a hash.
+  assert.deepEqual(find('assets/foo-bar-EPAM.js'), ['EPAM']);
   // Not a hash: the wrong length, no extension, or the term outside the token.
   assert.deepEqual(find('assets/x-BCePam0pq.js'), ['ePam']);
   assert.deepEqual(find('see BCePam0p now'), ['ePam']);

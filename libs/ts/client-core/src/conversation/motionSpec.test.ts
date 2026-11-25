@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { MOTION_TOKENS } from '../brand/motion.gen';
 import { BRAND_TOKENS } from '../brand/tokens.gen';
 import { AGENT_STATE } from '../stream/frameTypes';
 import { HANDOFF_MS, MOTION_EASING, MOTION_SPEC, tokenMs } from './motionSpec';
@@ -41,4 +42,9 @@ test('a duration token reads ms, seconds or a bare number, and falls back on any
   // A brand value that is no duration falls back to the default timing instead of breaking every client at import.
   assert.equal(tokenMs('fast', 400), 400);
   assert.equal(tokenMs(undefined, 900), 900);
+});
+
+test('the avatars read the motion tokens alone, so a white-label bundle carries no product name', () => {
+  assert.deepEqual(MOTION_TOKENS, BRAND_TOKENS.motion);
+  assert.equal(JSON.stringify(MOTION_TOKENS).includes(BRAND_TOKENS.shortName), false);
 });
