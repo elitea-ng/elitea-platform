@@ -490,7 +490,10 @@ adminTest('J39: a bulk invite writes every pair and the second run reports them 
   // covered by the Go integration tests, and a dialog that posts nothing is
   // the #130/#180 defect this suite exists to catch.
   await page.goto(BASE_URL + '/admin/app/users', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByText(SEEDED_ADMIN)).toBeVisible({ timeout: 15_000 });
+  // Scoped to <main>, as in the listing journey above: the nav footer shows
+  // the signed-in operator's own address too, so an unscoped match is a
+  // strict-mode violation once the grid has rendered the row.
+  await expect(page.getByRole('main').getByText(SEEDED_ADMIN)).toBeVisible({ timeout: 15_000 });
   await page.getByTestId('admin-bulk-invite-open').click();
 
   const usersField = page.getByTestId('bulk-invite-users').getByRole('combobox');
