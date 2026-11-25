@@ -19,6 +19,7 @@ import { server } from '@/test/setup';
 
 import { AdminRoles } from './Roles';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 interface RecordedRequest {
   readonly method: string;
@@ -473,15 +474,36 @@ describe('Admin › Roles', () => {
     expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeEnabled();
   });
 
-  it('renders read-only without the edit permission', async () => {
+  // Read-only mode (R3.4b, issue 2613): the security auditor reads `access`,
+  // so every write control is disabled, not hidden, and reading still works.
+  it('is view only for a role that reads the access item: every write control disabled', async () => {
     const user = userEvent.setup();
-    grantAdminUiPermissions(['configuration.roles.permissions.view']);
+    serveConsoleLevel('read');
+    renderAdminRoute(<AdminRoles />);
+
+    expect(await findViewOnlyNotice()).toHaveTextContent('Platform administrator');
+    await expandGroup(user, 'models.alpha');
+    await waitFor(() => expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeDisabled());
+    expect(screen.getByTestId('admin-roles-new-role')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+
+    // Tabs and search keep working; the standard tab's Apply is disabled too.
+    await user.click(screen.getByRole('tab', { name: 'Standard Roles' }));
+    expect(await screen.findByTestId('admin-roles-apply')).toBeDisabled();
+    await user.type(screen.getByTestId('admin-roles-search'), 'alpha');
+    expect(enabledWriteControls()).toEqual([]);
+    expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
+  });
+
+  it('keeps the controls enabled for a role that writes the access item', async () => {
+    const user = userEvent.setup();
+    serveConsoleLevel('write');
     renderAdminRoute(<AdminRoles />);
 
     await expandGroup(user, 'models.alpha');
-    expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Apply to Projects' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeEnabled();
+    expect(screen.getByTestId('admin-roles-new-role')).toBeEnabled();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
   });
 
   it('filters by search and expands what it matched', async () => {

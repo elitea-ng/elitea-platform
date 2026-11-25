@@ -34,6 +34,7 @@ import { t } from '@/shared/i18n';
 
 import type { PermissionMatrixRow } from './api/adminRolesApi';
 import { PermissionCellRow, PermissionGroupRow, humaniseRole } from './PermissionMatrixRows';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { isLockedGrant, type DeprecatedGrants } from './deprecatedGrants';
 
 export interface PermissionMatrixProps {
@@ -106,6 +107,7 @@ export const PermissionMatrix = memo(function PermissionMatrix({
   deleteHandlerFor,
 }: PermissionMatrixProps) {
   const [expansion, setExpansion] = useState<ExpansionState>({ search: '', groups: new Set() });
+  const writeControl = useAdminWriteControl();
 
   const grouped = useMemo(() => groupRows(rows, search), [rows, search]);
   const expanded = useMemo(
@@ -205,6 +207,8 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                             aria-label={t('pages.admin.roles.action.renameRole', 'Rename role: {{role}}', {
                               role,
                             })}
+                            disabled={writeControl.disabled}
+                            title={writeControl.reason}
                             onClick={onRename}
                           >
                             <EditOutlinedIcon fontSize="inherit" />
@@ -216,6 +220,8 @@ export const PermissionMatrix = memo(function PermissionMatrix({
                             aria-label={t('pages.admin.roles.action.deleteRole', 'Delete role: {{role}}', {
                               role,
                             })}
+                            disabled={writeControl.disabled}
+                            title={writeControl.reason}
                             onClick={onDelete}
                           >
                             <DeleteOutlinedIcon fontSize="inherit" />

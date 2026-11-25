@@ -69,8 +69,6 @@ const NOT_CONVERTED: readonly string[] = [
   'useAdminConfigurationPage.ts',
   'useAdminProjectProvisioning.ts',
   'useAdminProjectsPage.ts',
-  'useAdminRoleDefinitions.ts',
-  'useAdminRolesPage.ts',
   'useAdminSchedulesPage.ts',
   'useAdminSecretsPage.ts',
   'useAdminTasksPage.ts',

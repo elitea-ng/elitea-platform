@@ -29,12 +29,19 @@ import { createContext, useContext } from 'react';
 import { t } from '@/shared/i18n';
 
 import { useAdminConsole } from './api/adminConsoleApi';
+import { ROLES_ITEM_ID, useTemporaryRolesAccess } from './temporaryRolesLink';
 
 export type AdminItemAccess = 'read' | 'write' | 'none';
 
 /** The item's level from the capability document; `undefined` while the document is unknown. */
 export function useAdminItemAccess(itemId: string): AdminItemAccess | undefined {
-  const level = useAdminConsole().itemLevel(itemId);
+  const adminConsole = useAdminConsole();
+  // TEMPORARY (remove in R3.6, issue 2537): the document leaves the
+  // unavailable `access` item out, so Roles takes its level from the roles
+  // that open the item (`./temporaryRolesLink.ts`).
+  const rolesLevel = useTemporaryRolesAccess(adminConsole.roles, itemId === ROLES_ITEM_ID);
+  if (itemId === ROLES_ITEM_ID) return rolesLevel;
+  const level = adminConsole.itemLevel(itemId);
   if (level === undefined) return undefined;
   return level ?? 'none';
 }

@@ -27,6 +27,7 @@ import { server } from '@/test/setup';
 
 import { AdminRoles } from './Roles';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { serveConsoleLevel } from './__tests__/viewOnly';
 
 interface MatrixRow {
   readonly name: string;
@@ -329,24 +330,16 @@ describe('Admin › Roles › role definitions', () => {
     ).toBeInTheDocument();
   });
 
-  it('offers no role-definition control without the permissions', async () => {
-    grantAdminUiPermissions([
-      'configuration.roles.permissions.view',
-      'configuration.roles.permissions.edit',
-    ]);
+  // Read-only mode (R3.4b, issue 2613): the controls are disabled, not hidden.
+  it('disables the role-definition controls at the read level of the access item', async () => {
+    serveConsoleLevel('read');
     adminRows = ROWS_WITH_NEW_ROLE;
     renderAdminRoute(<AdminRoles />);
 
-    await screen.findByRole('table', { name: 'Permission matrix' });
-    expect(screen.queryByRole('button', { name: 'New role' })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Rename role: security_reviewer' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: 'Delete role: security_reviewer' }),
-    ).not.toBeInTheDocument();
-    // The matrix itself is still editable, so this is about the three role
-    // permissions and not about a page that rendered read-only.
-    expect(screen.getByRole('checkbox', { name: 'admin: models.alpha' })).toBeEnabled();
+    await screen.findByTestId('admin-view-only');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New role' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Rename role: security_reviewer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete role: security_reviewer' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'admin: models.alpha' })).toBeDisabled();
   });
 });

@@ -59,7 +59,10 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { RoleDeleteDialog, RoleNameDialog } from './AdminRoleDialogs';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { PermissionMatrix } from './PermissionMatrix';
+import { ROLES_ITEM_ID } from './temporaryRolesLink';
 import { useAdminRolesPage, type AdminRolesPageState } from './useAdminRolesPage';
 
 
@@ -113,26 +116,31 @@ function roleWriteText(message: string | undefined): string | undefined {
 const headerActionSx = { whiteSpace: 'nowrap', flexShrink: 0 } as const;
 
 function RolesActions({ state }: { readonly state: AdminRolesPageState }) {
+  const control = useAdminWriteControl();
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-      {state.onCreateRole && !state.isDirty ? (
+      {state.isDirty ? null : (
         <Button
           variant="secondary"
           size="small"
           sx={headerActionSx}
-          disabled={state.isWritingRole || state.isSaving}
+          disabled={state.isWritingRole || state.isSaving || control.disabled}
+          title={control.reason}
           onClick={state.onCreateRole}
+          data-testid="admin-roles-new-role"
         >
           {t('pages.admin.roles.action.newRole', 'New role')}
         </Button>
-      ) : null}
+      )}
       {state.onApplyToProjects && !state.isDirty ? (
         <Button
           variant="elitea" color="primary"
           size="small"
           sx={headerActionSx}
-          disabled={state.isSyncing || state.isSaving}
+          disabled={state.isSyncing || state.isSaving || control.disabled}
+          title={control.reason}
           onClick={state.onApplyToProjects}
+          data-testid="admin-roles-apply"
         >
           {t('pages.admin.roles.action.applyToProjects', 'Apply to Projects')}
         </Button>
@@ -181,7 +189,16 @@ function RolesBody({ state }: { readonly state: AdminRolesPageState }) {
   );
 }
 
+/** The page under the read-only wrapper (R3.4b, issue 2613). */
 export function AdminRoles() {
+  return (
+    <AdminWritable itemId={ROLES_ITEM_ID}>
+      <RolesPage />
+    </AdminWritable>
+  );
+}
+
+function RolesPage() {
   const state = useAdminRolesPage();
 
   return (
@@ -208,6 +225,8 @@ export function AdminRoles() {
           <RolesActions state={state} />
         </Box>
       </Box>
+
+      <AdminViewOnlyNotice />
 
       <Tabs value={state.activeTab} onChange={state.onTabChange} sx={{ minHeight: '2.5rem' }}>
         <Tab
