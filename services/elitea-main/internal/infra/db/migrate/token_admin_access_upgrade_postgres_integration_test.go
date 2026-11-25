@@ -383,8 +383,20 @@ func TestTokenAdminAccessBackfillKeepsWhatEveryTokenResolves(t *testing.T) {
 		if got.access != tok.want || len(got.scopes) != 0 {
 			t.Errorf("%s: admin_access %q, admin_scopes %v; want %q and empty", tok.what, got.access, got.scopes, tok.want)
 		}
-		if after := resolveAdministration(t, pool, tok.id, tok.owner); !slices.Equal(after, before[tok.id]) {
-			t.Errorf("%s resolves %v after the upgrade, %v before", tok.what, after, before[tok.id])
+		// The token resolves what its owner's session resolves after the
+		// upgrade, and loses nothing it resolved before. A later migration of
+		// the corpus may grant the owner's role a new permission (0271 gives
+		// admin entitlements.export.manage), which an `inherit` token then
+		// resolves too, so the sets before and after are not compared for
+		// equality.
+		after := resolveAdministration(t, pool, tok.id, tok.owner)
+		if owner := resolvePreviousRelease(t, pool, tok.owner); !slices.Equal(after, owner) {
+			t.Errorf("%s resolves %v after the upgrade; its owner's session resolves %v", tok.what, after, owner)
+		}
+		for _, name := range before[tok.id] {
+			if !slices.Contains(after, name) {
+				t.Errorf("%s resolved %s before the upgrade and not after", tok.what, name)
+			}
 		}
 	}
 
