@@ -27,6 +27,8 @@ export interface PermissionTrimmingTableProps {
   readonly showAgent: boolean;
   readonly removingKey: string | undefined;
   readonly onRemove: (item: PermissionTrimmingItem) => void;
+  /** Every Remove disabled, not hidden: the admin page in view-only mode. */
+  readonly removeDisabled?: boolean;
   /** A link to the owning agent; plain text without it. */
   readonly agentHref?: (item: PermissionTrimmingItem) => string | undefined;
 }
@@ -97,6 +99,7 @@ export function PermissionTrimmingTable({
   showAgent,
   removingKey,
   onRemove,
+  removeDisabled = false,
   agentHref,
 }: PermissionTrimmingTableProps): ReactNode {
   if (items.length === 0) {
@@ -129,6 +132,7 @@ export function PermissionTrimmingTable({
             showAgent={showAgent}
             removingKey={removingKey}
             onRemove={onRemove}
+            removeDisabled={removeDisabled}
             href={agentHref?.(item)}
           />
         ))}
@@ -142,10 +146,11 @@ interface TrimmingRowProps {
   readonly showAgent: boolean;
   readonly removingKey: string | undefined;
   readonly onRemove: (item: PermissionTrimmingItem) => void;
+  readonly removeDisabled: boolean;
   readonly href: string | undefined;
 }
 
-function TrimmingRow({ item, showAgent, removingKey, onRemove, href }: TrimmingRowProps): ReactNode {
+function TrimmingRow({ item, showAgent, removingKey, onRemove, removeDisabled, href }: TrimmingRowProps): ReactNode {
   return (
     <TableRow data-testid={`permission-trimming-row-${item.kind}-${item.key}`}>
       {showAgent && <TableCell>{item.project_id === 0 ? '—' : item.project_id}</TableCell>}
@@ -161,7 +166,7 @@ function TrimmingRow({ item, showAgent, removingKey, onRemove, href }: TrimmingR
       </TableCell>
       <TableCell data-testid="permission-trimming-usage">{usage(item)}</TableCell>
       <TableCell align="right">
-        <RowAction item={item} removingKey={removingKey} onRemove={onRemove} />
+        <RowAction item={item} removingKey={removingKey} onRemove={onRemove} removeDisabled={removeDisabled} />
       </TableCell>
     </TableRow>
   );
@@ -193,10 +198,12 @@ function RowAction({
   item,
   removingKey,
   onRemove,
+  removeDisabled,
 }: {
   readonly item: PermissionTrimmingItem;
   readonly removingKey: string | undefined;
   readonly onRemove: (item: PermissionTrimmingItem) => void;
+  readonly removeDisabled: boolean;
 }): ReactNode {
   if (!item.candidate) return null;
   if (!item.removable) {
@@ -210,7 +217,7 @@ function RowAction({
     <Button
       size="small"
       color="error"
-      disabled={removingKey !== undefined}
+      disabled={removeDisabled || removingKey !== undefined}
       onClick={() => onRemove(item)}
       data-testid={`permission-trimming-remove-${item.kind}-${item.key}`}
     >

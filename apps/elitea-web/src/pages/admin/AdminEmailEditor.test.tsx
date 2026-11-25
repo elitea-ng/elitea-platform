@@ -32,6 +32,7 @@ import { server } from '@/test/setup';
 
 import { AdminEmailEditor } from './AdminEmailEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 /** The stored layer names the host; the chart supplies the sender and origin. */
 const STATE = {
@@ -305,5 +306,33 @@ describe('AdminEmailEditor', () => {
         'From the environment',
       );
     });
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `email` the
+// fields, Save, the password removal and the test message are disabled, on
+// the E-mail page and in the Configuration section alike.
+describe('AdminEmailEditor - view only', () => {
+  beforeEach(() => {
+    recorded = [];
+    configureGeneratedClient({ baseUrl: 'https://elitea.test/api/v2' });
+  });
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('disables every write at the read level and still shows the settings', async () => {
+    useEmailHandlers();
+    serveConsoleLevel('read', 'email');
+    renderAdminRoute(<AdminEmailEditor />);
+
+    expect(await screen.findByTestId('admin-email-host')).toHaveValue('smtp.acme.example');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('admin-email-save')).toBeDisabled());
+    expect(screen.getByTestId('admin-email-host')).toBeDisabled();
+    expect(screen.getByTestId('admin-email-test-to')).toBeDisabled();
+    expect(screen.getByTestId('admin-email-test-send')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 });

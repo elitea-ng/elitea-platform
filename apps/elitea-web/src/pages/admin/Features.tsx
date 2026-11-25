@@ -111,6 +111,8 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
 import { useAdminFeaturesPage, type AdminConfigurationPageState } from './useAdminConfigurationPage';
 
@@ -150,17 +152,28 @@ function FeaturesSectionBody({ state }: { readonly state: AdminConfigurationPage
     );
   }
 
+  return <FeaturesSectionForm state={state} section={state.activeSection} />;
+}
+
+/** The form of an available section, split out of the body for the complexity gate (R3.4b). */
+function FeaturesSectionForm({
+  state,
+  section,
+}: {
+  readonly state: AdminConfigurationPageState;
+  readonly section: NonNullable<AdminConfigurationPageState['activeSection']>;
+}) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      {state.activeSection.description !== undefined && state.activeSection.description !== '' ? (
+      {section.description !== undefined && section.description !== '' ? (
         <Typography variant="bodySmall" color="text.secondary">
-          {state.activeSection.description}
+          {section.description}
         </Typography>
       ) : null}
       <ConfigurationSectionForm
-        fields={state.activeSection.fields ?? []}
+        fields={section.fields ?? []}
         values={state.values}
-        disabled={state.isSaving}
+        disabled={state.readOnly || state.isSaving}
         onChange={state.onFieldChange}
       />
       <Box sx={{ display: 'flex', gap: '0.5rem' }}>
@@ -176,7 +189,7 @@ function FeaturesSectionBody({ state }: { readonly state: AdminConfigurationPage
         <Button
           size="small"
           variant="elitea" color="primary"
-          disabled={!state.isDirty || state.isSaving}
+          disabled={state.readOnly || !state.isDirty || state.isSaving}
           onClick={state.onSave}
           sx={{ textTransform: 'none' }}
         >
@@ -190,6 +203,14 @@ function FeaturesSectionBody({ state }: { readonly state: AdminConfigurationPage
 }
 
 export function AdminFeatures() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.features}>
+      <FeaturesPage />
+    </AdminWritable>
+  );
+}
+
+function FeaturesPage() {
   const state = useAdminFeaturesPage();
 
   return (
@@ -197,6 +218,8 @@ export function AdminFeatures() {
       <Typography variant="headingLarge" component="h1">
         {t('pages.admin.features.title', 'Features')}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       {state.isLoadingSections ? <LinearProgress /> : null}
 

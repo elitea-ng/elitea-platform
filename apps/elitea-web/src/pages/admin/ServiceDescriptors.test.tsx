@@ -26,6 +26,7 @@ import { server } from '@/test/setup';
 
 import { AdminServiceDescriptors } from './ServiceDescriptors';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 interface RecordedRequest {
   readonly method: string;
@@ -537,5 +538,31 @@ describe('AdminServiceDescriptors activation (migration 0109)', () => {
     renderAdminRoute(<AdminServiceDescriptors />);
     await screen.findByText('wikis');
     expect(screen.queryByTestId('admin-admission-posture')).toBeNull();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of
+// `service-descriptors` Activate is disabled, not hidden.
+describe('AdminServiceDescriptors - view only', () => {
+  beforeEach(() => {
+    recorded = [];
+    configureGeneratedClient({ baseUrl: '/api/v2' });
+  });
+
+  afterEach(() => {
+    resetGeneratedClient();
+  });
+
+  it('disables Activate at the read level and keeps the listing', async () => {
+    const writes: RecordedWrite[] = [];
+    serveActivatable(writes);
+    serveConsoleLevel('read', 'service-descriptors');
+    renderAdminRoute(<AdminServiceDescriptors />);
+
+    const activate = await screen.findByRole('button', { name: 'Activate' });
+    await findViewOnlyNotice();
+    await waitFor(() => expect(activate).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
+    expect(writes).toEqual([]);
   });
 });
