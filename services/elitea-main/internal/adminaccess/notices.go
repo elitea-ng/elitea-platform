@@ -197,8 +197,13 @@ const administratorRoleHolder = `EXISTS (
 //     text is in the e-mail only for those who hold access.breakglass.approve
 //     or access.breakglass.review.
 //
-// An event whose deployment has nobody to tell writes no row; the posture
-// check of R2.14 reports a deployment with no notice channel.
+// An event whose deployment has nobody to tell writes no e-mail row; the
+// posture check of R2.14 reports a deployment with no notice channel.
+//
+// When the deployment configures the notice webhook (SetNoticeWebhookEnabled,
+// R2.5b), an activation, a critical change, an overdue review, the move to
+// unreviewed_no_reviewer and an `unauthorized` review also write one row of
+// the channel `webhook`, with no recipient person. The count includes it.
 func WriteElevationNotices(ctx context.Context, tx pgx.Tx, notice ElevationNotice) (int, error) {
 	if err := notice.validate(); err != nil {
 		return 0, err
@@ -239,7 +244,13 @@ ORDER BY account.id`,
 	if err != nil {
 		return 0, fmt.Errorf("write access notices: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	// The webhook row (R2.5b), when the deployment configures one: one per
+	// event, whoever the e-mail reaches, in the same transaction.
+	webhook, err := writeWebhookNotice(ctx, tx, notice, encoded)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()) + webhook, nil
 }
 
 /* ── the inherit token notice (R3.15b) ─────────────────────────────────── */
@@ -447,6 +458,13 @@ type NoticeSendResult struct {
 	// MailerConfigured is false when the pass sent nothing because no
 	// mailer is configured; every row stayed pending.
 	MailerConfigured bool
+	// The webhook channel (R2.5b), counted apart: Sent, Failed and Pending
+	// count the e-mail rows only. WebhookConfigured is false when the sender
+	// has no webhook; its rows, if any, then stay pending uncounted.
+	WebhookConfigured bool
+	WebhookSent       int
+	WebhookFailed     int
+	WebhookPending    int
 }
 
 // NoticeDB is what the sender needs from the database: a *pgxpool.Pool.
@@ -467,6 +485,8 @@ type NoticeSender struct {
 	// `inherit` notice states is computed from it at send time, as the token
 	// routes compute theirs, so the e-mail and the token list agree.
 	sunsetAfter func() string
+	// webhook is the out-of-band channel (R2.5b); nil when not configured.
+	webhook NoticeWebhookSender
 }
 
 // NewNoticeSender builds the sender. origin is the deployment's public
@@ -484,18 +504,39 @@ func NewNoticeSender(db NoticeDB, mailer NoticeMailer, origin string, now func()
 		batch: defaultNoticeBatch, sunsetAfter: InheritEndsOn}, nil
 }
 
-// Pass sends the due rows, one claim per row. A row whose send fails stays
-// unsent with its error and a later next attempt; the error of the pass
-// joins the database failures only, since a mailer failure is the row's
-// state, not the pass's.
+// Pass sends the due rows, one claim per row: the e-mail rows, then the
+// webhook rows, each on its own loop, so neither channel's failure holds the
+// other. A row whose send fails stays unsent with its error and a later next
+// attempt; the error of the pass joins the database failures only, since a
+// delivery failure is the row's state, not the pass's.
 func (s *NoticeSender) Pass(ctx context.Context) (NoticeSendResult, error) {
 	var result NoticeSendResult
-	if !s.mailer.Configured(ctx) {
-		pending, err := s.pending(ctx)
-		result.Pending = pending
-		return result, err
+	var errs []error
+	if s.mailer.Configured(ctx) {
+		result.MailerConfigured = true
+		errs = append(errs, s.sendEmails(ctx, &result)...)
 	}
-	result.MailerConfigured = true
+	pending, err := s.pending(ctx)
+	result.Pending = pending
+	if err != nil {
+		errs = append(errs, err)
+	}
+	if s.webhook != nil {
+		result.WebhookConfigured = true
+		errs = append(errs, s.sendWebhooks(ctx, &result)...)
+	}
+	// Counted with no webhook too: rows written while one was configured
+	// wait for it, and the caller reports them.
+	webhookPending, err := s.webhookPending(ctx)
+	result.WebhookPending = webhookPending
+	if err != nil {
+		errs = append(errs, err)
+	}
+	return result, errors.Join(errs...)
+}
+
+// sendEmails delivers the due e-mail rows.
+func (s *NoticeSender) sendEmails(ctx context.Context, result *NoticeSendResult) []error {
 	var errs []error
 	failedInARow := 0
 	for range s.batch {
@@ -528,12 +569,7 @@ func (s *NoticeSender) Pass(ctx context.Context) (NoticeSendResult, error) {
 		}
 		result.Sent++
 	}
-	pending, err := s.pending(ctx)
-	result.Pending = pending
-	if err != nil {
-		errs = append(errs, err)
-	}
-	return result, errors.Join(errs...)
+	return errs
 }
 
 // claimedNotice is a claimed row: the notice and what marking it needs.

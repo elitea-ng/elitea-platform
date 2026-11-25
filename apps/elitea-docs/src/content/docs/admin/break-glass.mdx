@@ -6,7 +6,7 @@ description: "Time-boxed elevations of one browser session: the settings that bo
 Break-glass access gives a person the administration permissions of the `admin` or `super_admin` role for a short time, in one browser session, with a stated reason. An elevation is not a role: it is bound to the session that asked for it, it ends by itself, and every elevation is reviewed after it ends.
 
 <Note>
-This release ships the policy, the ledger and its housekeeping. No route starts an elevation yet: the request, approve, start and end routes come in a later release. The settings below are stored now and become the policy of those routes when they ship.
+This release ships the policy, the ledger, its housekeeping and the request and approval routes. No route starts an elevation yet: the start and the end come in a later release, so an approved request grants nothing on its own.
 </Note>
 
 ## Settings
@@ -39,6 +39,41 @@ Dual control is the default: a second person with `access.breakglass.approve` ap
 Shortening the approval-off delay needs the same standing `super_admin` (`403` otherwise), since a shorter delay weakens the next switch-off as much as the switch-off itself. Lengthening it needs only the section.
 
 Switching approval back on needs only the section, takes effect at once, cancels a pending switch-off, and writes the same event with `approval_on_restored`.
+
+## Requesting and approving
+
+An elevation starts as a request, and a second person answers it. Both are calls of the administration API today; the console pages that make them come in a later release. Only a browser session makes them: a personal access token, a native app session, a run token and a sealed session are refused with `403 elevation_credential_refused` on every route below, whatever they hold.
+
+**Request.** A holder of `access.breakglass.request` through a standing role (the `emergency_access` role, or `admin` and `super_admin`) asks with `POST /api/v2/admin/access/elevations`:
+
+```json
+{"reason_code": "incident", "reason": "The model provider is down and the routing must be changed now.", "ticket": "INC-4711", "duration_minutes": 60}
+```
+
+- `reason_code` is `incident`, `identity_outage`, `recovery` or `other`, and `reason` is required.
+- `ticket` is optional.
+- `duration_minutes` is how long the elevation lasts once it starts. Without it, the request takes the **online default duration** of the settings. Above the **online maximum duration** it is refused with `400 elevation_duration_over_cap`.
+- One request is open at a time: a second one is refused with `409 elevation_request_pending` while the first waits for an answer, and while an approval of it has not started, for one request lifetime from the approval. With approval off, that is what keeps a person to one request per lifetime. There is no extension: more time is a new request after the elevation ends.
+
+Every holder of `access.breakglass.approve` except the person who asked gets an e-mail with a link to the approval page (see [Who is told](#who-is-told)). The request waits for the **request lifetime** (30 minutes by default).
+
+**Approve or deny.** A holder of `access.breakglass.approve` through a standing role answers with `POST /api/v2/admin/access/elevations/{id}/approve` (no body) or `.../deny` with a reason code the person reads: `{"reason_code": "standing_access_suffices"}`. The denial codes are `not_justified`, `more_information_needed`, `standing_access_suffices` and `other`.
+
+- **The level is the approver's.** An approver who holds `super_admin` through a standing role approves at the `super_admin` level, anyone else at the `admin` level. Nobody can approve `super_admin` without being one.
+- **Nobody answers their own request** (`403 elevation_own_request`).
+- **The person must still be able to hold it.** An approval is refused with `403 elevation_requester_not_eligible` when, since the request, the person's account was suspended, the person lost `access.breakglass.request`, or the session the request was made in ended. A denial is still accepted.
+- **Nobody under an elevation answers** (`403 elevation_approver_elevated`), in whichever session the elevation runs. The action table also refuses the request and both answers to an elevation (`elevation_restricted`).
+- **A late answer is refused.** After the request lifetime an answer gets `410 elevation_request_expired`, and the request is recorded as `request_expired` at that moment. A request that was answered already gets `409 elevation_request_decided`.
+
+Each step writes its ledger row, its security audit event (`admin.elevation` with the action `requested`, `approved` or `denied`) and, for a request, its notices, in one transaction: none happens without the others.
+
+**With approval off** (after its delay, see [Switching approval off](#switching-approval-off)), nobody is asked: the platform approves the request at once at the `admin` level, on the path `self`. Its `approved` event has the source `system` and says that no approver was involved, and no request e-mail is sent. During the delay a request still needs an approver.
+
+**What the console reads.**
+
+- `GET /api/v2/admin/access/elevations/mine`: the caller's latest request with its state (`requested`, `approved`, `denied` with its reason code, `request_expired`, and later the states of the elevation), the time left, and the roles that can approve it. For a holder of `access.breakglass.request`.
+- `GET /api/v2/admin/access/elevations/pending`: the requests that wait for an answer, oldest first (at most 200), with their reason text and the count of the whole queue. The caller's own requests are left out. For a holder of `access.breakglass.approve`.
+- `GET /api/v2/admin/access/elevations?limit=50&offset=0`: the history of requests and elevations, newest first. For a holder of `access.roles.view`. The reason text and the ticket are shown only to a holder of `access.breakglass.review`, to the person and to the approver; everyone else sees the reason code.
 
 ## When an elevation or a request runs out
 
@@ -74,7 +109,9 @@ Each e-mail names the person and the reason code. The reason text is in the e-ma
 Break-glass notices need outbound e-mail. Configure it (the **E-mail** section of [Configuration](/admin/features-and-configuration#configuration), or the [SMTP environment](/deployment/configuration#e-mail-smtp-bootstrap-defaults)) before you rely on break-glass. A notice is never dropped: while no mail server is configured, or while it refuses a message, the notice waits and is retried (after a minute at first, then at most every hour) by the `main.access_notice_sender` routine (see [Schedules and tasks](/admin/schedules-and-tasks#access-notice-sender)). A mail server that is down never blocks or ends an elevation. Waiting notices are rows of `elitea_auth.admin_access_notices` with no `sent_at`; the `attempts` and `last_error` columns say what was tried.
 </Note>
 
-The notice in the bell icon of the application comes in a later release; until then the e-mail is the only notice. The routes that write these events (request, start, review) ship in later releases too.
+A deployment can also send these notices to an out-of-band webhook, for when e-mail is down: see [The out-of-band notice webhook](/deployment/configuration#the-out-of-band-notice-webhook). Every event of the table but the request makes one webhook call, with ids, a type and a time only; it names nobody.
+
+The notice in the bell icon of the application comes in a later release. The request writes its notices today; the start and the review, which write the others, ship in later releases.
 
 ## What an elevation cannot do
 
@@ -93,6 +130,9 @@ The table lists every action whose value is not `allow`, reads included (reading
 
 | Action | Route | Under an elevation |
 |---|---|---|
+| `-` | `POST /api/v2/admin/access/elevations` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/elevations/{elevationID}/approve` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/elevations/{elevationID}/deny` | refused (`deny`) |
 | `-` | `GET /api/v2/admin/access/sealed_credentials` | refused (`deny`) |
 | `delete` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
 | `set_admin_role` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |

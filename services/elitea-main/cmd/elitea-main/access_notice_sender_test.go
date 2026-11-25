@@ -7,8 +7,11 @@ import (
 	"go/token"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
@@ -80,5 +83,43 @@ func TestCompositionRootStartsTheAccessNoticeSender(t *testing.T) {
 	})
 	if !found {
 		t.Fatal("main.go does not call startAccessNoticeSender(ctx, pool, mailComposer, publicOrigin, logger)")
+	}
+}
+
+// The notice webhook (ADR-0059 R2.5b) is read at start: unset, the outbox
+// stays e-mail only; set, its rows are turned on; half set or not https, the
+// start is refused, with an error that does not name the URL.
+func TestNoticeWebhookFromEnv(t *testing.T) {
+	t.Cleanup(func() { adminaccess.SetNoticeWebhookEnabled(false) })
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	env := func(values map[string]string) func(string) string {
+		return func(key string) string { return values[key] }
+	}
+	secret := uuid.NewString()
+
+	if webhook, err := noticeWebhookFromEnv(env(nil), logger); webhook != nil || err != nil ||
+		adminaccess.NoticeWebhookEnabled() {
+		t.Fatalf("unset: %v %v enabled=%v", webhook, err, adminaccess.NoticeWebhookEnabled())
+	}
+	for name, values := range map[string]map[string]string{
+		"secret only": {adminaccess.NoticeWebhookSecretEnv: secret},
+		"plain http": {adminaccess.NoticeWebhookURLEnv: "http://hooks.example/TOKEN",
+			adminaccess.NoticeWebhookSecretEnv: secret},
+		"weak secret": {adminaccess.NoticeWebhookURLEnv: "https://hooks.example/TOKEN",
+			adminaccess.NoticeWebhookSecretEnv: "short"},
+	} {
+		webhook, err := noticeWebhookFromEnv(env(values), logger)
+		if err == nil || webhook != nil || adminaccess.NoticeWebhookEnabled() {
+			t.Fatalf("%s: accepted (%v)", name, err)
+		}
+		if strings.Contains(err.Error(), "TOKEN") {
+			t.Fatalf("%s: the refusal names the URL: %v", name, err)
+		}
+	}
+	webhook, err := noticeWebhookFromEnv(env(map[string]string{
+		adminaccess.NoticeWebhookURLEnv: "https://hooks.example/TOKEN", adminaccess.NoticeWebhookSecretEnv: secret,
+	}), logger)
+	if err != nil || webhook == nil || !adminaccess.NoticeWebhookEnabled() {
+		t.Fatalf("set: %v %v enabled=%v", webhook, err, adminaccess.NoticeWebhookEnabled())
 	}
 }

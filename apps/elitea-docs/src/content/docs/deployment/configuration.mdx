@@ -298,6 +298,31 @@ Off by default. `main.env.ELITEA_ENTERPRISE_CREDENTIAL_GOVERNANCE_ENABLED` pins 
 
 The durations, caps and approval switch of break-glass elevations are console settings, not chart values: the **Break-glass** section under **Configuration**, which only a holder of `access.breakglass.manage` sees. The caps stop at ceilings in code that no setting can raise: 480 minutes online and 240 minutes with the sealed credential. Switching approval off needs a standing `super_admin`, takes effect after a delay (24 hours by default) and is recorded in the security audit at once. See [Break-glass access](/admin/break-glass#settings) for every setting and its default.
 
+### The out-of-band notice webhook
+
+E-mail can be down at the moment break-glass is used, so the break-glass notices have a second channel: a webhook, configured on the chart key `main.breakGlass.noticeWebhook`. An activation, a `critical` change made under an elevation, an overdue review, an elevation left with no eligible reviewer and a review with the outcome `unauthorized` each make one HTTPS `POST` to it, beside the e-mails. A request is not sent: it goes to the approvers by e-mail.
+
+A Slack, Teams or PagerDuty webhook URL carries the receiver's token, so the URL is a credential. It is never a chart value or a console setting, and no elevation can change or silence it: the chart takes the name of an existing Secret, and the schema refuses a `url` key.
+
+| Key | Default | What it is |
+|---|---|---|
+| `main.breakGlass.noticeWebhook.existingSecret` | `""` | The Secret that holds the URL and the signing secret. Empty sends no webhook. |
+| `main.breakGlass.noticeWebhook.key` | `url` | The Secret's key that holds the `https` URL. |
+| `main.breakGlass.noticeWebhook.signingSecretKey` | `signing-secret` | The Secret's key that holds the signing secret: at least 32 random bytes, for example `openssl rand -base64 32`. |
+| `main.breakGlass.noticeWebhook.egressAllowlist` | `""` | The private destinations the webhook may reach (hosts, `*.` wildcards, CIDR blocks, comma-separated). Empty permits public destinations only. Setting it without `existingSecret` fails the render. |
+
+The chart sets them as `ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_URL`, `ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_SECRET` (both from the Secret) and `ELITEA_BREAK_GLASS_NOTICE_WEBHOOK_EGRESS_ALLOWLIST`. Main reads them at start and refuses to start on a URL that is not `https`, on a signing secret that is short, a placeholder or a published value, and on a secret or an allowlist without a URL.
+
+Each call is one generic JSON body, the same for every receiver, with ids, a type and a time only. It names no person and carries no reason:
+
+```json
+{"type":"activation","elevation_id":"0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a","notice_id":"7d1e…","time":"2026-11-25T10:00:00Z","level":"admin","path":"approved"}
+```
+
+`type` is `activation`, `critical_change`, `review_overdue`, `unreviewed_no_reviewer` or `review_unauthorized`, and the header `X-Webhook-Event` repeats it. The header `X-Webhook-Signature` is `sha256=` and the hex HMAC-SHA256 of the exact body, keyed by the signing secret, as the [project webhooks](/how-tos/credentials-toolkits/webhooks-and-triggers#verifying-the-signature) sign theirs: check it before you act on a call. A receiver that wants a vendor's own format puts a small relay in front.
+
+The call goes through the egress guard: loopback, private, link-local and cloud metadata addresses are refused unless the allowlist names them, TLS is verified, a redirect is never followed (it counts as a failure), and each call times out after 10 seconds. A call that fails, or any answer outside `2xx`, leaves the notice waiting; the `main.access_notice_sender` routine tries it again after a minute, then at most every hour, on its own: a webhook that is down never holds the e-mails, and a mail server that is down never holds the webhook. Delivery is at least once, so a receiver deduplicates on `notice_id`. The URL is never logged or stored; the log names the notice id and the outcome.
+
 ## Maintenance and the banner
 
 Both are console-editable under **Configuration**, not chart settings: a dismissible banner with its own icon/style/message, and a maintenance mode that answers `503` with a splash screen to every caller without administration access (the admin console and authentication routes stay reachable, so the window is reversible from inside itself). See [Features and configuration](/admin/features-and-configuration#configuration) for the click-through.

@@ -185,22 +185,8 @@ FOR UPDATE SKIP LOCKED`, id, now, seconds)
 			if err != nil || !locked {
 				return false, err
 			}
-			request, err := scanElevation(tx.QueryRow(ctx, `
-UPDATE elitea_auth.admin_elevations
-SET decision = 'request_expired', decided_at = requested_at + make_interval(secs => $3)
-WHERE `+state+`
-RETURNING `+elevationColumns, id, now, seconds))
-			if errors.Is(err, pgx.ErrNoRows) {
-				return false, nil
-			}
-			if err != nil {
-				return false, err
-			}
-			return true, AppendElevationEvent(ctx, tx, r.appender, ElevationEvent{
-				Action:    securityaudit.ElevationRequestExpired,
-				Source:    securityaudit.ElevationSourceSystem,
-				Elevation: request,
-			})
+			_, changed, err := expireRequest(ctx, tx, r.appender, id, now, lifetime)
+			return changed, err
 		})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("elevation reconciler: expire request %s: %w", id, err))
@@ -211,6 +197,38 @@ RETURNING `+elevationColumns, id, now, seconds))
 		}
 	}
 	return expired, errors.Join(errs...)
+}
+
+// expireRequest decides the request id `request_expired` at the end of its
+// lifetime, with its `request_expired` event, on tx, when it is still
+// undecided and unstarted and its lifetime has passed at now. It reports
+// whether it wrote; a request in any other state is left as it is. The
+// caller holds the row (FOR UPDATE). The reconciler and the decision routes
+// (an answer that comes too late) both write the expiry here, so it is
+// recorded the same way whoever sees it first.
+func expireRequest(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, id uuid.UUID,
+	now time.Time, lifetime time.Duration,
+) (ElevationRecord, bool, error) {
+	request, err := scanElevation(tx.QueryRow(ctx, `
+UPDATE elitea_auth.admin_elevations
+SET decision = 'request_expired', decided_at = requested_at + make_interval(secs => $3)
+WHERE id = $1 AND decision IS NULL AND started_at IS NULL
+  AND requested_at <= $2::timestamptz - make_interval(secs => $3)
+RETURNING `+elevationColumns, id, now.UTC(), lifetime.Seconds()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ElevationRecord{}, false, nil
+	}
+	if err != nil {
+		return ElevationRecord{}, false, err
+	}
+	if err := AppendElevationEvent(ctx, tx, appender, ElevationEvent{
+		Action:    securityaudit.ElevationRequestExpired,
+		Source:    securityaudit.ElevationSourceSystem,
+		Elevation: request,
+	}); err != nil {
+		return ElevationRecord{}, false, err
+	}
+	return request, true, nil
 }
 
 // candidates answers the ids a query lists.

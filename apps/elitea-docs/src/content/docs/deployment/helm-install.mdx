@@ -39,6 +39,18 @@ Three files: the browser-attempt key, the PAT signing key and the Form users JSO
 Required on both main and gateway; must be identical. HMAC key for signing/verifying identity headers.
 </Accordion>
 
+<Accordion title="main.breakGlass.noticeWebhook.existingSecret (optional)">
+The out-of-band webhook of the break-glass notices, for when e-mail is down. Its URL carries the receiver's token, so it is a credential: the chart takes only the Secret's name, never the URL (the schema refuses a `url` key). The Secret holds two keys, the `https` URL (`key`, default `url`) and the signing secret the receiver checks `X-Webhook-Signature` against (`signingSecretKey`, default `signing-secret`, at least 32 random bytes):
+
+```bash
+kubectl create secret generic elitea-break-glass-webhook -n <namespace> \
+  --from-literal=url='https://<receiver>/<path-with-token>' \
+  --from-literal=signing-secret="$(openssl rand -base64 32)"
+```
+
+Then set `main.breakGlass.noticeWebhook.existingSecret: elitea-break-glass-webhook`. A receiver on a private address also needs `main.breakGlass.noticeWebhook.egressAllowlist`. Unset, no webhook is sent and the notices go by e-mail only. See [The out-of-band notice webhook](/deployment/configuration#the-out-of-band-notice-webhook) for the payload and the retries.
+</Accordion>
+
 ## Two settings with no chart default
 
 The chart **refuses to render** while either of these is empty — there is no safe guess for either, and a guessed value would look armed while guarding nothing:

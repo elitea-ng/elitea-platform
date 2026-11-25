@@ -67,6 +67,29 @@ var invisibleChecks = map[string]string{
 		"literal, and its one literal (admin.auth.users.super_admin) is seen on the SCIM client routes",
 }
 
+func init() {
+	// The elevation request writes (ADR-0059 R2.2b) are driven as a standing
+	// browser session, the only credential they take. Their action entries
+	// say `deny` under an elevation, so the restriction middleware of R2.8a
+	// resolves the session before the route gate: it decides on the
+	// ELEVATED part of the answer only, which a standing session never has,
+	// so no grant changes its outcome. The route gate after it names the
+	// permission (access.breakglass.request or .approve), and
+	// elevation_restriction_route_test.go drives the refusal under an
+	// elevation.
+	for _, pattern := range []string{
+		"/api/v2/admin/access/elevations",
+		"/api/v2/admin/access/elevations/{elevationID}/approve",
+		"/api/v2/admin/access/elevations/{elevationID}/deny",
+	} {
+		invisibleChecks[adminsurface.InvisibleKey(
+			adminsurface.Route{Method: http.MethodPost, Pattern: pattern},
+			"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api.(*elevationRestrictions).elevationCaller",
+		)] = "the restriction of R2.8a decides on the elevated part of the resolution, which a standing " +
+			"browser session never has; the route gate names the permission"
+	}
+}
+
 type drivenSurface struct {
 	result   adminsurface.Result
 	sections []adminsurface.Section

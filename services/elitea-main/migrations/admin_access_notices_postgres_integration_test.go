@@ -104,3 +104,53 @@ ORDER BY 1`)
 	}
 	return strings.Join(lines, "\n")
 }
+
+const adminAccessNoticeWebhookMigration = "shared/0281_admin_access_notice_webhook.sql"
+
+// Shared 0281 (issue 2598, ADR-0059 R2.5b): the webhook channel. It applies
+// twice with no change; a webhook row names no person and is one of the five
+// events the webhook reports, and every other row still needs a recipient.
+func TestAdminAccessNoticeWebhookChannel(t *testing.T) {
+	for name, build := range map[string]func(*testing.T) *pgxpool.Pool{
+		"bootstrap and corpus": newMigratedPool,
+		"no auth_core": func(t *testing.T) *pgxpool.Pool {
+			pool := newEmptyDatabase(t)
+			execMigrationFile(t, pool, adminElevationsMigration)
+			execMigrationFile(t, pool, adminAccessNoticesMigration)
+			execMigrationFile(t, pool, adminAccessNoticeWebhookMigration)
+			return pool
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := build(t)
+			before := adminAccessNoticesShape(t, pool)
+			if !strings.Contains(before, "admin_access_notices_webhook_kind") ||
+				!strings.Contains(before, "column recipient_user_id bigint YES") {
+				t.Fatalf("0281 shape lacks the webhook channel:\n%s", before)
+			}
+			execMigrationFile(t, pool, adminAccessNoticeWebhookMigration)
+			if after := adminAccessNoticesShape(t, pool); after != before {
+				t.Fatalf("re-applying 0281 changed the table:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+			if _, err := pool.Exec(context.Background(), `
+INSERT INTO elitea_auth.admin_access_notices (kind, channel, elevation_id, recipient_email, created_at, next_attempt_at)
+VALUES ('activation', 'webhook', gen_random_uuid(), '', now(), now())`); err != nil {
+				t.Fatalf("a webhook row of an activation was refused: %v", err)
+			}
+			for refusal, statement := range map[string]string{
+				"webhook request": `INSERT INTO elitea_auth.admin_access_notices (kind, channel, elevation_id, recipient_email, created_at, next_attempt_at)
+VALUES ('request', 'webhook', gen_random_uuid(), '', now(), now())`,
+				"webhook inherit notice": `INSERT INTO elitea_auth.admin_access_notices (kind, channel, recipient_email, created_at, next_attempt_at)
+VALUES ('inherit_token', 'webhook', '', now(), now())`,
+				"webhook row naming a person": `INSERT INTO elitea_auth.admin_access_notices (kind, channel, elevation_id, recipient_user_id, recipient_email, created_at, next_attempt_at)
+VALUES ('activation', 'webhook', gen_random_uuid(), 7, 'a@example.com', now(), now())`,
+				"e-mail row without a recipient": `INSERT INTO elitea_auth.admin_access_notices (kind, elevation_id, recipient_email, created_at, next_attempt_at)
+VALUES ('activation', gen_random_uuid(), 'a@example.com', now(), now())`,
+			} {
+				if _, err := pool.Exec(context.Background(), statement); err == nil {
+					t.Errorf("%s: the row was accepted", refusal)
+				}
+			}
+		})
+	}
+}
