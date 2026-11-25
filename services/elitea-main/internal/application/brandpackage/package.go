@@ -681,7 +681,7 @@ func ValuesFromPack(pack, base *v2branding.Pack) map[string]any {
 	values[platformconfig.KeyBrandingFontFaces] = faces
 
 	tokens := map[string]any{}
-	if base == nil || !sameRecord(pack.Schemes.Light, base.Schemes.Light) || !sameRecord(pack.Schemes.Dark, base.Schemes.Dark) {
+	if base == nil || !untouchedRecord(pack.Schemes.Light, base.Schemes.Light) || !untouchedRecord(pack.Schemes.Dark, base.Schemes.Dark) {
 		if len(pack.Schemes.Light) > 0 {
 			tokens["light"] = toAnyMap(pack.Schemes.Light)
 		}
@@ -706,12 +706,18 @@ func assetValue(v string) string {
 	return ""
 }
 
-func sameRecord(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
+// untouchedRecord reports whether a package's scheme record changes nothing
+// against base's: every id it states has base's value. It does not ask for
+// the SAME ids. A package exported from an earlier product default states
+// that default's ids, and a later default adds ids (ADR-0062 decision 1: the
+// 27 `role.*` ids, 408 → 435). A length check called every such package
+// hand-tuned and carried all its ids, rgba ones included, into
+// scheme_tokens, which then refused the import and the restore (the section
+// takes six-digit hex only). An empty record (the hue-only shape) states
+// nothing and is untouched.
+func untouchedRecord(a, b map[string]string) bool {
 	for k, v := range a {
-		if b[k] != v {
+		if bv, ok := b[k]; !ok || bv != v {
 			return false
 		}
 	}

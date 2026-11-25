@@ -1,6 +1,7 @@
 import { BrandPack } from '../schema';
 
 import packJson from './default.pack.json';
+import legacyRolesJson from './legacy-roles.json';
 
 /**
  * Tier 0 channel A (spec §4.3): the default pack, compiled in. The app must
@@ -29,3 +30,24 @@ export const DEFAULT_BRAND_PACK = BrandPack.parse(packJson);
  * Since brand guide v3 both schemes' anchor is the same Base Indigo.
  */
 export const BRAND_ANCHOR_TOKEN = 'primary.main';
+
+/** The group the 27 brand-guide roles live under in the pack: `role.<name>` (ADR-0062 decision 1). */
+export const ROLE_GROUP = 'role';
+
+/**
+ * Role → its generic legacy ids, in precedence order (ADR-0062 decision 1.4):
+ * `legacy-roles.json`, `{ "<role>": ["<legacy id>", …] }`.
+ *
+ * ADR-0024 lets a deployment hand-tune legacy ids (`scheme_tokens`); such a
+ * pack does not know the roles. `resolveScheme` gives a role the first value
+ * a pack states differently from the default pack: the role id itself, then
+ * each id of this list in order. The same file is what theme-gate check 10
+ * counts (decision 3.4), so a read the stage 4 script rewrites is always one
+ * the role honours.
+ *
+ * An id is listed only by hand and only when its meaning is the role and its
+ * default colour is the role's in both schemes; an id sits on one list only;
+ * the first id is the one whose meaning is most exactly the role. A role
+ * with no generic id has no entry. `__tests__/roles.test.ts` holds the rule.
+ */
+export const LEGACY_ROLES: Readonly<Record<string, readonly string[]>> = legacyRolesJson;

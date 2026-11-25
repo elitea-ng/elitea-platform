@@ -22,6 +22,29 @@ submodule. Since brand guide v3 the values come from client-core's
   copies disagree: the two schemes' key sets, the pack vs the augmentation
   (both directions), and the pack vs client-core.
 
+## Roles
+
+The 27 roles of `tokens.json` (`schemes.dark` / `schemes.light`) are ids
+`role.<name>` in both scheme records, with the `tokens.json` values verbatim
+(ADR-0062 decision 1). New shared code reads a role
+(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`); the
+legacy ids below stay for the call sites that read them. Change a role here
+only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
+differ.
+
+`legacy-roles.json` maps each role to its generic legacy ids,
+`{ "<role>": ["<legacy id>", …] }` (ADR-0062 decision 1.4). A deployment that
+hand-tunes one of them keeps that colour in the role: `resolveScheme` gives a
+role the first value the pack states differently from this pack, the role id
+first, then each listed id in order; otherwise the role resolves like every
+other id (stated, or re-hued from its default). theme-gate check 10 counts
+reads of the same ids, and the stage 4 script rewrites only them. Put an id
+there only by hand, only when its meaning is the role and its colour here is
+the role's in both schemes, and on one list only; the first id of a list is
+the one whose meaning is most exactly the role. `__tests__/roles.test.ts`
+fails when the rule breaks. What this means for operators:
+`docs/upgrading/2026-11-26-0000-colour-roles-hand-tuned-legacy-ids.md`.
+
 ## Where the values come from
 
 The pack follows the Elitea AI brand guide v3: every colour is a token of
@@ -55,7 +78,7 @@ does not always say what the value now is. The mapping decisions:
 | Pipeline node colours (`nodeColors.*`) | `elevated` (dark) / `surface` (light); `llm` and `agent` an alpha of `ai` | No per-type accent hues |
 | Help Center resource cards (`background.resourceCard.<colour>.*`) | the same neutral values for every colour | The page no longer reads per-card colours |
 
-**Symmetry.** Both scheme records carry the same 408 ids; a value that has
+**Symmetry.** Both scheme records carry the same 435 ids; a value that has
 no meaning in one scheme (for example `background.folder.shadow` on Ink) is
 the pixel-neutral equivalent (`0 0 0 rgba(0, 0, 0, 0)`).
 
