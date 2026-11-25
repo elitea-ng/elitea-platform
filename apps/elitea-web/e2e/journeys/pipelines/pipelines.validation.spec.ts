@@ -133,14 +133,56 @@ async function authorYaml(page: Page, document: string): Promise<void> {
   await expect(page.locator('.react-flow__node[data-id="LLM_1"]')).toBeVisible({ timeout: 15_000 });
 }
 
-/** Click Save and wait for the version PUT to land — the same helper shape `pipelines.lifecycle.spec.ts` uses. */
+/**
+ * Click Save and wait until the editor has taken the saved document back.
+ *
+ * The version PUT is not the end of a save. Once the save settles,
+ * `useRefetchPipelineAfterSave` re-reads the application detail, and
+ * `usePipelineVersionSync` re-initialises the canvas from the CHANGED
+ * `instructions` it carries. That rebuilds the flow nodes without their
+ * selection, so a node panel open at Save time closes.
+ *
+ * Issue 3029 (WebKit): this helper used to return on the PUT alone. The next
+ * `openNodePanel` then saw the panel that was still open, skipped opening it,
+ * and the refetch closed it under the following assertion, which waited its
+ * full 10 s for a panel nothing would reopen. In the passing retry's trace
+ * the refetch (`GET application/prompt_lib/…`) answered about 200 ms after
+ * the version PUT and the panel was already closed when the next step
+ * looked. The failing attempt timed out on `openNodePanel`'s LAST assertion,
+ * not inside its open branch, and its final snapshot shows no panel: the
+ * panel was open when the helper checked and closed afterwards.
+ *
+ * So the helper waits for that refetch (a GET of THIS application that
+ * arrives after the PUT answered) and, when a node panel was open, for the
+ * panel to close: the visible proof that the re-initialisation ran.
+ */
 async function saveAndAwaitPersist(page: Page): Promise<void> {
-  const persisted = page.waitForResponse(
-    (response) => response.request().method() === 'PUT' && response.url().includes(VERSION_PUT) && response.status() < 400,
+  const applicationId = /\/app\/pipelines\/latest\/(\d+)/.exec(page.url())?.[1];
+  expect(applicationId, 'Save is asserted on an existing pipeline only').toBeTruthy();
+  const panel = page.getByTestId('pipeline-node-panel');
+  const panelWasOpen = await panel.first().isVisible();
+  let putAnswered = false;
+  const persisted = page
+    .waitForResponse(
+      (response) => response.request().method() === 'PUT' && response.url().includes(VERSION_PUT) && response.status() < 400,
+      { timeout: 30_000 },
+    )
+    .then(() => {
+      putAnswered = true;
+    });
+  const detailPath = new RegExp(`/application/prompt_lib/${DEFAULT_PROJECT_ID}/${applicationId as string}(?:[?#]|$)`);
+  const reloaded = page.waitForResponse(
+    (response) => putAnswered && response.request().method() === 'GET' && detailPath.test(response.url()) && response.status() === 200,
     { timeout: 30_000 },
   );
   await page.getByTestId('pipeline-save-button').click();
-  await persisted;
+  // Awaited together: a PUT that fails rejects at once, and the refetch
+  // waiter, armed before the click, is never left rejecting with nobody
+  // listening (it would be reported against a later test).
+  await Promise.all([persisted, reloaded]);
+  if (panelWasOpen) {
+    await expect(panel, 'the post-save re-initialisation closes the open node panel').toHaveCount(0, { timeout: 10_000 });
+  }
   await expect(page.getByText('Failed to save your changes.')).toHaveCount(0);
 }
 

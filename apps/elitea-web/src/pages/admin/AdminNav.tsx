@@ -52,6 +52,7 @@ import ListItemButton from '@mui/material/ListItemButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import { visuallyHidden } from '@/shared/lib/visuallyHidden';
 import type { Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
@@ -59,6 +60,7 @@ import { t } from '@/shared/i18n';
 import { AdminNavDivider, focusRing } from './AdminNavChrome';
 import { AdminNavFooter } from './AdminNavFooter';
 import { AdminNavHeader } from './AdminNavHeader';
+import { consoleNavItemForRoute, type AdminConsoleNavArea } from './adminConsoleAreas';
 import { activeAdminNavItemId, visibleAdminNavGroups, type AdminNavItem } from './adminNavItems';
 import {
   COLLAPSED_SIDE_BAR_WIDTH_REM,
@@ -87,7 +89,25 @@ import {
 const ADMIN_NAV_WIDTH = SIDE_BAR_WIDTH_REM;
 const ADMIN_NAV_COLLAPSED_WIDTH = COLLAPSED_SIDE_BAR_WIDTH_REM;
 
-export function AdminNav(): ReactNode {
+/** A run of links: an unlabelled group, or a labelled area (R3.2). */
+interface AdminNavSection {
+  readonly id: string;
+  readonly label?: string;
+  readonly items: readonly AdminNavLinkItem[];
+}
+
+type AdminNavLinkItem = Pick<AdminNavItem, 'id' | 'path' | 'label' | 'icon'>;
+
+export interface AdminNavProps {
+  /**
+   * The six labelled areas the capability document opens (ADR-0059 decision
+   * 6, R3.2). Absent: the two unlabelled groups of `./adminNavGroups`, which
+   * render while the `admin_console_areas` switch is off.
+   */
+  readonly areas?: readonly AdminConsoleNavArea[] | undefined;
+}
+
+export function AdminNav({ areas }: AdminNavProps = {}): ReactNode {
   const collapsed = useAdminNavCollapsedStore((state) => state.collapsed);
   const setCollapsed = useAdminNavCollapsedStore((state) => state.setCollapsed);
 
@@ -113,11 +133,15 @@ export function AdminNav(): ReactNode {
    * `select` also keeps the subscription on a stable primitive, so an unrelated
    * router-state change cannot re-render the nav.
    */
+  const labelled = areas !== undefined;
   const activeId = useRouterState({
-    select: (state) => activeAdminNavItemId(state.matches.map((match) => match.routeId)),
+    select: (state) => {
+      const matched = state.matches.map((match) => match.routeId);
+      return labelled ? consoleNavItemForRoute(matched)?.id : activeAdminNavItemId(matched);
+    },
   });
 
-  const groups = visibleAdminNavGroups();
+  const groups: readonly AdminNavSection[] = areas ?? visibleAdminNavGroups();
   const width = collapsed ? ADMIN_NAV_COLLAPSED_WIDTH : ADMIN_NAV_WIDTH;
 
   return (
@@ -152,8 +176,11 @@ export function AdminNav(): ReactNode {
       >
         {groups.map((group, index) => (
           <Fragment key={group.id}>
-            {index > 0 && <AdminNavDivider />}
+            {index > 0 && !labelled && <AdminNavDivider />}
             <Box
+              component={labelled ? 'section' : 'div'}
+              aria-labelledby={labelled ? `admin-nav-area-label-${group.id}` : undefined}
+              data-testid={labelled ? `admin-nav-area-${group.id}` : undefined}
               sx={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -166,9 +193,18 @@ export function AdminNav(): ReactNode {
                 // divider then sits directly above the bottom group, as it does
                 // there. When permissions leave only ONE group, it grows instead
                 // and the footer stays pinned to the bottom either way.
-                ...(index === 0 ? { flex: 1 } : {}),
+                // The six areas stack from the top, each under its label.
+                ...(index === 0 && !labelled ? { flex: 1 } : {}),
               }}
             >
+              {group.label !== undefined && (
+                <AdminNavAreaLabel
+                  id={`admin-nav-area-label-${group.id}`}
+                  label={group.label}
+                  collapsed={collapsed}
+                  first={index === 0}
+                />
+              )}
               {group.items.map((item) => (
                 <AdminNavLink
                   key={item.id}
@@ -226,8 +262,44 @@ export function AdminNav(): ReactNode {
   );
 }
 
+interface AdminNavAreaLabelProps {
+  readonly id: string;
+  readonly label: string;
+  readonly collapsed: boolean;
+  /** The first area has nothing above it to separate from. */
+  readonly first: boolean;
+}
+
+/** An area's label. Collapsed, it is kept for assistive technology and a rule shows in its place. */
+function AdminNavAreaLabel({ id, label, collapsed, first }: AdminNavAreaLabelProps): ReactNode {
+  return (
+    <>
+      {collapsed && !first && <AdminNavDivider />}
+      <Typography
+        id={id}
+        component="h2"
+        variant="labelSmall"
+        sx={(theme: Theme) =>
+          collapsed
+            ? visuallyHidden
+            : {
+                margin: 0,
+                padding: '0.25rem 0.5rem 0',
+                color: theme.vars.palette.text.metrics,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }
+        }
+      >
+        {label}
+      </Typography>
+    </>
+  );
+}
+
 interface AdminNavLinkProps {
-  readonly item: AdminNavItem;
+  readonly item: AdminNavLinkItem;
   readonly active: boolean;
   readonly collapsed: boolean;
 }

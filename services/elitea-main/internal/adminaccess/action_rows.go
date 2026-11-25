@@ -351,6 +351,7 @@ func actionRows() []Action {
 	// The Configuration sections.
 	maintenance := section("maintenance", RuntimePlugins)
 	rows = append(rows,
+		section("admin_console", RuntimePlugins),
 		section("agent_lifecycle", ConfigurationGovernance),
 		section("agent_publishing", RuntimePlugins),
 		section("agents", ConfigurationGovernance),
@@ -372,7 +373,7 @@ func actionRows() []Action {
 		section("default_secrets", RuntimePlugins),
 		section("delegation", ConfigurationGovernance),
 		section("email", RuntimePlugins).elevation(deny),
-		section("entitlement_export", EntitlementsExport),
+		section("entitlement_export", EntitlementsExportManage),
 		section("governance", ConfigurationGovernance),
 		section("guardrails", RuntimePlugins),
 		section("llm_proxy", RuntimePlugins),

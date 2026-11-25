@@ -797,6 +797,9 @@ func TestSchemaDeclaresAvailabilityForEverySection(t *testing.T) {
 		"voice_features": true, "support_assistant": true,
 		"guardrails": true, "dedicated_banner": true,
 		"maintenance": true, "analytics": true, "default_secrets": true,
+		// ADR-0059 R3.2 (issue 2532): every GET /api/v2/admin/console carries
+		// it (adminaccess.PlatformFlags).
+		"admin_console": true,
 		"native_client_policy": true,
 		// ADR-0034: every send and cloud turn claim reads it
 		// (workspacehandoff.PolicyService).
@@ -917,8 +920,14 @@ func TestEverySectionDeclaresWhichPageItBelongsTo(t *testing.T) {
 	if !features["analytics"] {
 		t.Error("analytics is not on the Features page")
 	}
-	if len(features) != 6 {
-		t.Errorf("Features page has %d sections, want the reference's 5 plus analytics (6)", len(features))
+	// `admin_console` is the second addition: the console's own six-area
+	// navigation switch (ADR-0059 R3.2, issue 2532), read by the capability
+	// document.
+	if !features["admin_console"] {
+		t.Error("admin_console is not on the Features page")
+	}
+	if len(features) != 7 {
+		t.Errorf("Features page has %d sections, want the reference's 5 plus analytics and admin_console (7)", len(features))
 	}
 	// A2 (ELITEA-0032, onetest "Resources Section Appears in Admin
 	// Configuration Before Banner"): `resources` is back on Configuration.

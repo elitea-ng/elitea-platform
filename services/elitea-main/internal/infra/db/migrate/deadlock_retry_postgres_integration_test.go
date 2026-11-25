@@ -24,7 +24,7 @@ func TestApplyRetriesDeadlockAgainstConcurrentTransaction(t *testing.T) {
 	if url == "" {
 		t.Skip("set ELITEA_TEST_DATABASE_URL to run the deadlock retry story")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	adminConfig, err := pgxpool.ParseConfig(url)
 	require.NoError(t, err)
@@ -47,7 +47,16 @@ func TestApplyRetriesDeadlockAgainstConcurrentTransaction(t *testing.T) {
 	// A longer deadlock_timeout on this throwaway database gives the other
 	// side that long to queue. It needs a superuser; without one the test
 	// keeps the default and its old timing.
-	if _, err := admin.Exec(ctx, "ALTER DATABASE "+pgx.Identifier{name}.Sanitize()+" SET deadlock_timeout = '5s'"); err != nil {
+	//
+	// Equal timeouts still left a race (the flake of PR 3033): the two checks
+	// fire one timeout after each side starts waiting, close together, and
+	// the other side's check could run first. The other side's own
+	// transaction therefore waits three times longer before it checks (SET
+	// LOCAL below), so the migrator's check always runs first and finds the
+	// cycle once the other side is queued.
+	superuser := true
+	if _, err := admin.Exec(ctx, "ALTER DATABASE "+pgx.Identifier{name}.Sanitize()+" SET deadlock_timeout = '10s'"); err != nil {
+		superuser = false
 		t.Logf("keeping the default deadlock_timeout: %v", err)
 	}
 	childConfig := adminConfig.Copy()
@@ -69,22 +78,9 @@ CREATE TABLE lock_a (id int); CREATE TABLE lock_b (id int);`)
 	// it) asks for lock_a, which the migrator already holds.
 	other, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	// The 5 s above is BOTH sides' timeout, so it only widened the window for
-	// the other side to queue; it did not order the two checks. The other side
-	// queues 20 to 60 ms after the migrator, so the two checks fire that far
-	// apart, and on a loaded runner the migrator's timer can be served after
-	// the other side's: the other side found the cycle first and was the
-	// victim (the flake of PR 3035). This transaction's own check comes after
-	// the test's deadline, so only the migrator's check can break the cycle.
-	// In a savepoint: without a superuser the SET fails, and a failed
-	// statement would abort the whole transaction.
-	setting, err := other.Begin(ctx)
-	require.NoError(t, err)
-	if _, err := setting.Exec(ctx, "SET LOCAL deadlock_timeout = '120s'"); err != nil {
-		t.Logf("keeping the database's deadlock_timeout for the other side: %v", err)
-		require.NoError(t, setting.Rollback(ctx))
-	} else {
-		require.NoError(t, setting.Commit(ctx))
+	if superuser {
+		_, err = other.Exec(ctx, "SET LOCAL deadlock_timeout = '30s'")
+		require.NoError(t, err)
 	}
 	_, err = other.Exec(ctx, "LOCK TABLE lock_b IN ACCESS EXCLUSIVE MODE")
 	require.NoError(t, err)

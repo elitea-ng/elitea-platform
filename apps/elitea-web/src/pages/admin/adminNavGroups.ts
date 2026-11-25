@@ -179,6 +179,8 @@ export function navGroups(): readonly AdminNavGroup[] {
             'configuration.microsoft_apps',
             'configuration.native_clients',
             'configuration.service_descriptors',
+            'entitlements.export',
+            'entitlements.export.manage',
             'identity.sso.settings.manage',
             'identity.sso.view',
             'llm.catalogue.view',

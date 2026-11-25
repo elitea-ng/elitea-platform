@@ -13,15 +13,21 @@ import (
 // any client not listed, so an existing provisioning credential reveals no
 // more after the upgrade than before. It shares the export's own permission
 // (`entitlements.export`, seeded on super_admin and admin by shared 0209): who
-// may download the CSV decides which tool may read the same data over SCIM.
+// may download the CSV reads the section. Saving it decides which tool may
+// read the same data over SCIM, so it takes the write permission
+// `entitlements.export.manage` (shared 0271, #3026): a read permission
+// writes nothing, so a role given the export to read (an auditor) cannot
+// widen who reads it. The legacy path (runtime.plugins and
+// entitlements.export) is unchanged until the sunset.
 // Writes go through the administration config save, which the admin-surface
 // audit middleware records like every other section change.
 func entitlementExportSection() map[string]any {
 	const section = platformconfig.SectionEntitlementExport
 	return map[string]any{
-		"id":     section,
-		"access": legacyOnlyAccess(adminaccess.AreaSecurity),
-		"title":  "Entitlement Export",
+		"id": section,
+		"access": narrowAccess(adminaccess.AreaSecurity,
+			adminaccess.EntitlementsExport, adminaccess.EntitlementsExportManage),
+		"title": "Entitlement Export",
 		"description": "Which SCIM clients may read the read-only entitlement tree at /api/v2/scim/v2/entitlements " +
 			"(who holds which role and what it allows, for access reviews). Empty (the default) refuses every " +
 			"client. The admin CSV download on the Users page is not affected.",

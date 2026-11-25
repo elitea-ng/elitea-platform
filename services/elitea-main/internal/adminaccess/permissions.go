@@ -60,8 +60,12 @@ const (
 	// Security.
 	ModelsAdminAuditTrailView = "models.admin.audit_trail.view"
 	EntitlementsExport        = "entitlements.export"
-	RetentionManage           = "retention.manage"
-	LegalHoldManage           = "legal_hold.manage"
+	// EntitlementsExportManage writes the entitlement_export Configuration
+	// section: which SCIM clients may read the entitlement tree (#3026).
+	// entitlements.export reads the section and downloads the export.
+	EntitlementsExportManage = "entitlements.export.manage"
+	RetentionManage          = "retention.manage"
+	LegalHoldManage          = "legal_hold.manage"
 
 	// Platform.
 	RuntimePlugins                       = "runtime.plugins"
@@ -245,6 +249,7 @@ func tableRows() []Permission {
 		// Security.
 		row(ModelsAdminAuditTrailView, AreaSecurity, ClassRead),
 		row(EntitlementsExport, AreaSecurity, ClassRead),
+		narrow(EntitlementsExportManage, AreaSecurity, ClassWrite, RuntimePlugins, EntitlementsExport),
 		row(RetentionManage, AreaSecurity, ClassWrite),
 		row(LegalHoldManage, AreaSecurity, ClassWrite),
 

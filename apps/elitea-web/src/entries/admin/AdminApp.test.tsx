@@ -20,9 +20,10 @@
  * cases apart would have to invent a distinction the server does not make.
  */
 import { cleanup, configure, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { adminNavGroups } from '@/pages/admin/adminNavItems';
+import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 
 import { AdminApp } from './AdminApp';
 import { testTimeout } from '@/test/timeouts';
@@ -40,8 +41,15 @@ interface AdminUiConfigWindow {
   admin_ui_config?: { permissions?: readonly string[]; access?: string };
 }
 
+// The navigation waits for the console capability document (ADR-0059
+// R3.2), read through the generated client; the MSW default answers it.
+beforeEach(() => {
+  configureGeneratedClient({ baseUrl: 'https://elitea.example' });
+});
+
 afterEach(() => {
   cleanup();
+  resetGeneratedClient();
   delete (window as unknown as AdminUiConfigWindow).admin_ui_config;
 });
 

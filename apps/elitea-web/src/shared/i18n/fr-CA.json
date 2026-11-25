@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Réessayer",
   "pages.admin.console.error.title": "Impossible de charger la console",
   "pages.admin.console.loading": "Chargement de la console…",
-  "pages.admin.console.refused": "Vous n'avez pas accès à la console d'administration."
+  "pages.admin.console.refused": "Vous n'avez pas accès à la console d'administration.",
+  "pages.admin.console.area.people_access": "Personnes et accès",
+  "pages.admin.console.area.projects": "Projets",
+  "pages.admin.console.area.models_spend": "Modèles et dépenses",
+  "pages.admin.console.area.agents_governance": "Agents et gouvernance",
+  "pages.admin.console.area.security": "Sécurité",
+  "pages.admin.console.area.platform": "Plateforme",
+  "pages.admin.console.item.schedules-tasks": "Planifications et tâches",
+  "pages.admin.schedulesTasks.tab.schedules": "Planifications",
+  "pages.admin.itemDenied.title": "Vous ne pouvez pas ouvrir {{item}}",
+  "pages.admin.itemDenied.explanation": "Vos rôles d’administration n’incluent pas {{item}}. Le serveur refuse ses pages et ses modifications pour vous.",
+  "pages.admin.itemDenied.rolesLoading": "Recherche des rôles qui l’ouvrent…",
+  "pages.admin.itemDenied.rolesError": "Impossible de lire les rôles qui l’ouvrent.",
+  "pages.admin.itemDenied.noRole": "Aucun rôle de ce déploiement ne l’ouvre.",
+  "pages.admin.itemDenied.rolesIntro": "Ces rôles l’ouvrent :",
+  "pages.admin.itemDenied.askSupport": "Pour demander l’un de ces rôles, communiquez avec votre soutien informatique :",
+  "pages.admin.itemDenied.askFallback": "Pour demander l’un de ces rôles, communiquez avec les personnes qui gèrent ce déploiement."
 }

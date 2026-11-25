@@ -163,10 +163,12 @@ var consoleItems = []ConsoleItem{
 
 	// Platform.
 	// The break_glass section (R2.2a) is a section of this page, so its
-	// permission opens it until the break-glass screens (R3.10) ship.
+	// permission opens it until the break-glass screens (R3.10) ship. The
+	// entitlement_export section is one too: entitlements.export reads it and
+	// entitlements.export.manage saves it (#3026).
 	consoleItem("configuration", AreaPlatform,
 		PlatformConfigView, PlatformConfigManage, PlatformMaintenanceManage, RuntimePlugins,
-		AccessBreakglassManage),
+		AccessBreakglassManage, EntitlementsExport, EntitlementsExportManage),
 	consoleItem("features", AreaPlatform, PlatformConfigView, PlatformConfigManage, RuntimePlugins),
 	consoleItem("branding", AreaPlatform, ConfigurationBranding),
 	consoleItem("email", AreaPlatform, PlatformEmailManage, RuntimePlugins),

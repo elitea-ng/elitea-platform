@@ -2,11 +2,12 @@
  * The admin layout over the console capability document (ADR-0059 R3.1b,
  * issue 2611).
  *
- * With the document-driven navigation on (R3.2's flag), a pending read shows
- * a loading state and a failed read shows an error with a retry control and
- * no navigation item: never an empty navigation, which would read as "no
- * access". With it off, the existing navigation renders whatever the read
- * does, so this story changes nothing visible.
+ * The document carries the `admin_console_areas` switch (R3.2, issue 2532),
+ * so until it answers the navigation is unknown: a pending read shows a
+ * loading state and a failed read shows an error with a retry control and no
+ * navigation item, never an empty navigation, which would read as "no
+ * access". Once it answers, the switch picks the six labelled areas or the
+ * two unlabelled groups.
  */
 import { ThemeProvider } from '@mui/material/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -52,8 +53,8 @@ afterEach(() => {
   delete (window as unknown as AdminUiConfigWindow).admin_ui_config;
 });
 
-async function mountLayout(consoleNavigation: boolean): Promise<void> {
-  const rootRoute = createRootRoute({ component: () => <AdminLayout consoleNavigation={consoleNavigation} /> });
+async function mountLayout(): Promise<void> {
+  const rootRoute = createRootRoute({ component: () => <AdminLayout /> });
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/',
@@ -83,7 +84,7 @@ function failConsoleRead(): void {
 describe('AdminLayout with the document-driven navigation', () => {
   it('shows a loading state while the document is pending', async () => {
     server.use(getGetAdminConsoleDocumentMockHandler(() => new Promise(() => {})));
-    await mountLayout(true);
+    await mountLayout();
 
     expect(screen.getByTestId('admin-console-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-nav')).not.toBeInTheDocument();
@@ -92,7 +93,7 @@ describe('AdminLayout with the document-driven navigation', () => {
 
   it('shows an error with a retry control and no navigation item when the read fails', async () => {
     failConsoleRead();
-    await mountLayout(true);
+    await mountLayout();
 
     expect(await screen.findByTestId('admin-console-error')).toBeInTheDocument();
     expect(screen.getByTestId('admin-console-retry')).toBeInTheDocument();
@@ -102,7 +103,7 @@ describe('AdminLayout with the document-driven navigation', () => {
 
   it('reads the document again from the retry control and leaves the error state when it answers', async () => {
     failConsoleRead();
-    await mountLayout(true);
+    await mountLayout();
     await screen.findByTestId('admin-console-error');
 
     server.use(getGetAdminConsoleDocumentMockHandler(getGetAdminConsoleDocumentResponseMock()));
@@ -116,7 +117,7 @@ describe('AdminLayout with the document-driven navigation', () => {
 describe('AdminLayout when the server refuses the document itself', () => {
   it('says so, offers no retry and shows no navigation item', async () => {
     server.use(http.get('*/admin/console', () => new HttpResponse(null, { status: 403 })));
-    await mountLayout(true);
+    await mountLayout();
 
     expect(await screen.findByTestId('admin-console-refused')).toBeInTheDocument();
     expect(screen.queryByTestId('admin-console-retry')).not.toBeInTheDocument();
@@ -124,13 +125,21 @@ describe('AdminLayout when the server refuses the document itself', () => {
   });
 });
 
-describe('AdminLayout with the document-driven navigation off (until R3.2)', () => {
-  it('keeps the existing navigation when the read fails', async () => {
-    failConsoleRead();
-    await mountLayout(false);
+describe('AdminLayout once the document answers', () => {
+  it('renders the six labelled areas when the switch is on', async () => {
+    server.use(getGetAdminConsoleDocumentMockHandler({ ...getGetAdminConsoleDocumentResponseMock(), admin_console_areas: true }));
+    await mountLayout();
 
-    expect(screen.getByTestId('admin-nav')).toBeInTheDocument();
+    expect(await screen.findByTestId('admin-nav-area-people_access')).toBeInTheDocument();
     expect(screen.getByTestId('admin-nav-item-users')).toBeInTheDocument();
-    expect(screen.queryByTestId('admin-console-error')).not.toBeInTheDocument();
+  });
+
+  it('renders the two unlabelled groups when the switch is off', async () => {
+    server.use(getGetAdminConsoleDocumentMockHandler({ ...getGetAdminConsoleDocumentResponseMock(), admin_console_areas: false }));
+    await mountLayout();
+
+    expect(await screen.findByTestId('admin-nav')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-nav-item-users')).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^admin-nav-area-/)).toHaveLength(0);
   });
 });

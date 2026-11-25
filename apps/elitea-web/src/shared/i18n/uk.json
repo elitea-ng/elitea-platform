@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Спробувати ще раз",
   "pages.admin.console.error.title": "Не вдалося завантажити консоль",
   "pages.admin.console.loading": "Завантаження консолі…",
-  "pages.admin.console.refused": "У вас немає доступу до консолі адміністрування."
+  "pages.admin.console.refused": "У вас немає доступу до консолі адміністрування.",
+  "pages.admin.console.area.people_access": "Люди й доступ",
+  "pages.admin.console.area.projects": "Проєкти",
+  "pages.admin.console.area.models_spend": "Моделі й витрати",
+  "pages.admin.console.area.agents_governance": "Агенти й управління",
+  "pages.admin.console.area.security": "Безпека",
+  "pages.admin.console.area.platform": "Платформа",
+  "pages.admin.console.item.schedules-tasks": "Розклади й завдання",
+  "pages.admin.schedulesTasks.tab.schedules": "Розклади",
+  "pages.admin.itemDenied.title": "Ви не можете відкрити «{{item}}»",
+  "pages.admin.itemDenied.explanation": "Ваші адміністративні ролі не включають «{{item}}». Сервер відхиляє для вас його сторінки й зміни.",
+  "pages.admin.itemDenied.rolesLoading": "Пошук ролей, які його відкривають…",
+  "pages.admin.itemDenied.rolesError": "Не вдалося прочитати ролі, які його відкривають.",
+  "pages.admin.itemDenied.noRole": "Жодна роль у цьому розгортанні його не відкриває.",
+  "pages.admin.itemDenied.rolesIntro": "Його відкривають ці ролі:",
+  "pages.admin.itemDenied.askSupport": "Щоб попросити одну з цих ролей, зверніться до ІТ-підтримки:",
+  "pages.admin.itemDenied.askFallback": "Щоб попросити одну з цих ролей, зверніться до тих, хто керує цим розгортанням."
 }
