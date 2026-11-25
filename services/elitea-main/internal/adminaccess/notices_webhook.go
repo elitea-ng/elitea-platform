@@ -54,7 +54,7 @@ import (
 )
 
 // NoticeChannelWebhook is the outbox channel of the webhook rows. A webhook
-// row has no recipient person (shared 0280).
+// row has no recipient person (shared 0281).
 const NoticeChannelWebhook = "webhook"
 
 // WebhookNoticeKinds are the kinds the webhook reports. A request goes to

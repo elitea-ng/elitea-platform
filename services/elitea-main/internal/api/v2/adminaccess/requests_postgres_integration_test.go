@@ -1,7 +1,7 @@
 package adminaccess_test
 
 // The elevation request routes on PostgreSQL (ADR-0059 R2.2b, issue 2596):
-// the handler over the real ledger (shared 0269, 0279), the real outbox
+// the handler over the real ledger (shared 0269, 0280), the real outbox
 // (0277) and the real security audit outbox. The route gates are covered by
 // requests_test.go; here they let every browser session through, so what is
 // proven is what the ledger writes for a route call.

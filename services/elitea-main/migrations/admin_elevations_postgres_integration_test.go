@@ -16,11 +16,11 @@ import (
 const adminElevationsMigration = "shared/0269_admin_elevations.sql"
 
 // adminElevationsAmendments are the later files that change the ledger 0269
-// created: 0279 (R2.2b) adds the request columns and replaces the trigger
+// created: 0280 (R2.2b) adds the request columns and replaces the trigger
 // function. A re-apply of 0269 reinstalls 0269's function, so every re-apply
 // below runs the amendments after it, in the order a re-run of the corpus
 // takes.
-var adminElevationsAmendments = []string{"shared/0279_admin_elevation_requests.sql"}
+var adminElevationsAmendments = []string{"shared/0280_admin_elevation_requests.sql"}
 
 func reapplyAdminElevations(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()

@@ -105,9 +105,9 @@ ORDER BY 1`)
 	return strings.Join(lines, "\n")
 }
 
-const adminAccessNoticeWebhookMigration = "shared/0280_admin_access_notice_webhook.sql"
+const adminAccessNoticeWebhookMigration = "shared/0281_admin_access_notice_webhook.sql"
 
-// Shared 0280 (issue 2598, ADR-0059 R2.5b): the webhook channel. It applies
+// Shared 0281 (issue 2598, ADR-0059 R2.5b): the webhook channel. It applies
 // twice with no change; a webhook row names no person and is one of the five
 // events the webhook reports, and every other row still needs a recipient.
 func TestAdminAccessNoticeWebhookChannel(t *testing.T) {
@@ -126,11 +126,11 @@ func TestAdminAccessNoticeWebhookChannel(t *testing.T) {
 			before := adminAccessNoticesShape(t, pool)
 			if !strings.Contains(before, "admin_access_notices_webhook_kind") ||
 				!strings.Contains(before, "column recipient_user_id bigint YES") {
-				t.Fatalf("0280 shape lacks the webhook channel:\n%s", before)
+				t.Fatalf("0281 shape lacks the webhook channel:\n%s", before)
 			}
 			execMigrationFile(t, pool, adminAccessNoticeWebhookMigration)
 			if after := adminAccessNoticesShape(t, pool); after != before {
-				t.Fatalf("re-applying 0280 changed the table:\nbefore:\n%s\nafter:\n%s", before, after)
+				t.Fatalf("re-applying 0281 changed the table:\nbefore:\n%s\nafter:\n%s", before, after)
 			}
 			if _, err := pool.Exec(context.Background(), `
 INSERT INTO elitea_auth.admin_access_notices (kind, channel, elevation_id, recipient_email, created_at, next_attempt_at)

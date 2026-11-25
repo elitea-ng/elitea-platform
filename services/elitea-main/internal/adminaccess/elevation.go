@@ -176,7 +176,7 @@ type ElevationRecord struct {
 	EndedAt           time.Time
 	EndReason         string
 	ReviewState       string
-	// Duration is the duration a request asked for (shared 0279), from which
+	// Duration is the duration a request asked for (shared 0280), from which
 	// the start computes the expiry; zero on a row that started at insert.
 	Duration time.Duration
 	// DenialReasonCode is why a request was denied (ElevationDenial*); ""

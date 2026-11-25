@@ -308,7 +308,8 @@ func actionRows() []Action {
 		post(admin("/connector_requests/{requestID}/reject"), ConnectorApprove),
 		post(admin("/credential_inventory/revoke"), CredentialsInventoryManage).dangerous(),
 		post(admin("/permission_trimming/remove"), CredentialsInventoryManage),
-		post(admin("/delegation_review/scan"), ConfigurationGovernance),
+		// The scan writes the delegation grants a migration missed (R0.15).
+		post(admin("/delegation_review/scan"), AgentsGovernanceManage),
 		post(admin("/toolkit_types/administration/bulk"), ToolkitCatalogueTypeManage),
 		put(admin("/toolkit_types/administration/{type}"), ToolkitCatalogueTypeManage),
 		put(admin("/toolkit_types/administration/{type}/projects/{projectID}"), ToolkitCatalogueTypeManage),
@@ -394,30 +395,31 @@ func actionRows() []Action {
 	rows = append(rows, governanceRow(http.MethodPut, GovernanceRowPattern)...)
 	rows = append(rows, governanceRow(http.MethodDelete, GovernanceRowPattern)...)
 
-	// The Configuration sections.
+	// The Configuration sections. The agent governance sections are saved
+	// with agents.governance.manage (R0.15) or on the legacy path.
 	maintenance := section("maintenance", RuntimePlugins)
 	rows = append(rows,
 		section("admin_console", RuntimePlugins),
-		section("agent_lifecycle", ConfigurationGovernance),
+		section("agent_lifecycle", AgentsGovernanceManage),
 		section("agent_publishing", RuntimePlugins),
-		section("agents", ConfigurationGovernance),
-		section("ai_disclosure", ConfigurationGovernance),
+		section("agents", AgentsGovernanceManage),
+		section("ai_disclosure", AgentsGovernanceManage),
 		section("analytics", RuntimePlugins),
-		section("approval_policy", ConfigurationGovernance),
-		section("approvals", ConfigurationGovernance),
+		section("approval_policy", AgentsGovernanceManage),
+		section("approvals", AgentsGovernanceManage),
 		section("auth", RuntimePlugins),
 		// The break-glass policy (ADR-0059 R2.2a): durations, caps and the
 		// approval switch. An elevation never changes its own controls.
 		section("break_glass", AccessBreakglassManage).critical(deny),
 		section("branding", ConfigurationBranding),
-		section("browser", ConfigurationGovernance),
-		section("catalogue", ConfigurationGovernance),
+		section("browser", AgentsGovernanceManage),
+		section("catalogue", AgentsGovernanceManage),
 		section("circuit_breaker", ConfigurationGovernance),
 		section("cloud_executor", ConfigurationNativeClients),
-		section("credential_review", ConfigurationGovernance),
+		section("credential_review", AgentsGovernanceManage),
 		section("dedicated_banner", RuntimePlugins),
 		section("default_secrets", RuntimePlugins),
-		section("delegation", ConfigurationGovernance),
+		section("delegation", AgentsGovernanceManage),
 		section("email", RuntimePlugins).elevation(deny),
 		section("entitlement_export", EntitlementsExportManage),
 		section("governance", ConfigurationGovernance),
@@ -430,19 +432,19 @@ func actionRows() []Action {
 		section("microsoft_apps", ConfigurationMicrosoftApps),
 		section("native_client_policy", ConfigurationNativeClients),
 		section("native_clients", ConfigurationNativeClients),
-		section("notifications", ConfigurationGovernance),
-		section("platform_preamble", ConfigurationGovernance),
-		section("proactivity", ConfigurationGovernance),
-		section("remote_agents", ConfigurationGovernance),
+		section("notifications", AgentsGovernanceManage),
+		section("platform_preamble", AgentsGovernanceManage),
+		section("proactivity", AgentsGovernanceManage),
+		section("remote_agents", AgentsGovernanceManage),
 		section("resources", RuntimePlugins),
-		section("run_caps", ConfigurationGovernance),
+		section("run_caps", AgentsGovernanceManage),
 		section("service_descriptors", ConfigurationServiceDescriptors),
 		section("session_policy", RuntimePlugins),
 		section("skill_publishing", RuntimePlugins),
 		section("support_assistant", RuntimePlugins),
 		section("voice_features", RuntimePlugins),
 		section("web_search", RuntimePlugins),
-		section("worker_egress", ConfigurationGovernance),
+		section("worker_egress", AgentsGovernanceManage),
 	)
 	return rows
 }

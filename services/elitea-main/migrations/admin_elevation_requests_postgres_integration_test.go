@@ -1,6 +1,6 @@
 package migrations_test
 
-// Shared 0279 (issue 2596, ADR-0059 R2.2b): the request columns of the
+// Shared 0280 (issue 2596, ADR-0059 R2.2b): the request columns of the
 // elevation ledger. The duration is frozen at insert, the denial reason code
 // belongs to a denial and is frozen with the decision, and both are bounded
 // by CHECK constraints.

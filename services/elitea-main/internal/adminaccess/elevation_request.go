@@ -6,7 +6,7 @@ package adminaccess
 //
 // A request is a row of the ledger (elevation.go) that has not started: the
 // person, the session that asked, the reason code and text, the optional
-// ticket and the duration asked for (shared 0279). A second person decides
+// ticket and the duration asked for (shared 0280). A second person decides
 // it once; the trigger of shared 0269 freezes the decision after that. The
 // start (R2.2c) reads an approved request and computes the expiry from its
 // duration then.
@@ -52,7 +52,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
-// The reason codes of a denial (shared 0279's CHECK holds the same list).
+// The reason codes of a denial (shared 0280's CHECK holds the same list).
 const (
 	ElevationDenialNotJustified           = "not_justified"
 	ElevationDenialMoreInformationNeeded  = "more_information_needed"

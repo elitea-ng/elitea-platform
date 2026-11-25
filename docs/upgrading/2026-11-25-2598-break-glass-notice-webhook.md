@@ -26,7 +26,7 @@ type and a time only. It names no person. A failed call waits in the same
 outbox as the e-mails and is retried by the `main.access_notice_sender`
 routine on its own, without holding the e-mails.
 
-The shared migration `0280_admin_access_notice_webhook.sql` adds the
+The shared migration `0281_admin_access_notice_webhook.sql` adds the
 `webhook` channel to `elitea_auth.admin_access_notices`: a webhook row has no
 recipient person. It changes no existing row.
 

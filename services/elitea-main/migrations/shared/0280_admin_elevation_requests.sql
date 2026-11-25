@@ -1,4 +1,4 @@
--- 0279_admin_elevation_requests.sql — what an elevation REQUEST records
+-- 0280_admin_elevation_requests.sql — what an elevation REQUEST records
 -- before it starts (ADR-0059 decision 5, "Path 1" steps 1 to 3; story R2.2b,
 -- issue 2596).
 --
@@ -37,7 +37,7 @@
 DO $$
 BEGIN
 IF to_regclass('elitea_auth.admin_elevations') IS NULL THEN
-    RAISE NOTICE '0279: elitea_auth.admin_elevations absent, nothing to change';
+    RAISE NOTICE '0280: elitea_auth.admin_elevations absent, nothing to change';
     RETURN;
 END IF;
 

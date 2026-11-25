@@ -370,3 +370,23 @@ func (s *AnnotationSlot) ElevationID() string {
 
 // ID is a convenience for the pointer fields above.
 func ID(value int64) *int64 { return &value }
+
+type reasonCodeKey struct{}
+
+// ContextWithReasonCode records the reason code the caller gave for a
+// dangerous action (ADR-0059 R3.8a). The reason check sets it; a chained
+// security event built from the request (internal/securityaudit/accessevent)
+// carries it. The reason TEXT never travels this way: it is written to the
+// admin audit row only, through Annotate.
+func ContextWithReasonCode(ctx context.Context, code string) context.Context {
+	if code == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, reasonCodeKey{}, code)
+}
+
+// ReasonCodeFromContext answers the reason code of the request, "" for none.
+func ReasonCodeFromContext(ctx context.Context) string {
+	code, _ := ctx.Value(reasonCodeKey{}).(string)
+	return code
+}

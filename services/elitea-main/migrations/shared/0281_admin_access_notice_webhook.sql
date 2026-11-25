@@ -1,4 +1,4 @@
--- 0280_admin_access_notice_webhook.sql — the out-of-band webhook channel of
+-- 0281_admin_access_notice_webhook.sql — the out-of-band webhook channel of
 -- the break-glass notices (ADR-0059 decision 5, "Loud"; story R2.5b, issue
 -- 2598).
 --
@@ -30,7 +30,7 @@
 DO $$
 BEGIN
 IF to_regclass('elitea_auth.admin_access_notices') IS NULL THEN
-    RAISE NOTICE '0280: elitea_auth.admin_access_notices absent, nothing to change';
+    RAISE NOTICE '0281: elitea_auth.admin_access_notices absent, nothing to change';
     RETURN;
 END IF;
 

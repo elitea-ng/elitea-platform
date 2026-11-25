@@ -3,7 +3,7 @@ package adminaccess_test
 // The out-of-band webhook of the break-glass notices on the real schema
 // (ADR-0059 decision 5, "Loud"; story R2.5b, issue 2598): the webhook row is
 // written with the e-mail rows in the transaction of the event (shared
-// 0280), and the sender delivers it to an HTTPS test server through the
+// 0281), and the sender delivers it to an HTTPS test server through the
 // egress guard, signed, with ids, a type and a time only.
 
 import (

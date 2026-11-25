@@ -186,6 +186,7 @@ func TestTheRouteGateIsComputedFromTheSections(t *testing.T) {
 // names one.
 func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 	t.Parallel()
+	agentGovernance := 0
 	want := map[string][2]string{
 		"guardrails":      {adminaccess.LLMPolicyView, adminaccess.LLMGuardrailsManage},
 		"circuit_breaker": {adminaccess.LLMPolicyView, adminaccess.LLMPolicyManage},
@@ -210,15 +211,21 @@ func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 			}
 			delete(want, section.id)
 		}
-		// The agent governance sections keep the legacy path only (R0.15
-		// gives them their pair).
-		if section.access.Area == adminaccess.AreaAgentsGovernance &&
-			section.legacyPermission == adminaccess.ConfigurationGovernance && !section.access.LegacyOnly {
-			t.Errorf("agent governance section %s declares a narrow pair before R0.15", section.id)
+		// The agent governance sections declare the pair of R0.15.
+		if section.legacyPermission == adminaccess.ConfigurationGovernance &&
+			section.access.Area == adminaccess.AreaAgentsGovernance {
+			got := [2]string{section.access.Read, section.access.Write}
+			if want := [2]string{adminaccess.AgentsGovernanceView, adminaccess.AgentsGovernanceManage}; got != want {
+				t.Errorf("agent governance section %s declares %v, want %v (R0.15)", section.id, got, want)
+			}
+			agentGovernance++
 		}
 	}
 	for id := range want {
 		t.Errorf("section %s is not in the list", id)
+	}
+	if agentGovernance != 15 {
+		t.Errorf("%d agent governance sections declare the pair, want the 15 of R0.15", agentGovernance)
 	}
 }
 

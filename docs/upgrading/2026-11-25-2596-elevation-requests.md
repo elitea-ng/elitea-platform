@@ -25,7 +25,7 @@ over, a request is approved at once by the platform at the `admin` level.
 Nothing starts an elevation yet: the start and the end come in a later
 release, so an approved request grants nothing on its own.
 
-The shared migration `0279_admin_elevation_requests.sql` adds the requested
+The shared migration `0280_admin_elevation_requests.sql` adds the requested
 duration and the denial reason code to `elitea_auth.admin_elevations`, two
 indexes, and the reason code to the ledger's append-only trigger. It changes
 no existing row.

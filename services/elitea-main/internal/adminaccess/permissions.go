@@ -6,7 +6,7 @@ package adminaccess
 //
 // The narrow names of ADR-0059 decision 2 enter the table in the story whose
 // migration grants them, so the grant gate stays green at every commit: 25 in
-// R0.2 (shared 0261), the agents.governance.* pair in R0.15.
+// R0.2 (shared 0261), the agents.governance.* pair in R0.15 (shared 0279).
 const (
 	// People and access.
 	AdminAuthUsers                         = "admin.auth.users"
@@ -56,6 +56,15 @@ const (
 	AgentIdentityExternalManage  = "models.agent_identity.external.manage"
 	SafetySuspend                = "safety.suspend"
 	ToolkitCatalogueTypeManage   = "toolkit_catalogue.type.manage"
+	// AgentsGovernanceView and AgentsGovernanceManage are the agent
+	// governance pair of ADR-0059 decision 2 (story R0.15, shared 0279): the
+	// agent registry, the delegation review, the worker egress hosts and the
+	// agent governance Configuration sections. Each gate accepts them beside
+	// configuration.governance until the sunset; a read accepts either name
+	// of the pair, as a section's write half also reads. No built-in narrow role
+	// holds them: the agent governance role is deferred (owner decision 10).
+	AgentsGovernanceView   = "agents.governance.view"
+	AgentsGovernanceManage = "agents.governance.manage"
 
 	// Security.
 	ModelsAdminAuditTrailView = "models.admin.audit_trail.view"
@@ -191,8 +200,8 @@ func tableRows() []Permission {
 	runtimePlugins.Legacy = true
 
 	governance := row(ConfigurationGovernance, AreaAgentsGovernance, ClassWrite)
-	// Legacy, like runtime.plugins: the llm.* names and, from R0.15,
-	// agents.governance.* replace it.
+	// Legacy, like runtime.plugins: the llm.* names and agents.governance.*
+	// (R0.15) replace it.
 	governance.Legacy = true
 
 	publishedAgents := row(RuntimeAdminPublishedAgents, AreaProjects, ClassRead)
@@ -235,6 +244,10 @@ func tableRows() []Permission {
 
 		// Agents and governance.
 		governance,
+		// The Configuration sections' legacy path is runtime.plugins with
+		// configuration.governance, so the pair narrows both.
+		narrow(AgentsGovernanceView, AreaAgentsGovernance, ClassRead, ConfigurationGovernance, RuntimePlugins),
+		narrow(AgentsGovernanceManage, AreaAgentsGovernance, ClassWrite, ConfigurationGovernance, RuntimePlugins),
 		row(ConnectorApprove, AreaAgentsGovernance, ClassApprove),
 		row(CredentialsInventoryRead, AreaAgentsGovernance, ClassRead),
 		row(CredentialsInventoryManage, AreaAgentsGovernance, ClassWrite),
