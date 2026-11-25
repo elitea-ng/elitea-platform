@@ -780,6 +780,24 @@ func TestASealedSessionGets403ForAdminScopes(t *testing.T) {
 	requireScopeRefusal(t, got, CodeScopesSealedSession)
 }
 
+// An elevation creates no token at all (ADR-0059 R2.8a): a plain token from an
+// elevated browser session, or from a sealed session, is refused with
+// elevation_restricted and nothing is written; without an elevation the same
+// request mints.
+func TestAnElevatedOrSealedSessionCreatesNoToken(t *testing.T) {
+	const plain = `{"name":"ci"}`
+	got := scopeRequest(t, freshSession, scopeResolver{set: adminCallerSet, elevated: true}, http.MethodPost, "/token/", plain)
+	requireScopeRefusal(t, got, CodeMintElevated)
+	got = scopeRequest(t, sealedCaller, scopeResolver{set: adminCallerSet}, http.MethodPost, "/token/", plain)
+	requireScopeRefusal(t, got, CodeMintElevated)
+	if got = scopeRequest(t, freshSession, scopeResolver{set: adminCallerSet}, http.MethodPost, "/token/", plain); got.status != http.StatusOK || got.created == nil {
+		t.Fatalf("a standing session: %d %s, want a token", got.status, got.body)
+	}
+	if CodeMintElevated != adminaccess.CodeElevationRestricted {
+		t.Fatalf("the mint refusal code is %q, want the restriction's own", CodeMintElevated)
+	}
+}
+
 func TestAnElevatedSessionGets403ForAdminScopes(t *testing.T) {
 	elevated := scopeResolver{set: adminCallerSet, elevated: true}
 	got := scopeRequest(t, freshSession, elevated, http.MethodPost, "/token/", createScoped("admin.auth.users"))
@@ -974,6 +992,33 @@ func TestAScopeRefusalNamesTheCredentialInTheMintVocabulary(t *testing.T) {
 	} {
 		if got := scopeMintCredential(kind); got != want {
 			t.Errorf("%q: %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// The reserved break-glass account creates no token (ADR-0059 R2.6b), by
+// account: a browser session of it is refused with its own code before the
+// repository is called, whatever the case of the address.
+func TestTokenCreateRefusesTheReservedAccount(t *testing.T) {
+	for _, email := range []string{"break-glass@centry.user", "Break-Glass@CENTRY.user"} {
+		created := false
+		handler := &Handler{
+			tokenSigningKey: []byte("test-secret"),
+			tokens: tokenRepositoryStub{createFunc: func(context.Context, tokenCreateInput) (tokenRecord, error) {
+				created = true
+				return tokenRecord{}, nil
+			}},
+		}
+		req := httptest.NewRequest(http.MethodPost, "/token/", bytes.NewBufferString(`{"name":"x"}`))
+		principal := identity.User{ID: "7", UserID: "7", Email: email, BrowserSessionRef: 3}
+		req = req.WithContext(identity.ContextWithAuthenticatedUser(
+			req.Context(), principal, identity.AuthenticationSourceSession))
+		rec := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || created ||
+			!strings.Contains(rec.Body.String(), CodeMintReservedAccount) {
+			t.Fatalf("%s: status = %d, created = %v, body = %s; want 403 %s",
+				email, rec.Code, created, rec.Body.String(), CodeMintReservedAccount)
 		}
 	}
 }

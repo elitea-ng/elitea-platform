@@ -63,6 +63,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	identity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -83,6 +84,12 @@ const (
 	// credential's kind, or could not read a native caller's administration
 	// set. The rule fails closed.
 	CodeCallerUnresolved = "token_mint_caller_unresolved"
+	// CodeMintReservedAccount: the caller is the reserved break-glass account
+	// (ADR-0059 R2.6b), which never creates a token.
+	CodeMintReservedAccount = "token_mint_reserved_account"
+	// CodeMintElevated: the browser session holds an active elevation, or is
+	// a sealed session (ADR-0059 R2.8a). The code is the restriction's own.
+	CodeMintElevated = adminaccess.CodeElevationRestricted
 )
 
 // TokenMintRefusedAuditAction is the action the audit row of a refused mint
@@ -328,4 +335,36 @@ func (h *Handler) ownerHoldsAdministration(r *http.Request, user identity.User) 
 		return false, err
 	}
 	return len(resolution.Permissions) > 0, nil
+}
+
+// elevatedMintRefusal refuses a mint from a browser session that can hold an
+// elevation (identity.Credential.ElevationSessionRef) when an elevation took
+// part in its administration-mode resolution, and from every sealed session.
+// A session that can hold none is not read. A resolution that is refused
+// refuses the mint; one that fails is a fault (err).
+func (h *Handler) elevatedMintRefusal(r *http.Request, user identity.User, credential mintCredential) (*tokenMintRefusal, error) {
+	refuse := func(code, message string) (*tokenMintRefusal, error) {
+		return &tokenMintRefusal{Code: code, Message: message, CredentialKind: credential}, nil
+	}
+	if user.Credential().IsSealed() {
+		return refuse(CodeMintElevated, "a sealed break-glass session cannot create a personal access token")
+	}
+	if user.Credential().ElevationSessionRef() <= 0 {
+		return nil, nil
+	}
+	if h.permissions == nil {
+		return refuse(CodeCallerUnresolved, "the server could not read your administration permissions")
+	}
+	resolution, err := h.permissions.ResolvePermissions(r.Context(), user, identity.PermissionModeAdministration, "")
+	if errors.Is(err, identity.ErrPermissionDenied) {
+		return refuse(CodeCallerUnresolved, "the server could not read your administration permissions")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resolution.Elevated() {
+		return refuse(CodeMintElevated,
+			"a personal access token cannot be created under an elevation; end it and use your standing sign-in")
+	}
+	return nil, nil
 }

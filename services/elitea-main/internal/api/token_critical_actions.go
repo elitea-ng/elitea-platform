@@ -112,12 +112,18 @@ func (g *tokenCriticalActions) middleware(next http.Handler) http.Handler {
 // candidates answers the entries of the (method, pattern) the request routes
 // to, with the route context of the lookup (its path parameters).
 func (g *tokenCriticalActions) candidates(r *http.Request) ([]adminaccess.Action, *chi.Context) {
+	return actionCandidates(g.routes, r)
+}
+
+// actionCandidates answers the entries of the (method, pattern) the request
+// routes to in routes, with the route context of the lookup.
+func actionCandidates(routes chi.Routes, r *http.Request) ([]adminaccess.Action, *chi.Context) {
 	path := r.URL.RawPath
 	if path == "" {
 		path = r.URL.Path
 	}
 	rctx := chi.NewRouteContext()
-	pattern := g.routes.Find(rctx, r.Method, path)
+	pattern := routes.Find(rctx, r.Method, path)
 	if pattern == "" {
 		return nil, rctx
 	}

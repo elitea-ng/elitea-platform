@@ -63,14 +63,18 @@ func TestReporterDeliversWithRetryAndCloseDrains(t *testing.T) {
 	r := New(client, "replica-a", time.Second, nil)
 	r.Start()
 	r.Submit(summary())
+	// The client records the request before the reporter counts it as
+	// delivered: wait for both, or the counter is read between the two.
 	deadline := time.Now().Add(5 * time.Second)
-	for client.count() == 0 && time.Now().Before(deadline) {
+	for (client.count() == 0 || r.Delivered() == 0) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if client.count() != 1 || r.Delivered() != 1 {
-		t.Fatalf("delivered %d", r.Delivered())
+		t.Fatalf("client holds %d, delivered %d", client.count(), r.Delivered())
 	}
+	client.mu.Lock()
 	got := client.requests[0]
+	client.mu.Unlock()
 	if got.GetReplicaId() != "replica-a" || got.GetExecutionId() != "exec-1" || !got.GetFinal() ||
 		got.GetHostsReached()[0].GetHost() != "pypi.org" || got.GetHostsRefused()[0].GetReason() != "sni-mismatch" {
 		t.Fatalf("%v", got)

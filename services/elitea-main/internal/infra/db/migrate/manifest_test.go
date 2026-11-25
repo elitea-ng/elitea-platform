@@ -1266,7 +1266,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 274: shared/0274_entitlement_export_manage.sql, the grant
 	// entitlements.export.manage (super_admin, admin): the write permission of
 	// the entitlement_export Configuration section (issue 3026). No table.
-	require.EqualValues(t, 274, Head(shared))
+	//
+	// 275: shared/0275_admin_audit_elevation_flag.sql, the nullable
+	// elevation_flagged column of centry.audit_events, the review mark of an
+	// action the action table flags under an elevation, outside the chain
+	// hash (issue 2522, ADR-0059 R2.8a). No permission.
+	require.EqualValues(t, 275, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

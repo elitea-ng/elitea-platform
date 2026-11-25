@@ -530,6 +530,18 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		writeTokenMintRefusal(w, r, refusal)
 		return
 	}
+	// The reserved break-glass account creates no token (ADR-0059 R2.6b), by
+	// ACCOUNT, whatever credential is calling. The token row's INSERT refuses
+	// it again (CreatePATForActiveUser), so a principal without its address
+	// cannot slip past this check.
+	if adminaccess.IsReservedBreakGlassEmail(user.Email) {
+		writeTokenMintRefusal(w, r, &tokenMintRefusal{
+			Code:           CodeMintReservedAccount,
+			Message:        "the reserved break-glass account cannot create a personal access token",
+			CredentialKind: credential,
+		})
+		return
+	}
 	if !h.tokenServiceAvailable(w) {
 		return
 	}
@@ -576,6 +588,19 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if admin.granted() && !h.authorizeAdminScopes(w, r, user, admin.Scopes, TokenMintRefusedAuditAction) {
+		return
+	}
+	// An elevation creates no token (ADR-0059 decision 5, "What an elevation
+	// cannot do"; R2.8a): a token would outlive it. A sealed session holds
+	// its elevation and nothing else, so it never mints. After the scope
+	// rules, which refuse scopes under an elevation with their own codes.
+	elevated, err := h.elevatedMintRefusal(r, user, credential)
+	if err != nil {
+		writeTokenMintFault(w, r, credential, err)
+		return
+	}
+	if elevated != nil {
+		writeTokenMintRefusal(w, r, elevated)
 		return
 	}
 	if !request.Name.present {

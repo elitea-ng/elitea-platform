@@ -23,29 +23,43 @@ import (
 // it. The lines are printed after the commit, and only there: the secret is
 // in no log line, no event and no row.
 func breakGlassIssueTx(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, req breakGlassRequest, at time.Time) ([]string, error) {
-	person, err := resolveAdminRoleUser(ctx, tx, req.user)
-	if err != nil {
-		return nil, err
+	issue := adminaccess.SealedIssue{
+		Level: req.level, Label: req.label, Split: req.split, At: at, Lifetime: req.lifetime,
+		Ticket: req.ticket, Unbound: req.unbound, Source: securityaudit.ElevationSourceOperator,
 	}
-	if person.suspended {
-		return nil, refusedError("%s is suspended; a sealed credential is bound to an active account", person.label())
+	holder := "the reserved account " + adminaccess.ReservedBreakGlassEmail
+	if !req.unbound {
+		person, err := resolveAdminRoleUser(ctx, tx, req.user)
+		if err != nil {
+			return nil, err
+		}
+		if person.suspended {
+			return nil, refusedError("%s is suspended; a sealed credential is bound to an active account", person.label())
+		}
+		issue.UserID, holder = person.id, person.label()
 	}
-	issued, err := adminaccess.IssueSealedCredential(ctx, tx, appender, adminaccess.SealedIssue{
-		UserID: person.id, Level: req.level, Label: req.label, Split: req.split, At: at, Lifetime: req.lifetime,
-		Source: securityaudit.ElevationSourceOperator,
-	})
+	issued, err := adminaccess.IssueSealedCredential(ctx, tx, appender, issue)
 	switch {
 	case errors.Is(err, adminaccess.ErrSealedCredentialPerson):
-		return nil, refusedError("%s is not an active account", person.label())
+		return nil, refusedError("%s is not an active account", holder)
+	case errors.Is(err, adminaccess.ErrSealedCredentialReserved):
+		return nil, refusedError("%s is the reserved break-glass account: issue its credentials with --unbound", holder)
+	case errors.Is(err, adminaccess.ErrReservedAccountUnusable):
+		return nil, refusedError("%s is suspended or holds a role, so it cannot take an unbound credential", holder)
 	case err != nil:
 		return nil, err
 	}
 	lines := []string{
-		fmt.Sprintf("issued sealed credential %s for %s at the level %s, expires %s%s",
-			issued.ID, person.label(), issued.Level, issued.ExpiresAt.UTC().Format(time.RFC3339), labelSuffix(issued.Label)),
-		"It is shown this once and stored only as a digest: seal it now. Revoke it with `" +
-			breakGlassCommand + " " + breakGlassRevoke + " " + issued.ID.String() + "`.",
+		fmt.Sprintf("issued sealed credential %s for %s at the level %s, expires %s%s%s",
+			issued.ID, holder, issued.Level, issued.ExpiresAt.UTC().Format(time.RFC3339), labelSuffix(issued.Label),
+			ticketSuffix(req.ticket)),
 	}
+	if issued.ReservedAccountCreated {
+		lines = append(lines, fmt.Sprintf("created the reserved account %s (user %d) with no role",
+			adminaccess.ReservedBreakGlassEmail, issued.UserID))
+	}
+	lines = append(lines, "It is shown this once and stored only as a digest: seal it now. Revoke it with `"+
+		breakGlassCommand+" "+breakGlassRevoke+" "+issued.ID.String()+"`.")
 	if !issued.Split {
 		return append(lines, issued.Credential()), nil
 	}
@@ -56,6 +70,13 @@ func breakGlassIssueTx(ctx context.Context, tx pgx.Tx, appender securityaudit.Ap
 		"half 1: "+first,
 		"half 2: "+second,
 	), nil
+}
+
+func ticketSuffix(ticket string) string {
+	if ticket == "" {
+		return ""
+	}
+	return ", ticket " + ticket
 }
 
 func labelSuffix(label string) string {

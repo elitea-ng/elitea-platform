@@ -151,7 +151,9 @@ shared migration 0268): `acting_roles` (the caller's standing administration
 roles, from the resolution the request already made), `elevation_id`,
 `credential_kind` (`session`, `form`, `sealed`, `token`, `native`, `run`,
 `system`, `scim`; NULL when unknown, never a guess), `central_override`,
-`reason_code`, `reason` and `reason_missing`.
+`reason_code`, `reason` and `reason_missing`, and (story R2.8a, shared migration
+0275) `elevation_flagged`, the review mark of an action the action table flags
+under an elevation.
 
 **These fields are not tamper-evident until R1.4b (issue 2576).** They are
 plain nullable columns outside the row hash: `centry.audit_event_canonical`

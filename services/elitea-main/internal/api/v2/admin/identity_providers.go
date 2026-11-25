@@ -302,6 +302,12 @@ func (h *Handler) IdentityProviderSave(w http.ResponseWriter, r *http.Request) {
 	if adminaccess.RefuseToken(w, r, http.MethodPut, adminaccess.IdentityProviderSavePattern, action) {
 		return
 	}
+	// The elevation rule on the same entry (ADR-0059 R2.8a): a trust change
+	// only under a sealed super_admin elevation, flagged; a settings change
+	// or turning it off flagged.
+	if adminaccess.RestrictElevation(w, r, http.MethodPut, adminaccess.IdentityProviderSavePattern, action) {
+		return
+	}
 	if action != adminaccess.OutcomeSettings && !h.requireIdentityTrust(w, r, trustGate{
 		code: CodeIdentityTrustSuperAdminRequired,
 		message: "only a super admin can create or delete an identity provider, turn it on or off, replace " +

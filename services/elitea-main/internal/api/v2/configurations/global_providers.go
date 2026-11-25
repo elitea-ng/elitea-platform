@@ -659,6 +659,11 @@ func (h *Handler) rewriteGlobalProviderBody(
 		if adminaccess.RefuseToken(w, r, http.MethodPut, adminaccess.GlobalProviderUpdatePattern, action) {
 			return nil, false
 		}
+		// The elevation rule on the same entry (ADR-0059 R2.8a): a route
+		// change under an elevation is flagged for the review.
+		if adminaccess.RestrictElevation(w, r, http.MethodPut, adminaccess.GlobalProviderUpdatePattern, action) {
+			return nil, false
+		}
 		// A token that may not make the route change made a settings one
 		// against the row it read. The write holds it to that row, so a
 		// concurrent route change is not written back over by the merged data.

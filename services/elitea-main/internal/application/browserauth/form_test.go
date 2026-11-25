@@ -104,19 +104,20 @@ func TestFormUserWithoutEmailIsRefusedNotSynthesized(t *testing.T) {
 		{"login":"admin","password":"secret"},
 		{"login":"system-ish","password":"secret","email":"someone@CENTRY.user"},
 		{"login":"attr-reserved","password":"secret","attributes":{"email":"x@centry.user"}},
+		{"login":"break-glass","password":"secret","email":"break-glass@centry.user"},
 		{"login":"ok","password":"secret","email":"ok@example.test"}
 	]}`))
 	if err != nil {
 		t.Fatalf("one misconfigured user must not reject the whole document: %v", err)
 	}
-	if got, want := provider.MisconfiguredLogins(), []string{"admin", "system-ish", "attr-reserved"}; !reflect.DeepEqual(got, want) {
+	if got, want := provider.MisconfiguredLogins(), []string{"admin", "system-ish", "attr-reserved", "break-glass"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("misconfigured logins = %q, want %q", got, want)
 	}
-	if provider.UserCount() != 4 {
-		t.Fatalf("user count = %d, want 4", provider.UserCount())
+	if provider.UserCount() != 5 {
+		t.Fatalf("user count = %d, want 5", provider.UserCount())
 	}
 
-	for _, login := range []string{"admin", "system-ish", "attr-reserved"} {
+	for _, login := range []string{"admin", "system-ish", "attr-reserved", "break-glass"} {
 		assertion, err := provider.NewVerifier(login, "secret").Verify(context.Background(), formVerification("origin-session"))
 		if !errors.Is(err, ErrUnauthenticated) || err.Error() != ErrUnauthenticated.Error() ||
 			!reflect.DeepEqual(assertion, browserflow.VerifiedAssertion{}) {

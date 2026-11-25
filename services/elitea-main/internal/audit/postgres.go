@@ -26,9 +26,9 @@ INSERT INTO centry.audit_events
      http_method, http_route, status_code, duration_ms, is_error,
      entity_type, entity_id, entity_name, trace_id, span_id, parent_span_id,
      acting_roles, elevation_id, credential_kind, central_override,
-     reason_code, reason, reason_missing)
+     reason_code, reason, reason_missing, elevation_flagged)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19::text::uuid, $20, $21, $22, $23, $24)`
+        $18, $19::text::uuid, $20, $21, $22, $23, $24, $25)`
 
 // Column widths from the same migration. A value longer than its column makes
 // PostgreSQL refuse the INSERT with 22001, which would lose the row — and,
@@ -270,7 +270,7 @@ func (r *PostgresRecorder) write(events []Event) {
 			nullable(e.EntityType), e.EntityID, nullable(e.EntityName),
 			nullable(e.TraceID), nullable(e.SpanID), nullable(e.ParentSpanID),
 			nullableRoles(e.ActingRoles), nullable(e.ElevationID), nullable(e.CredentialKind),
-			e.CentralOverride, nullable(e.ReasonCode), nullable(e.Reason), e.ReasonMissing)
+			e.CentralOverride, nullable(e.ReasonCode), nullable(e.Reason), e.ReasonMissing, e.ElevationFlagged)
 	}
 
 	results := r.pool.SendBatch(ctx, batch)

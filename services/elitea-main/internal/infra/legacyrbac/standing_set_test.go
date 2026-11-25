@@ -60,8 +60,9 @@ func (s *elevatedStore) Query(_ context.Context, statement string, args ...any) 
 			return &stringRows{}, nil
 		}
 		return &stringRows{rows: [][]*string{
-			{text("0b7c2d4e-0000-4000-8000-000000000001"), text("admin.auth.users")},
-			{text("0b7c2d4e-0000-4000-8000-000000000001"), text("admin.auth.users.super_admin")},
+			{text("0b7c2d4e-0000-4000-8000-000000000001"), text("super_admin"), text("approved"), text("admin.auth.users")},
+			{text("0b7c2d4e-0000-4000-8000-000000000001"), text("super_admin"), text("approved"),
+				text("admin.auth.users.super_admin")},
 		}}, nil
 	case strings.Contains(statement, "auth_core__user_role"):
 		return &stringRows{rows: [][]*string{{text("admin"), text("admin.auth.users")}}}, nil
@@ -100,6 +101,10 @@ func TestTheStandingSetCallNeverReadsTheElevation(t *testing.T) {
 	}
 	if !slices.Equal(full.Permissions, []string{"admin.auth.users", "admin.auth.users.super_admin"}) {
 		t.Fatalf("the bound session resolves %v", full.Permissions)
+	}
+	if want := []auth.ElevationGrant{{ID: "0b7c2d4e-0000-4000-8000-000000000001", Level: "super_admin",
+		Path: "approved"}}; !slices.Equal(full.Elevations, want) {
+		t.Fatalf("the elevations are %+v, want %+v (one per elevation, with its level and path)", full.Elevations, want)
 	}
 	if !slices.Equal(full.ElevatedPermissions, []string{"admin.auth.users.super_admin"}) {
 		t.Fatalf("the elevated part is %v, want the super_admin permission alone", full.ElevatedPermissions)

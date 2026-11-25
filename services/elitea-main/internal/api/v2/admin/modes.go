@@ -248,6 +248,10 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if errors.Is(err, rolegrants.ErrReservedAccount) {
+			adminaccess.Write(w, r, adminaccess.ReservedAccountRefusal())
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}

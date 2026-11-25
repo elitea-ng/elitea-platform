@@ -680,3 +680,29 @@ func TestTheAuthTimeDecidesTheSessionsAuthenticationTime(t *testing.T) {
 		})
 	}
 }
+
+// The reserved break-glass account (ADR-0059 R2.6b) signs in through no
+// single sign-on plane: an assertion naming its address is refused before any
+// read or write, whatever the case; a subject linked to it reads as suspended.
+func TestSingleSignOnRefusesTheReservedAccount(t *testing.T) {
+	for _, email := range []string{"break-glass@centry.user", "BREAK-GLASS@centry.USER"} {
+		tx := &scriptedTx{}
+		if _, err := resolveProvisionedUser(
+			context.Background(), tx, testBinding, "oidc:sub-R", email, "R", nil, false,
+		); !errors.Is(err, errReservedAccount) {
+			t.Fatalf("%s: error is %v, want errReservedAccount", email, err)
+		}
+		if len(tx.statements) != 0 {
+			t.Fatalf("%s: the refusal ran %v", email, tx.statements)
+		}
+	}
+	linked := &scriptedTx{rows: []scriptedRow{{values: []any{9, true, true, true}}}}
+	if _, err := resolveProvisionedUser(
+		context.Background(), linked, testBinding, "oidc:sub-L", "someone@corp.com", "S", nil, false,
+	); !errors.Is(err, errUserSuspended) {
+		t.Fatalf("a linked subject of a suspended or reserved account: %v", err)
+	}
+	if !strings.Contains(strings.Join(linked.statements, "\n"), "lower(owner.email) = 'break-glass@centry.user'") {
+		t.Fatalf("the linked-subject read does not test the reserved address: %v", linked.statements)
+	}
+}

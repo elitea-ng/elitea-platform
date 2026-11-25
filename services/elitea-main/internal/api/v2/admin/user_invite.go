@@ -45,9 +45,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
+
+// reservedInviteDomain is the system-identity domain an invite refuses.
+const reservedInviteDomain = "@centry.user"
 
 // inviteRecordExists is the half of an undelivered-invite explanation that is
 // about the RECORD rather than about the relay.
@@ -89,6 +93,15 @@ func (h *Handler) UserInvite(w http.ResponseWriter, r *http.Request) {
 	if !validInviteEmail(email) {
 		writeJSON(w, http.StatusBadRequest,
 			map[string]any{"ok": false, "error": "Invalid email: " + strings.TrimSpace(body.UserEmail)})
+		return
+	}
+	// The reserved system-identity domain is no person's address: an invite
+	// would create a platform account in it, and the reserved break-glass
+	// account (ADR-0059 R2.6b) is created by `elitea-main break-glass issue
+	// --unbound` only.
+	if strings.HasSuffix(email, reservedInviteDomain) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "code": adminaccess.CodeReservedAccount,
+			"error": "addresses in the reserved " + reservedInviteDomain + " domain cannot be invited"})
 		return
 	}
 

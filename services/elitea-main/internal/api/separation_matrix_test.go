@@ -48,12 +48,28 @@ var separationRoles = []string{
 // no grant can read names itself here until it pins the row.
 var pendingIssues = []int{}
 
-// The answer classes of the file.
+// The answer classes of the file. flagged and restricted are the elevated
+// columns' only.
 const (
-	classAllowed = "allowed"
-	classRefused = "refused"
-	noAction     = "-"
+	classAllowed    = "allowed"
+	classRefused    = "refused"
+	classFlagged    = "flagged"
+	classRestricted = "restricted"
+	noAction        = "-"
 )
+
+// separationElevations are the elevated columns (ADR-0059 R2.8a): a Form
+// session with no standing set under one approved elevation of the level,
+// whose role set the elevation gives, in the order of the file's columns.
+var separationElevations = []string{adminaccess.ElevationLevelAdmin, adminaccess.ElevationLevelSuperAdmin}
+
+func validElevatedClass(class string) bool {
+	switch class {
+	case classAllowed, classRefused, classFlagged, classRestricted:
+		return true
+	}
+	return false
+}
 
 // matrixRow is one line of the file.
 type matrixRow struct {
@@ -67,6 +83,8 @@ type matrixRow struct {
 	Pending int
 	// Answers holds one class per separationRoles entry.
 	Answers []string
+	// Elevated holds one class per separationElevations entry.
+	Elevated []string
 }
 
 func (r matrixRow) key() string { return r.Method + " " + r.Pattern + " " + r.Action }
@@ -84,9 +102,17 @@ func (r matrixRow) format() string {
 	if r.Pending != 0 {
 		roles = fmt.Sprintf("pending #%d", r.Pending)
 	} else {
-		roles = strings.Join(r.Answers, " ")
+		roles = fmt.Sprintf("%-47s %-10s %-10s", strings.Join(r.Answers, " "), r.elevated(0), r.elevated(1))
 	}
-	return fmt.Sprintf("%-47s %-7s %s %s %s", roles, r.Class, r.Method, r.Pattern, r.Action)
+	return fmt.Sprintf("%-69s %-7s %s %s %s", roles, r.Class, r.Method, r.Pattern, r.Action)
+}
+
+// elevated is the class of the i-th elevated column, "" when absent.
+func (r matrixRow) elevated(i int) string {
+	if i < len(r.Elevated) {
+		return r.Elevated[i]
+	}
+	return ""
 }
 
 const separationMatrixHeader = `# The separation matrix of the administration surface (ADR-0059 R0.9a, #2498).
@@ -104,8 +130,14 @@ const separationMatrixHeader = `# The separation matrix of the administration su
 #
 # Each role is its STANDING permission set from the registry
 # (internal/adminaccess builtin_roles.go), resolved for every
-# administration-mode check of the request. No elevation takes part: the
-# elevated columns are R2.8's.
+# administration-mode check of the request, with no elevation.
+#
+# The two elevated columns (ADR-0059 R2.8a, #2522) are a Form browser session
+# with NO standing set under one approved elevation at the admin, then the
+# super_admin level: every permission the request resolves is the level's
+# role set, given by the elevation. They show what the action table's
+# elevation values do (internal/adminaccess action_rows.go): the test also
+# checks each such row against the registry.
 #
 # The classes:
 #   allowed     the administration checks admitted the request. The answer is
@@ -115,6 +147,10 @@ const separationMatrixHeader = `# The separation matrix of the administration su
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
+#   flagged     (elevated columns) allowed, and the admin audit row is marked
+#               elevation_flagged for the review.
+#   restricted  (elevated columns) 403 elevation_restricted: an elevation
+#               cannot do the action.
 #
 # These are GATE answers: who passes the administration checks of a route.
 # The rules a write applies after its gate (no escalation, not yourself, the
@@ -133,7 +169,8 @@ const separationMatrixHeader = `# The separation matrix of the administration su
 # tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
-# security_auditor emergency_access, then class, method, route and action.
+# security_auditor emergency_access, elevated admin, elevated super_admin,
+# then class, method, route and action.
 `
 
 // routeClass is the class of a surface entry: read for a GET or HEAD, and
@@ -190,6 +227,23 @@ func classify(role, full, none adminsurface.Answer) (string, error) {
 	return classAllowed, nil
 }
 
+// classifyElevated answers the class of an elevated request: restricted for
+// the restriction's 403, the role class otherwise, flagged when allowed and
+// marked for the review.
+func classifyElevated(answer, full, none adminsurface.Answer) string {
+	if answer.Status == http.StatusForbidden && strings.Contains(answer.Body, `"elevation_restricted"`) {
+		return classRestricted
+	}
+	class, err := classify(answer, full, none)
+	if err != nil {
+		return classRefused
+	}
+	if class == classAllowed && answer.Flagged {
+		return classFlagged
+	}
+	return class
+}
+
 // variantFor answers the variant that drove an entry.
 func variantFor(opts adminsurface.Options, entry adminsurface.Entry) adminsurface.Variant {
 	for _, v := range opts.Variants[entry.String()] {
@@ -237,6 +291,13 @@ func computeMatrix(handler http.Handler, opts adminsurface.Options, result admin
 			}
 			row.Answers = append(row.Answers, class)
 		}
+		for _, level := range separationElevations {
+			role, _ := adminaccess.LookupBuiltInRole(level)
+			elevated := variant
+			elevated.Elevation = &adminsurface.Elevation{Level: level, Path: adminaccess.ElevationPathApproved}
+			row.Elevated = append(row.Elevated,
+				classifyElevated(adminsurface.Send(handler, entry.Route, elevated, opts, role.Set()), full, none))
+		}
 		rows = append(rows, row)
 	}
 	slices.SortFunc(rows, func(a, b matrixRow) int { return strings.Compare(a.sortKey(), b.sortKey()) })
@@ -275,9 +336,15 @@ func parseMatrix(text string) ([]matrixRow, error) {
 					return nil, fmt.Errorf("line %d: %q is not a class", n+1, answer)
 				}
 			}
+			// The elevated classes are never a route class (read, write,
+			// approve), so a row written without them still parses, and
+			// answerFailures names each missing one.
+			for len(row.Elevated) < len(separationElevations) && len(fields) > 4 && validElevatedClass(fields[0]) {
+				row.Elevated, fields = append(row.Elevated, fields[0]), fields[1:]
+			}
 		default:
-			return nil, fmt.Errorf("line %d: want %d classes or a pending marker, a class, a method, a route and an action: %q",
-				n+1, len(separationRoles), line)
+			return nil, fmt.Errorf("line %d: want %d classes (and %d elevated ones) or a pending marker, a class, "+
+				"a method, a route and an action: %q", n+1, len(separationRoles), len(separationElevations), line)
 		}
 		if len(fields) < 4 {
 			return nil, fmt.Errorf("line %d: no class, method, route and action: %q", n+1, line)
@@ -360,6 +427,12 @@ func answerFailures(computed, file []matrixRow) []string {
 					got.key(), role, row.answer(role), got.answer(role)))
 			}
 		}
+		for i, level := range separationElevations {
+			if row.elevated(i) != got.elevated(i) {
+				failures = append(failures, fmt.Sprintf("%s: elevated %s is %s in the file and %s by the router",
+					got.key(), level, row.elevated(i), got.elevated(i)))
+			}
+		}
 	}
 	return failures
 }
@@ -375,7 +448,7 @@ func withPending(computed, file []matrixRow) []matrixRow {
 	out := slices.Clone(computed)
 	for i := range out {
 		if issue := pending[out[i].key()]; issue != 0 {
-			out[i].Pending, out[i].Answers = issue, nil
+			out[i].Pending, out[i].Answers, out[i].Elevated = issue, nil, nil
 		}
 	}
 	return out

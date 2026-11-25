@@ -66,7 +66,19 @@ func (r *Resolver) answer(ctx context.Context, mode, projectID string) (auth.Per
 		r.mu.Unlock()
 		return auth.PermissionResolution{}, auth.ErrPermissionDenied
 	}
-	return auth.PermissionResolution{UserID: principalUserID, Permissions: rec.record(call)}, nil
+	permissions := rec.record(call)
+	resolution := auth.PermissionResolution{UserID: principalUserID, Permissions: permissions}
+	if rec.elevation != nil && mode == auth.PermissionModeAdministration {
+		// No standing set: everything the answer holds the elevation gave.
+		resolution.ElevationSessionRef = ElevatedSessionRef
+		resolution.ElevatedPermissions = append([]string(nil), permissions...)
+		resolution.ElevationID = ElevationID
+		resolution.ElevationIDs = []string{ElevationID}
+		resolution.Elevations = []auth.ElevationGrant{{
+			ID: ElevationID, Level: rec.elevation.Level, Path: rec.elevation.Path,
+		}}
+	}
+	return resolution, nil
 }
 
 // principalUserID is the numeric id of the synthetic principal.
@@ -83,6 +95,10 @@ type recorder struct {
 	others []string
 	calls  []Call
 	admin  int
+	// elevation makes every administration-mode answer elevated
+	// (Variant.Elevation).
+	elevation *Elevation
+	flagged   bool
 }
 
 func (rec *recorder) record(call Call) []string {
@@ -95,6 +111,20 @@ func (rec *recorder) record(call Call) []string {
 	n := rec.admin
 	rec.admin++
 	return append([]string{}, rec.grant(n)...)
+}
+
+// flag records that the request's admin audit row was marked for the
+// elevation review.
+func (rec *recorder) flag() {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.flagged = true
+}
+
+func (rec *recorder) isFlagged() bool {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.flagged
 }
 
 func (rec *recorder) snapshot() []Call {

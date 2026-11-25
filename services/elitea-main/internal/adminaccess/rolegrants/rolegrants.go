@@ -49,6 +49,16 @@ const (
 // away and give nothing.
 var ErrRoleNotFound = errors.New("rolegrants: role is not defined in that mode")
 
+// ErrReservedAccount means the user is the reserved break-glass account
+// (ADR-0059 decision 5, story R2.6b), which holds no role on any path. The
+// caller rolls its transaction back.
+var ErrReservedAccount = errors.New("rolegrants: the reserved break-glass account holds no role")
+
+// ReservedAccountEmail is the address of the reserved break-glass account
+// (adminaccess.ReservedBreakGlassEmail; this package cannot import that one,
+// and adminaccess's reserved_account_test.go keeps the two equal).
+const ReservedAccountEmail = "break-glass@centry.user"
+
 // Querier is what the writer needs from the caller's transaction.
 type Querier interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -98,7 +108,20 @@ VALUES ($1, $2, $3, $4, NULLIF($5::bigint, 0)::integer, NULLIF($6, ''), $7, NULL
 // Grant gives the user one role, keeping every other role of the mode. It
 // reports whether anything changed: false when the user already held it, in
 // which case neither the assignment nor the history is written.
+//
+// It refuses the reserved break-glass account with ErrReservedAccount, in
+// every mode and from every source: this is the one INSERT into
+// auth_core__user_role, so no assignment path can give that account a role.
 func Grant(ctx context.Context, q Querier, userID int64, mode, role string, origin Origin) (bool, error) {
+	var reserved bool
+	if err := q.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1 AND lower(email) = $2)`,
+		userID, ReservedAccountEmail).Scan(&reserved); err != nil {
+		return false, fmt.Errorf("rolegrants: read the user of %s/%s: %w", mode, role, err)
+	}
+	if reserved {
+		return false, ErrReservedAccount
+	}
 	var roleID int
 	if err := q.QueryRow(ctx, `
 SELECT id FROM public.auth_core__role WHERE name = $1 AND mode = $2`, role, mode).Scan(&roleID); err != nil {
