@@ -43,6 +43,7 @@ import {
   type BudgetPeriod,
   type FailModeChoice,
 } from './api/adminBudgetsApi';
+import { useAdminWriteControl } from './adminWriteAccess';
 
 /** What the dialog opens on. Every field is the STORED value or its default. */
 export interface BudgetDialogInitialValues {
@@ -143,9 +144,7 @@ export function AdminBudgetDialog({
     }
     const parsedThreshold = parseThreshold(threshold);
     if ('error' in parsedThreshold) {
-      setLocalError(
-        t('pages.admin.budgets.error.thresholdRange', 'The warning threshold must be 1 to 100.'),
-      );
+      setLocalError(t('pages.admin.budgets.error.thresholdRange', 'The warning threshold must be 1 to 100.'));
       return;
     }
     setLocalError('');
@@ -200,10 +199,7 @@ export function AdminBudgetDialog({
           value={threshold}
           disabled={isSaving || isLoading}
           onChange={(event) => setThreshold(event.target.value)}
-          helperText={t(
-            'pages.admin.budgets.field.thresholdHelp',
-            'Leave empty to inherit the platform threshold.',
-          )}
+          helperText={t('pages.admin.budgets.field.thresholdHelp', 'Leave empty to inherit the platform threshold.')}
           slotProps={{ htmlInput: { 'data-testid': 'admin-budget-threshold' } }}
         />
 
@@ -272,16 +268,25 @@ export function AdminBudgetDialog({
         <Button variant="text" disabled={isSaving} onClick={onClose}>
           {t('pages.admin.budgets.dialog.cancel', 'Cancel')}
         </Button>
-        <Button
-          variant="contained"
-          disabled={isSaving || isLoading}
-          onClick={handleSubmit}
-          data-testid="admin-budget-save"
-        >
-          {t('pages.admin.budgets.dialog.save', 'Save')}
-        </Button>
+        <BudgetSaveButton busy={isSaving || isLoading} onClick={handleSubmit} />
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** Save, disabled while busy and in view-only mode (R3.4a, issue 2534). */
+function BudgetSaveButton({ busy, onClick }: { readonly busy: boolean; readonly onClick: () => void }): ReactNode {
+  const { disabled, reason } = useAdminWriteControl();
+  return (
+    <Button
+      variant="contained"
+      disabled={busy || disabled}
+      title={reason}
+      onClick={onClick}
+      data-testid="admin-budget-save"
+    >
+      {t('pages.admin.budgets.dialog.save', 'Save')}
+    </Button>
   );
 }
 
@@ -308,9 +313,6 @@ function failModeLabel(mode: (typeof NATS_FAIL_MODES)[number]): string {
     case 'fail_closed':
       return t('pages.admin.budgets.failMode.failClosed', 'Fail closed — refuse the call');
     case 'tiered_hybrid':
-      return t(
-        'pages.admin.budgets.failMode.tieredHybrid',
-        'Tiered hybrid — fall back to Postgres',
-      );
+      return t('pages.admin.budgets.failMode.tieredHybrid', 'Tiered hybrid — fall back to Postgres');
   }
 }

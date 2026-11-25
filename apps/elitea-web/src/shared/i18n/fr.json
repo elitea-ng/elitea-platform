@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "Aucun rôle de ce déploiement ne l’ouvre.",
   "pages.admin.itemDenied.rolesIntro": "Ces rôles l’ouvrent :",
   "pages.admin.itemDenied.askSupport": "Pour demander l’un de ces rôles, contactez votre support informatique :",
-  "pages.admin.itemDenied.askFallback": "Pour demander l’un de ces rôles, contactez les personnes qui gèrent ce déploiement."
+  "pages.admin.itemDenied.askFallback": "Pour demander l’un de ces rôles, contactez les personnes qui gèrent ce déploiement.",
+  "pages.admin.viewOnly.controlReason": "Consultation seule : vos rôles permettent de voir cette page, mais pas de la modifier.",
+  "pages.admin.viewOnly.noRole": "Vous pouvez voir cette page, mais pas la modifier. Aucun rôle de ce déploiement ne peut la modifier.",
+  "pages.admin.viewOnly.roles": "Vous pouvez voir cette page, mais pas la modifier. Ces rôles peuvent la modifier : {{roles}}.",
+  "pages.admin.viewOnly.title": "Consultation seule",
+  "pages.admin.viewOnly.unnamed": "Vous pouvez voir cette page, mais pas la modifier."
 }

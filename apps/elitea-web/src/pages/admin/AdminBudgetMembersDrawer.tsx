@@ -29,12 +29,12 @@ import TableBody from '@mui/material/TableBody';
 import TableCell from '@mui/material/TableCell';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { formatSmallUsd } from '@/shared/lib/money';
 
+import { AdminWriteControl } from './AdminWritable';
 import type { MemberBudgetRow } from './api/adminBudgetsApi';
 
 export interface AdminBudgetMembersDrawerProps {
@@ -116,9 +116,7 @@ export function AdminBudgetMembersDrawer({
                 <TableCell>{t('pages.admin.budgets.members.column.member', 'Member')}</TableCell>
                 <TableCell>{t('pages.admin.budgets.members.column.cap', 'Cap')}</TableCell>
                 <TableCell>{t('pages.admin.budgets.members.column.spend', 'Spend')}</TableCell>
-                <TableCell align="right">
-                  {t('pages.admin.budgets.members.column.actions', 'Actions')}
-                </TableCell>
+                <TableCell align="right">{t('pages.admin.budgets.members.column.actions', 'Actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -136,25 +134,33 @@ export function AdminBudgetMembersDrawer({
                   </TableCell>
                   <TableCell>{row.spend_available === false ? DASH : money(row.spend)}</TableCell>
                   <TableCell align="right">
-                    <Tooltip title={t('pages.admin.budgets.action.edit', 'Edit budget')}>
-                      <IconButton
-                        size="small"
-                        onClick={() => onEdit(row)}
-                        data-testid={`admin-budgets-member-edit-${row.user_id}`}
-                      >
-                        <EditOutlinedIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    {hasCap(row) ? (
-                      <Tooltip title={t('pages.admin.budgets.action.clear', 'Clear back to default')}>
+                    <AdminWriteControl label={t('pages.admin.budgets.action.edit', 'Edit budget')}>
+                      {(disabled) => (
                         <IconButton
                           size="small"
-                          onClick={() => onClear(row)}
-                          data-testid={`admin-budgets-member-clear-${row.user_id}`}
+                          disabled={disabled}
+                          aria-label={t('pages.admin.budgets.action.edit', 'Edit budget')}
+                          onClick={() => onEdit(row)}
+                          data-testid={`admin-budgets-member-edit-${row.user_id}`}
                         >
-                          <DeleteOutlineIcon fontSize="small" />
+                          <EditOutlinedIcon fontSize="small" />
                         </IconButton>
-                      </Tooltip>
+                      )}
+                    </AdminWriteControl>
+                    {hasCap(row) ? (
+                      <AdminWriteControl label={t('pages.admin.budgets.action.clear', 'Clear back to default')}>
+                        {(disabled) => (
+                          <IconButton
+                            size="small"
+                            disabled={disabled}
+                            aria-label={t('pages.admin.budgets.action.clear', 'Clear back to default')}
+                            onClick={() => onClear(row)}
+                            data-testid={`admin-budgets-member-clear-${row.user_id}`}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        )}
+                      </AdminWriteControl>
                     ) : null}
                   </TableCell>
                 </TableRow>
