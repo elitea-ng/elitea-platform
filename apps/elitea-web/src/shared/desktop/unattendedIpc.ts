@@ -140,7 +140,11 @@ export type UnattendedEvent =
   /** On a turn that ran when the app stopped, after the next start, when the host does not continue it by itself: offer Continue. */
   | { kind: 'resume_offered'; payload: { workspace_id: string; conversation_id: string | number } }
   /** On a turn whose `done` named a `floor_next` (ADR-0050 decision 7f): that agent does not answer (`floor_turn_superseded`: a newer message took the floor). */
-  | { kind: 'floor_stopped'; payload: { code: string; message: string } };
+  | { kind: 'floor_stopped'; payload: { code: string; message: string } }
+  /** The answering agent's avatar state changed (ADR-0061 decision 4b): the `agent_state` frame's shape, derived by the host. */
+  | { kind: 'agent_state'; payload: { participant_id: number; state: string; activity?: unknown } }
+  /** The agents still to answer the routed message, after a Skip (ADR-0061 decision 2c); the host keeps the order. */
+  | { kind: 'exchange'; payload: { remaining: number[] } };
 
 /** The fields a `status` `running` of an unattended turn adds. */
 export interface UnattendedStatusFields {
@@ -169,4 +173,6 @@ export interface TurnFloorStatus {
   participant_id: number;
   agent_name: string;
   executor: AgentExecutor;
+  /** The agents still to answer the message after this one, skips removed (ADR-0061 decision 2c); absent from an older host. */
+  exchange?: number[];
 }

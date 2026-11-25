@@ -116,6 +116,7 @@ export { ActionView } from './ui/ActionView';
 export type { ActionViewProps } from './ui/ActionView';
 export { AgentAvatar } from './ui/chat-box/AgentAvatar';
 export type { AgentAvatarProps } from './ui/chat-box/AgentAvatar';
+export { applyLocalAgentState, useAgentAvatarStates } from './model/agentAvatar.store';
 export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';
 export type { ApplicationAnswerProps } from './ui/chat-box/ApplicationAnswer.types';
 export type { AnswerCanvasSelection } from './ui/chat-box/AnswerContent';
