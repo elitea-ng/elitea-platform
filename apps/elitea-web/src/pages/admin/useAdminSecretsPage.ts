@@ -34,6 +34,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { t } from '@/shared/i18n';
 
 import { adminUiShowsControlFor } from './adminUiConfig';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   adminSecretFailureReason,
   useAdminSecrets,
@@ -94,9 +96,17 @@ export interface AdminSecretsPageState {
 
   /** Presentation only — the server authorises every one of these on its own. */
   readonly canReveal: boolean;
+  /** Absent on the Internal tab, which is read-only for everyone. */
   readonly onCreate: (() => void) | undefined;
   readonly onEdit: ((name: string) => void) | undefined;
   readonly onDelete: ((name: string) => void) | undefined;
+  /**
+   * View-only mode (R3.4b, issue 2613): an action the caller's roles cannot
+   * take is disabled, not hidden, on the User Secrets tab.
+   */
+  readonly createDisabled: boolean;
+  readonly editDisabled: boolean;
+  readonly deleteDisabled: boolean;
 
   readonly onTabChange: (event: unknown, next: number) => void;
   readonly onSearchChange: (value: string) => void;
@@ -120,10 +130,16 @@ export function useAdminSecretsPage(): AdminSecretsPageState {
   const [savedMessage, setSavedMessage] = useState('');
 
   const listQuery = useAdminSecrets();
+  // The reveal is a read (a GET the API module carries as a mutation so the
+  // plaintext never enters the query cache), so it works at the read level.
   const reveal = useRevealAdminSecret();
-  const create = useCreateAdminSecret();
-  const update = useUpdateAdminSecret();
-  const remove = useDeleteAdminSecret();
+  const access = useAdminWritable(ADMIN_ITEM.secrets);
+  const create = access.guard(useCreateAdminSecret());
+  const update = access.guard(useUpdateAdminSecret());
+  const remove = access.guard(useDeleteAdminSecret());
+  const createControl = useAdminActionControl(PERMISSION_SECRETS_CREATE);
+  const editControl = useAdminActionControl(PERMISSION_SECRETS_EDIT);
+  const deleteControl = useAdminActionControl(PERMISSION_SECRETS_DELETE);
 
   const secrets = useMemo(() => listQuery.data ?? [], [listQuery.data]);
 
@@ -197,9 +213,6 @@ export function useAdminSecretsPage(): AdminSecretsPageState {
   // Presentation flags. The Internal tab is read-only for everyone regardless
   // of what these say — see this module's header.
   const isUserTab = activeTab === 0;
-  const canCreate = isUserTab && adminUiShowsControlFor(PERMISSION_SECRETS_CREATE);
-  const canEdit = isUserTab && adminUiShowsControlFor(PERMISSION_SECRETS_EDIT);
-  const canDelete = isUserTab && adminUiShowsControlFor(PERMISSION_SECRETS_DELETE);
 
   return {
     activeTab,
@@ -228,21 +241,24 @@ export function useAdminSecretsPage(): AdminSecretsPageState {
     // honest ordering — hiding it on a permission the config does not carry
     // would hide the affordance from callers who do hold `.view`.
     canReveal: adminUiShowsControlFor(PERMISSION_SECRETS_LIST),
-    onCreate: canCreate
+    createDisabled: createControl.disabled,
+    editDisabled: editControl.disabled,
+    deleteDisabled: deleteControl.disabled,
+    onCreate: isUserTab
       ? () => {
           setEditingName(undefined);
           setSaveError(undefined);
           setDialogOpen(true);
         }
       : undefined,
-    onEdit: canEdit
+    onEdit: isUserTab
       ? (name: string) => {
           setEditingName(name);
           setSaveError(undefined);
           setDialogOpen(true);
         }
       : undefined,
-    onDelete: canDelete ? (name: string) => setDeleteName(name) : undefined,
+    onDelete: isUserTab ? (name: string) => setDeleteName(name) : undefined,
 
     onTabChange: useCallback((_event: unknown, next: number) => {
       setActiveTab(next);

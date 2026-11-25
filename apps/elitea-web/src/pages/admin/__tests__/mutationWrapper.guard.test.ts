@@ -41,11 +41,18 @@ const NOT_CONVERTED: readonly string[] = [
   'ServiceDescriptorDecisionDialog.tsx',
   'useAdminBrandingPage.ts',
   'useAdminConfigurationPage.ts',
-  'useAdminSchedulesPage.ts',
-  'useAdminSecretsPage.ts',
-  'useAdminTasksPage.ts',
   'useBrandingPackage.ts',
 ];
+
+/**
+ * Mutation hooks that READ: a GET the API module carries as a mutation so
+ * its result never enters the query cache. They work at the read level, so
+ * they are not guarded. Each entry says what it reads; never add a write.
+ */
+const READ_MUTATIONS: ReadonlySet<string> = new Set([
+  // GET of one global secret's plaintext, gated on configuration.secrets.secret.view.
+  'useRevealAdminSecret',
+]);
 
 const SOURCE_RE = /\.(ts|tsx)$/;
 const TEST_RE = /\.(test|spec|stories)\.(ts|tsx)$/;
@@ -131,7 +138,7 @@ function apiSources(): string[] {
 function pageFindings(hooks: ReadonlySet<string>): Map<string, string[]> {
   const findings = new Map<string, string[]>();
   for (const path of walk(ADMIN_DIR, new Set(['api', '__tests__']))) {
-    const calls = unwrappedMutations(readFileSync(path, 'utf8'), hooks);
+    const calls = unwrappedMutations(readFileSync(path, 'utf8'), hooks).filter((name) => !READ_MUTATIONS.has(name));
     if (calls.length > 0) findings.set(relative(ADMIN_DIR, path), calls);
   }
   return findings;

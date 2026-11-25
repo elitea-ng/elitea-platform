@@ -21,6 +21,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import { AdminTasks } from './Tasks';
 
 const BASE = '/api/v2';
@@ -286,5 +287,19 @@ describe('AdminTasks', () => {
     seedListing([runtimeJob()], undefined, true);
     renderAdminRoute(<AdminTasks refetchInterval={false} />);
     expect(await screen.findByTestId('admin-tasks-truncated')).toBeInTheDocument();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `schedules-tasks`
+// Stop is disabled, not hidden; the filters and paging still read.
+describe('AdminTasks - view only', () => {
+  it('disables Stop at the read level', async () => {
+    serveConsoleLevel('read', 'schedules-tasks');
+    seedListing([runtimeJob()]);
+    renderAdminRoute(<AdminTasks refetchInterval={false} />);
+    await screen.findByTestId('admin-task-exec-1');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByLabelText('Stop exec-1')).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

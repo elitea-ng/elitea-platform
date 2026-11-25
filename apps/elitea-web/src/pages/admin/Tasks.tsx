@@ -51,6 +51,9 @@ import Typography from '@mui/material/Typography';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { AdminTasksTable } from './AdminTasksTable';
 import { TASK_KINDS, type AdminTaskRow } from './api/adminTasksApi';
 import { useAdminTasksPage } from './useAdminTasksPage';
@@ -80,7 +83,16 @@ export interface AdminTasksProps {
 }
 
 export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.schedulesTasks}>
+      <TasksPage {...props} />
+    </AdminWritable>
+  );
+}
+
+function TasksPage(props: AdminTasksProps): ReactNode {
   const page = useAdminTasksPage(props.refetchInterval);
+  const writeControl = useAdminWriteControl();
   const [pendingCancel, setPendingCancel] = useState<AdminTaskRow>();
 
   return (
@@ -94,6 +106,8 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
           'Background jobs running on this platform. The list refreshes every ten seconds.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Box sx={filtersSx}>
         <Select
@@ -150,6 +164,7 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
         <AdminTasksTable
           rows={page.rows}
           isCancelling={page.isCancelling}
+          cancelDisabled={writeControl.disabled}
           onCancel={setPendingCancel}
         />
       )}
@@ -180,6 +195,7 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
           <Button
             color="error"
             variant="contained"
+            disabled={writeControl.disabled}
             onClick={() => {
               if (pendingCancel === undefined) return;
               page.cancel(pendingCancel);
