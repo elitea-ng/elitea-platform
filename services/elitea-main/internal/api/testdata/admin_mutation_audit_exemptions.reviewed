@@ -1,0 +1,7 @@
+# Administration mutations that write no admin audit row (ADR-0059 R1.7, #2511).
+#
+# Read by TestEveryAdministrationMutationWritesAnAuditRow
+# (admin_mutation_audit_coverage_test.go). One "METHOD pattern: reason" per
+# line; the pattern in adminaccess.RoutePattern form. An entry is a security
+# review: it says why the mutation needs no row, or names the follow-up issue
+# that adds one. The list is empty: every administration mutation is audited.

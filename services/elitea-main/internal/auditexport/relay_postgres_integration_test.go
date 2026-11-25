@@ -6,6 +6,7 @@ package auditexport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -115,6 +116,7 @@ type flakySink struct {
 	down      bool
 	delivered []string
 	chains    []*Chain
+	details   []any
 	// onSend runs before each delivery (tests that race the relay).
 	onSend func()
 }
@@ -137,6 +139,7 @@ func (f *flakySink) Send(_ context.Context, events []Event) error {
 	for _, e := range events {
 		f.delivered = append(f.delivered, e.Ref())
 		f.chains = append(f.chains, e.Chain)
+		f.details = append(f.details, e.Details)
 	}
 	return nil
 }
@@ -256,6 +259,58 @@ func TestAuditEventsRelayStartsAtNewestRowAndDeliversNewOnes(t *testing.T) {
 	sink.mu.Unlock()
 	if n, _ := relay.Drain(context.Background()); n != 0 {
 		t.Fatal("exported the same rows twice")
+	}
+}
+
+// ADR-0059 R1.4b: the role-use columns reach the export; NULL columns are
+// omitted, {} stays an empty list, and the reason text never leaves the row.
+func TestAuditEventsRelayExportsTheRoleUseFields(t *testing.T) {
+	pool := newExportPool(t)
+	sink := &flakySink{}
+	relay := newRelay(t, pool, sink, nil)
+	_, _ = relay.Drain(context.Background()) // creates the cursor at the table's end
+	var full, none, absent int64
+	if err := pool.QueryRow(context.Background(), `
+INSERT INTO centry.audit_events (timestamp, user_id, event_type, action, is_error, acting_roles, elevation_id,
+       credential_kind, central_override, reason_code, reason, reason_missing, elevation_flagged)
+VALUES (clock_timestamp(), 7, 'api', 'PUT /a', false, '{admin,llm_manager}', '0192f0c1-7b6e-7c3a-8f00-000000000001',
+       'session', true, 'incident', 'INC-42 the text', false, true)
+RETURNING id`).Scan(&full); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(context.Background(), `
+INSERT INTO centry.audit_events (timestamp, event_type, action, is_error, acting_roles, credential_kind, central_override)
+VALUES (clock_timestamp(), 'api', 'POST /b', false, '{}', 'system', false) RETURNING id`).Scan(&none); err != nil {
+		t.Fatal(err)
+	}
+	absent = insertAudit(t, pool, 1, 0)[0]
+	if n := drainUntil(t, relay, 3); n != 3 {
+		t.Fatalf("drain = %d, want 3", n)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	byRow := map[int64]AdminAuditDetails{}
+	for _, d := range sink.details {
+		details := d.(AdminAuditDetails)
+		byRow[details.RowID] = details
+		raw, _ := json.Marshal(details)
+		if strings.Contains(string(raw), "INC-42") || strings.Contains(string(raw), `"reason"`) {
+			t.Fatalf("the reason text was exported: %s", raw)
+		}
+	}
+	got := byRow[full]
+	if got.ActingRoles == nil || strings.Join(*got.ActingRoles, ",") != "admin,llm_manager" ||
+		got.ElevationID != "0192f0c1-7b6e-7c3a-8f00-000000000001" || got.CredentialKind != "session" ||
+		got.CentralOverride == nil || !*got.CentralOverride || got.ReasonCode != "incident" ||
+		got.ReasonMissing == nil || *got.ReasonMissing || got.ElevationFlagged == nil || !*got.ElevationFlagged {
+		t.Fatalf("full row details = %+v", got)
+	}
+	if got := byRow[none]; got.ActingRoles == nil || len(*got.ActingRoles) != 0 || got.CredentialKind != "system" {
+		t.Fatalf("{} must export as an empty list: %+v", got)
+	}
+	if got := byRow[absent]; got.ActingRoles != nil || got.CredentialKind != "" || got.CentralOverride != nil ||
+		got.ReasonMissing != nil || got.ElevationFlagged != nil {
+		t.Fatalf("NULL columns must be omitted: %+v", got)
 	}
 }
 

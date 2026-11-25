@@ -10,6 +10,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
@@ -228,6 +229,12 @@ func TestSchemaRejectsMalformedEvents(t *testing.T) {
 		"bad time":             func(m map[string]any) { m["time"] = "yesterday" },
 		"admin details extra":  func(m map[string]any) { m["details"].(map[string]any)["surprise"] = true },
 		"admin without row id": func(m map[string]any) { delete(m["details"].(map[string]any), "row_id") },
+		// The reason text is never exported (ADR-0059 R1.4b): the schema has
+		// no field for it.
+		"admin reason text": func(m map[string]any) { m["details"].(map[string]any)["reason"] = "INC-42" },
+		"admin unknown credential kind": func(m map[string]any) {
+			m["details"].(map[string]any)["credential_kind"] = "password"
+		},
 		"security without chain": func(m map[string]any) {
 			m["source"] = "security_audit"
 		},
@@ -244,5 +251,154 @@ func TestSchemaRejectsMalformedEvents(t *testing.T) {
 	}
 	if err := validate(t, schema, base); err != nil {
 		t.Fatalf("baseline event rejected: %v", err)
+	}
+}
+
+// goldenDir holds the elitea.audit.v1 envelopes of admin_audit rows as a
+// receiver sees them, byte for byte: the field order is part of the contract
+// (append, never reorder). Regenerate with ELITEA_UPDATE_GOLDEN=1.
+const goldenDir = "../../../../libs/jsonschema/audit/v1/testdata"
+
+func adminAuditGoldenRows() map[string]AuditRow {
+	at := time.Date(2026, 11, 25, 9, 30, 0, 0, time.UTC)
+	chain := func(row AuditRow) AuditRow {
+		row.PartitionKey, row.PartitionSeq = ptr("0"), ptr(int64(row.ID))
+		row.PrevHash, row.Hash = bytes.Repeat([]byte{0x11}, 32), bytes.Repeat([]byte{0x22}, 32)
+		return row
+	}
+	return map[string]AuditRow{
+		// A row from before shared 0268: no role-use field at all.
+		"admin_audit_before_role_use": chain(AuditRow{
+			ID: 41, Timestamp: at, UserID: ptr(int64(7)), UserEmail: "a@example.com", EventType: "api",
+			Action: "PUT /api/v2/admin/roles", HTTPMethod: "PUT", HTTPRoute: "/api/v2/admin/roles",
+			StatusCode: ptr(int32(200)), DurationMS: ptr(3.5),
+		}),
+		// An administration-mode write under an elevation, every field set.
+		"admin_audit_role_use": chain(AuditRow{
+			ID: 42, Timestamp: at, UserID: ptr(int64(7)), UserEmail: "a@example.com", ProjectID: ptr(int64(3)),
+			EventType: "api", Action: "PUT /api/v2/admin/projects/{project_id}/members",
+			HTTPMethod: "PUT", HTTPRoute: "/api/v2/admin/projects/{project_id}/members",
+			StatusCode: ptr(int32(200)), DurationMS: ptr(12.25),
+			ActingRoles: ptr([]string{"admin", "llm_manager"}), ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001",
+			CredentialKind: "session", CentralOverride: ptr(true), ReasonCode: "incident",
+			ReasonMissing: ptr(false), ElevationFlagged: ptr(true),
+		}),
+		// A credential that acts with no administration role: {} is a value,
+		// not an absence.
+		"admin_audit_no_roles": chain(AuditRow{
+			ID: 43, Timestamp: at, EventType: "api", Action: "POST /api/v2/admin/tasks",
+			HTTPMethod: "POST", HTTPRoute: "/api/v2/admin/tasks", StatusCode: ptr(int32(202)),
+			ActingRoles: ptr([]string{}), CredentialKind: "system", CentralOverride: ptr(false),
+			ElevationFlagged: ptr(false),
+		}),
+	}
+}
+
+func TestAdminAuditGoldenEnvelopes(t *testing.T) {
+	schema := compileSchema(t)
+	for name, row := range adminAuditGoldenRows() {
+		t.Run(name, func(t *testing.T) {
+			got, err := json.MarshalIndent(FromAuditRow(row), "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, '\n')
+			path := goldenDir + "/" + name + ".golden.json"
+			if os.Getenv("ELITEA_UPDATE_GOLDEN") == "1" {
+				if err := os.WriteFile(path, got, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read golden (regenerate with ELITEA_UPDATE_GOLDEN=1): %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("envelope differs from %s:\n%s", path, got)
+			}
+			var doc any
+			if err := json.Unmarshal(want, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if err := validate(t, schema, doc); err != nil {
+				t.Fatalf("golden %s does not conform to elitea.audit.v1: %v", name, err)
+			}
+			if bytes.Contains(want, []byte(`"reason"`)) {
+				t.Fatal("the reason text must never be exported")
+			}
+		})
+	}
+}
+
+// A consumer written against the envelope before the role-use fields keeps
+// decoding it: the fields are additions inside details, and the mapper of
+// the old details shape ignores them.
+func TestAdminAuditRoleUseFieldsAreToleratedByAnOlderConsumer(t *testing.T) {
+	raw, err := os.ReadFile(goldenDir + "/admin_audit_role_use.golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var older struct {
+		Schema  string `json:"schema"`
+		Details struct {
+			RowID   int64 `json:"row_id"`
+			IsError bool  `json:"is_error"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(raw, &older); err != nil || older.Schema != SchemaVersion || older.Details.RowID != 42 {
+		t.Fatalf("an older consumer cannot read the envelope: %+v, %v", older, err)
+	}
+	// And the order: the new fields follow is_error, the old fields keep
+	// their places.
+	text := string(raw)
+	order := []string{`"row_id"`, `"http_method"`, `"http_route"`, `"status_code"`, `"duration_ms"`, `"is_error"`,
+		`"acting_roles"`, `"elevation_id"`, `"credential_kind"`, `"central_override"`, `"reason_code"`,
+		`"reason_missing"`, `"elevation_flagged"`}
+	last := -1
+	for _, key := range order {
+		at := strings.Index(text, key)
+		if at <= last {
+			t.Fatalf("%s is out of order in the details", key)
+		}
+		last = at
+	}
+}
+
+// The schema's credential_kind enum is the closed list the recorder writes
+// (audit.KnownCredentialKind), and a stored value outside it is not exported.
+func TestCredentialKindEnumMatchesTheRecorder(t *testing.T) {
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	enum := doc.Defs["adminAuditDetails"].Properties["credential_kind"].Enum
+	kinds := []string{audit.CredentialKindSession, audit.CredentialKindForm, audit.CredentialKindSealed,
+		audit.CredentialKindToken, audit.CredentialKindNative, audit.CredentialKindRun,
+		audit.CredentialKindSystem, audit.CredentialKindSCIM}
+	if strings.Join(enum, ",") != strings.Join(kinds, ",") {
+		t.Fatalf("schema credential_kind enum %v, recorder kinds %v", enum, kinds)
+	}
+	for _, kind := range enum {
+		if !audit.KnownCredentialKind(kind) {
+			t.Errorf("%q is in the schema but not a known credential kind", kind)
+		}
+	}
+	at := time.Date(2026, 11, 25, 9, 30, 0, 0, time.UTC)
+	event := FromAuditRow(AuditRow{ID: 5, Timestamp: at, EventType: "api", Action: "PUT /x", CredentialKind: "password"})
+	if details := event.Details.(AdminAuditDetails); details.CredentialKind != "" {
+		t.Fatalf("an unknown stored kind was exported: %q", details.CredentialKind)
+	}
+	if err := validate(t, compileSchema(t), event); err != nil {
+		t.Fatal(err)
 	}
 }

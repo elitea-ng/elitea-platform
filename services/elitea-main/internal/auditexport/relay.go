@@ -303,7 +303,9 @@ SELECT last_txid, last_id FROM elitea_runtime.audit_export_cursors WHERE stream 
 const auditColumns = `e.id, e.timestamp, e.user_id, e.user_email, e.project_id, e.event_type, e.action,
        e.http_method, e.http_route, e.status_code, e.duration_ms, e.is_error,
        e.entity_type, e.entity_id, e.entity_name, e.trace_id, e.span_id, e.parent_span_id,
-       c.partition_key, c.partition_seq, c.prev_hash, c.hash`
+       c.partition_key, c.partition_seq, c.prev_hash, c.hash,
+       e.acting_roles, e.elevation_id::text, e.credential_kind, e.central_override,
+       e.reason_code, e.reason_missing, e.elevation_flagged`
 
 // selectLegacyRowsSQL reads rows inserted before 0196 (export_txid 0). That
 // set is closed: the migration's lock waited for every inserting transaction.
@@ -444,13 +446,21 @@ func scanAuditRows(rows pgx.Rows) ([]Event, []position, error) {
 			statusCode                                       *int16
 			userEmail, method, route, entityType, entityName *string
 			traceID, spanID, parentSpanID                    *string
+			elevationID, credentialKind, reasonCode          *string
+			actingRoles                                      []string
 		)
 		if err := rows.Scan(&txid, &row.ID, &row.Timestamp, &userID, &userEmail, &projectID, &row.EventType, &row.Action,
 			&method, &route, &statusCode, &row.DurationMS, &row.IsError,
 			&entityType, &entityID, &entityName, &traceID, &spanID, &parentSpanID,
-			&row.PartitionKey, &row.PartitionSeq, &row.PrevHash, &row.Hash); err != nil {
+			&row.PartitionKey, &row.PartitionSeq, &row.PrevHash, &row.Hash,
+			&actingRoles, &elevationID, &credentialKind, &row.CentralOverride,
+			&reasonCode, &row.ReasonMissing, &row.ElevationFlagged); err != nil {
 			return nil, nil, err
 		}
+		if actingRoles != nil {
+			row.ActingRoles = &actingRoles
+		}
+		row.ElevationID, row.CredentialKind, row.ReasonCode = deref(elevationID), deref(credentialKind), deref(reasonCode)
 		row.UserID, row.ProjectID, row.EntityID = widen(userID), widen(projectID), widen(entityID)
 		if statusCode != nil {
 			v := int32(*statusCode)

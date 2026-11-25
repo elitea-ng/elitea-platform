@@ -1,0 +1,45 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "22b6824f-159d-54e4-9866-7ed108f18f61",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "admin_audit",
+  "event_type": "api",
+  "ocsf": {
+    "class_uid": 6003,
+    "category_uid": 6
+  },
+  "tenant": {
+    "project_id": 3
+  },
+  "actor": {
+    "type": "user",
+    "id": "7",
+    "email": "a@example.com"
+  },
+  "action": "PUT /api/v2/admin/projects/{project_id}/members",
+  "outcome": "success",
+  "chain": {
+    "partition": "0",
+    "sequence": 42,
+    "prev_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "details": {
+    "row_id": 42,
+    "http_method": "PUT",
+    "http_route": "/api/v2/admin/projects/{project_id}/members",
+    "status_code": 200,
+    "duration_ms": 12.25,
+    "is_error": false,
+    "acting_roles": [
+      "admin",
+      "llm_manager"
+    ],
+    "elevation_id": "0192f0c1-7b6e-7c3a-8f00-000000000001",
+    "credential_kind": "session",
+    "central_override": true,
+    "reason_code": "incident",
+    "reason_missing": false,
+    "elevation_flagged": true
+  }
+}
