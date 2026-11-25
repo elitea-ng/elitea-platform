@@ -15,7 +15,8 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { t } from '@/shared/i18n';
 
-import { ADMIN_ITEM } from './adminItemIds';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminWritable } from './adminWriteAccess';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminProjectsCsv } from './adminProjectsCsv';
@@ -281,7 +282,7 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
     memberProject,
     activityProject,
     cloudExecutorProject,
-    canEditProjects: access.writable,
+    canEditProjects: access.writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.projectsEdit),
 
     onTabChange,
     onSearchChange,

@@ -497,12 +497,30 @@ describe('Admin › Roles', () => {
 
   it('keeps the controls enabled for a role that writes the access item', async () => {
     const user = userEvent.setup();
+    grantAdminUiPermissions([
+      'configuration.roles.permissions.view',
+      'configuration.roles.permissions.edit',
+      'configuration.roles.roles.create',
+    ]);
     serveConsoleLevel('write');
     renderAdminRoute(<AdminRoles />);
 
     await expandGroup(user, 'models.alpha');
     expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeEnabled();
     expect(screen.getByTestId('admin-roles-new-role')).toBeEnabled();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
+  });
+
+  // The item is `write` for any of its write permissions, so an action with a
+  // narrower one is disabled, not hidden, for a caller without it.
+  it('disables New role for a writer without roles.create, and keeps the matrix editable', async () => {
+    const user = userEvent.setup();
+    serveConsoleLevel('write');
+    renderAdminRoute(<AdminRoles />);
+
+    await expandGroup(user, 'models.alpha');
+    expect(screen.getByRole('checkbox', { name: 'admin: models.alpha.view' })).toBeEnabled();
+    expect(screen.getByTestId('admin-roles-new-role')).toBeDisabled();
     expect(screen.queryByTestId('admin-view-only')).toBeNull();
   });
 

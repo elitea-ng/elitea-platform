@@ -18,6 +18,11 @@ drawers keep working, and the page sends no change.
   delete, suspend and members on Projects, and approve and reject on App
   requests. A role that can read a page sees what it could do there, and the
   notice says who can.
+- An action whose permission is narrower than its page is still checked on
+  its own. For example, a role with only `projects.projects.project.create`
+  can create projects, but delete, suspend and members stay disabled, and their
+  tooltip says the role cannot do that action. The same applies to role
+  create, rename and delete on Roles, and to user management on Users.
 - Each tab of the LLM Proxy and of identity configuration follows its own
   console item, so a role can be view only on one tab and able to change
   another.

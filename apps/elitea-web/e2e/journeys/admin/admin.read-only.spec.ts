@@ -31,9 +31,19 @@ const WRITE_CONTROL =
 /** Write controls the auditor may use: the review outcome form, once R3.11 ships. */
 const ALLOWED_WRITES: readonly RegExp[] = [];
 
-/** The write controls of the page: named buttons, and the checkboxes of its tables. */
+/** A row checkbox of a plain table or an MUI X data grid; the grid's select-all box is excluded. */
+const ROW_CHECKBOX = ['table', '[role="grid"]']
+  .map((container) => `${container} input[type="checkbox"]:not([aria-label="Select all rows"])`)
+  .join(', ');
+
+/**
+ * The write controls of the page: named buttons, and the row checkboxes of its
+ * tables and data grids (a grid's select-all header box only selects).
+ */
 function writeControls(main: Locator): Locator {
-  return main.getByRole('button', { name: WRITE_CONTROL }).or(main.locator('table').getByRole('checkbox'));
+  return main
+    .getByRole('button', { name: WRITE_CONTROL })
+    .or(main.locator(ROW_CHECKBOX));
 }
 
 async function enabledWrites(main: Locator): Promise<string[]> {

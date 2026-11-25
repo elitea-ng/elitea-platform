@@ -38,7 +38,8 @@ import { DataGrid } from '@mui/x-data-grid';
 import { t } from '@/shared/i18n';
 
 import { AdminUserRolesSelect } from './AdminUserRolesSelect';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import type { AdministrationRole } from './api/adminRoleOptionsApi';
 import type { AdminUserRow } from './api/adminUsersApi';
 
@@ -106,7 +107,7 @@ export const AdminUsersTable = memo(function AdminUsersTable({
 }: AdminUsersTableProps) {
   const theme = useTheme();
   // View-only mode (R3.4b, issue 2613): the writes are disabled, not hidden.
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.usersManage).disabled;
 
   const sortModel: GridSortModel = useMemo(
     () => (sortField ? [{ field: sortField, sort: sortDirection }] : []),

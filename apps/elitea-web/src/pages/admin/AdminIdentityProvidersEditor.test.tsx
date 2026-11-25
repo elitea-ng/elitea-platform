@@ -37,7 +37,7 @@ import {
   splitLoginDomains,
 } from './adminIdentityProviderForm';
 import { renderAdminRoute } from './__tests__/testRouter';
-import { enabledWriteControls, serveConsoleLevel } from './__tests__/viewOnly';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const PROVIDERS = [
   {
@@ -479,5 +479,18 @@ describe('view only', () => {
     await waitFor(() => expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled());
     expect(screen.getByTestId('admin-scim-clients-add')).toBeEnabled();
     expect(screen.getByTestId('admin-scim-group-bindings-add')).toBeEnabled();
+  });
+
+  // SCIM not open to the caller at all: its controls are disabled, and its own
+  // notice says why, under a writable Identity providers half.
+  it('explains a disabled SCIM half when the caller has no SCIM level', async () => {
+    useScimHandlers();
+    serveConsoleLevel('write', 'identity-providers');
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+
+    const notice = await findViewOnlyNotice();
+    expect(notice).toHaveAttribute('data-item-id', 'scim');
+    await waitFor(() => expect(screen.getByTestId('admin-scim-clients-add')).toBeDisabled());
+    expect(screen.getByTestId('admin-identity-providers-add')).toBeEnabled();
   });
 });

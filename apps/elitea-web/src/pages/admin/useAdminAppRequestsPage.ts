@@ -307,7 +307,9 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
     pendingIds,
     errorMessage,
     savedMessage,
-    rejecting,
+    // A level that drops to read under an open reject dialog closes it
+    // (R3.4b): the dialog is a write, and its confirm would send nothing.
+    rejecting: access.writable ? rejecting : null,
 
     onSearchChange,
     onStatusFilterChange,
@@ -321,6 +323,6 @@ export function useAdminAppRequestsPage(): AdminAppRequestsPageState {
 
     onApprove,
     onOpenReject: setRejecting,
-    onConfirmReject: access.writable ? onConfirmReject : undefined,
+    onConfirmReject,
   };
 }

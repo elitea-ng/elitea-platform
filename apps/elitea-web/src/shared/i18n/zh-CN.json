@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "如需申请其中一个角色，请联系你的 IT 支持：",
   "pages.admin.itemDenied.askFallback": "如需申请其中一个角色，请联系管理此部署的人员。",
   "pages.admin.viewOnly.controlReason": "仅查看：你的角色可以查看此页面，但不能更改。",
+  "pages.admin.viewOnly.actionReason": "你的角色可以更改此页面，但不能执行此操作。",
   "pages.admin.viewOnly.noRole": "你可以查看此页面，但不能更改。此部署中没有可以更改它的角色。",
   "pages.admin.viewOnly.roles": "你可以查看此页面，但不能更改。以下角色可以更改它：{{roles}}。",
   "pages.admin.viewOnly.title": "仅查看",

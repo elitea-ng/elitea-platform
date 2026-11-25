@@ -29,6 +29,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminWritable } from './adminWriteAccess';
 import { deprecatedGrants, type DeprecatedGrants } from './deprecatedGrants';
 import {
@@ -254,7 +256,8 @@ export function useAdminRolesPage(): AdminRolesPageState {
     [onCloseRoleDialog],
   );
 
-  const canEdit = access.writable;
+  // The matrix writes under permissions.edit, narrower than the item (R3.4b).
+  const canEdit = access.writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.rolePermissionsEdit);
 
   return {
     activeTab,

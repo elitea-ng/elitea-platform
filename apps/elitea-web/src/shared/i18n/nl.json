@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "Neem contact op met uw IT-ondersteuning om een van deze rollen aan te vragen:",
   "pages.admin.itemDenied.askFallback": "Neem contact op met de mensen die deze implementatie beheren om een van deze rollen aan te vragen.",
   "pages.admin.viewOnly.controlReason": "Alleen bekijken: uw rollen kunnen deze pagina zien, maar niet wijzigen.",
+  "pages.admin.viewOnly.actionReason": "Uw rollen kunnen deze pagina wijzigen, maar niet met deze actie.",
   "pages.admin.viewOnly.noRole": "U kunt deze pagina zien, maar niet wijzigen. Geen rol in deze implementatie kan haar wijzigen.",
   "pages.admin.viewOnly.roles": "U kunt deze pagina zien, maar niet wijzigen. Deze rollen kunnen haar wijzigen: {{roles}}.",
   "pages.admin.viewOnly.title": "Alleen bekijken",

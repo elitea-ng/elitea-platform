@@ -64,8 +64,8 @@ import { AdminUserDevicesDrawer } from './AdminUserDevicesDrawer';
 import { AdminUsersTable, type AdminUserRowActions } from './AdminUsersTable';
 import type { AdminUserRow } from './api/adminUsersApi';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWriteControl } from './adminWriteAccess';
 import { UserActivityDrawer } from './UserActivityDrawer';
 import { ADMIN_USERS_PAGE_SIZE, useAdminUsersPage } from './useAdminUsersPage';
 
@@ -81,6 +81,7 @@ export function AdminUsers() {
 function UsersPage() {
   const state = useAdminUsersPage();
   const writeControl = useAdminWriteControl();
+  const manageControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.usersManage);
   // The cross-project bulk invite (issue 247). It lives on this page because
   // its subject is ACCOUNTS: the legacy runtime put "add every user to a
   // project" under Invites, beside the global user list, and the picker it
@@ -150,7 +151,8 @@ function UsersPage() {
               color="alarm"
               size="small"
               startIcon={<DeleteIcon fontSize="small" />}
-              disabled={writeControl.disabled}
+              disabled={manageControl.disabled}
+              title={manageControl.reason}
               onClick={() => state.onRequestDelete(state.selectedIds)}
               sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             >

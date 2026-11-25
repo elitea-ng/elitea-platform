@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "これらのロールを申請するには、IT サポートに連絡してください:",
   "pages.admin.itemDenied.askFallback": "これらのロールを申請するには、このデプロイを管理している担当者に連絡してください。",
   "pages.admin.viewOnly.controlReason": "閲覧のみ: あなたのロールではこのページを表示できますが、変更はできません。",
+  "pages.admin.viewOnly.actionReason": "あなたのロールではこのページを変更できますが、この操作はできません。",
   "pages.admin.viewOnly.noRole": "このページを表示できますが、変更はできません。このデプロイメントには、変更できるロールがありません。",
   "pages.admin.viewOnly.roles": "このページを表示できますが、変更はできません。次のロールで変更できます: {{roles}}。",
   "pages.admin.viewOnly.title": "閲覧のみ",

@@ -1,7 +1,9 @@
 /**
  * Admin › Configuration › LLM Proxy › Models & pricing: the catalogue tab,
- * moved out of `./AdminLlmProxyEditor.tsx` unchanged so the editor stays
- * under the 400-line cap (R3.4b, issue 2613).
+ * moved out of `./AdminLlmProxyEditor.tsx` so the editor stays under the
+ * 400-line cap, and then put under the read-only guard of `models-pricing`:
+ * save and clear-override are guarded, and Add a model price is disabled at
+ * `read` (R3.4b, issue 2613).
  */
 import { useDeferredValue, useMemo, useState } from 'react';
 

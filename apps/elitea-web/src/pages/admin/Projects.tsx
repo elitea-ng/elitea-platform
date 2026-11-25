@@ -89,8 +89,8 @@ import { AdminProjectsTable } from './AdminProjectsTable';
 import { ProjectActivityDrawer } from './ProjectActivityDrawer';
 import { ProjectMemberDialog } from './ProjectMemberDialog';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import { ADMIN_PROJECTS_PAGE_SIZE, useAdminProjectsPage } from './useAdminProjectsPage';
 
 /** The page under the read-only wrapper (R3.4b, issue 2613). */
@@ -104,7 +104,8 @@ export function AdminProjects() {
 
 function ProjectsPage() {
   const state = useAdminProjectsPage();
-  const writeControl = useAdminWriteControl();
+  const createControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectCreate);
+  const deleteControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.projectDelete);
 
   const { total, page, provisioning } = state;
   const selectedCount = provisioning.selectedProjects.length;
@@ -171,8 +172,8 @@ function ProjectsPage() {
               color="primary"
               size="small"
               startIcon={<AddIcon fontSize="small" />}
-              disabled={writeControl.disabled}
-              title={writeControl.reason}
+              disabled={createControl.disabled}
+              title={createControl.reason}
               onClick={provisioning.onOpenCreate}
               // flexShrink/nowrap from #587: every child of this row used to be
               // shrinkable, so a narrow viewport took the width out of the
@@ -195,7 +196,7 @@ function ProjectsPage() {
                 <IconButton
                   aria-label={deleteLabel}
                   color="error"
-                  disabled={writeControl.disabled || selectedCount === 0}
+                  disabled={deleteControl.disabled || selectedCount === 0}
                   onClick={provisioning.onOpenDelete}
                   sx={{ flexShrink: 0 }}
                 >

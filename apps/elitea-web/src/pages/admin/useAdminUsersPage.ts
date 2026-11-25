@@ -17,7 +17,8 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
 import type { AdminUserRowActions } from './AdminUsersTable';
-import { ADMIN_ITEM } from './adminItemIds';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminWritable } from './adminWriteAccess';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminUsersCsv } from './adminUsersCsv';
@@ -166,7 +167,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
   // At `read` the controls are disabled (R3.4b, issue 2613), and the picker
   // lists only what each person holds.
   const access = useAdminWritable(ADMIN_ITEM.users);
-  const rolesQuery = useAdministrationRoles({ enabled: access.writable });
+  const rolesQuery = useAdministrationRoles({ enabled: access.writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.usersManage) });
 
   const listQuery = useAdminUsers({
     limit: ADMIN_USERS_PAGE_SIZE,

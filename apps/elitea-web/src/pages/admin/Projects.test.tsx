@@ -671,6 +671,21 @@ describe('Admin › Projects', () => {
     });
   });
 
+  // The item is `write` for any of Edit, Create or Delete, so each action
+  // still needs its own permission: disabled, no longer hidden, without it.
+  it('enables create and disables delete, suspend and members when only create is granted', async () => {
+    grantAdminUiPermissions(['projects.projects.projects.view', 'projects.projects.project.create']);
+    serveConsoleLevel('write', 'projects');
+    renderAdminRoute(<AdminProjects />);
+    await screen.findByText('atlas');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Delete projects' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Suspend project' })[0]).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Manage project member' })[0]).toBeDisabled();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
+  });
+
   describe('the member dialog', () => {
     it('offers the roles the SERVER defines, not a hardcoded list', async () => {
       const user = userEvent.setup();

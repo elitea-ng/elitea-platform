@@ -5003,6 +5003,7 @@
   "pages.admin.itemDenied.askSupport": "이 역할 중 하나를 요청하려면 IT 지원팀에 문의하세요:",
   "pages.admin.itemDenied.askFallback": "이 역할 중 하나를 요청하려면 이 배포를 관리하는 담당자에게 문의하세요.",
   "pages.admin.viewOnly.controlReason": "보기 전용: 내 역할로 이 페이지를 볼 수는 있지만 변경할 수는 없습니다.",
+  "pages.admin.viewOnly.actionReason": "내 역할로 이 페이지를 변경할 수는 있지만 이 작업은 할 수 없습니다.",
   "pages.admin.viewOnly.noRole": "이 페이지를 볼 수는 있지만 변경할 수는 없습니다. 이 배포에는 변경할 수 있는 역할이 없습니다.",
   "pages.admin.viewOnly.roles": "이 페이지를 볼 수는 있지만 변경할 수는 없습니다. 다음 역할로 변경할 수 있습니다: {{roles}}.",
   "pages.admin.viewOnly.title": "보기 전용",

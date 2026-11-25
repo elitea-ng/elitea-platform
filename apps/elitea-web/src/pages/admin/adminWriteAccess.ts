@@ -28,6 +28,7 @@ import { createContext, useContext } from 'react';
 
 import { t } from '@/shared/i18n';
 
+import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminConsole } from './api/adminConsoleApi';
 import { ROLES_ITEM_ID, useTemporaryRolesAccess } from './temporaryRolesLink';
 
@@ -143,6 +144,25 @@ export function useAdminWriteControl(): AdminWriteControlState {
   return {
     disabled: true,
     reason: t('pages.admin.viewOnly.controlReason', 'View only: your roles can see this page but not change it.'),
+  };
+}
+
+/**
+ * The state of a control for ONE action whose permission is narrower than its
+ * page's item: Create project on Projects, Delete role on Roles. The item is
+ * `write` when the caller holds any of its write permissions, so a caller with
+ * only `project.create` would otherwise meet an enabled Delete the server
+ * refuses. The action is disabled, never hidden, when the page is view only or
+ * when the caller lacks the action's permission. Presentation only, read from
+ * `window.admin_ui_config.permissions` as the hiding it replaces was; the
+ * server still decides every write.
+ */
+export function useAdminActionControl(permission: string): AdminWriteControlState {
+  const page = useAdminWriteControl();
+  if (page.disabled || adminUiShowsControlFor(permission)) return page;
+  return {
+    disabled: true,
+    reason: t('pages.admin.viewOnly.actionReason', 'Your roles can change this page, but not with this action.'),
   };
 }
 
