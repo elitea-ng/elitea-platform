@@ -35,6 +35,15 @@ The level is recorded on the credential and in its issue event. An elevation giv
 - **Lifetime.** A credential lives at most 365 days (the default). Replace a credential before it expires; an expired one does not count as an emergency path. A drill that uses a credential and replaces it also proves the path works.
 - A credential is bound to an active account. A suspended account is refused at issue.
 
+### Envelopes and the reserved account
+
+An envelope in a safe cannot name the person who will open it. For that case, issue an **unbound** credential: `--unbound` binds it to the reserved account `break-glass@centry.user` instead of a named person. It needs `--ticket` (the change or incident the envelope is made under) and `--label` (its custodian, for example `"envelope A, safe 2, held by the security officer"`), and takes no `--user`.
+
+- **Two envelopes, two custodians.** Issue two unbound credentials, each with its own label, and give them to two different people in two places. One lost or opened envelope then never closes the path. Revoke and reissue an envelope that was opened, even in a drill.
+- **The reserved account.** The first `issue --unbound` creates the account, with no role and no project; the output says so. Every later one reuses it. The account holds no role and joins no project (a role assignment, a project invitation and a role change for it are refused with `reserved_account`), creates no token (`token_mint_reserved_account`), and signs in through no identity provider, no SAML or OIDC link and no Form user. The Users page does not list it or count it. The only way in as it is a sealed credential.
+- **The address is reserved.** No person can be invited, provisioned or configured with `break-glass@centry.user`, and the console neither suspends nor deletes the account (`403 reserved_account`): revoke its credentials with `break-glass revoke` instead. An existing account with that address that holds a role or is suspended makes `issue --unbound` refuse; clear it first.
+- A bound issue (`--user`) that names the reserved account is refused: issue its credentials with `--unbound`.
+
 ### Issue a credential
 
 ```bash
@@ -45,7 +54,14 @@ kubectl -n <ns> exec deploy/elitea-main -- \
 # At the super_admin level, for 90 days, as two halves for two custodians
 kubectl -n <ns> exec deploy/elitea-main -- \
   /elitea-main break-glass issue --user 42 --level super_admin --expires 90d --split --label "split pair 1"
+
+# Unbound, for an envelope: the reserved account, a ticket and a custodian label
+kubectl -n <ns> exec deploy/elitea-main -- \
+  /elitea-main break-glass issue --unbound --ticket INC-4711 --level super_admin \
+  --label "envelope A, safe 2, security officer"
 ```
+
+`--ticket` is an identifier (letters, digits, `.`, `_`, `:` and `-`, at most 64), never free text. `--unbound` without `--ticket` or without `--label`, or beside `--user`, is refused before anything is read (exit 2).
 
 `--expires` takes a lifetime (`90d`, `720h`) or a date (`2027-06-30`, or an RFC 3339 time). More than 365 days, or a time in the past, is refused before anything is read.
 
@@ -73,7 +89,7 @@ Revoke a credential when its envelope is lost or opened without an incident, whe
 
 | Command | Security audit event |
 | --- | --- |
-| `issue` | `admin.elevation` with the action `credential_issued`, the source `operator`, the credential id, the person and the level |
+| `issue` | `admin.elevation` with the action `credential_issued`, the source `operator`, the credential id, the person and the level; an unbound issue adds the reason codes `credential_unbound` and `ticket:<ticket, lower-cased>` |
 | `list` | a `decision` event with the action `admin.elevation.credential_list`, the source `operator` and the number of credentials listed |
 | `revoke` | `admin.elevation` with the action `credential_revoked`, the source `operator`, the credential id, the person and the level |
 

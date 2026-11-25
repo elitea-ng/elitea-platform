@@ -64,6 +64,9 @@ type membershipChange struct {
 func (h *Handler) checkMembershipChange(
 	r *http.Request, q adminaccess.Querier, change membershipChange,
 ) *adminaccess.Refusal {
+	if refusal := reservedMembershipRefusal(r, q, change); refusal != nil {
+		return refusal
+	}
 	caller, refusal := adminaccess.ResolveCaller(r, h.permissionResolver)
 	if refusal != nil {
 		return refusal
@@ -155,4 +158,32 @@ func callerIsAmong(r *http.Request, q adminaccess.Querier, callerID int64, chang
 		`SELECT EXISTS (SELECT 1 FROM auth_core__user WHERE id = $1 AND lower(email) = ANY($2::text[]))`,
 		callerID, normalized).Scan(&self)
 	return self, err
+}
+
+// reservedMembershipRefusal refuses a write that would make the reserved
+// break-glass account a member of a project (ADR-0059 R2.6b): an invite of its
+// address, or a role given to it. Removing it (no role assigned) is not
+// refused. It binds a global administrator too, so it runs before the caller
+// is read.
+func reservedMembershipRefusal(r *http.Request, q adminaccess.Querier, change membershipChange) *adminaccess.Refusal {
+	for _, email := range change.invited {
+		if adminaccess.IsReservedBreakGlassEmail(email) {
+			return adminaccess.ReservedAccountRefusal()
+		}
+	}
+	if len(change.assigned) == 0 || len(change.targets) == 0 {
+		return nil
+	}
+	targets := make([]int64, len(change.targets))
+	for i, id := range change.targets {
+		targets[i] = int64(id)
+	}
+	reserved, err := adminaccess.AnyReservedAccount(r.Context(), q, targets)
+	if err != nil {
+		return adminaccess.Unresolved("the project members could not be read, so the role change was refused")
+	}
+	if reserved {
+		return adminaccess.ReservedAccountRefusal()
+	}
+	return nil
 }

@@ -769,10 +769,10 @@ CREATE TABLE IF NOT EXISTS centry.audit_events (
     http_method VARCHAR(10), http_route VARCHAR(512), status_code SMALLINT, duration_ms DOUBLE PRECISION,
     is_error BOOLEAN NOT NULL DEFAULT FALSE, entity_type VARCHAR(32), entity_id INTEGER, entity_name VARCHAR(256),
     trace_id VARCHAR(32), span_id VARCHAR(16), parent_span_id VARCHAR(16),
-    -- The role-use columns of shared 0268 (ADR-0059 R1.4a), which the
-    -- recorder writes.
+    -- The role-use columns of shared 0268 (ADR-0059 R1.4a) and the
+    -- elevation flag of 0275 (R2.8a), which the recorder writes.
     acting_roles text[], elevation_id uuid, credential_kind text, central_override boolean,
-    reason_code text, reason text, reason_missing boolean)`); err != nil {
+    reason_code text, reason text, reason_missing boolean, elevation_flagged boolean)`); err != nil {
 		t.Fatal(err)
 	}
 	const owner int64 = 11

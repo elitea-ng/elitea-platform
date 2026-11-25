@@ -44,6 +44,8 @@ WHERE token.uuid = sqlc.arg(uuid)::text
 -- token handlers (R1.3a). The INSERT names neither column ON PURPOSE: a new
 -- token takes the column default `none`, so it has no administration rights
 -- until scopes are chosen. Nothing reads them before R1.2a.
+-- The reserved break-glass account (ADR-0059 R2.6b) is no owner: it creates
+-- no token, so the INSERT answers no row for it as for a suspended owner.
 -- name: CreatePATForActiveUser :one
 INSERT INTO public.auth_core__token (uuid, expires, user_id, name)
 SELECT
@@ -54,6 +56,7 @@ SELECT
 FROM public.auth_core__user AS owner
 WHERE owner.id = sqlc.arg(user_id)::integer
   AND owner.suspended = false
+  AND lower(owner.email) IS DISTINCT FROM 'break-glass@centry.user'
 RETURNING
     id,
     uuid,

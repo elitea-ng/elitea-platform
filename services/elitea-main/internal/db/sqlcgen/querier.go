@@ -110,6 +110,8 @@ type Querier interface {
 	// token handlers (R1.3a). The INSERT names neither column ON PURPOSE: a new
 	// token takes the column default `none`, so it has no administration rights
 	// until scopes are chosen. Nothing reads them before R1.2a.
+	// The reserved break-glass account (ADR-0059 R2.6b) is no owner: it creates
+	// no token, so the INSERT answers no row for it as for a suspended owner.
 	CreatePATForActiveUser(ctx context.Context, arg CreatePATForActiveUserParams) (CreatePATForActiveUserRow, error)
 	// A binding is written once, in the same transaction as the token INSERT, and
 	// after the membership check. There is no update query on purpose: a binding is

@@ -503,3 +503,93 @@ WHERE event -> 'data' ->> 'action' = 'admin.elevation.credential_revoked'`).Scan
 		t.Fatalf("%d revoke events, want 1", revokes)
 	}
 }
+
+/* ── unbound credentials and the reserved account (R2.6b, issue 2599) ─── */
+
+// `issue --unbound` without --ticket or without --label, or beside --user,
+// exits 2 before any connection, so nothing is stored.
+func TestBreakGlassUnboundNeedsATicketAndALabel(t *testing.T) {
+	for name, tc := range map[string]struct {
+		args []string
+		want string
+	}{
+		"no ticket":        {[]string{"issue", "--unbound", "--label", "envelope A"}, "needs --ticket"},
+		"no label":         {[]string{"issue", "--unbound", "--ticket", "INC-4711"}, "needs --label"},
+		"a blank label":    {[]string{"issue", "--unbound", "--ticket", "INC-4711", "--label", "  "}, "needs --label"},
+		"neither":          {[]string{"issue", "--unbound"}, "needs --ticket"},
+		"a user too":       {[]string{"issue", "--unbound", "--user", "7", "--ticket", "INC-1", "--label", "A"}, "not both"},
+		"a free-text tick": {[]string{"issue", "--unbound", "--ticket", "the outage of monday", "--label", "A"}, "not an identifier"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			connected := false
+			code := runBreakGlassWith(context.Background(), tc.args,
+				func(string) (string, bool) { return "postgres://unused", true }, &stdout, &stderr,
+				mustNotConnect(&connected), time.Now)
+			if code != breakGlassExitUsage || connected {
+				t.Fatalf("code = %d, connected = %v, stderr = %s", code, connected, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr = %q, want %q", stderr.String(), tc.want)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("a refused issue printed %q", stdout.String())
+			}
+		})
+	}
+}
+
+// The first `issue --unbound` creates the reserved account with no role and
+// binds the credential to it; its event carries the ticket. A second issue
+// reuses the account. A bound issue for the account is refused.
+func TestBreakGlassUnboundIssueUsesTheReservedAccount(t *testing.T) {
+	pool, dsn := newMigrateTestDatabase(t)
+	first := issueThroughCommand(t, pool, dsn, "--unbound", "--ticket", "INC-4711", "--label", "envelope A, safe 2")
+	if !strings.Contains(first.run.stdout, "created the reserved account "+adminaccess.ReservedBreakGlassEmail) {
+		t.Fatalf("the first unbound issue did not say it created the account:\n%s", first.run.stdout)
+	}
+	var reservedID int64
+	var roles, memberships int
+	if err := pool.QueryRow(t.Context(), `
+SELECT u.id,
+       (SELECT count(*) FROM public.auth_core__user_role WHERE user_id = u.id),
+       (SELECT count(*) FROM public.auth_core__project_user_role WHERE user_id = u.id)
+FROM public.auth_core__user u WHERE lower(u.email) = $1`, adminaccess.ReservedBreakGlassEmail).Scan(
+		&reservedID, &roles, &memberships); err != nil {
+		t.Fatalf("read the reserved account: %v", err)
+	}
+	if first.stored.UserID != reservedID || roles != 0 || memberships != 0 {
+		t.Fatalf("credential bound to %d (reserved %d); the account holds %d roles and %d memberships",
+			first.stored.UserID, reservedID, roles, memberships)
+	}
+	if first.stored.Label != "envelope A, safe 2" {
+		t.Fatalf("label = %q", first.stored.Label)
+	}
+	var reasons string
+	if err := pool.QueryRow(t.Context(), `
+SELECT event -> 'data' -> 'reasons'
+FROM elitea_runtime.security_audit_outbox
+WHERE event -> 'data' ->> 'action' = 'admin.elevation.credential_issued'
+  AND event -> 'data' -> 'elevation' ->> 'credential_id' = $1`, first.stored.ID.String()).Scan(&reasons); err != nil {
+		t.Fatalf("the issue event: %v", err)
+	}
+	if !strings.Contains(reasons, `"ticket:inc-4711"`) || !strings.Contains(reasons, `"credential_unbound"`) {
+		t.Fatalf("the issue event's reasons %s carry no ticket or no unbound marker", reasons)
+	}
+
+	second := issueThroughCommand(t, pool, dsn, "--unbound", "--ticket", "CHG-12", "--label", "envelope B", "--level", "super_admin")
+	if second.stored.UserID != reservedID || strings.Contains(second.run.stdout, "created the reserved account") {
+		t.Fatalf("the second unbound issue did not reuse account %d: bound to %d\n%s",
+			reservedID, second.stored.UserID, second.run.stdout)
+	}
+	var accounts int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.auth_core__user WHERE lower(email) = $1`,
+		adminaccess.ReservedBreakGlassEmail).Scan(&accounts); err != nil || accounts != 1 {
+		t.Fatalf("%d reserved accounts (%v), want 1", accounts, err)
+	}
+
+	bound := runBreakGlassAgainst(t, dsn, "issue", "--user", adminaccess.ReservedBreakGlassEmail)
+	if bound.code != breakGlassExitRefused || !strings.Contains(bound.stderr, "--unbound") {
+		t.Fatalf("a bound issue for the reserved account: exit %d, %s", bound.code, bound.stderr)
+	}
+}

@@ -53,6 +53,74 @@ An elevation that ends early (by its holder, an approver or the operator command
 
 To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).
 
+## What an elevation cannot do
+
+An elevation must not make itself permanent or switch off the controls that watch it. Every administration action carries an elevation value in the platform's action table, and the platform applies it when the permission that admitted the request came from the elevation:
+
+- **allow** (most actions): the elevation may do it.
+- **flag**: allowed, and the audit row of the request is marked `elevation_flagged` for the elevation review (see [Role use on administration rows](/admin/audit-trail#role-use-on-administration-rows)).
+- **deny**: refused with `403` and the code `elevation_restricted`, at either level.
+- **sealed**: the identity trust actions. Refused with `403 elevation_restricted` under an elevation a person approved, or one that started with approval off, at either level, and under a sealed elevation at the `admin` level. Allowed and flagged only under a sealed elevation at the `super_admin` level: repairing an identity provider while nobody can sign in is what the sealed path is for.
+
+The value belongs to the action, not to the permission: shortening a retention policy is refused, lengthening it with the same permission is not. A person whose **standing** roles already admit an action is not restricted by these values, elevated or not. An elevation also creates no personal access token (`403 elevation_restricted` on **Create token**; a request with admin scopes gets the scope rules' own codes `token_scopes_elevated` or `token_scopes_sealed_session` first), and a sealed session never does.
+
+The table lists every action whose value is not `allow`, with the action name a request carries in its body or path (`-` for a route that is one action). It is checked against the action table on every build.
+
+{/* elevation-table:start (generated from the action table; see elevation_doc_test.go) */}
+
+| Action | Route | Under an elevation |
+|---|---|---|
+| `delete` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
+| `set_admin_role` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/admin/email/administration` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/gateway/providers` | allowed and flagged (`flag`) |
+| `route` | `PUT /api/v2/admin/gateway/providers/{configID}` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/admin/identity_providers/administration/{key}` | only a sealed `super_admin` elevation, flagged (`sealed`) |
+| `disable` | `PUT /api/v2/admin/identity_providers/administration/{key}` | allowed and flagged (`flag`) |
+| `settings` | `PUT /api/v2/admin/identity_providers/administration/{key}` | allowed and flagged (`flag`) |
+| `trust` | `PUT /api/v2/admin/identity_providers/administration/{key}` | only a sealed `super_admin` elevation, flagged (`sealed`) |
+| `-` | `POST /api/v2/admin/identity_providers/administration/{key}/rebind` | only a sealed `super_admin` elevation, flagged (`sealed`) |
+| `-` | `POST /api/v2/admin/invites_bulk/administration` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/admin/legal_holds/{id}/release` | refused (`deny`) |
+| `-` | `DELETE /api/v2/admin/modes/administration` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/admin/modes/administration` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/admin/native_devices/administration/{deviceID}` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/admin/permissions/{scope}/{mode}` | refused (`deny`) |
+| `-` | `PUT /api/v2/admin/permissions/{scope}/{mode}` | refused (`deny`) |
+| `break_glass` | `PUT /api/v2/admin/plugin_config_values/administration/{plugin}` | refused (`deny`) |
+| `email` | `PUT /api/v2/admin/plugin_config_values/administration/{plugin}` | refused (`deny`) |
+| `maintenance:on` | `PUT /api/v2/admin/plugin_config_values/administration/{plugin}` | allowed and flagged (`flag`) |
+| `maintenance:other` | `PUT /api/v2/admin/plugin_config_values/administration/{plugin}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/admin/project_cloud_executor/administration/{projectID}` | allowed and flagged (`flag`) |
+| `shorten` | `PUT /api/v2/admin/retention/policies/{dataClass}` | refused (`deny`) |
+| `shorten` | `DELETE /api/v2/admin/retention/policies/{dataClass}/projects/{projectID}` | refused (`deny`) |
+| `shorten` | `PUT /api/v2/admin/retention/policies/{dataClass}/projects/{projectID}` | refused (`deny`) |
+| `-` | `DELETE /api/v2/admin/roles/{scope}/{mode}` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/roles/{scope}/{mode}` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/scim_clients/administration` | only a sealed `super_admin` elevation, flagged (`sealed`) |
+| `-` | `POST /api/v2/admin/scim_clients/administration/{id}/rotate` | only a sealed `super_admin` elevation, flagged (`sealed`) |
+| `-` | `POST /api/v2/admin/scim_group_bindings/administration` | refused (`deny`) |
+| `-` | `DELETE /api/v2/admin/scim_group_bindings/administration/{id}` | refused (`deny`) |
+| `-` | `PUT /api/v2/admin/scim_group_bindings/administration/{id}` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/user_invite/administration` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/admin/user_project_permissions/administration` | refused (`deny`) |
+| `suspend` | `PUT /api/v2/admin/user_suspend/{mode}/{userID}` | allowed and flagged (`flag`) |
+| `unsuspend` | `PUT /api/v2/admin/user_suspend/{mode}/{userID}` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/admin/users/administration/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/admin/users/administration/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/admin/users/administration/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/admin/users/{mode}/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/admin/users/{mode}/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/admin/users/{mode}/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID}` | allowed and flagged (`flag`) |
+| `-` | `DELETE /api/v2/configurations/configuration/{projectID}/{configID}` | allowed and flagged (`flag`) |
+| `-` | `PUT /api/v2/configurations/configuration/{projectID}/{configID}` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/configurations/configurations/{mode}/{projectID}` | allowed and flagged (`flag`) |
+| `-` | `POST /api/v2/configurations/configurations/{projectID}` | allowed and flagged (`flag`) |
+
+{/* elevation-table:end */}
+
 ## Sealed sessions
 
 A sealed session is how a [sealed credential](/deployment/break-glass-runbook#sealed-credentials) signs in when single sign-on is down. It is not an ordinary session with more permissions. It is a separate kind of session with its own limits:

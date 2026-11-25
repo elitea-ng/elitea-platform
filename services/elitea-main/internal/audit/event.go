@@ -131,6 +131,10 @@ type Event struct {
 	ReasonCode    string
 	Reason        string
 	ReasonMissing *bool
+	// ElevationFlagged marks the row for the elevation review: an action the
+	// action table flags (or a sealed one under the sealed super_admin
+	// elevation) was done under an elevation (ADR-0059 R2.8a; shared 0275).
+	ElevationFlagged bool
 }
 
 // The credential_kind values of an admin audit row: the credentials table of
@@ -210,6 +214,9 @@ type Annotation struct {
 	ReasonCode    string
 	Reason        string
 	ReasonMissing *bool
+	// ElevationFlagged marks the row for the elevation review (R2.8a). Once
+	// set by any handler or middleware it stays set.
+	ElevationFlagged bool
 }
 
 // Administration is what an administration-mode permission resolution of the
@@ -298,6 +305,9 @@ func Annotate(ctx context.Context, a Annotation) {
 	}
 	if a.ReasonMissing != nil {
 		slot.annotation.ReasonMissing = a.ReasonMissing
+	}
+	if a.ElevationFlagged {
+		slot.annotation.ElevationFlagged = true
 	}
 }
 

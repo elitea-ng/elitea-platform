@@ -40,6 +40,7 @@ Every row of a request to the administration surface also records the capacity t
 | `elevation_id` | The break-glass elevation the request was made under, when there was one. |
 | `central_override` | The write went through the central override of a platform administrator. |
 | `reason_code`, `reason`, `reason_missing` | The reason given for a dangerous or critical action, and whether a required reason was missing. |
+| `elevation_flagged` | The action was done under a break-glass elevation, with a permission only the elevation gave, and is one the platform marks for the elevation review. See [what an elevation cannot do](/admin/break-glass#what-an-elevation-cannot-do). |
 
 A request that never checked administration permissions leaves these fields empty.
 

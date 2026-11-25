@@ -294,10 +294,12 @@ func tokenRule(r *http.Request, pattern string) retentionTokenRule {
 	return retentionTokenRule{r: r, pattern: pattern}
 }
 
-// tokenRefusedError carries the refusal out of the store.
+// tokenRefusedError carries the refusal out of the store. elevation marks
+// the elevation rule's refusal (ADR-0059 R2.8a) rather than the token rule's.
 type tokenRefusedError struct {
-	outcome string
-	refusal *adminaccess.Refusal
+	outcome   string
+	refusal   *adminaccess.Refusal
+	elevation bool
 }
 
 func (e *tokenRefusedError) Error() string { return e.refusal.Message }
@@ -307,6 +309,15 @@ func (t retentionTokenRule) run(before, after retention.Bounds) error {
 	if refusal := adminaccess.CheckTokenRule(t.r.Context(), t.r.Method, t.pattern, outcome); refusal != nil {
 		return &tokenRefusedError{outcome: outcome, refusal: refusal}
 	}
+	// The elevation rule on the same outcome (ADR-0059 R2.8a): an elevation
+	// may lengthen a policy and never shorten one.
+	decision := adminaccess.CheckElevationRule(t.r.Context(), t.r.Method, t.pattern, outcome)
+	if decision.Refusal != nil {
+		return &tokenRefusedError{outcome: outcome, refusal: decision.Refusal, elevation: true}
+	}
+	if decision.Flag {
+		adminaccess.FlagElevation(t.r.Context())
+	}
 	return nil
 }
 
@@ -314,6 +325,11 @@ func (t retentionTokenRule) run(before, after retention.Bounds) error {
 // middleware writes it, anything else as before.
 func (t retentionTokenRule) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var refused *tokenRefusedError
+	if errors.As(err, &refused) && refused.elevation {
+		adminaccess.WriteElevationRefusal(w, r,
+			adminaccess.Action{Method: r.Method, Pattern: t.pattern, Name: refused.outcome}.Key(), refused.refusal)
+		return
+	}
 	if errors.As(err, &refused) {
 		adminaccess.WriteTokenRefusal(w, r, r.Method, t.pattern, refused.outcome, refused.refusal)
 		return

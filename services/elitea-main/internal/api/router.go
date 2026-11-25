@@ -2259,6 +2259,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// above the route gates. Marked from the finished router with the routes
 	// above.
 	tokenRule := &tokenCriticalActions{resolver: permissionResolver}
+	// What an elevation cannot do (ADR-0059 R2.8a,
+	// elevation_restrictions.go): below the token rule, in the same place
+	// and for the same reasons, and marked from the same finished router.
+	elevationRule := &elevationRestrictions{resolver: permissionResolver}
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:                cfg.Pool,
@@ -2568,6 +2572,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		//     the question an audit trail is most often opened to answer.
 		r.Use(apimw.Audit(auditRecorder))
 		r.Use(tokenRule.middleware)
+		r.Use(elevationRule.middleware)
 		// A write that can change what a callee agent holds asks for the drift
 		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
 		// Below Audit so it sees the final status; it never changes a response.
@@ -6466,13 +6471,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// where a project's ai_credentials are created, overwritten and deleted;
 	// without Audit here they left no centry.audit_events row. A fresh slice,
 	// so the append can never write into apiGates' backing array.
-	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+2)
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+3)
 	reviewedGates = append(reviewedGates, apiGates...)
-	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware, elevationRule.middleware)
 	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	administrationRoutes.mark(r)
 	tokenRule.mark(r)
+	elevationRule.mark(r)
 	return r
 }
 

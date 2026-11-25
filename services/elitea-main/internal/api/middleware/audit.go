@@ -348,6 +348,10 @@ func buildEvent(r *http.Request, status int, elapsed time.Duration, slot *audit.
 		event.ReasonCode = annotation.ReasonCode
 		event.Reason = annotation.Reason
 		event.ReasonMissing = annotation.ReasonMissing
+		// An action the action table flags, done under an elevation
+		// (ADR-0059 R2.8a): kept on every status, since a flagged attempt
+		// that failed is still the review's.
+		event.ElevationFlagged = annotation.ElevationFlagged
 	}
 	applyRoleUse(r, slot, user, hasUser, &event)
 	return event
