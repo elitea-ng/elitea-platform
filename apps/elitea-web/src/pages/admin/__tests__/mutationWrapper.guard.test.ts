@@ -57,7 +57,6 @@ const NOT_CONVERTED: readonly string[] = [
   'ToolkitTypeBulkDialog.tsx',
   'ToolkitTypeDecisionDialog.tsx',
   'ToolkitTypeProjectsDialog.tsx',
-  'useAdminAppRequestsPage.ts',
   'useAdminBrandingPage.ts',
   'useAdminConfigurationPage.ts',
   'useAdminSchedulesPage.ts',
