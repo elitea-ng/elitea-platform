@@ -49,6 +49,20 @@ func AdministrationSurface() []string {
 	return routes
 }
 
+// ActionsForRequest answers the action-table entries of a request of method
+// routed to pattern (normalised by RoutePattern), whose URL parameters param
+// answers. A route with a `{mode}` segment has entries in the administration
+// mode only: the same route in another mode is not on the administration
+// surface. The token, elevation and reason rules of internal/api/middleware
+// call it, so the mode is named here and not in the middleware.
+func ActionsForRequest(method, pattern string, param func(string) string) []Action {
+	pattern = RoutePattern(pattern)
+	if strings.Contains(pattern, "{mode}") && param("mode") != ModeAdministration {
+		return nil
+	}
+	return ActionTable().Route(method, pattern)
+}
+
 // OnAdministrationSurface reports whether a request of method, routed to
 // pattern (chi's pattern; RoutePattern normalises it), is on the
 // administration surface. param answers the request's URL parameters: a

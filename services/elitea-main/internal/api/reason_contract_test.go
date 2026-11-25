@@ -35,7 +35,7 @@ func hasParameterRef(op *openapi3.Operation, name string) bool {
 }
 
 func TestTheSpecDocumentsTheReasonOnEveryMarkedOperation(t *testing.T) {
-	spec, err := generated.GetSwagger()
+	spec, err := generated.GetSpec()
 	if err != nil {
 		t.Fatal(err)
 	}

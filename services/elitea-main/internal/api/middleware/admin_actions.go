@@ -32,7 +32,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // MaxAdminActionBody bounds the body read to find a body selector's value or
@@ -55,11 +54,7 @@ func AdminActionCandidates(routes chi.Routes, r *http.Request) ([]adminaccess.Ac
 	if pattern == "" {
 		return nil, rctx
 	}
-	pattern = adminaccess.RoutePattern(pattern)
-	if strings.Contains(pattern, "{mode}") && rctx.URLParam("mode") != auth.PermissionModeAdministration {
-		return nil, rctx
-	}
-	return adminaccess.ActionTable().Route(r.Method, pattern), rctx
+	return adminaccess.ActionsForRequest(r.Method, pattern, rctx.URLParam), rctx
 }
 
 // SelectAdminActions narrows the entries of a route that multiplexes actions
