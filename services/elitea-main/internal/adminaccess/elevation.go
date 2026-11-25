@@ -458,6 +458,9 @@ RETURNING `+elevationColumns,
 	if err != nil {
 		return ElevationRecord{}, err
 	}
+	// elitea_break_glass_activations_total (metrics.go): every start path
+	// goes through here, so none counts on its own.
+	countActivation(elevation.Path)
 	return elevation, nil
 }
 

@@ -56,6 +56,8 @@ var surfaceRouterUnsetFields = map[string]string{
 		"no permission decision",
 	"AgentHeartbeatMandates": "the mandate check of the project heartbeat routes, which mount without it " +
 		"behind their default-mode gates",
+	"PostureInitialGlobalAdmins": "the configured bootstrap list one access posture check reads; the " +
+		"posture route mounts without it behind the same access.roles.view gate, no permission decision",
 	"AgentToolsCache":            reasonSectionCache,
 	"ApprovalPolicyCache":        reasonSectionCache,
 	"ContentControlsCache":       reasonSectionCache,

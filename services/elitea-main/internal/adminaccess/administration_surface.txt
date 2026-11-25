@@ -29,7 +29,9 @@ DELETE /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{u
 DELETE /api/v2/projects/project/{mode}/{projectID}
 DELETE /api/v2/secrets/secret/{mode}/{projectID}/{name}
 GET /api/v2/admin/access/history
+GET /api/v2/admin/access/posture
 GET /api/v2/admin/access/roles
+GET /api/v2/admin/access/sealed_credentials
 GET /api/v2/admin/access/tokens
 GET /api/v2/admin/agent_identities
 GET /api/v2/admin/agent_registry
