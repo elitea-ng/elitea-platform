@@ -283,7 +283,7 @@ An upgrade of an installed agent is a change request of kind `upgrade`, and a me
 
 ## Configure the tier policy
 
-A platform administrator sets the tier policy in **Admin › Configuration › Agent Lifecycle** (permission `configuration.governance`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
+A platform administrator sets the tier policy in **Admin › Configuration › Agent Lifecycle** (permission `agents.governance.manage`, or the legacy `configuration.governance` with `runtime.plugins`), or with `PUT /api/v2/admin/plugin_config_values/administration/agent_lifecycle`.
 
 | Setting | Default | Range |
 | --- | --- | --- |
@@ -307,7 +307,11 @@ Governance approvals never exceed approvals. A value below the default is raised
 | `models.applications.governance` | Platform `super_admin` and `admin`; project `admin` | Approve where the tier needs the governance role, lower a tier, override a failed gate, withdraw anyone's request |
 | `lifecycle.attestations.write` | Project `admin` | Record and revoke attestations |
 | `lifecycle.registry.mark_due` | Project `admin` | Mark an agent due |
-| `configuration.governance` | Platform administrators | The tier policy and the cross-project registry |
+| `agents.governance.view` | Platform `super_admin` and `admin` | Read the tier policy and the cross-project registry |
+| `agents.governance.manage` | Platform `super_admin` and `admin` | Read both, and edit the tier policy |
+| `configuration.governance` | Platform `super_admin` and `admin` | The legacy name the two above narrow: the tier policy (with `runtime.plugins`) and the cross-project registry. It ends on the sunset date. |
+
+No built-in narrow role holds `agents.governance.view` or `agents.governance.manage`; give them to a custom role to delegate agent governance.
 
 ## Governance API
 
@@ -324,7 +328,7 @@ All paths are under `/api/v2/elitea_core`, with `{p}` the project id and `{app}`
 | `GET`, `POST agent_attestations/prompt_lib/{p}`; `POST agent_attestations/prompt_lib/{p}/{id}/revoke` | read: `models.applications.versions.get`; write: `lifecycle.attestations.write` | List, record or revoke attestations |
 | `GET release_gate_suites/prompt_lib/{p}/{app}`; `PUT release_gate_suites/prompt_lib/{p}/{app}/{dataset}` | read: `models.applications.evaluation.dataset.read`; write: `…evaluation.dataset.update` and `models.applications.publish.post`, and `models.applications.governance` to loosen the gate of an agent whose tier needs approval | Read or set the gate suites |
 | `GET release_gates/prompt_lib/{p}/{app}[/{gate}]` | `models.applications.evaluation.run.read` | Gates with their runs, results, failures and override |
-| `GET /api/v2/admin/agent_registry` | `configuration.governance` | The cross-project registry; `tier`, `state`, `owner_id`, `project_id`, `limit`, `offset`; `format=csv` exports up to 10,000 rows |
+| `GET /api/v2/admin/agent_registry` | `agents.governance.view`, `agents.governance.manage` or `configuration.governance` | The cross-project registry; `tier`, `state`, `owner_id`, `project_id`, `limit`, `offset`; `format=csv` exports up to 10,000 rows |
 
 ### Record an attestation from a GRC tool
 

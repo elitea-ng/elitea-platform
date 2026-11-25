@@ -69,9 +69,6 @@ export interface AdminNavGroup {
   readonly items: readonly AdminNavItem[];
 }
 
-
-
-
 /**
  * The reference's `SIDEBAR_PERMISSIONS`, with three corrections.
  *
@@ -92,14 +89,11 @@ export interface AdminNavGroup {
  * registers none of them: `001_initial.sql` and `migrations/shared/*` seed
  * fully-qualified names only.
  *
- * Reading an unissued name as "the operator lacks the permission" once hid
- * `projects` and `service-descriptors` from every console, silently. An
- * unissuable name hides an item for good: add no gate no seed grants.
+ * An unissued name once hid `projects` and `service-descriptors` from every
+ * console, silently: add no gate whose permission no seed grants.
  *
- * The section names no code checks are gone from every gate: shared migration
- * 0136 retires the bare `projects` and `configuration` nodes (#6874), and 0172
- * retires `projects.projects` and `configuration.roles`. The resolver matches
- * exact strings, so none of them stood in for a fully-qualified name.
+ * Shared migrations 0136 (#6874) and 0172 retire those section names; the
+ * resolver matches exact strings, and
  * `internal/api/router_permission_retired_gate_test.go` fails if a web gate
  * names a retired string again.
  */
@@ -188,6 +182,8 @@ export function navGroups(): readonly AdminNavGroup[] {
           anyPermission: [
             'runtime.plugins',
             'access.breakglass.manage',
+            'agents.governance.manage',
+            'agents.governance.view',
             'configuration.branding',
             'configuration.microsoft_apps',
             'configuration.native_clients',
@@ -297,7 +293,9 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/agent-registry',
           label: t('pages.admin.nav.agentRegistry', 'Agent registry'),
           icon: FactCheckOutlinedIcon,
-          anyPermission: ['configuration.governance'],
+          // ADR-0059 R0.15: the registry route accepts either name of the
+          // agent governance pair beside the legacy name.
+          anyPermission: ['configuration.governance', 'agents.governance.view', 'agents.governance.manage'],
         },
         {
           // ADR-0044 decision 1 (#1501): the connector approval queue.
@@ -313,12 +311,14 @@ export function navGroups(): readonly AdminNavGroup[] {
           // ADR-0044 Amendment 1, A1.3 (epic 2156 story S6): the delegation
           // grants that await review, the queue the migration of existing
           // compositions left. Gated on `configuration.governance`, the
-          // permission of the Delegation section it explains.
+          // permission of the Delegation section it explains, or the agent
+          // governance pair (ADR-0059 R0.15): the list reads with either
+          // name, the scan writes with `agents.governance.manage`.
           id: 'delegation-review',
           path: '/delegation-review',
           label: t('pages.admin.nav.delegationReview', 'Delegations awaiting review'),
           icon: AccountTreeOutlinedIcon,
-          anyPermission: ['configuration.governance'],
+          anyPermission: ['configuration.governance', 'agents.governance.view', 'agents.governance.manage'],
         },
         {
           // ADR-0044 decision 5 (#1501): shared migration 0208 grants

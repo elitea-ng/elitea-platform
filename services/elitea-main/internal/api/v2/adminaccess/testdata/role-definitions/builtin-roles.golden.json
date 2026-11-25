@@ -6,7 +6,7 @@
       "built_in": true,
       "status": "built_in",
       "locked": true,
-      "permission_count": 79,
+      "permission_count": 81,
       "areas": [
         {
           "id": "people_access",
@@ -211,7 +211,7 @@
       "built_in": true,
       "status": "built_in",
       "locked": true,
-      "permission_count": 77,
+      "permission_count": 79,
       "areas": [
         {
           "id": "people_access",

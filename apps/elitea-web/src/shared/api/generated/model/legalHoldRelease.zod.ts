@@ -41,11 +41,13 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
 
 export const legalHoldReleaseReasonMax = 2000;
 
 export const LegalHoldRelease = zod.object({
   reason: zod.string().max(legalHoldReleaseReasonMax).optional(),
+  reason_code: ActionReasonCode.optional(),
 });
 
 export type LegalHoldRelease = zod.input<typeof LegalHoldRelease>;

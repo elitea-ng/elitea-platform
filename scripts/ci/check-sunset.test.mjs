@@ -89,6 +89,9 @@ const PERMISSIONS = 'services/elitea-main/internal/adminaccess/permissions.go';
 const LEGACY_NAMES = 'package adminaccess\n\nconst (\n\tRuntimePlugins = "runtime.plugins"\n\tConfigurationGovernance = "configuration.governance"\n)\n';
 const INHERIT = 'services/elitea-main/internal/infra/legacyrbac/postgres.go';
 const REPLACED = 'services/elitea-main/internal/adminaccess/replacements.go';
+// The reason warning period of R3.8 (#2539), a legacy item since it landed.
+const WARNING_PERIOD = 'services/elitea-main/internal/adminaccess/reason.go';
+const WARNING_PERIOD_SOURCE = 'package adminaccess\n\nconst ReasonOptionalUntilSunset = true\n';
 const REPLACEMENT_SOURCE =
   'package adminaccess\n\nconst (\n\tSealedSignInRoute = "/api/v2/auth/sealed"\n\tReasonMissingHeader = "Elitea-Reason-Missing"\n)\n';
 
@@ -199,6 +202,7 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
     r.write(REGISTRY, registry('', ''));
     r.write(PERMISSIONS, LEGACY_NAMES);
     r.write(INHERIT, 'package legacyrbac\n\nconst (\n\tTokenAdminAccessInherit = "inherit"\n)\n');
+    r.write(WARNING_PERIOD, WARNING_PERIOD_SOURCE);
     const before = r.commit('2026-12-01', 'v7.6.0');
 
     r.write(REPLACED, REPLACEMENT_SOURCE);
@@ -211,6 +215,7 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
     // The removal leaves a comment that quotes a name: that is not the item.
     r.write(PERMISSIONS, 'package adminaccess\n\n// Formerly "runtime.plugins" and "configuration.governance".\n');
     r.remove(INHERIT);
+    r.remove(WARNING_PERIOD);
     const removal = r.commit('2027-04-11');
     // The working tree is not what is checked.
     r.write(PERMISSIONS, LEGACY_NAMES);
@@ -234,6 +239,7 @@ test('inspect reads the commit, not the working tree, and the tags reachable fro
     execFileSync('git', ['checkout', '-q', '-b', 'early', 'v7.8.0'], { cwd: r.root });
     fs.rmSync(path.join(r.root, PERMISSIONS), { force: true });
     fs.rmSync(path.join(r.root, INHERIT), { force: true });
+    fs.rmSync(path.join(r.root, WARNING_PERIOD), { force: true });
     const early = r.commit('2027-04-11');
     assert.equal(inspect(r.root, early).minorsAfterReplacement, 1);
     assert.match(decide(inspect(r.root, early)).join(), /case 3: .*1 stable minor/);

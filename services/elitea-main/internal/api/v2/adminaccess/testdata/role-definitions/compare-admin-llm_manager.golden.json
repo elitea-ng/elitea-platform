@@ -4,7 +4,7 @@
     "display_name": "Platform administrator",
     "built_in": true,
     "status": "built_in",
-    "permission_count": 77
+    "permission_count": 79
   },
   "b": {
     "name": "llm_manager",
@@ -246,6 +246,8 @@
       "admin.auth.users",
       "admin.moderation",
       "admin.moderation.edit",
+      "agents.governance.manage",
+      "agents.governance.view",
       "configuration.branding",
       "configuration.governance",
       "configuration.microsoft_apps",

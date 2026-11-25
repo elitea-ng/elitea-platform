@@ -52,6 +52,23 @@ A request that never checked administration permissions leaves these fields empt
 
 Every row written since the chain's form `elitea.audit_events.v2` was introduced covers these fields in its tamper-evident chain: a change to one of them breaks the chain's verification. The reason text is the exception: it is never part of the chain and never exported, so it can be erased. Rows written before that release keep their older chain form, which does not cover these fields, and still verify. The [SIEM export](/reference/audit-event-schema#details-for-admin_audit) carries the same fields, without the reason text.
 
+## Reasons for dangerous actions
+
+Every dangerous or critical administration action asks why it is made: deleting or suspending a user, changing who is an administrator, editing the role matrix, an identity provider or SCIM trust change, deleting a project, releasing a legal hold, shortening a retention policy, a guardrail or global provider change, the platform-wide stop, maintenance mode, resetting branding, revoking a credential and a bulk invite. The upgrade note of the release that introduced reasons lists every route and action.
+
+A caller gives the reason in two parts:
+
+| Field | Header (a request without a body) | Meaning |
+|---|---|---|
+| `reason_code` | `Elitea-Reason-Code` | One of `incident`, `request`, `maintenance`, `correction`, `offboarding` or `other`. |
+| `reason` | `Elitea-Reason` | Free text. Required with `other`. In a header it is percent-encoded UTF-8 of at most 500 bytes after decoding; in a body at most 2000 bytes. |
+
+A non-empty body field wins over its header. The permission matrix save reads the headers only. A reason the server cannot accept, such as an unknown code, a header over 500 bytes or a text with a control character, is refused with `400` and the code `reason_invalid`.
+
+The admin audit row records `reason_code`, `reason` and `reason_missing`. The reason code is also recorded on the security event of an access change (`admin.access.changed`); the text is not, so it stays erasable.
+
+During the warning period, until the sunset date of the old permission names, an action without a reason code is still served. Its response carries the header `Elitea-Reason-Missing: 1` and its audit row has `reason_missing` set. A request that is refused, for example for a missing permission, is not flagged. After the sunset date such a request will be refused. Personal access tokens are treated like any other caller. Proxy and ingress access logs must not record the `Elitea-Reason` header: see the [hardening checklist](/deployment/hardening-checklist#identity-and-credentials).
+
 ## Export to your SIEM
 
 Audit Trail is the place to look; it is not where evidence should be kept. The hash chain on security audit events makes tampering detectable, but immutability and long retention belong to your SIEM or WORM store. Elitea sends two streams there, in one versioned envelope, [`elitea.audit.v1`](/reference/audit-event-schema):

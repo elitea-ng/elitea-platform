@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
 import { CredentialKind } from "./credentialKind.zod";
 
 export const credentialRevokeRequestReasonMax = 500;
@@ -49,6 +50,7 @@ export const CredentialRevokeRequest = zod.object({
   kind: CredentialKind,
   credential_id: zod.string().min(1),
   reason: zod.string().max(credentialRevokeRequestReasonMax).optional(),
+  reason_code: ActionReasonCode.optional(),
 });
 
 export type CredentialRevokeRequest = zod.input<typeof CredentialRevokeRequest>;
