@@ -1289,7 +1289,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// inherit_notice_delivered_at of elitea_identity.token_lifecycle: when
 	// the notice to the owner of an inherit token was delivered, which its
 	// end date counts from (issue 2619, ADR-0059 R3.15b). No permission.
-	require.EqualValues(t, 278, Head(shared))
+	//
+	// 279: shared/0279_agent_governance_permissions.sql, the grants
+	// agents.governance.view and agents.governance.manage (super_admin, admin):
+	// the agent governance pair of ADR-0059 decision 2 (issue 2552, R0.15). No
+	// table.
+	require.EqualValues(t, 279, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

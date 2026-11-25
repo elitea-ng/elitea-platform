@@ -12,44 +12,25 @@ package api
 // action table, and, when the entry may refuse the token, reads the token's
 // admin_access once through the administration-mode resolution.
 //
-// Picking the entry:
-//
-//   - one entry with no name: that entry;
-//   - a body selector (the `action` field of POST /admin/auth_users/{mode}):
-//     the body is read and put back whole for the handler. The field is
-//     matched without regard to case, as the handler's struct decode matches
-//     it;
-//   - a path selector: the placeholder's value;
-//   - a selector value the request does not state unambiguously (no field,
-//     two spellings with different values, a body that is not one JSON
-//     object, a body over maxTokenRuleBody) or that the table does not list:
-//     every entry of the route, so a route with a critical entry refuses the
-//     token rather than trust the handler to read the value the same way;
-//   - classifier outcomes the request alone cannot tell apart: when every
-//     outcome gives the same answer, that answer; otherwise, when the
-//     classifier's handler applies the rule itself
-//     (adminaccess.TokenRuleInHandler), the token caller is put on the
-//     context for it; otherwise the token is refused: the closed failure.
+// Picking the entry is apimw.SelectAdminActions (middleware/admin_actions.go),
+// shared with the elevation restrictions and the reason check. Classifier
+// outcomes the request alone cannot tell apart: when every outcome gives the
+// same answer, that answer; otherwise, when the classifier's handler applies
+// the rule itself (adminaccess.TokenRuleInHandler), the token caller is put on
+// the context for it; otherwise the token is refused: the closed failure.
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
-
-// maxTokenRuleBody bounds the body read to find a body selector's value. A
-// larger body is put back whole and its value counts as unknown: the
-// multiplexed routes take small JSON bodies.
-const maxTokenRuleBody = 1 << 20
 
 type tokenCriticalActions struct {
 	routes   chi.Routes
@@ -71,7 +52,7 @@ func (g *tokenCriticalActions) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		candidates, r = selectEntries(candidates, r, rctx)
+		candidates, r = apimw.SelectAdminActions(candidates, r, rctx)
 		if !anyMayRefuse(candidates) {
 			next.ServeHTTP(w, r)
 			return
@@ -112,92 +93,7 @@ func (g *tokenCriticalActions) middleware(next http.Handler) http.Handler {
 // candidates answers the entries of the (method, pattern) the request routes
 // to, with the route context of the lookup (its path parameters).
 func (g *tokenCriticalActions) candidates(r *http.Request) ([]adminaccess.Action, *chi.Context) {
-	return actionCandidates(g.routes, r)
-}
-
-// actionCandidates answers the entries of the (method, pattern) the request
-// routes to in routes, with the route context of the lookup.
-func actionCandidates(routes chi.Routes, r *http.Request) ([]adminaccess.Action, *chi.Context) {
-	path := r.URL.RawPath
-	if path == "" {
-		path = r.URL.Path
-	}
-	rctx := chi.NewRouteContext()
-	pattern := routes.Find(rctx, r.Method, path)
-	if pattern == "" {
-		return nil, rctx
-	}
-	pattern = adminaccess.RoutePattern(pattern)
-	if strings.Contains(pattern, "{mode}") && rctx.URLParam("mode") != auth.PermissionModeAdministration {
-		// The same route in another mode is not on the administration
-		// surface (adminaccess.ActionForRequest).
-		return nil, rctx
-	}
-	return adminaccess.ActionTable().Route(r.Method, pattern), rctx
-}
-
-// selectEntries narrows the entries of a route that multiplexes actions to
-// the request's action. A value it cannot read, or one the table does not
-// list, keeps every entry of the route: the closed failure. The request it
-// returns carries the body it read.
-func selectEntries(entries []adminaccess.Action, r *http.Request, rctx *chi.Context) ([]adminaccess.Action, *http.Request) {
-	selector := entries[0].Selector
-	var value string
-	switch selector.In {
-	case "":
-		return entries, r
-	case adminaccess.SelectPath:
-		value = rctx.URLParam(selector.Field)
-	case adminaccess.SelectBody:
-		value, r = bodyField(r, selector.Field)
-	}
-	var out []adminaccess.Action
-	for _, entry := range entries {
-		if value != "" && entry.Selector.Value == value {
-			out = append(out, entry)
-		}
-	}
-	if len(out) == 0 {
-		return entries, r
-	}
-	return out, r
-}
-
-// bodyField reads the top-level string field of a JSON body, matching its
-// name without regard to case as encoding/json does for a struct, and puts
-// the whole body back. A body over maxTokenRuleBody, a body that is not one
-// JSON object, a field that is not a string, and two spellings of the field
-// with different values answer "": unknown.
-func bodyField(r *http.Request, field string) (string, *http.Request) {
-	if r.Body == nil || r.Body == http.NoBody {
-		return "", r
-	}
-	original := r.Body
-	raw, err := io.ReadAll(io.LimitReader(original, maxTokenRuleBody+1))
-	restored := r.Clone(r.Context())
-	restored.Body = struct {
-		io.Reader
-		io.Closer
-	}{io.MultiReader(bytes.NewReader(raw), original), original}
-	if err != nil || len(raw) > maxTokenRuleBody {
-		return "", restored
-	}
-	var body map[string]json.RawMessage
-	if json.Unmarshal(raw, &body) != nil {
-		return "", restored
-	}
-	value, seen := "", false
-	for key, encoded := range body {
-		if !strings.EqualFold(key, field) {
-			continue
-		}
-		var spelled string
-		if json.Unmarshal(encoded, &spelled) != nil || (seen && spelled != value) {
-			return "", restored
-		}
-		value, seen = spelled, true
-	}
-	return value, restored
+	return apimw.AdminActionCandidates(g.routes, r)
 }
 
 // anyMayRefuse reports whether an entry can refuse a token at all: a critical

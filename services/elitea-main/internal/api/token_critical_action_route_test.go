@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	v2retention "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/retention"
 	v2skills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
@@ -291,7 +292,7 @@ func TestATokenWhoseAccessCannotBeReadIsRefused(t *testing.T) {
 // an unknown action.
 func TestATokenCannotHideTheActionFromTheRule(t *testing.T) {
 	router := newTokenRuleRouter(t, auth.CredentialKindToken, adminaccess.TokenAccessInherit, tokenRuleSuperAdmin)
-	padded := `{"action":"set_admin_role","user_ids":[2],"role":"admin"}` + strings.Repeat(" ", maxTokenRuleBody+1)
+	padded := `{"action":"set_admin_role","user_ids":[2],"role":"admin"}` + strings.Repeat(" ", apimw.MaxAdminActionBody+1)
 	for name, body := range map[string]string{
 		"another case":   `{"Action":"set_admin_role","user_ids":[2],"role":"admin"}`,
 		"upper case":     `{"ACTION":"set_admin_role","user_ids":[2],"role":"admin"}`,
@@ -309,9 +310,10 @@ func TestATokenCannotHideTheActionFromTheRule(t *testing.T) {
 
 // The body the rule read reaches the handler whole, past the bound too.
 func TestTheRulePutsTheWholeBodyBack(t *testing.T) {
-	for _, body := range []string{`{"action":"delete"}`, `{"action":"delete"}` + strings.Repeat(" ", maxTokenRuleBody+10)} {
+	for _, body := range []string{`{"action":"delete"}`, `{"action":"delete"}` + strings.Repeat(" ", apimw.MaxAdminActionBody+10)} {
 		req := httptest.NewRequest(http.MethodPost, tokenRuleUsersPath, strings.NewReader(body))
-		_, restored := bodyField(req, "action")
+		_, restored := apimw.SelectAdminActions(
+			adminaccess.ActionTable().Route(http.MethodPost, adminaccess.AuthUsersActionPattern), req, chi.NewRouteContext())
 		got, err := io.ReadAll(restored.Body)
 		if err != nil || string(got) != body {
 			t.Fatalf("restored %d bytes (%v), want %d", len(got), err, len(body))

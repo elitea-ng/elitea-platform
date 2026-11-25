@@ -17,8 +17,8 @@ import (
 
 // FromRequest completes change with the facts of the request in ctx: the
 // actor (unless the caller named one), the credential reference, the
-// elevation id (unless set) and the trace id. It never reads a credential
-// value: the reference is the token or session ROW.
+// elevation id and the reason code (each unless set) and the trace id. It
+// never reads a credential value: the reference is the token or session ROW.
 func FromRequest(ctx context.Context, change securityaudit.AdminAccessChanged) securityaudit.AdminAccessChanged {
 	if principal, ok := auth.UserFromContext(ctx); ok {
 		if change.ActorUserID == 0 {
@@ -28,6 +28,10 @@ func FromRequest(ctx context.Context, change securityaudit.AdminAccessChanged) s
 	}
 	if change.Change.ElevationID == "" {
 		change.Change.ElevationID = audit.ElevationIDFromContext(ctx)
+	}
+	// The reason code of a dangerous action (ADR-0059 R3.8a), never its text.
+	if change.Change.ReasonCode == "" {
+		change.Change.ReasonCode = audit.ReasonCodeFromContext(ctx)
 	}
 	if spanContext := trace.SpanContextFromContext(ctx); spanContext.IsValid() {
 		change.CorrelationID = spanContext.TraceID().String()

@@ -139,9 +139,13 @@ var consoleItems = []ConsoleItem{
 		ConfigurationGovernance),
 
 	// Agents and governance.
-	consoleItem("agent-registry", AreaAgentsGovernance, ConfigurationGovernance),
+	// The agent governance pair (R0.15) beside the legacy name its gates
+	// still accept.
+	consoleItem("agent-registry", AreaAgentsGovernance, AgentsGovernanceView, AgentsGovernanceManage,
+		ConfigurationGovernance),
 	consoleItem("connector-requests", AreaAgentsGovernance, ConnectorApprove),
-	consoleItem("delegation-review", AreaAgentsGovernance, ConfigurationGovernance),
+	consoleItem("delegation-review", AreaAgentsGovernance, AgentsGovernanceView, AgentsGovernanceManage,
+		ConfigurationGovernance),
 	// The toolkit types and the prebuilt MCP servers, both connectors.
 	consoleItem("toolkits", AreaAgentsGovernance, ToolkitCatalogueTypeManage, MCPCatalogueManage),
 	consoleItem("credential-inventory", AreaAgentsGovernance, CredentialsInventoryRead, CredentialsInventoryManage),

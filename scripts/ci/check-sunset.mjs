@@ -75,17 +75,17 @@ export const LEGACY_ITEMS = [
   { id: 'runtime.plugins', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`RuntimePlugins[[:space:]]*=[[:space:]]*"runtime\.plugins"`, landed: true },
   { id: 'configuration.governance', story: 'R0.1a (#2490)', dir: ADMINACCESS, pattern: String.raw`ConfigurationGovernance[[:space:]]*=[[:space:]]*"configuration\.governance"`, landed: true },
   { id: 'inherit token administration access', story: 'R1.1 (#2505)', dir: LEGACYRBAC, pattern: String.raw`TokenAdminAccessInherit[[:space:]]*=[[:space:]]*"inherit"`, landed: true },
-  // R3.8 (#2539) owes this constant: true while a request without a reason
+  // R3.8a (#2539), internal/adminaccess/reason.go: true while a request without a reason
   // is served with Elitea-Reason-Missing.
-  { id: 'reason warning period', story: 'R3.8 (#2539)', dir: ADMINACCESS, pattern: String.raw`ReasonOptionalUntilSunset[[:space:]]*=[[:space:]]*true`, landed: false },
+  { id: 'reason warning period', story: 'R3.8 (#2539)', dir: ADMINACCESS, pattern: String.raw`ReasonOptionalUntilSunset[[:space:]]*=[[:space:]]*true`, landed: true },
 ];
 
 /** The replacements: when both are in the code, the date must be set. */
 export const REPLACEMENTS = [
   // R2.7 (#2521) owes this constant: the pattern of the sealed sign-in route.
   { id: 'sealed sign-in route', story: 'R2.7 (#2521)', dir: ADMINACCESS, pattern: String.raw`SealedSignInRoute[[:space:]]*=[[:space:]]*"`, landed: false },
-  // R3.8 (#2539) owes this constant: the header a request without a reason gets.
-  { id: 'reason handling', story: 'R3.8 (#2539)', dir: ADMINACCESS, pattern: String.raw`ReasonMissingHeader[[:space:]]*=[[:space:]]*"Elitea-Reason-Missing"`, landed: false },
+  // R3.8a (#2539), internal/adminaccess/reason.go: the header a request without a reason gets.
+  { id: 'reason handling', story: 'R3.8 (#2539)', dir: ADMINACCESS, pattern: String.raw`ReasonMissingHeader[[:space:]]*=[[:space:]]*"Elitea-Reason-Missing"`, landed: true },
 ];
 
 // ── Dates (no clock) ─────────────────────────────────────────────────────────

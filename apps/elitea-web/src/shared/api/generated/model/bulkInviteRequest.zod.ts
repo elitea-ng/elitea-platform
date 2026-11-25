@@ -41,6 +41,9 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
+
+export const bulkInviteRequestReasonMax = 2000;
 
 export const BulkInviteRequest = zod
   .object({
@@ -56,6 +59,14 @@ export const BulkInviteRequest = zod
       .string()
       .describe(
         "ONE role name, resolved per project against auth_core__project_role. A project that does not define it is refused for that pair, never given another project's role row.\n",
+      ),
+    reason_code: ActionReasonCode.optional(),
+    reason: zod
+      .string()
+      .max(bulkInviteRequestReasonMax)
+      .optional()
+      .describe(
+        "Why the change is made (ADR-0059 R3.8a). Recorded on the admin audit row only; the server takes it out of the body before the handler reads it.\n",
       ),
   })
   .describe(

@@ -195,6 +195,8 @@ import type {
   ProjectCloudExecutorSwitchUpdate,
   ProjectRequestCreate,
   PublishedAgentsListing,
+  ReasonInvalidResponse,
+  ReasonRefusal,
   RemoveUserModeRoleParams,
   RetentionOverrideUpdate,
   RetentionPolicy,
@@ -3338,7 +3340,7 @@ export type adminAuthUsersActionResponse200 = {
 };
 
 export type adminAuthUsersActionResponse400 = {
-  data: N400Response;
+  data: ReasonInvalidResponse;
   status: 400;
 };
 
@@ -3464,7 +3466,7 @@ export const getAdminAuthUsersActionQueryKey = (
 export const getAdminAuthUsersActionQueryOptions = <
   TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -3513,12 +3515,16 @@ export type AdminAuthUsersActionQueryResult = NonNullable<
   Awaited<ReturnType<typeof adminAuthUsersAction>>
 >;
 export type AdminAuthUsersActionQueryError =
-  N400Response | N401Response | AdminRoleRefusal | N404Response | N500Response;
+  | ReasonInvalidResponse
+  | N401Response
+  | AdminRoleRefusal
+  | N404Response
+  | N500Response;
 
 export function useAdminAuthUsersAction<
   TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -3551,7 +3557,7 @@ export function useAdminAuthUsersAction<
 export function useAdminAuthUsersAction<
   TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -3584,7 +3590,7 @@ export function useAdminAuthUsersAction<
 export function useAdminAuthUsersAction<
   TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -3613,7 +3619,7 @@ export function useAdminAuthUsersAction<
 export function useAdminAuthUsersAction<
   TData = Awaited<ReturnType<typeof adminAuthUsersAction>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5381,7 +5387,7 @@ export type assignUserModeRoleResponse200 = {
 };
 
 export type assignUserModeRoleResponse400 = {
-  data: N400Response;
+  data: ReasonInvalidResponse;
   status: 400;
 };
 
@@ -5496,7 +5502,7 @@ export const getAssignUserModeRoleQueryKey = (
 export const getAssignUserModeRoleQueryOptions = <
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5536,12 +5542,16 @@ export type AssignUserModeRoleQueryResult = NonNullable<
   Awaited<ReturnType<typeof assignUserModeRole>>
 >;
 export type AssignUserModeRoleQueryError =
-  N400Response | N401Response | AdminRoleRefusal | N404Response | N500Response;
+  | ReasonInvalidResponse
+  | N401Response
+  | AdminRoleRefusal
+  | N404Response
+  | N500Response;
 
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5573,7 +5583,7 @@ export function useAssignUserModeRole<
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5605,7 +5615,7 @@ export function useAssignUserModeRole<
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5633,7 +5643,7 @@ export function useAssignUserModeRole<
 export function useAssignUserModeRole<
   TData = Awaited<ReturnType<typeof assignUserModeRole>>,
   TError =
-    | N400Response
+    | ReasonInvalidResponse
     | N401Response
     | AdminRoleRefusal
     | N404Response
@@ -5673,7 +5683,7 @@ export type removeUserModeRoleResponse200 = {
 };
 
 export type removeUserModeRoleResponse400 = {
-  data: N400Response;
+  data: ReasonInvalidResponse;
   status: 400;
 };
 
@@ -5763,7 +5773,11 @@ export const getRemoveUserModeRoleQueryKey = (
 export const getRemoveUserModeRoleQueryOptions = <
   TData = Awaited<ReturnType<typeof removeUserModeRole>>,
   TError =
-    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+    | ReasonInvalidResponse
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | N500Response,
 >(
   params: RemoveUserModeRoleParams,
   options?: {
@@ -5797,12 +5811,20 @@ export type RemoveUserModeRoleQueryResult = NonNullable<
   Awaited<ReturnType<typeof removeUserModeRole>>
 >;
 export type RemoveUserModeRoleQueryError =
-  N400Response | N401Response | N403Response | ErrorResponse | N500Response;
+  | ReasonInvalidResponse
+  | N401Response
+  | N403Response
+  | ErrorResponse
+  | N500Response;
 
 export function useRemoveUserModeRole<
   TData = Awaited<ReturnType<typeof removeUserModeRole>>,
   TError =
-    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+    | ReasonInvalidResponse
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | N500Response,
 >(
   params: RemoveUserModeRoleParams,
   options: {
@@ -5830,7 +5852,11 @@ export function useRemoveUserModeRole<
 export function useRemoveUserModeRole<
   TData = Awaited<ReturnType<typeof removeUserModeRole>>,
   TError =
-    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+    | ReasonInvalidResponse
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | N500Response,
 >(
   params: RemoveUserModeRoleParams,
   options?: {
@@ -5858,7 +5884,11 @@ export function useRemoveUserModeRole<
 export function useRemoveUserModeRole<
   TData = Awaited<ReturnType<typeof removeUserModeRole>>,
   TError =
-    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+    | ReasonInvalidResponse
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | N500Response,
 >(
   params: RemoveUserModeRoleParams,
   options?: {
@@ -5882,7 +5912,11 @@ export function useRemoveUserModeRole<
 export function useRemoveUserModeRole<
   TData = Awaited<ReturnType<typeof removeUserModeRole>>,
   TError =
-    N400Response | N401Response | N403Response | ErrorResponse | N500Response,
+    | ReasonInvalidResponse
+    | N401Response
+    | N403Response
+    | ErrorResponse
+    | N500Response,
 >(
   params: RemoveUserModeRoleParams,
   options?: {
@@ -6174,7 +6208,7 @@ export type bulkInviteMembersResponse200 = {
 };
 
 export type bulkInviteMembersResponse400 = {
-  data: N400Response;
+  data: ReasonInvalidResponse;
   status: 400;
 };
 
@@ -6287,7 +6321,7 @@ export const getBulkInviteMembersQueryKey = (
 
 export const getBulkInviteMembersQueryOptions = <
   TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   bulkInviteRequest: BulkInviteRequest,
   options?: {
@@ -6322,11 +6356,11 @@ export type BulkInviteMembersQueryResult = NonNullable<
   Awaited<ReturnType<typeof bulkInviteMembers>>
 >;
 export type BulkInviteMembersQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  ReasonInvalidResponse | N401Response | N403Response | N500Response;
 
 export function useBulkInviteMembers<
   TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   bulkInviteRequest: BulkInviteRequest,
   options: {
@@ -6353,7 +6387,7 @@ export function useBulkInviteMembers<
 };
 export function useBulkInviteMembers<
   TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   bulkInviteRequest: BulkInviteRequest,
   options?: {
@@ -6380,7 +6414,7 @@ export function useBulkInviteMembers<
 };
 export function useBulkInviteMembers<
   TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   bulkInviteRequest: BulkInviteRequest,
   options?: {
@@ -6403,7 +6437,7 @@ export function useBulkInviteMembers<
 
 export function useBulkInviteMembers<
   TData = Awaited<ReturnType<typeof bulkInviteMembers>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   bulkInviteRequest: BulkInviteRequest,
   options?: {
@@ -9610,7 +9644,7 @@ export type revokeInventoryCredentialResponse200 = {
 };
 
 export type revokeInventoryCredentialResponse400 = {
-  data: CredentialReviewRefusal;
+  data: CredentialReviewRefusal | ReasonRefusal;
   status: 400;
 };
 
@@ -9717,7 +9751,8 @@ export const getRevokeInventoryCredentialQueryKey = (
 
 export const getRevokeInventoryCredentialQueryOptions = <
   TData = Awaited<ReturnType<typeof revokeInventoryCredential>>,
-  TError = CredentialReviewRefusal | N401Response | N403Response,
+  TError =
+    CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response,
 >(
   credentialRevokeRequest: CredentialRevokeRequest,
   options?: {
@@ -9756,11 +9791,12 @@ export type RevokeInventoryCredentialQueryResult = NonNullable<
   Awaited<ReturnType<typeof revokeInventoryCredential>>
 >;
 export type RevokeInventoryCredentialQueryError =
-  CredentialReviewRefusal | N401Response | N403Response;
+  CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response;
 
 export function useRevokeInventoryCredential<
   TData = Awaited<ReturnType<typeof revokeInventoryCredential>>,
-  TError = CredentialReviewRefusal | N401Response | N403Response,
+  TError =
+    CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response,
 >(
   credentialRevokeRequest: CredentialRevokeRequest,
   options: {
@@ -9787,7 +9823,8 @@ export function useRevokeInventoryCredential<
 };
 export function useRevokeInventoryCredential<
   TData = Awaited<ReturnType<typeof revokeInventoryCredential>>,
-  TError = CredentialReviewRefusal | N401Response | N403Response,
+  TError =
+    CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response,
 >(
   credentialRevokeRequest: CredentialRevokeRequest,
   options?: {
@@ -9814,7 +9851,8 @@ export function useRevokeInventoryCredential<
 };
 export function useRevokeInventoryCredential<
   TData = Awaited<ReturnType<typeof revokeInventoryCredential>>,
-  TError = CredentialReviewRefusal | N401Response | N403Response,
+  TError =
+    CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response,
 >(
   credentialRevokeRequest: CredentialRevokeRequest,
   options?: {
@@ -9837,7 +9875,8 @@ export function useRevokeInventoryCredential<
 
 export function useRevokeInventoryCredential<
   TData = Awaited<ReturnType<typeof revokeInventoryCredential>>,
-  TError = CredentialReviewRefusal | N401Response | N403Response,
+  TError =
+    CredentialReviewRefusal | ReasonRefusal | N401Response | N403Response,
 >(
   credentialRevokeRequest: CredentialRevokeRequest,
   options?: {
@@ -13722,6 +13761,11 @@ export type deleteProjectRetentionOverrideResponse204 = {
   status: 204;
 };
 
+export type deleteProjectRetentionOverrideResponse400 = {
+  data: ReasonInvalidResponse;
+  status: 400;
+};
+
 export type deleteProjectRetentionOverrideResponse401 = {
   data: N401Response;
   status: 401;
@@ -13747,6 +13791,7 @@ export type deleteProjectRetentionOverrideResponseSuccess =
     headers: Headers;
   };
 export type deleteProjectRetentionOverrideResponseError = (
+  | deleteProjectRetentionOverrideResponse400
   | deleteProjectRetentionOverrideResponse401
   | deleteProjectRetentionOverrideResponse403
   | deleteProjectRetentionOverrideResponse404
@@ -13796,7 +13841,11 @@ export const getDeleteProjectRetentionOverrideQueryKey = (
 
 export const getDeleteProjectRetentionOverrideQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13845,11 +13894,18 @@ export type DeleteProjectRetentionOverrideQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
 >;
 export type DeleteProjectRetentionOverrideQueryError =
-  N401Response | AdministrationForbiddenResponse | ErrorResponse;
+  | ReasonInvalidResponse
+  | N401Response
+  | AdministrationForbiddenResponse
+  | ErrorResponse;
 
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13877,7 +13933,11 @@ export function useDeleteProjectRetentionOverride<
 };
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13905,7 +13965,11 @@ export function useDeleteProjectRetentionOverride<
 };
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13929,7 +13993,11 @@ export function useDeleteProjectRetentionOverride<
 
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -14624,6 +14692,11 @@ export type releaseLegalHoldResponse200 = {
   status: 200;
 };
 
+export type releaseLegalHoldResponse400 = {
+  data: ReasonInvalidResponse;
+  status: 400;
+};
+
 export type releaseLegalHoldResponse401 = {
   data: N401Response;
   status: 401;
@@ -14653,6 +14726,7 @@ export type releaseLegalHoldResponseSuccess = releaseLegalHoldResponse200 & {
   headers: Headers;
 };
 export type releaseLegalHoldResponseError = (
+  | releaseLegalHoldResponse400
   | releaseLegalHoldResponse401
   | releaseLegalHoldResponse403
   | releaseLegalHoldResponse404
@@ -14723,7 +14797,11 @@ export const getReleaseLegalHoldQueryKey = (
 
 export const getReleaseLegalHoldQueryOptions = <
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14764,11 +14842,18 @@ export type ReleaseLegalHoldQueryResult = NonNullable<
   Awaited<ReturnType<typeof releaseLegalHold>>
 >;
 export type ReleaseLegalHoldQueryError =
-  N401Response | AdministrationForbiddenResponse | ErrorResponse;
+  | ReasonInvalidResponse
+  | N401Response
+  | AdministrationForbiddenResponse
+  | ErrorResponse;
 
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   id: number,
   legalHoldRelease: undefined | LegalHoldRelease,
@@ -14796,7 +14881,11 @@ export function useReleaseLegalHold<
 };
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14824,7 +14913,11 @@ export function useReleaseLegalHold<
 };
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14848,7 +14941,11 @@ export function useReleaseLegalHold<
 
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
+  TError =
+    | ReasonInvalidResponse
+    | N401Response
+    | AdministrationForbiddenResponse
+    | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -23907,6 +24004,11 @@ export type resetBrandingSettingsResponse200 = {
   status: 200;
 };
 
+export type resetBrandingSettingsResponse400 = {
+  data: ReasonInvalidResponse;
+  status: 400;
+};
+
 export type resetBrandingSettingsResponse401 = {
   data: N401Response;
   status: 401;
@@ -23927,6 +24029,7 @@ export type resetBrandingSettingsResponseSuccess =
     headers: Headers;
   };
 export type resetBrandingSettingsResponseError = (
+  | resetBrandingSettingsResponse400
   | resetBrandingSettingsResponse401
   | resetBrandingSettingsResponse403
   | resetBrandingSettingsResponse500
@@ -23967,7 +24070,7 @@ export const getResetBrandingSettingsQueryKey = () => {
 
 export const getResetBrandingSettingsQueryOptions = <
   TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(options?: {
   query?: Partial<
     UseQueryOptions<
@@ -23997,11 +24100,11 @@ export type ResetBrandingSettingsQueryResult = NonNullable<
   Awaited<ReturnType<typeof resetBrandingSettings>>
 >;
 export type ResetBrandingSettingsQueryError =
-  N401Response | N403Response | N500Response;
+  ReasonInvalidResponse | N401Response | N403Response | N500Response;
 
 export function useResetBrandingSettings<
   TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   options: {
     query: Partial<
@@ -24027,7 +24130,7 @@ export function useResetBrandingSettings<
 };
 export function useResetBrandingSettings<
   TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   options?: {
     query?: Partial<
@@ -24053,7 +24156,7 @@ export function useResetBrandingSettings<
 };
 export function useResetBrandingSettings<
   TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   options?: {
     query?: Partial<
@@ -24075,7 +24178,7 @@ export function useResetBrandingSettings<
 
 export function useResetBrandingSettings<
   TData = Awaited<ReturnType<typeof resetBrandingSettings>>,
-  TError = N401Response | N403Response | N500Response,
+  TError = ReasonInvalidResponse | N401Response | N403Response | N500Response,
 >(
   options?: {
     query?: Partial<

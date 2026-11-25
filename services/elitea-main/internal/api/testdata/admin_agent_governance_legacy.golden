@@ -1,0 +1,4 @@
+GET	/api/v2/admin/agent_registry	503
+GET	/api/v2/admin/delegation_review	503
+POST	/api/v2/admin/delegation_review/scan	503
+GET	/api/v2/admin/worker_egress/hosts	503

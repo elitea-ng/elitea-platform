@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
 
 export const executionSuspensionCreateProjectIdMax = 2147483647;
 
@@ -85,6 +86,7 @@ export const ExecutionSuspensionCreate = zod.object({
     .string()
     .optional()
     .describe("Must be STOP for the platform scope."),
+  reason_code: ActionReasonCode.optional(),
 });
 
 export type ExecutionSuspensionCreate = zod.input<

@@ -150,6 +150,33 @@ components:
       name: elitea_session
 
   parameters:
+    EliteaReasonCode:
+      name: Elitea-Reason-Code
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/ActionReasonCode'
+      description: >-
+        The reason code of a dangerous administration action (ADR-0059
+        decision 6, R3.8a). Where the operation's request body declares
+        `reason_code`, a non-empty body field may carry it instead and wins
+        over this header; otherwise (a DELETE, the permission matrix save) send this
+        header. During the warning period a request without a code
+        is served and answers `Elitea-Reason-Missing: 1`. An unknown code
+        answers 400 `reason_invalid`.
+    EliteaReason:
+      name: Elitea-Reason
+      in: header
+      required: false
+      schema:
+        type: string
+      description: >-
+        The reason text, percent-encoded UTF-8 of at most 500 bytes after
+        decoding (a browser refuses a header value outside ISO-8859-1);
+        longer answers 400 `reason_invalid`. Required with the code
+        `other`. Where the operation's request body declares `reason`, the
+        body field may carry it instead. Recorded on the admin audit row only; proxy and
+        ingress access logs must not record this header.
     XClientVersion:
       name: X-Client-Version
       in: header
@@ -8802,6 +8829,22 @@ components:
           type: boolean
           description: This call set the name.
           example: true
+    ActionReasonCode:
+      type: string
+      description: >-
+        Why a dangerous administration action is made (ADR-0059 decision 6,
+        R3.8a). `other` needs a reason text.
+      enum: [incident, request, maintenance, correction, offboarding, other]
+    ReasonRefusal:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: reason_invalid when the reason is what the server refused.
+          enum: [reason_invalid]
     ErrorResponse:
       type: object
       required: [error]
@@ -9340,6 +9383,15 @@ components:
         min_age_days: { type: integer, minimum: 0 }
         max_age_days: { type: integer, minimum: 1, nullable: true }
         allow_project_override: { type: boolean }
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
+        reason:
+          type: string
+          maxLength: 2000
+          description: >
+            Why the change is made (ADR-0059 R3.8a). Recorded on the admin
+            audit row only; the server takes it out of the body before the
+            handler reads it.
 
     RetentionOverrideUpdate:
       type: object
@@ -9350,6 +9402,15 @@ components:
         keeps forever.
       properties:
         max_age_days: { type: integer, minimum: 1, nullable: true }
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
+        reason:
+          type: string
+          maxLength: 2000
+          description: >
+            Why the change is made (ADR-0059 R3.8a). Recorded on the admin
+            audit row only; the server takes it out of the body before the
+            handler reads it.
 
     LegalHold:
       type: object
@@ -9402,6 +9463,8 @@ components:
       additionalProperties: false
       properties:
         reason: { type: string, maxLength: 2000 }
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
 
     AgentIdentityBinding:
       type: object
@@ -11854,6 +11917,8 @@ components:
         kind: { $ref: '#/components/schemas/CredentialKind' }
         credential_id: { type: string, minLength: 1 }
         reason: { type: string, maxLength: 500 }
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
     CredentialRevokeResult:
       type: object
       required: [kind, credential_id, revoked_at]
@@ -12436,6 +12501,8 @@ components:
         confirm:
           type: string
           description: Must be STOP for the platform scope.
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
 
     ExecutionSuspensionResume:
       type: object
@@ -21376,6 +21443,15 @@ components:
             Any mode except `default`: default-mode roles are project
             membership and are written through /admin/users/{mode}/{project_id}.
         role: { type: string }
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
+        reason:
+          type: string
+          maxLength: 2000
+          description: >
+            Why the change is made (ADR-0059 R3.8a). Recorded on the admin
+            audit row only; the server takes it out of the body before the
+            handler reads it.
 
     ModeRoleAssignResult:
       type: object
@@ -21491,6 +21567,15 @@ components:
             `set_admin_role`, the set form: the administration roles the
             account holds after the request, `[]` for none. Duplicates are
             ignored.
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
+        reason:
+          type: string
+          maxLength: 2000
+          description: >
+            Why the change is made (ADR-0059 R3.8a). Recorded on the admin
+            audit row only; the server takes it out of the body before the
+            handler reads it.
 
     AdminAuthUsersActionResult:
       type: object
@@ -22869,6 +22954,15 @@ components:
             ONE role name, resolved per project against
             auth_core__project_role. A project that does not define it is
             refused for that pair, never given another project's role row.
+        reason_code:
+          $ref: '#/components/schemas/ActionReasonCode'
+        reason:
+          type: string
+          maxLength: 2000
+          description: >
+            Why the change is made (ADR-0059 R3.8a). Recorded on the admin
+            audit row only; the server takes it out of the body before the
+            handler reads it.
 
     BulkInviteResult:
       type: object
@@ -24858,7 +24952,40 @@ components:
             browser subscribes to. Poll or subscribe to follow the run.
 
 
+  headers:
+    EliteaReasonMissing:
+      description: >-
+        `1` on a dangerous administration action served (below 400) without
+        a reason code during the warning period of ADR-0059 decision 6 (R3.8a).
+        After the sunset date the same request answers 400
+        `reason_required` instead.
+      schema:
+        type: string
+        enum: ['1']
   responses:
+    ReasonInvalid:
+      description: >-
+        400: the request is invalid, or (code reason_invalid) its reason is:
+        an unknown reason code, `other` without a text, a reason header that
+        is not percent-encoded UTF-8, is sent twice or is over 500 bytes
+        after decoding, a text with a control character other than tab and
+        line breaks, a body reason field that is not a string, or a body
+        reason over 2000 bytes (ADR-0059 R3.8a).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ReasonRefusal'
+          examples:
+            reason_invalid:
+              summary: An unknown reason code
+              value:
+                error: reason_code is not a known reason code; use one of incident, request, maintenance, correction, offboarding, other
+                code: reason_invalid
+            reason_header_too_long:
+              summary: A reason header over 500 bytes after decoding
+              value:
+                error: the header Elitea-Reason is longer than 500 bytes after percent-decoding
+                code: reason_invalid
     SyncCursorInvalid:
       description: >-
         400: `changes_since` is not a cursor this list issued, or `limit` is
@@ -25986,8 +26113,13 @@ paths:
               action: set_admin_role
               user_id: 11
               role_names: [admin, llm_manager]
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The write happened
           content:
             application/json:
@@ -25998,7 +26130,7 @@ paths:
                 user_id: 11
                 role_name: null
                 role_names: [admin, llm_manager]
-        '400': { $ref: '#/components/responses/400' }
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403':
           description: >
@@ -26564,8 +26696,13 @@ paths:
               user_id: 11
               mode: administration
               role: llm_manager
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The assignment now exists
           content:
             application/json:
@@ -26574,7 +26711,7 @@ paths:
               example:
                 ok: true
                 id: '11:administration:llm_manager'
-        '400': { $ref: '#/components/responses/400' }
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403':
           description: >
@@ -26613,6 +26750,8 @@ paths:
         than reporting a removal that did not happen.
       tags: [admin]
       parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
         - name: id
           in: query
           required: true
@@ -26620,12 +26759,14 @@ paths:
           description: '`<user_id>:<mode>:<role>`, as returned by the listing.'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The assignment was removed
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ModeRoleRemoveResult'
-        '400': { $ref: '#/components/responses/400' }
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':
@@ -26733,8 +26874,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/BulkInviteRequest'
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: >
             The per-pair report. 200 even when `ok` is false — read `failed`
             and each result's `outcome`.
@@ -26742,7 +26888,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BulkInviteSummary'
-        '400': { $ref: '#/components/responses/400' }
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -27544,17 +27690,33 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/CredentialRevokeRequest' }
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The revoked credential
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CredentialRevokeResult' }
         '400':
-          description: (code invalid_request) A body that is not valid
+          description: >
+            (code invalid_request) A body that is not valid; or (code reason_invalid) a reason the server
+            cannot accept: see the Elitea-Reason-Code parameter.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CredentialReviewRefusal' }
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/CredentialReviewRefusal' }
+                  - { $ref: '#/components/schemas/ReasonRefusal' }
+              examples:
+                reason_invalid:
+                  summary: A reason the server cannot accept (ADR-0059 R3.8a)
+                  value:
+                    error: reason_code is not a known reason code; use one of incident, request, maintenance, correction, offboarding, other
+                    code: reason_invalid
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '404':
@@ -27730,17 +27892,30 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ExecutionSuspensionCreate' }
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '201':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The new active suspension
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ExecutionSuspension' }
         '400':
-          description: A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation
+          description: >
+            A malformed body, an unknown scope, a missing key or reason, or (code confirmation_required) a platform stop without the typed confirmation; or (code reason_invalid) a reason the server
+            cannot accept: see the Elitea-Reason-Code parameter.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                reason_invalid:
+                  summary: A reason the server cannot accept (ADR-0059 R3.8a)
+                  value:
+                    error: reason_code is not a known reason code; use one of incident, request, maintenance, correction, offboarding, other
+                    code: reason_invalid
         '401': { $ref: '#/components/responses/401' }
         '403':
           description: The caller lacks safety.suspend, or this surface may not suspend that scope
@@ -28168,8 +28343,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RetentionPolicyUpdate'
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The row as stored
           content:
             application/json:
@@ -28180,9 +28360,17 @@ paths:
             A missing field, an unknown data class, a maximum below the class
             floor or the minimum, keep forever on the gateway log, a maximum on
             attachments, or project overrides on a class that takes none
+            Or (code reason_invalid) a reason the server cannot accept:
+            see the Elitea-Reason-Code parameter.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                reason_invalid:
+                  summary: A reason the server cannot accept (ADR-0059 R3.8a)
+                  value:
+                    error: reason_code is not a known reason code; use one of incident, request, maintenance, correction, offboarding, other
+                    code: reason_invalid
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '503':
@@ -28215,18 +28403,31 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RetentionOverrideUpdate'
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The override as stored
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RetentionPolicy'
         '400':
-          description: Outside the platform bounds, or overrides are not allowed
+          description: >
+            Outside the platform bounds, or overrides are not allowed; or (code reason_invalid) a reason the server
+            cannot accept: see the Elitea-Reason-Code parameter.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                reason_invalid:
+                  summary: A reason the server cannot accept (ADR-0059 R3.8a)
+                  value:
+                    error: reason_code is not a known reason code; use one of incident, request, maintenance, correction, offboarding, other
+                    code: reason_invalid
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
@@ -28246,9 +28447,15 @@ paths:
         The platform value applies again. Gated on `retention.manage`;
         audited as `retention.override.delete`.
       tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '204':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: Removed
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
@@ -28398,13 +28605,19 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/LegalHoldRelease'
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The released hold
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LegalHold'
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
@@ -30237,13 +30450,19 @@ paths:
         unreferenced brand assets older than the upload grace period, and
         answers with a fresh read of the same shape as GET with `saved: true`.
       tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: The branding state after the reset
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BrandingSettings'
+        '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -30542,6 +30761,8 @@ paths:
         role that holds it already keeps it.
       tags: [admin]
       parameters:
+        - $ref: '#/components/parameters/EliteaReasonCode'
+        - $ref: '#/components/parameters/EliteaReason'
         - name: team_projects
           in: query
           schema: { type: boolean }
@@ -30569,6 +30790,8 @@ paths:
               $ref: '#/components/schemas/UserProjectPermissionsUpdate'
       responses:
         '200':
+          headers:
+            Elitea-Reason-Missing: { $ref: '#/components/headers/EliteaReasonMissing' }
           description: What the save changed
           content:
             application/json:
@@ -30579,6 +30802,8 @@ paths:
             An unknown role or permission, a role a target project does not
             define, or a legacy permission newly granted
             (`permission_deprecated`).
+            Or (code reason_invalid) a reason the server cannot accept:
+            see the Elitea-Reason-Code parameter.
           content:
             application/json:
               schema:

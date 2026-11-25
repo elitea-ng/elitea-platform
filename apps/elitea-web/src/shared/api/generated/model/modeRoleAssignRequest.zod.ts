@@ -41,6 +41,9 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
+
+export const modeRoleAssignRequestReasonMax = 2000;
 
 export const ModeRoleAssignRequest = zod
   .object({
@@ -55,6 +58,14 @@ export const ModeRoleAssignRequest = zod
         "Any mode except `default`: default-mode roles are project membership and are written through /admin/users/{mode}/{project_id}.\n",
       ),
     role: zod.string(),
+    reason_code: ActionReasonCode.optional(),
+    reason: zod
+      .string()
+      .max(modeRoleAssignRequestReasonMax)
+      .optional()
+      .describe(
+        "Why the change is made (ADR-0059 R3.8a). Recorded on the admin audit row only; the server takes it out of the body before the handler reads it.\n",
+      ),
   })
   .describe("NOTE(W2): internal/api/v2/admin/modes.go:117-126.\n");
 

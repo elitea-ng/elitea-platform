@@ -109,6 +109,8 @@ A route accepts a narrow permission beside the broad one it narrows, so a holder
 | `platform.operations.view` | Read system information, tracing status, background jobs and tasks. **Accepted.** | `runtime.plugins` |
 | `platform.operations.manage` | Cancel a background job; start the notice run. It does not include reading the list: pair it with `platform.operations.view`. **Accepted.** | `runtime.plugins` |
 | `mcp.catalogue.manage` | Read and edit prebuilt MCP servers. **Accepted.** | `runtime.plugins` |
+| `agents.governance.view` | Read the agent registry, the delegations awaiting review, the worker egress hosts and the agent governance Configuration sections (Agent Lifecycle, Agents, AI Disclosure, Approval Policy, Approvals, Browser, Catalogue, Credential Review, Delegation, Notifications, Platform Preamble, Proactivity, Remote Agents, Run Caps, Worker Egress). **Accepted.** | `configuration.governance`, `runtime.plugins` |
+| `agents.governance.manage` | Read them too, edit the agent governance sections and run the delegation review scan. **Accepted.** | `configuration.governance`, `runtime.plugins` |
 | `projects.members.manage` | Add, change and remove members of any project, without widening your own access. | `configuration.users.users.create`, `.edit` and `.delete` |
 | `projects.settings.view` | Read the guarded settings of any project. | none (new) |
 | `projects.settings.manage` | Edit the guarded settings of any project. | none (new) |
@@ -129,7 +131,7 @@ Six names are not a narrower part of an existing permission. `projects.settings.
 `runtime.plugins` and `configuration.governance` each cover many unrelated subjects. The narrow permissions above replace them:
 
 - `runtime.plugins` is replaced by `platform.config.view` and `.manage`, `platform.email.manage`, `platform.maintenance.manage`, `platform.operations.view` and `.manage`, `mcp.catalogue.manage`, `identity.sso.view`, `.settings.manage` and `.trust.manage`, and the `llm.policy.*` and `llm.guardrails.manage` names for the guardrail and breaker sections.
-- `configuration.governance` is replaced by the `llm.*` names for the gateway. The agent governance Configuration sections have no narrow pair yet and still need `configuration.governance`; a later release gives them one.
+- `configuration.governance` is replaced by the `llm.*` names for the gateway and by `agents.governance.view` and `.manage` for the agent registry, the delegation review, the worker egress hosts and the agent governance Configuration sections. Both administrator roles hold the pair; no built-in narrow role does. To let someone run agent governance without `configuration.governance`, give a custom role the pair.
 
 Both legacy names end on a sunset date, at least 90 days after the last replacement ships; a later release sets and announces the date. Until then:
 

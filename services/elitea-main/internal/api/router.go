@@ -1859,7 +1859,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref"},
+		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref", adminaccess.ReasonMissingHeader},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -2274,6 +2274,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// elevation_restrictions.go): below the token rule, in the same place
 	// and for the same reasons, and marked from the same finished router.
 	elevationRule := &elevationRestrictions{resolver: permissionResolver}
+	// The reason of a dangerous action (ADR-0059 R3.8a,
+	// middleware/reason.go): below the elevation rule, in the same place and
+	// for the same reasons, and marked from the same finished router.
+	reasonRule := apimw.NewReasonCheck()
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:                cfg.Pool,
@@ -2584,6 +2588,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 		r.Use(tokenRule.middleware)
 		r.Use(elevationRule.middleware)
+		r.Use(reasonRule.Middleware)
 		// A write that can change what a callee agent holds asks for the drift
 		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
 		// Below Audit so it sees the final status; it never changes a response.
@@ -3416,9 +3421,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// The hosts runs reached and were refused (ADR-0044 decision 2,
 				// issue 1490), to seed a worker egress allowlist. The worker
-				// egress settings' own permission. Unconditional: no pool
-				// answers 503.
-				r.With(central(v2workeregress.Permission)).
+				// egress settings' own permission, or either name of the agent
+				// governance pair (ADR-0059 R0.15: the manage half saves the
+				// section these hosts seed, so it reads them too).
+				// Unconditional: no pool answers 503.
+				r.With(central(adminaccess.AgentsGovernanceView, adminaccess.AgentsGovernanceManage,
+					v2workeregress.Permission)).
 					Get("/worker_egress/hosts", newWorkerEgressHostsHandler(cfg.Pool).Hosts)
 
 				// Agent identity bindings and mandates (ADR-0039, issue 1112).
@@ -3542,19 +3550,25 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 
 				// The cross-project agent registry (ADR-0040 decision 1),
 				// JSON or CSV, behind configuration.governance like the
-				// Agent Lifecycle section.
-				r.With(central(adminaccess.ConfigurationGovernance)).
+				// Agent Lifecycle section, or either name of the agent
+				// governance pair (ADR-0059 R0.15).
+				r.With(central(adminaccess.AgentsGovernanceView, adminaccess.AgentsGovernanceManage,
+					adminaccess.ConfigurationGovernance)).
 					Get(v2agentlifecycle.AdminRegistryPath, v2agentlifecycle.NewHandler(agentLifecycle, nil).AdminRegistry)
 
 				// The delegations that await review (ADR-0044 Amendment 1,
 				// A1.3; epic 2156 story S6): the queue the migration of
 				// existing compositions left, per project, and the scan that
 				// writes the grants it missed. Behind the permission of the
-				// Delegation section it explains. Mounted unconditionally: a
-				// handler without the grant store answers 503.
-				r.With(central(adminaccess.ConfigurationGovernance)).
+				// Delegation section it explains, or the agent governance pair
+				// (ADR-0059 R0.15): the list reads with either name, the scan
+				// writes with agents.governance.manage only. Mounted
+				// unconditionally: a handler without the grant store answers
+				// 503.
+				r.With(central(adminaccess.AgentsGovernanceView, adminaccess.AgentsGovernanceManage,
+					adminaccess.ConfigurationGovernance)).
 					Get("/delegation_review", adminHandler.DelegationReviewList)
-				r.With(central(adminaccess.ConfigurationGovernance)).
+				r.With(central(adminaccess.AgentsGovernanceManage, adminaccess.ConfigurationGovernance)).
 					Post("/delegation_review/scan", adminHandler.DelegationReviewScan)
 
 				// The connector approval queue (ADR-0044 decision 1, #1501):
@@ -6508,14 +6522,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// where a project's ai_credentials are created, overwritten and deleted;
 	// without Audit here they left no centry.audit_events row. A fresh slice,
 	// so the append can never write into apiGates' backing array.
-	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+3)
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+4)
 	reviewedGates = append(reviewedGates, apiGates...)
-	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware, elevationRule.middleware)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware, elevationRule.middleware,
+		reasonRule.Middleware)
 	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	administrationRoutes.mark(r)
 	tokenRule.mark(r)
 	elevationRule.mark(r)
+	reasonRule.Mark(r)
 	return r
 }
 
