@@ -133,6 +133,9 @@ pub struct RuleFiles {
     user_dir: Option<PathBuf>,
     workspaces: Arc<WorkspaceStore>,
     lock: Mutex<()>,
+    /// The trusted folders, told of every write the app makes (ADR-0061:
+    /// an outside write while a folder is trusted suspends trust).
+    trust: std::sync::OnceLock<std::sync::Weak<crate::trust::TrustStore>>,
 }
 
 fn io(error: &std::io::Error) -> HostError {
@@ -315,7 +318,13 @@ impl RuleFiles {
             user_dir,
             workspaces,
             lock: Mutex::new(()),
+            trust: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Tell `store` of every write (set once, at start-up).
+    pub fn set_trust_store(&self, store: &Arc<crate::trust::TrustStore>) {
+        let _ = self.trust.set(Arc::downgrade(store));
     }
 
     fn path(&self, scope: RuleScope, workspace_id: &str) -> Option<PathBuf> {
@@ -446,7 +455,15 @@ impl RuleFiles {
     fn write(&self, path: &Path, set: &RuleSet) -> Result<(), HostError> {
         let bytes = serde_json::to_vec_pretty(set.file())
             .map_err(|e| HostError::Internal(e.to_string()))?;
-        write_private(path, &bytes)
+        let trust = self.trust.get().and_then(std::sync::Weak::upgrade);
+        if let Some(trust) = &trust {
+            trust.rules_writing(path);
+        }
+        let written = write_private(path, &bytes);
+        if let Some(trust) = &trust {
+            trust.rules_written(path);
+        }
+        written
     }
 
     /// Append `rules` (and the proposal's pins) to the workspace's rules

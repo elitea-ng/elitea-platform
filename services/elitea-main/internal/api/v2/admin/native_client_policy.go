@@ -253,6 +253,18 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.Network,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkFolderTrust,
+			"type":  "boolean",
+			"title": "Allow Trusted Folders (No Sandbox)",
+			"description": "Whether a person may trust a desktop folder so that its commands run outside the sandbox, " +
+				"as their own user with their login environment and the network, still under approvals and the " +
+				"denied commands. Takes effect only while the Widest Sandbox Mode is full-access and the shell and the " +
+				"network are allowed. Turning it off suspends every trusted folder on its next policy refresh.",
+			"section":      section,
+			"default":      defaults.FolderTrust,
+			"visible_when": visible,
+		},
 		patternList(platformconfig.KeyNativeLocalWorkCommandAllow, "Allowed Commands",
 			fmt.Sprintf("Command patterns that run without asking the user. At most %d patterns of %d bytes.",
 				platformconfig.MaxLocalWorkPatterns, platformconfig.MaxLocalWorkPatternBytes)),

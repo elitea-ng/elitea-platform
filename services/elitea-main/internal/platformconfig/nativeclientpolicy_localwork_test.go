@@ -48,9 +48,38 @@ func TestLocalWorkPolicyOverlay(t *testing.T) {
 		IndexModelMirrorURL:  "https://mirror.example.com/hf",
 		ComputerUseAppsAllow: []string{}, ComputerUseAppsDeny: []string{},
 		Browser: true, BrowserAgent: true, BrowserAllowDomains: []string{}, BrowserDenyDomains: []string{},
+		FolderTrust: true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("overlay = %+v\nwant %+v", got, want)
+	}
+}
+
+// TestLocalWorkFolderTrust pins ADR-0061 decision 5b and owner answer 1: the
+// key defaults to true, parses a stored false, keeps the default for junk,
+// and travels in the `local_work` group as `folder_trust`.
+func TestLocalWorkFolderTrust(t *testing.T) {
+	if !NativeClientPolicyFromValues(Values{}).LocalWork.FolderTrust {
+		t.Fatal("local_work.folder_trust must default to true")
+	}
+	if NativeClientPolicyFromValues(Values{KeyNativeLocalWorkFolderTrust: false}).LocalWork.FolderTrust {
+		t.Fatal("a stored false must turn folder trust off")
+	}
+	if !NativeClientPolicyFromValues(Values{KeyNativeLocalWorkFolderTrust: "no"}).LocalWork.FolderTrust {
+		t.Fatal("a non-boolean value must keep the default")
+	}
+	body, err := json.Marshal(NativeClientPolicyFromValues(Values{KeyNativeLocalWorkFolderTrust: false}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		LocalWork map[string]any `json:"local_work"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := decoded.LocalWork["folder_trust"]; !ok || got != false {
+		t.Fatalf("local_work.folder_trust = %v (present %v), want false", got, ok)
 	}
 }
 

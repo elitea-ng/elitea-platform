@@ -362,6 +362,68 @@ workspace#3: …", "error": "forbidden_by_rule", "justification": "…",
 names instead of retrying. A rule imported from a repository leaves the
 `justification` out (it is the repository's text, not the person's).
 
+A task worktree's workspace rules are its folder's file (#3015): the
+worktree's session loads the root folder's `rules.json`, and "Always allow"
+in the worktree appends to it.
+
+Two fields exist for trusted folders (ADR-0061, below): an `allow` rule's
+`sandbox` may be `"host"` (it may run the command on the host in a trusted
+folder, and covers what a rule with no sandbox covers in the sandbox), and
+`requires_trust: true` marks an "Always allow" made in a trusted folder
+(`sandbox: "host"`, no `network`): it allows nothing while the folder is not
+trusted (`rules_explain` says "needs trust"). Neither is valid with
+`credential`, `hosts` or `origin: repository`; an imported proposal drops
+both, with a warning.
+
+## Trusted folders (`src/trust.rs`, `src/trust_commands.rs`, ADR-0061)
+
+A trusted folder's commands run on the host (no OS sandbox), with the
+person's login-shell environment (captured once per app session; the app's
+own variables, proxy credentials and tokens left out) and their output
+redacted of known token formats and the host's own tokens. Grants keep their
+sandbox. Approvals follow the trusted folder's layers
+(`libs/rust/local-tools/src/approvals/trust.rs`): forbidden and ask rules and
+the policy first; an allow rule the person wrote (never a repository's)
+allows; after the turn read outside content (a remote toolkit, MCP, web,
+browser or computer tool, or a later agent's turn of a routed message) every
+other host command is asked with `source: "taint"`, which neither bypass
+mode nor the unattended grant answers; otherwise only routine commands that
+start no network program run without a question ("Ask for every command":
+none). A task worktree has its folder's trust and is never granted its own.
+
+| Command | Args | Returns |
+|---------|------|---------|
+| `trust_status` | `{workspace_id}` | `TrustStatus`: `{workspace_id, state: "untrusted"\|"trusted"\|"suspended", suspended_by: "policy"\|"tamper"\|null, tampered_file, allowed_by_policy, policy_blocks: ("local_work"\|"shell"\|"network"\|"ceiling"\|"folder_trust")[], inherited_from, grantable, ask_every_command, env_fallback, platform: "macos"\|"linux"\|"windows", sandbox_available, granted_at, last_host_command_at, confirmation_version}`. Rejects `workspace_unknown` |
+| `trust_grant` | `{workspace_id, confirmation_version, ask_every_command}` | `TrustStatus`. Rejects `trust_not_allowed` (the policy), `trust_refused` (a task worktree, the filesystem root or home folder, a folder holding the app's data, a link to another open folder), `confirmation_outdated` (not `1`) |
+| `trust_revoke` | `{workspace_id}` | `TrustStatus`; the folder's host processes are stopped |
+| `trust_list` | `{}` | `TrustStatus & {name, path}` of every trusted or suspended folder |
+
+`trust://event`: `{kind: "changed", workspace_id: string|null}` after a
+grant, revoke or suspension (`null`: every folder), `{kind: "tamper", file}`
+when a record or the ledger was changed outside the app.
+
+The record is `<app data>/workspaces/<id>/trust.json` (0600): the SHA-256 of
+the folder's canonical path, `granted_at`, `confirmation_version`,
+`ask_every_command`, `suspended`. Every grant, revoke and suspension appends
+to `<app data>/workspaces/trust-ledger.jsonl` (0600), each line chained to
+the previous one by its SHA-256 and naming the digest of the record it
+wrote; paths appear as digests only. The ledger also records the digest of
+the folder's and the person's `rules.json` at the grant and at every write
+the app makes. A broken chain, a record the ledger does not name, or, while a
+folder is trusted, a rules file whose digest is not the last one recorded
+suspends every trusted folder (`suspended_by: "tamper"`, `tampered_file`), and
+the damaged ledger is kept beside the new one. A policy that stops allowing
+trust suspends it (`suspended_by: "policy"`) when it is next read and when a
+session reopens for the new policy. A suspended folder is trusted again only
+by a new grant. A folder whose canonical path changed is untrusted.
+
+A host command's result carries `execution: "host"` (and `env_fallback:
+true` when the login shell could not be read); a background one's start
+answer carries `execution: "host"`. The commit report counts them
+(`host_commands`, `trusted`; the server stamps `ran_outside_sandbox`). A
+failed tool's `tool_result` event carries its `code` (without the
+`local_tools.` prefix), so `sandbox_unavailable` can offer trust.
+
 ## The local agent turn (D0, `src/d0/`)
 
 | Command | Arguments | Result |

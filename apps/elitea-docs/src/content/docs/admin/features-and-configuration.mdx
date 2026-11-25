@@ -91,6 +91,7 @@ The device and data-control keys: `require_device_lock`, `idle_lock_seconds`, `a
 | `local_work_shell` | On | Local turns may run shell commands. |
 | `local_work_max_sandbox_mode` | `workspace-write` | The least confined sandbox a command may use: `read-only`, `workspace-write` or `full-access`. |
 | `local_work_network` | Off | Sandboxed commands may reach the network. A desktop approval rule that grants a login or named hosts also needs it ([approval rules](/how-tos/chat-conversations/desktop-approval-rules/)). |
+| `local_work_folder_trust` | On | A person may mark a desktop folder **trusted (no sandbox)**: its commands then run as the person's own processes, with their login-shell environment, CLI logins and the network, still under approvals, their rules and `local_work_command_deny`. It takes effect only while `local_work_max_sandbox_mode` is `full-access` and `local_work_shell` and `local_work_network` are on, so a deployment on the default `workspace-write` ceiling has no trusted folders. Turn it off to allow full access with a question per command but no trust. When the policy stops allowing trust, every trusted folder is suspended on the device's next policy refresh, until the person confirms again. |
 | `local_work_command_allow`, `local_work_command_deny`, `local_work_path_deny` | Empty | Command and path patterns, at most 200 of 512 bytes each. A deny wins. |
 | `local_work_local_mcp` | Off | People may add MCP servers that run on their machine. |
 | `local_work_local_index` | On | The app may index a workspace folder on the device. |

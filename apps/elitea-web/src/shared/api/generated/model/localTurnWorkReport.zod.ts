@@ -51,6 +51,8 @@ export const localTurnWorkReportMemoriesSavedMax = 500;
 
 export const localTurnWorkReportMemoriesDeletedMax = 500;
 
+export const localTurnWorkReportHostCommandsMin = 0;
+
 export const LocalTurnWorkReport = zod
   .object({
     sandbox_mode: zod
@@ -86,6 +88,19 @@ export const LocalTurnWorkReport = zod
       .optional()
       .describe(
         "Client contract 1.20. The ids of the memories the turn's delete_memory calls removed, in call order; absent when none. Stored and audited as `memories_saved` is.",
+      ),
+    host_commands: zod
+      .int()
+      .min(localTurnWorkReportHostCommandsMin)
+      .optional()
+      .describe(
+        "Client contract 1.66 (ADR-0061 decision 5i). How many of the turn's commands ran outside the OS sandbox in a trusted folder. Absent when none. When above 0 the stored `local_work` carries `ran_outside_sandbox: true`. As everything here, what the client reports; the server cannot verify it.",
+      ),
+    trusted: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Client contract 1.66. The turn's folder was trusted (and not suspended) when the turn ran. Absent when it was not.",
       ),
   })
   .describe(
