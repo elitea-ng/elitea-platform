@@ -13,7 +13,7 @@ documents = ["elitea-doc-extract/documents"]
 # The desktop ⇄ cloud handoff (ADR-0034): snapshot, exclusions, secret
 # scan and take-back over the workspace store. Off by default: it links
 # gix's object and pack crates.
-handoff = ["dep:elitea-workspace-store", "dep:regex"]
+handoff = ["dep:elitea-workspace-store"]
 
 [dependencies]
 # Tilde, like agent-runtime: adk breaks its API between minors and the
@@ -52,8 +52,9 @@ portable-pty = "0.9.0"
 # run_tests' junit reports (pytest, Surefire, Gradle). No default features:
 # no serde, no encoding; it expands no DTD entity.
 quick-xml = { version = "0.42.0", default-features = false }
-# The handoff's secret rules (shipped as data, `src/handoff/secret_rules.json`).
-regex = { version = "1.13.1", optional = true }
+# The handoff's secret rules (shipped as data, `src/handoff/secret_rules.json`)
+# and the token formats redacted from host-command output (`redact`, ADR-0061).
+regex = "1.13.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

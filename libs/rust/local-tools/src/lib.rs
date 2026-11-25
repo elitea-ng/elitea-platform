@@ -31,6 +31,7 @@ pub mod git;
 #[cfg(feature = "handoff")]
 pub mod handoff;
 pub mod hooks;
+pub mod host_env;
 pub mod ledger;
 mod line_ending;
 pub mod lsp;
@@ -42,6 +43,7 @@ pub mod process;
 pub mod project;
 pub mod project_instructions;
 pub mod provider;
+pub mod redact;
 pub mod run_tests;
 pub mod sandbox;
 pub mod session;

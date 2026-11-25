@@ -58,6 +58,18 @@ const MAX_SHOWN: usize = 253 + 6;
 /// The proxy user name in the command's proxy URL.
 const PROXY_USER: &str = "elitea";
 
+/// Whether `value` is one of this host's proxy URLs
+/// ([`EgressProxy::url`]): a grant's proxy credential on the loopback,
+/// never passed to a host command (ADR-0061 decision 5c).
+#[must_use]
+pub fn is_app_proxy_url(value: &str) -> bool {
+    value
+        .strip_prefix("http://")
+        .and_then(|rest| rest.strip_prefix(PROXY_USER))
+        .and_then(|rest| rest.strip_prefix(':'))
+        .is_some_and(|rest| rest.contains("@127.0.0.1:"))
+}
+
 /// Why a host entry of a rule is refused, or `None` for a valid one:
 /// lowercase DNS labels (`a-z`, `0-9`, `-`, not at a label's ends), at
 /// least two labels, optionally `*.` in front, no IP literal, no port.

@@ -173,6 +173,7 @@ mod tests {
             loopback: false,
             keep_alive,
             max_wall: std::time::Duration::from_secs(120),
+            host_redact: None,
         }
     }
 

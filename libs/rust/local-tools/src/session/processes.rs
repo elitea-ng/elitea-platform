@@ -297,6 +297,12 @@ impl LocalSession {
             shell::prepare_command(&self.workspace, &self.shell, spec, start.unconfined)?;
         let enforcement = prepared.enforcement;
         let note = prepared.note;
+        let on_host = spec.on_host() && enforcement == crate::sandbox::Enforcement::None;
+        let env = if on_host {
+            shell::host_environment(&self.shell, start.tty).0
+        } else {
+            shell::process_environment(&self.shell, start.tty)
+        };
         let process = self.processes.spawn(SpawnSpec {
             call_id: call_id.to_owned(),
             command: spec.command.clone(),
@@ -304,13 +310,14 @@ impl LocalSession {
             cwd_path: self.workspace.absolute(&spec.cwd),
             program: prepared.program,
             args: prepared.args,
-            env: shell::process_environment(&self.shell, start.tty),
+            env,
             tty: start.tty,
             sandbox: spec.mode,
             network: spec.network,
             loopback: spec.loopback,
             keep_alive: start.keep_alive,
             max_wall: self.shell.max_process_wall,
+            host_redact: on_host.then(|| shell::host_redacted_secrets(&self.shell)),
         })?;
         process.settle(start.yield_for).await;
         let max = self.process_read_cap(None)?;
@@ -323,6 +330,9 @@ impl LocalSession {
             map.insert("enforcement".to_owned(), json!(enforcement));
             if let Some(note) = note {
                 map.insert("enforcement_note".to_owned(), json!(note));
+            }
+            if on_host {
+                map.insert("execution".to_owned(), json!(shell::EXECUTION_HOST));
             }
         }
         Ok(answer)
@@ -425,6 +435,7 @@ impl LocalSession {
             paths: vec![process.cwd().to_owned()],
             command: typed,
             sandbox: Some(process.sandbox()),
+            host: process.on_host(),
             ..ToolCall::new(kind)
         };
         self.authorize(call_id, call, message).await

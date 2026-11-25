@@ -606,6 +606,8 @@ mod tests {
             shell: false,
             grant: None,
             network: None,
+            execution: None,
+            env_fallback: false,
         }
     }
 
