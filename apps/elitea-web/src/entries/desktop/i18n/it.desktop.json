@@ -1026,6 +1026,7 @@
   "workspace.team.pipeline": "Contiene una pipeline",
   "workspace.team.noMembers": "Nessun agente",
   "workspace.team.leadNotice": "Team {{team}}: un messaggio che non nomina alcun agente va a {{lead}} (responsabile); scrivi @Nome per rivolgerti a un altro membro.",
-  "workspace.team.addressedNotice": "Team {{team}}: scrivi @Nome per rivolgerti a un membro; un messaggio che non nomina alcun agente va a {{lead}}.",
-  "workspace.team.folderNotice": "Ogni membro lavora su questo computer con questa cartella e i suoi strumenti. Un agente che un membro chiama come strumento viene eseguito nel cloud e non riceve la cartella."
+  "workspace.team.addressedNotice": "Team {{team}}: scrivi @Nome per rivolgerti a un membro; un messaggio che non nomina alcun agente va all’agente che ha risposto per ultimo (all’inizio {{lead}}).",
+  "workspace.team.folderNotice": "Ogni membro lavora su questo computer con questa cartella e i suoi strumenti. Un agente che un membro chiama come strumento viene eseguito nel cloud e non riceve la cartella.",
+  "workspace.team.notListed": "Un agente non è elencato qui"
 }

@@ -81,6 +81,8 @@ function unavailableText(reason: TeamUnavailable): string {
   switch (reason) {
     case 'other_project':
       return t('workspace.team.otherProject', 'Agents of another project');
+    case 'not_listed':
+      return t('workspace.team.notListed', 'An agent is not listed here');
     case 'pipeline':
       return t('workspace.team.pipeline', 'Has a pipeline');
     case 'no_members':

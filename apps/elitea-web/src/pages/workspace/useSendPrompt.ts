@@ -187,6 +187,12 @@ function companionsOf(selection: AgentSelection, agentId: string): CompanionAgen
     .map((c) => ({ applicationId: Number(c.agentId), applicationName: c.name, versionId: c.versionId, agentType: c.agentType, cloud: c.cloud }));
 }
 
+/** Shows the started thread; one this send created keeps the team and companions picked for it (`markCreated`). */
+function showStarted(selection: Pick<AgentSelection, 'markCreated' | 'selectConversation'>, conversationId: string, created: boolean): void {
+  if (created) selection.markCreated?.(conversationId);
+  selection.selectConversation(conversationId);
+}
+
 /** The composer's agent leads the team the thread is run by (policy `lead`, #3053): the new thread's floor names it. */
 export function leadsTheTeam(selection: Pick<AgentSelection, 'team'>, agentId: string): boolean {
   const team = selection.team;
@@ -351,7 +357,7 @@ export function useSendPrompt(
       // prompt and the person's conversation choice as they were.
       if (!started) return false;
       pending.current = null;
-      selection.selectConversation(conversationId);
+      showStarted(selection, conversationId, startsNew);
       notifyStarted(onStarted, conversationId, prompt, shownOf(images));
       return true;
     } catch (error) {

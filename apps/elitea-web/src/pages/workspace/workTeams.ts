@@ -32,7 +32,7 @@ export interface WorkTeam {
 }
 
 /** Why a team cannot run here. */
-export type TeamUnavailable = 'other_project' | 'pipeline' | 'no_members';
+export type TeamUnavailable = 'other_project' | 'not_listed' | 'pipeline' | 'no_members';
 
 /** A team as the picker lists it: runnable, or why not. */
 export type TeamChoice = { id: number; name: string; team: WorkTeam } | { id: number; name: string; unavailable: TeamUnavailable };
@@ -45,9 +45,10 @@ export function teamChoice(team: AgentTeam, projectId: number, agents: readonly 
   const members = team.members;
   if (members.length === 0) return { id: team.id, name: team.name, unavailable: 'no_members' };
   const known = new Set(agents.map((agent) => agent.id));
-  if (members.some((member) => member.project_id !== projectId || !known.has(String(member.application_id)))) {
-    return { id: team.id, name: team.name, unavailable: 'other_project' };
-  }
+  if (members.some((member) => member.project_id !== projectId)) return { id: team.id, name: team.name, unavailable: 'other_project' };
+  // An agent of this project the picker's list does not hold (gone, or past the list's first page): it cannot be told
+  // apart from a pipeline, nor picked.
+  if (members.some((member) => !known.has(String(member.application_id)))) return { id: team.id, name: team.name, unavailable: 'not_listed' };
   if (members.some((member) => pipelineIds.has(String(member.application_id)))) return { id: team.id, name: team.name, unavailable: 'pipeline' };
   const named = members.map((member): WorkTeamMember => {
     const agent = agents.find((a) => a.id === String(member.application_id));

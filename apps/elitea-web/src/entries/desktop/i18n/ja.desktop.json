@@ -1026,6 +1026,7 @@
   "workspace.team.pipeline": "パイプラインを含む",
   "workspace.team.noMembers": "エージェントなし",
   "workspace.team.leadNotice": "チーム {{team}}: エージェントを指定しないメッセージは {{lead}}（リード）に届きます。別のメンバーに宛てるには @名前 と書きます。",
-  "workspace.team.addressedNotice": "チーム {{team}}: メンバーに宛てるには @名前 と書きます。エージェントを指定しないメッセージは {{lead}} に届きます。",
-  "workspace.team.folderNotice": "各メンバーはこのコンピューターで、このフォルダーとそのツールを使って作業します。メンバーがツールとして呼び出すエージェントはクラウドで実行され、フォルダーを受け取りません。"
+  "workspace.team.addressedNotice": "チーム {{team}}: メンバーに宛てるには @名前 と書きます。エージェントを指定しないメッセージは、最後に回答したエージェント（最初は {{lead}}）に届きます。",
+  "workspace.team.folderNotice": "各メンバーはこのコンピューターで、このフォルダーとそのツールを使って作業します。メンバーがツールとして呼び出すエージェントはクラウドで実行され、フォルダーを受け取りません。",
+  "workspace.team.notListed": "ここに表示されないエージェントがあります"
 }

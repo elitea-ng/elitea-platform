@@ -23,7 +23,7 @@ export function TeamThreadNotice({ team, local }: TeamThreadNoticeProps): React.
     <Alert severity="info" data-testid="workspace-team-notice">
       {team.lead
         ? t('workspace.team.leadNotice', 'Team {{team}}: a message that names no agent goes to {{lead}} (lead); write @Name to address another member.', { team: team.name, lead })
-        : t('workspace.team.addressedNotice', 'Team {{team}}: write @Name to address a member; a message that names no agent goes to {{lead}}.', { team: team.name, lead })}{' '}
+        : t('workspace.team.addressedNotice', 'Team {{team}}: write @Name to address a member; a message that names no agent goes to the agent that answered last ({{lead}} at first).', { team: team.name, lead })}{' '}
       {t(
         'workspace.team.folderNotice',
         'Every member works on this computer with this folder and its tools. An agent a member calls as a tool runs in the cloud and does not get the folder.',

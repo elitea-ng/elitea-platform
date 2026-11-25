@@ -18,7 +18,7 @@
  * (`workTeams.ts`): the composer's agent is its lead (or its first member), on the team's version, and the other
  * members are the companions, each running on this computer. The first send writes the lead as the thread's floor.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getApplication, useGetApplication, useListApplications } from '@/shared/api/generated/applications/applications';
 import { useListConversations } from '@/shared/api/generated/chat/chat';
@@ -110,10 +110,25 @@ export interface AgentSelection {
   team?: WorkTeam;
   /** Run a new thread by the team `id` (a runnable one of `teams`). */
   selectTeam?: (id: number) => void;
+  /** A send created thread `id` for the new thread: selecting it keeps the team and the companions. */
+  markCreated?: (id: string) => void;
 }
 
 const NO_COMPANIONS: readonly ThreadCompanion[] = [];
 const NO_TEAMS: readonly TeamChoice[] = [];
+
+/** The companion came with the team (one of its other members). */
+function fromTeam(team: WorkTeam | undefined, companion: ThreadCompanion): boolean {
+  return team?.others.some((member) => String(member.applicationId) === companion.agentId) === true;
+}
+
+/**
+ * Selecting `id` leaves the thread the companions (and the team) were picked for: none, another existing thread, or,
+ * from a new thread, any thread but the one its first send created (`created`).
+ */
+function leavesThread(id: string, current: string, created: string): boolean {
+  return id === '' || (current !== '' && id !== current) || (current === '' && id !== created);
+}
 
 /** The version the team pinned its lead to, when `agentId` is that lead and the version is offered; else `undefined`. */
 function teamVersion(team: WorkTeam | undefined, agentId: string, versions: readonly VersionChoice[]): string | undefined {
@@ -151,6 +166,8 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
   const [conversationId, setConversationId] = useState('');
   const [companions, setCompanions] = useState<readonly ThreadCompanion[]>(NO_COMPANIONS);
   const [team, setTeam] = useState<WorkTeam | undefined>(undefined);
+  // The thread the new thread's first send created (`markCreated`).
+  const created = useRef('');
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
   const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });
@@ -259,20 +276,27 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       setAgentId(id);
       setVersionId('');
       setConversationId('');
-      setCompanions((current) => current.filter((c) => c.agentId !== id));
+      // Another agent: the thread is no longer the team's, and the team's members go with it.
+      setCompanions((current) => current.filter((c) => c.agentId !== id && !fromTeam(team, c)));
       setTeam(undefined);
     },
+    // Another version of the lead is not the saved team any more: the agents stay, the team's name and lead go.
     selectVersion: (id) => {
       setVersionId(id);
       setConversationId('');
+      setTeam(undefined);
     },
-    // Another thread has its own agents: the companions stay only for the thread a first send just created.
+    // Another thread has its own agents: the companions (and the team) stay only for the thread a first send just created.
     selectConversation: (id) => {
-      if (id === '' || (conversationId !== '' && id !== conversationId)) {
+      if (leavesThread(id, conversationId, created.current)) {
         setCompanions(NO_COMPANIONS);
         setTeam(undefined);
       }
+      if (id === '') created.current = '';
       setConversationId(id);
+    },
+    markCreated: (id) => {
+      created.current = id;
     },
     companions,
     addCompanion,

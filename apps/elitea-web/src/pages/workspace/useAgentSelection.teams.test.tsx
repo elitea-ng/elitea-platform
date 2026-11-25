@@ -94,6 +94,44 @@ describe('useAgentSelection teams (#3053)', () => {
     expect(hook.current().team).toBeUndefined();
   });
 
+  it('leaving the team\'s new thread drops the team and the members it brought', async () => {
+    serveProject(['models.teams.list']);
+    const hook = mountSelection();
+    await waitFor(() => expect(hook.current().teams).toHaveLength(2));
+    const pick = async () => {
+      act(() => hook.current().selectTeam?.(3));
+      await waitFor(() => expect(hook.current().versionId).toBe('10'));
+    };
+    const dropped = () => {
+      expect(hook.current().team).toBeUndefined();
+      expect(hook.current().companions).toEqual([]);
+    };
+
+    // An existing thread has its own agents: the team is not added to it.
+    await pick();
+    act(() => hook.current().selectConversation('11111111-1111-4111-8111-111111111111'));
+    dropped();
+
+    // The thread the team's first send created keeps it.
+    await pick();
+    act(() => hook.current().markCreated?.('22222222-2222-4222-8222-222222222222'));
+    act(() => hook.current().selectConversation('22222222-2222-4222-8222-222222222222'));
+    expect(hook.current().team).toMatchObject({ id: 3 });
+    expect(hook.current().companions).toHaveLength(1);
+
+    // Another lead agent: the team's other members go with the team.
+    act(() => hook.current().selectConversation(''));
+    await pick();
+    act(() => hook.current().selectAgent('6'));
+    dropped();
+
+    // Another version of the lead is not the saved team: the members stay, the team's name and lead go.
+    await pick();
+    act(() => hook.current().selectVersion('9'));
+    expect(hook.current().team).toBeUndefined();
+    expect(hook.current().companions).toHaveLength(1);
+  });
+
   it('a team that cannot run here is not picked', async () => {
     serveProject(['models.teams.list']);
     const hook = mountSelection();

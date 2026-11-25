@@ -1026,6 +1026,7 @@
   "workspace.team.pipeline": "Enthält eine Pipeline",
   "workspace.team.noMembers": "Keine Agenten",
   "workspace.team.leadNotice": "Team {{team}}: Eine Nachricht, die keinen Agenten nennt, geht an {{lead}} (Lead); schreiben Sie @Name, um ein anderes Mitglied anzusprechen.",
-  "workspace.team.addressedNotice": "Team {{team}}: Schreiben Sie @Name, um ein Mitglied anzusprechen; eine Nachricht, die keinen Agenten nennt, geht an {{lead}}.",
-  "workspace.team.folderNotice": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen. Ein Agent, den ein Mitglied als Werkzeug aufruft, läuft in der Cloud und erhält den Ordner nicht."
+  "workspace.team.addressedNotice": "Team {{team}}: Schreiben Sie @Name, um ein Mitglied anzusprechen; eine Nachricht, die keinen Agenten nennt, geht an den Agenten, der zuletzt geantwortet hat (anfangs {{lead}}).",
+  "workspace.team.folderNotice": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen. Ein Agent, den ein Mitglied als Werkzeug aufruft, läuft in der Cloud und erhält den Ordner nicht.",
+  "workspace.team.notListed": "Ein Agent ist hier nicht aufgeführt"
 }

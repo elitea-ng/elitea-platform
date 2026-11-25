@@ -1026,6 +1026,7 @@
   "workspace.team.pipeline": "Bevat een pipeline",
   "workspace.team.noMembers": "Geen agents",
   "workspace.team.leadNotice": "Team {{team}}: een bericht dat geen agent noemt, gaat naar {{lead}} (lead); schrijf @Naam om een ander lid aan te spreken.",
-  "workspace.team.addressedNotice": "Team {{team}}: schrijf @Naam om een lid aan te spreken; een bericht dat geen agent noemt, gaat naar {{lead}}.",
-  "workspace.team.folderNotice": "Elk lid werkt op deze computer met deze map en de bijbehorende tools. Een agent die een lid als tool aanroept, draait in de cloud en krijgt de map niet."
+  "workspace.team.addressedNotice": "Team {{team}}: schrijf @Naam om een lid aan te spreken; een bericht dat geen agent noemt, gaat naar de agent die het laatst antwoordde (eerst {{lead}}).",
+  "workspace.team.folderNotice": "Elk lid werkt op deze computer met deze map en de bijbehorende tools. Een agent die een lid als tool aanroept, draait in de cloud en krijgt de map niet.",
+  "workspace.team.notListed": "Een agent staat hier niet in de lijst"
 }

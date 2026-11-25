@@ -63,11 +63,11 @@ describe('teamChoice (#3053)', () => {
     expect(teamChoice(team({ lead_position: 9 }), 42, agents, new Set())).toMatchObject({ team: { lead: false, primary: { applicationId: 5 } } });
   });
 
-  it('does not run a team with an agent of another project, or one the bound project does not list', () => {
+  it('does not run a team with an agent of another project, or one of this project the picker does not list', () => {
     const publicMember = team({ members: [{ application_id: 5, project_id: 42, version_id: 9, name: 'Coder' }, { application_id: 900, project_id: 1, version_id: 901, name: 'Helper' }] });
     expect(teamChoice(publicMember, 42, agents, new Set())).toEqual({ id: 3, name: 'Review crew', unavailable: 'other_project' });
     const gone = team({ members: [{ application_id: 5, project_id: 42, version_id: 9, name: 'Coder' }, { application_id: 99, project_id: 42, version_id: 1, name: 'Gone' }] });
-    expect(teamChoice(gone, 42, agents, new Set())).toMatchObject({ unavailable: 'other_project' });
+    expect(teamChoice(gone, 42, agents, new Set())).toMatchObject({ unavailable: 'not_listed' });
   });
 
   it('does not run a team with a pipeline (a pipeline never runs on this computer), or with no members', () => {
