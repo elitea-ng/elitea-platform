@@ -3113,3 +3113,110 @@ fn retry_after_header_is_surfaced_bounded_on_429_and_503_responses() {
         assert_eq!(error.retry.retry_after_ms, expected_ms, "{status}");
     }
 }
+
+/// One model turn of `sse` against the `double` toolset, drained.
+async fn unadmitted_turn(
+    sse: &'static str,
+) -> (
+    Result<Vec<adk_rust::LlmResponse>, adk_rust::AdkError>,
+    Result<String, super::openai_compatible_facade::ModelFacadeError>,
+) {
+    let (client, _captured) = test_model_gateway_client(
+        vec![TestModelGatewayOutcome::Response(
+            test_model_gateway_response(Body::new(Full::new(Bytes::from(sse)))),
+        )],
+        test_model_gateway_config(),
+    )
+    .expect("model gateway client");
+    let bound = client
+        .bind_ordinary(
+            &ClaimScopedEliteaContext::fixture(17, TOKEN),
+            17,
+            test_model_facade_invocation(),
+        )
+        .expect("bound model");
+    let request = tool_request(vec![Content::new("user").with_text("hello team!")]);
+    let responses = drain(bound.generate_for_test(request).await.expect("stream")).await;
+    (responses, bound.take_completion_for_test())
+}
+
+/// Issue 3050: a model that streamed its answer and then asked for a tool the
+/// agent does not have (a self-hosted model naming `gh` from instructions
+/// written for desktop Local work) ended the whole turn as INTERNAL after the
+/// person had read the answer. The turn now ends cleanly: the streamed text is
+/// the answer, the unadmitted call is never emitted, and a short note names
+/// the tool.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unadmitted_tool_call_after_streamed_text_ends_the_turn_cleanly() {
+    let (responses, completion) = unadmitted_turn(concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hello team! \"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Let me check the board.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"gh\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2}}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .await;
+    let responses =
+        responses.expect("an unadmitted call after streamed text does not fail the turn");
+    let terminal = responses.last().expect("terminal response");
+    assert!(terminal.turn_complete && !terminal.partial, "the turn ends");
+    assert!(
+        responses
+            .iter()
+            .filter_map(|response| response.content.as_ref())
+            .flat_map(|content| content.parts.iter())
+            .all(|part| !matches!(part, Part::FunctionCall { .. })),
+        "the unadmitted call is never emitted"
+    );
+    let completion = completion.expect("completion");
+    assert!(
+        completion.starts_with("Hello team! Let me check the board."),
+        "{completion}"
+    );
+    assert!(
+        completion.contains("`gh`"),
+        "the note names the tool: {completion}"
+    );
+}
+
+/// Next to an admitted call, only the call the agent does not have is
+/// dropped: the admitted one runs and the tool loop goes on.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unadmitted_tool_call_next_to_an_admitted_one_is_dropped() {
+    let (responses, _completion) = unadmitted_turn(concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Doubling.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"shell\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"double\",\"arguments\":\"{\\\"value\\\":2}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .await;
+    let responses = responses.expect("the admitted call survives");
+    let terminal = responses.last().expect("terminal response");
+    assert!(!terminal.turn_complete, "the admitted call runs");
+    let calls: Vec<&str> = terminal
+        .content
+        .iter()
+        .flat_map(|content| content.parts.iter())
+        .filter_map(|part| match part {
+            Part::FunctionCall { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, vec!["double"]);
+}
+
+/// Before anything reached the person, the call stays refused: the replay
+/// layer's one repair (`replay_history::recovery`) asks the model again with
+/// only the declared tools, and nothing visible is duplicated.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unadmitted_tool_call_before_any_output_stays_refused() {
+    let (responses, _completion) = unadmitted_turn(concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"gh\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .await;
+    let error = responses.expect_err("refused before output");
+    assert_eq!(error.code, super::model_facade::TOOL_NOT_ADMITTED_CODE);
+}

@@ -1024,8 +1024,17 @@ enum ActiveBlock {
         name: String,
         arguments: String,
     },
+    /// A tool use outside the admitted toolset after output streamed (issue
+    /// 3050): its input is read and discarded, and it is never emitted.
+    Dropped {
+        arguments: usize,
+    },
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent flags of one stream: started, stopped, tool turn, output emitted"
+)]
 struct AnthropicStreamState {
     expected_model: String,
     started: bool,
@@ -1039,6 +1048,10 @@ struct AnthropicStreamState {
     tool_turn: bool,
     terminal: Option<Box<LlmResponse>>,
     stopped: bool,
+    /// Text or reasoning of this model call already left the facade.
+    emitted: bool,
+    /// The first tool use dropped as outside the admitted toolset.
+    dropped: Option<String>,
 }
 
 impl AnthropicStreamState {
@@ -1056,6 +1069,8 @@ impl AnthropicStreamState {
             tool_turn: false,
             terminal: None,
             stopped: false,
+            emitted: false,
+            dropped: None,
         }
     }
 
@@ -1138,6 +1153,19 @@ impl AnthropicStreamState {
                     && valid_tool_name(&tool.name)
                     && !self.allowed_tools.contains(&tool.name) =>
             {
+                tracing::warn!(
+                    event = if self.emitted { "model_tool_not_admitted_dropped" } else { "model_tool_not_admitted" },
+                    tool_name = %super::model_facade::noted_tool_name(&tool.name),
+                    "a model tool use outside the admitted toolset"
+                );
+                // Issue 3050: after output streamed the replay layer cannot
+                // repair the call by asking again, so it is dropped (see the
+                // OpenAI-compatible facade's `finish_tool_calls`).
+                if self.emitted {
+                    self.dropped.get_or_insert(tool.name);
+                    self.active = Some((event.index, ActiveBlock::Dropped { arguments: 0 }));
+                    return Ok(None);
+                }
                 return Err(model_error(
                     ErrorCategory::Unsupported,
                     super::model_facade::TOOL_NOT_ADMITTED_CODE,
@@ -1179,10 +1207,21 @@ impl AnthropicStreamState {
         }
         match (block, event.delta) {
             (ActiveBlock::Text, ContentBlockDelta::TextDelta(delta)) => {
-                Ok(partial_text(delta.text))
+                let partial = partial_text(delta.text);
+                self.emitted |= partial.is_some();
+                Ok(partial)
             }
             (ActiveBlock::Thinking { .. }, ContentBlockDelta::ThinkingDelta(delta)) => {
-                Ok(partial_thinking(delta.thinking))
+                let partial = partial_thinking(delta.thinking);
+                self.emitted |= partial.is_some();
+                Ok(partial)
+            }
+            (ActiveBlock::Dropped { arguments }, ContentBlockDelta::InputJsonDelta(delta)) => {
+                *arguments = arguments.saturating_add(delta.partial_json.len());
+                if *arguments > MAX_TOOL_ARGUMENT_BYTES {
+                    return Err(anthropic_output_too_large());
+                }
+                Ok(None)
             }
             // Issue 1603: the signature is what lets this block go back to
             // Anthropic as thinking within the tool loop. It is sent as the
@@ -1285,7 +1324,20 @@ impl AnthropicStreamState {
         {
             return Err(invalid_anthropic_stream());
         }
-        let (finish_reason, tool_turn) = finish_reason(stop)?;
+        let (finish_reason, mut tool_turn) = finish_reason(stop)?;
+        // Issue 3050: every tool use was dropped as outside the admitted
+        // toolset after the answer streamed. The turn ends on that answer and
+        // a note naming the tool.
+        let note = if tool_turn && self.tool_calls.is_empty() {
+            self.dropped
+                .as_deref()
+                .map(super::model_facade::unadmitted_tool_note)
+        } else {
+            None
+        };
+        if note.is_some() {
+            tool_turn = false;
+        }
         if tool_turn == self.tool_calls.is_empty() {
             return Err(invalid_anthropic_stream());
         }
@@ -1323,11 +1375,19 @@ impl AnthropicStreamState {
             ..UsageMetadata::default()
         };
         self.tool_turn = tool_turn;
-        self.terminal = Some(Box::new(LlmResponse {
-            content: tool_turn.then(|| Content {
+        let content = if tool_turn {
+            Some(Content {
                 role: "model".to_owned(),
                 parts: std::mem::take(&mut self.tool_calls),
-            }),
+            })
+        } else {
+            note.map(|text| Content {
+                role: "model".to_owned(),
+                parts: vec![Part::Text { text }],
+            })
+        };
+        self.terminal = Some(Box::new(LlmResponse {
+            content,
             usage_metadata: Some(usage),
             finish_reason: Some(finish_reason),
             partial: false,
@@ -1428,6 +1488,9 @@ fn anthropic_response_stream(
         }
         let (terminal, completed_turn) = state.finish()?;
         if completed_turn {
+            // A completed turn's terminal carries text only when it is the
+            // note of dropped tool uses (issue 3050); it is part of the answer.
+            record_anthropic_response(&terminal, &mut accumulated, &mut semantic_bytes)?;
             record_anthropic_completion(&mut accumulated, &completion, terminal.finish_reason == Some(FinishReason::MaxTokens))?;
         }
         yield terminal;

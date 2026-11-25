@@ -15,6 +15,14 @@ static EPOCH: OnceLock<Instant> = OnceLock::new();
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(0);
 static NEXT_PANIC_BACKTRACE: AtomicU64 = AtomicU64::new(0);
 const MAX_BYTES: usize = 8192;
+
+/// The `failure_diagnostic` log field when no capture was taken: the opt-in
+/// capture (`ELITEA_RUST_FAILURE_DIAGNOSTICS=on`) is off, or its one-per-second
+/// allowance was spent. It says nothing about the failure itself, whose class
+/// is the line's `error_code` and `upstream_error_code`. It read
+/// `disabled_or_rate_limited`, which operators took for the failure's cause
+/// (issue 3050: an unadmitted tool call looked like a rate limit).
+pub(crate) const NOT_CAPTURED: &str = "not_captured";
 const MAX_SPANS: usize = 32;
 
 pub(super) fn configured(value: Option<&str>) -> Result<bool, DiagnosticInitError> {

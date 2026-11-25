@@ -902,6 +902,7 @@ fn failure_terminal_parts(
     )
 }
 
+#[allow(clippy::too_many_lines, reason = "one table of upstream codes")]
 pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
     // A run cap refused a tool call or a model turn (ADR-0041 decision 3).
     if let Some(cap) = upstream_code.and_then(RunCap::from_error_code) {
@@ -1012,7 +1013,11 @@ pub(crate) fn model_failure(upstream_code: Option<&str>) -> RuntimeFailureKind {
             | "model_gateway.event_after_completion"
             | "model_gateway.too_many_events"
             | "anthropic_gateway.invalid_stream"
-            | "anthropic_gateway.incomplete_stream",
+            | "anthropic_gateway.incomplete_stream"
+            // Issue 3050: the model asked for a tool the agent does not have
+            // and the one repair did not correct it. Its answer was invalid
+            // for this request, not an internal fault of the platform.
+            | crate::transport::model_facade::TOOL_NOT_ADMITTED_CODE,
         ) => RuntimeFailureKind::ModelResponseInvalid,
         _ => RuntimeFailureKind::Internal,
     }
