@@ -1613,11 +1613,17 @@ impl AgentHost {
 
     /// The `local_work` policy as the server sent it (defaults when none).
     pub fn local_work_policy(&self) -> LocalWorkPolicy {
-        self.deps
+        let received: Option<LocalWorkPolicy> = self
+            .deps
             .policy
             .local_work()
-            .and_then(|section| serde_json::from_value(section).ok())
-            .unwrap_or_default()
+            .and_then(|section| serde_json::from_value(section).ok());
+        // Defaults stand in for a missing policy, but never suspend trust
+        // (ADR-0061 decision 5i: only a policy that says no does).
+        if let Some(store) = self.trust.get() {
+            store.set_policy_known(received.is_some());
+        }
+        received.unwrap_or_default()
     }
 
     /// The "always for this app" answers of every workspace (ADR-0047
@@ -1823,12 +1829,7 @@ impl AgentHost {
     }
 
     fn policy(&self) -> Result<LocalWorkPolicy, TurnError> {
-        let policy: LocalWorkPolicy = self
-            .deps
-            .policy
-            .local_work()
-            .and_then(|section| serde_json::from_value(section).ok())
-            .unwrap_or_default();
+        let policy = self.local_work_policy();
         if !policy.allowed {
             return Err(TurnError::new(
                 "local_work_disabled",

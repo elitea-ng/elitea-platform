@@ -495,7 +495,12 @@ impl RuleFiles {
         }
         let written = write_private(path, &bytes);
         if let Some(trust) = &trust {
-            trust.rules_written(path);
+            // A failed write leaves the old file: its digest stays.
+            if written.is_ok() {
+                trust.rules_written(path, &bytes);
+            } else {
+                trust.rules_written_failed(path);
+            }
         }
         written
     }

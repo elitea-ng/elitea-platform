@@ -178,6 +178,10 @@ pub struct TrustStore {
     /// The person's rules file (`<config>/rules.json`), watched with the
     /// folders' own while any folder is trusted.
     user_rules: Option<PathBuf>,
+    /// Whether the policy in hand is one the server sent (not the defaults
+    /// of a missing or unreadable one): only a received policy suspends a
+    /// folder for good; an unknown one leaves trust inert for the read.
+    policy_known: std::sync::atomic::AtomicBool,
     /// Rules files the app is writing right now (not tampering).
     writing: Mutex<std::collections::HashSet<PathBuf>>,
     /// The app's own directories: never trusted, nor anything inside them.
@@ -232,6 +236,7 @@ impl TrustStore {
         Arc::new(Self {
             workspaces,
             user_rules,
+            policy_known: std::sync::atomic::AtomicBool::new(false),
             writing: Mutex::new(std::collections::HashSet::new()),
             refused,
             lock: Mutex::new(()),
@@ -239,6 +244,16 @@ impl TrustStore {
             env_fallback: std::sync::atomic::AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
         })
+    }
+
+    /// Whether the policy passed in next came from the server.
+    pub fn set_policy_known(&self, known: bool) {
+        self.policy_known
+            .store(known, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn policy_known(&self) -> bool {
+        self.policy_known.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The rules file `key` names (`"user"`, or a workspace id).
@@ -261,33 +276,56 @@ impl TrustStore {
         (self.workspaces.data_dir(id) == dir).then(|| id.to_owned())
     }
 
-    /// The app is about to write the rules file at `path`.
+    /// The app is about to write the rules file at `path` (a merge of what
+    /// is on disk). The file is checked first, so an outside edit is never
+    /// laundered into the ledger by the app's next write: it suspends every
+    /// trusted folder.
     pub fn rules_writing(&self, path: &Path) {
-        if let Ok(mut writing) = self.writing.lock() {
-            writing.insert(path.to_path_buf());
+        let mut changes = Vec::new();
+        if let Ok(_guard) = self.lock.lock() {
+            if let Err(file) = self.verify() {
+                self.suspend_all(&file);
+                changes.push(TrustChange::Tamper(file));
+                changes.push(TrustChange::Changed(None));
+            }
+            if let Ok(mut writing) = self.writing.lock() {
+                writing.insert(path.to_path_buf());
+            }
+        }
+        finish(self, changes, None);
+    }
+
+    /// The app wrote `bytes` to the rules file at `path`: their digest goes
+    /// into the ledger (not a re-read of the file), so only an outside write
+    /// is tampering.
+    pub fn rules_written(&self, path: &Path, bytes: &[u8]) {
+        if let Ok(_guard) = self.lock.lock() {
+            if let Some(key) = self.rules_key(path) {
+                let _ = self.record_rules(&key, Some(bytes));
+            }
+            if let Ok(mut writing) = self.writing.lock() {
+                writing.remove(path);
+            }
         }
     }
 
-    /// The app wrote the rules file at `path`: its digest goes into the
-    /// ledger, so only an outside write is tampering.
-    pub fn rules_written(&self, path: &Path) {
-        if let Some(key) = self.rules_key(path)
-            && let Ok(_guard) = self.lock.lock()
-        {
-            let _ = self.record_rules(&key);
-        }
+    /// The app's write to `path` failed: the file is as it was.
+    pub fn rules_written_failed(&self, path: &Path) {
         if let Ok(mut writing) = self.writing.lock() {
             writing.remove(path);
         }
     }
 
-    /// Append the current digest of `key`'s rules file (the caller holds
-    /// the lock).
-    fn record_rules(&self, key: &str) -> Result<(), Refusal> {
-        let digest = self
-            .rules_path(key)
-            .and_then(|path| std::fs::read(path).ok())
-            .map(|bytes| sha256_hex(&bytes));
+    /// Append the digest of `key`'s rules file: of `written`, or of what is
+    /// on disk (the caller holds the lock).
+    fn record_rules(&self, key: &str, written: Option<&[u8]>) -> Result<(), Refusal> {
+        let digest = match written {
+            Some(bytes) => Some(sha256_hex(bytes)),
+            None => self
+                .rules_path(key)
+                .and_then(|path| std::fs::read(path).ok())
+                .map(|bytes| sha256_hex(&bytes)),
+        };
         self.append(&Entry {
             at: now(),
             event: RULES_EVENT.to_owned(),
@@ -323,8 +361,14 @@ impl TrustStore {
 
     /// Record that a host command ran in `workspace_id` now.
     pub fn host_command_ran(&self, workspace_id: &str) {
+        // A task worktree's commands count for the folder it came from.
+        let owner = self
+            .workspace(workspace_id)
+            .ok()
+            .and_then(|workspace| self.owner(&workspace))
+            .map_or_else(|| workspace_id.to_owned(), |owner| owner.id);
         if let Ok(mut last) = self.last_host_command.lock() {
-            last.insert(workspace_id.to_owned(), now());
+            last.insert(owner, now());
         }
     }
 
@@ -381,12 +425,23 @@ impl TrustStore {
             None => None,
         };
         let allowed = policy.folder_trust_allowed();
-        let state = match &record {
-            None => TrustState::Untrusted,
-            Some(record) if record.suspended.is_some() => TrustState::Suspended,
-            Some(_) => TrustState::Trusted,
+        // An unknown policy (none received yet, or unreadable) suspends
+        // nothing on disk: trust is inert for this read only.
+        let suspension = record
+            .as_ref()
+            .and_then(|r| r.suspended.clone())
+            .or_else(|| {
+                (record.is_some() && !allowed).then(|| Suspension {
+                    by: SuspendedBy::Policy,
+                    at: now(),
+                    file: None,
+                })
+            });
+        let state = match (&record, &suspension) {
+            (None, _) => TrustState::Untrusted,
+            (Some(_), Some(_)) => TrustState::Suspended,
+            (Some(_), None) => TrustState::Trusted,
         };
-        let suspension = record.as_ref().and_then(|r| r.suspended.clone());
         let last = self.last_host_command.lock().ok().and_then(|last| {
             last.get(owner.as_ref().map_or(workspace_id, |o| &o.id))
                 .cloned()
@@ -531,8 +586,8 @@ impl TrustStore {
             self.write(&record, "granted", None)?;
             // The rules it is granted with: from now on only the app
             // changes them.
-            self.record_rules(workspace_id)?;
-            self.record_rules(USER_RULES)?;
+            self.record_rules(workspace_id, None)?;
+            self.record_rules(USER_RULES, None)?;
         }
         self.notify(&TrustChange::Changed(Some(workspace_id.to_owned())));
         self.status(workspace_id, policy)
@@ -609,7 +664,7 @@ impl TrustStore {
             {
                 break 'checked None;
             }
-            if record.suspended.is_none() && !policy.folder_trust_allowed() {
+            if record.suspended.is_none() && !policy.folder_trust_allowed() && self.policy_known() {
                 record.suspended = Some(Suspension {
                     by: SuspendedBy::Policy,
                     at: now(),

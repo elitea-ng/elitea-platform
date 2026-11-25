@@ -85,7 +85,7 @@ const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: Th
 const sandboxOffer = (workspace: Workspace) => (code: string) =>
   code === 'sandbox_unavailable' ? <SandboxUnavailableOffer workspaceId={workspace.id} workspaceName={workspace.name} /> : null;
 
-const indexSettingsOpener =(hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
+const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;

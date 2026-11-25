@@ -388,8 +388,10 @@ allows; after the turn read outside content (a remote toolkit, MCP, web,
 browser or computer tool, or a later agent's turn of a routed message) every
 other host command is asked with `source: "taint"`, which neither bypass
 mode nor the unattended grant answers; otherwise only routine commands that
-start no network program run without a question ("Ask for every command":
-none). A task worktree has its folder's trust and is never granted its own.
+start no known network program run without a question (a best-effort list: a
+build or package script can still reach the network). With "Ask for every
+command" on, every host command is asked, rules and remembered choices
+included; deny rules still deny. A task worktree has its folder's trust and is never granted its own.
 
 | Command | Args | Returns |
 |---------|------|---------|
@@ -415,7 +417,16 @@ suspends every trusted folder (`suspended_by: "tamper"`, `tampered_file`), and
 the damaged ledger is kept beside the new one. A policy that stops allowing
 trust suspends it (`suspended_by: "policy"`) when it is next read and when a
 session reopens for the new policy. A suspended folder is trusted again only
-by a new grant. A folder whose canonical path changed is untrusted.
+by a new grant. A folder whose canonical path changed is untrusted. Before
+the app writes a rules file it checks it, so an outside edit is never folded
+into the app's own write. A policy that is missing or unreadable (none
+received yet) suspends nothing on disk: trust is inert until one arrives.
+
+The ledger is tamper-evident, not tamper-proof: its chain is unkeyed, so it
+catches an edit to a rules or trust file that leaves the ledger alone (a
+script, a stray `>>`, a hand edit), not a process that rewrites the ledger
+too. That is the same trust boundary as the folder itself: a host command
+runs as the person.
 
 A host command's result carries `execution: "host"` (and `env_fallback:
 true` when the login shell could not be read); a background one's start

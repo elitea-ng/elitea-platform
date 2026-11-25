@@ -10,9 +10,10 @@
 //! | 1. Policy ceiling | unchanged and first (`command_deny` in every segment, `command_allow`, the shell, `path_deny`) |
 //! | 2. Hooks, plan mode | unchanged: plan mode denies a command; a hook's deny wins and its ask asks |
 //! | 3. Forbidden and prompt rules, every origin | unchanged: forbidden denies, prompt asks |
+//! | "Ask for every command" | every host command left is asked (with the taint gate's source after an untrusted read); no rule, remembered choice or default allows one |
 //! | 4. An allow rule the **person** wrote (user rules; workspace rules without `origin: repository`; not an older host's) | allows a host command without a question when the rule says `sandbox: host` or names no sandbox, and grants nothing (`credential`, `hosts`: those keep their sandbox, decision 5h). It still answers after an untrusted read |
 //! | 5. "Always allow" made in a trusted folder (`sandbox: host`, `requires_trust: true`) | allows it, unless the turn read untrusted content |
-//! | 6. Defaults | allowed only when the classifier rates it routine, it starts no network-capable program ([`crate::classify::network_program`]), the turn read nothing untrusted, and the folder does not ask for every command. Everything else is asked |
+//! | 6. Defaults | allowed only when the classifier rates it routine, it starts no network-capable program ([`crate::classify::network_program`]), and the turn read nothing untrusted. Everything else is asked. The program list is a best effort: a build or package script (`npm run`, `cargo build`) may still reach the network |
 //! | Repository rules | never allow a host run; they can still forbid or ask |
 //!
 //! **Untrusted input closes the gate (5f).** The engine keeps an
@@ -51,7 +52,8 @@ pub const ASK_EVERY_COMMAND_REASON: &str =
 /// What the host knows about a trusted folder's settings.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FolderTrust {
-    /// The folder's "Ask for every command" switch: layer 6 never allows.
+    /// The folder's "Ask for every command" switch: no host command is
+    /// allowed without a question.
     pub ask_every_command: bool,
 }
 
@@ -143,6 +145,17 @@ impl RulesEngine {
         if call.keep_alive {
             return Decision::new(Verdict::Ask, Source::Default, KEEP_ALIVE_REASON);
         }
+        // "Ask for every command": no allow answers, the taint gate's ask
+        // keeps its source (bypass never answers it).
+        if self
+            .folder_trust()
+            .is_some_and(|trust| trust.ask_every_command)
+        {
+            if self.read_untrusted() {
+                return Decision::new(Verdict::Ask, Source::Taint, TAINT_REASON);
+            }
+            return Decision::new(Verdict::Ask, Source::Default, ASK_EVERY_COMMAND_REASON);
+        }
         let allow = winner.filter(|(_, _, rule)| rule.decision == RuleDecision::Allow);
         // Layer 4: a rule the person wrote answers, even after an untrusted
         // read (the person vouched for this command themselves).
@@ -163,12 +176,6 @@ impl RulesEngine {
             return decision;
         }
         // Layer 6: the defaults.
-        if self
-            .folder_trust()
-            .is_some_and(|trust| trust.ask_every_command)
-        {
-            return Decision::new(Verdict::Ask, Source::Default, ASK_EVERY_COMMAND_REASON);
-        }
         let (cwd, _) = self.resolution(call);
         let command = call.command.as_deref().unwrap_or_default();
         match assess(

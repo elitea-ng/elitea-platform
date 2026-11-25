@@ -9,7 +9,7 @@ In a **Local work** thread of the Elitea desktop app, the agent's commands norma
 
 - Commands run **without the OS sandbox**, with your login shell's environment and your real `PATH`, your keychain and command-line logins (`gh`, `gcloud`, `kubectl`, `podman` and others), and the network.
 - **File tools keep their rules.** Reading, writing and editing files still stay inside the folder: writes outside it, to `.git` and to your organization's denied paths are refused. Trust changes how commands run, not what file tools may touch.
-- **Approvals still apply.** Your organization's policy, plan mode, hooks and your **Forbidden** and **Ask** rules come first, as everywhere. An **Allow** rule that *you* wrote may run a command without a question; a repository's rule never can. Without a rule, only routine commands that start no network program run without a question; everything else is asked.
+- **Approvals still apply.** Your organization's policy, plan mode, hooks and your **Forbidden** and **Ask** rules come first, as everywhere. An **Allow** rule that *you* wrote may run a command without a question; a repository's rule never can. Without a rule, only routine commands that start no known network program run without a question; everything else is asked. That list is a best effort: a build or package script (`npm run build`, `cargo build`) can still reach the network, so turn on **Ask for every command** if you want to review each one.
 - **Outside content closes the gate.** After the agent reads something from outside the folder in a turn (a web page, an MCP server's or a remote tool's result, the browser pane, another app, or the answers before a later agent's turn), every command that no rule of yours allows is asked, with the reason "after reading content from outside this folder". **Bypass** mode does not answer these questions: you do.
 
 ## What trust exposes
@@ -26,7 +26,7 @@ The dialog says it, and it is worth reading slowly:
 <Steps>
 1. In the sidebar, open the folder's **⋯** menu (or right-click the folder) and select **Trust this folder…**.
 2. Read the statements, then tick the confirmation that names the folder.
-3. Optionally, open **Advanced options** and turn on **Ask for every command**: commands still run without a sandbox, but each one waits for your answer first.
+3. Optionally, open **Advanced options** and turn on **Ask for every command**: commands still run without a sandbox, but each one waits for your answer first, even one an Allow rule or an earlier **Always allow** covers.
 4. Select **Trust this folder**.
 </Steps>
 

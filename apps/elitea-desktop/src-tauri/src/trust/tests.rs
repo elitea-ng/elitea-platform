@@ -34,6 +34,7 @@ fn fixture() -> Fixture {
         Some(dir.path().join("config").join("rules.json")),
         vec![dir.path().join("data")],
     );
+    store.set_policy_known(true);
     let changes = Arc::new(Mutex::new(Vec::new()));
     let seen = changes.clone();
     store.on_change(move |change| seen.lock().expect("lock").push(change));
@@ -211,7 +212,7 @@ fn an_outside_write_to_the_rules_suspends_trust() {
     // The app writes it.
     fixture.store.rules_writing(&rules);
     crate::rules::write_private(&rules, br#"{"version":1}"#).expect("write");
-    fixture.store.rules_written(&rules);
+    fixture.store.rules_written(&rules, br#"{"version":1}"#);
     assert_eq!(
         fixture.store.status(&id, &policy).expect("status").state,
         TrustState::Trusted
@@ -236,6 +237,68 @@ fn an_outside_write_to_the_rules_suspends_trust() {
         .grant(&id, &policy, CONFIRMATION_VERSION, false)
         .expect("granted");
     assert_eq!(again.state, TrustState::Trusted);
+}
+
+/// Before the server's policy arrives (or when it cannot be read), the
+/// defaults make trust inert for the read, but suspend nothing: the folder
+/// is trusted again once the policy is in.
+#[test]
+fn an_unknown_policy_suspends_nothing() {
+    let fixture = fixture();
+    let id = fixture.folder("repo");
+    fixture
+        .store
+        .grant(&id, &trusting(), CONFIRMATION_VERSION, false)
+        .expect("granted");
+    fixture.store.set_policy_known(false);
+    let unknown = LocalWorkPolicy::default();
+    let status = fixture.store.status(&id, &unknown).expect("status");
+    assert_eq!(status.state, TrustState::Suspended);
+    assert!(status.folder_trust().is_none());
+    fixture.store.policy_changed(&unknown);
+    fixture.store.set_policy_known(true);
+    let status = fixture.store.status(&id, &trusting()).expect("status");
+    assert_eq!(status.state, TrustState::Trusted);
+}
+
+/// A host command in a task worktree counts for its folder.
+#[test]
+fn a_worktree_host_command_counts_for_its_folder() {
+    let fixture = fixture();
+    let id = fixture.folder("repo");
+    let tree = fixture.dir.path().join("trees").join("t1");
+    std::fs::create_dir_all(&tree).expect("tree");
+    let task = fixture
+        .workspaces
+        .add_worktree(&id, &tree, "thread-1", "task/t1")
+        .expect("worktree")
+        .id;
+    fixture.store.host_command_ran(&task);
+    let status = fixture.store.status(&id, &trusting()).expect("status");
+    assert!(status.last_host_command_at.is_some());
+}
+
+/// An outside edit is not laundered by the app's next write (a merge of
+/// what is on disk): that write suspends trust first.
+#[test]
+fn the_apps_next_write_does_not_launder_an_outside_edit() {
+    let fixture = fixture();
+    let id = fixture.folder("repo");
+    let policy = trusting();
+    fixture
+        .store
+        .grant(&id, &policy, CONFIRMATION_VERSION, false)
+        .expect("granted");
+    let rules = fixture.workspaces.data_dir(&id).join("rules.json");
+    let injected = br#"{"version":1,"rules":[{"pattern":["sh"]}]}"#;
+    crate::rules::write_private(&rules, injected).expect("write");
+    // "Always allow" merges the file and writes it back.
+    fixture.store.rules_writing(&rules);
+    crate::rules::write_private(&rules, injected).expect("write");
+    fixture.store.rules_written(&rules, injected);
+    let status = fixture.store.status(&id, &policy).expect("status");
+    assert_eq!(status.state, TrustState::Suspended);
+    assert_eq!(status.suspended_by, Some(SuspendedBy::Tamper));
 }
 
 /// A task worktree inherits its folder's trust and cannot be trusted on

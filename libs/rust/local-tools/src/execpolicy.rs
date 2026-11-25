@@ -468,6 +468,20 @@ impl PrefixRule {
         if self.requires_trust && self.origin.is_some() {
             return Some("a repository's rule cannot require trust".to_owned());
         }
+        if self.sandbox.is_some_and(RuleSandbox::is_host) {
+            if self.decision != RuleDecision::Allow || grants || self.network {
+                return Some(
+                    "`sandbox: host` belongs to an allow rule without `credential`, `hosts` or \
+                     `network` (a grant keeps its sandbox)"
+                        .to_owned(),
+                );
+            }
+            if self.origin.is_some() {
+                return Some(
+                    "a repository's rule cannot run a command outside the sandbox".to_owned(),
+                );
+            }
+        }
         if self.network && grants {
             return Some(
                 "`hosts` and `credential` limit the network to named hosts; drop `network: true`"

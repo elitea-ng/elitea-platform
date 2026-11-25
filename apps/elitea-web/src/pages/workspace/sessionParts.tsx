@@ -318,7 +318,7 @@ export function EarlierTurns({
   }
 }
 
-/** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
+/** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) `toolOffer`: a failed tool call's offer by error code ("Trust this folder…" on `sandbox_unavailable`). */
 export function Exchanges({ turn, prompts, promptImages, onFork, live, toolOffer }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
@@ -328,7 +328,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live, toolOffer
   onFork?: OnFork;
   /** The live turn's "Retry" (its error) and "Continue" (its tool-call stop). */
   live?: { onRetryTurn: () => void; onContinue: () => void };
-  /** A failed tool call's offer by error code ("Trust this folder…" on `sandbox_unavailable`). */ toolOffer?: (code: string) => React.ReactNode;
+  toolOffer?: (code: string) => React.ReactNode;
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const turns = [...turn.earlier, ...(turn.turnId === null ? [] : [{ turnId: turn.turnId, view: turn.view }])];

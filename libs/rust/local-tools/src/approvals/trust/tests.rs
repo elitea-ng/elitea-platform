@@ -135,20 +135,23 @@ fn layers() {
     assert_eq!(decided(&fixture.engine, "cargo test").0, Verdict::Deny);
 }
 
+/// "Ask for every command": every host command waits, even one a rule or a
+/// remembered choice would allow; deny rules still deny, and the taint
+/// gate's ask keeps its source.
 #[test]
-fn ask_for_every_command_asks_the_defaults_only() {
+fn ask_for_every_command_asks_every_command() {
     let fixture = fixture(trusting());
     fixture.engine.set_folder_trust(Some(FolderTrust {
         ask_every_command: true,
     }));
-    let decision = fixture.engine.decide(&host("cargo test"));
-    assert_eq!(decision.verdict, Verdict::Ask);
-    assert_eq!(decision.reason, ASK_EVERY_COMMAND_REASON);
-    // The person's own rule still answers.
-    assert_eq!(
-        decided(&fixture.engine, "make deploy"),
-        (Verdict::Allow, Source::User)
-    );
+    for command in ["cargo test", "make deploy", "scripts/seed.sh"] {
+        let decision = fixture.engine.decide(&host(command));
+        assert_eq!(decision.verdict, Verdict::Ask, "{command}");
+        assert_eq!(decision.reason, ASK_EVERY_COMMAND_REASON, "{command}");
+    }
+    assert_eq!(decided(&fixture.engine, "npm publish").0, Verdict::Deny);
+    fixture.engine.record_untrusted_read();
+    assert_eq!(decided(&fixture.engine, "make deploy").1, Source::Taint);
 }
 
 /// Prompt injection (decision 5f, 5g): the turn read outside content, then
@@ -285,4 +288,17 @@ fn a_repository_rule_cannot_require_trust() {
       {"pattern":["make"],"origin":"repository","requires_trust":true}
     ]}"#;
     assert!(RuleSet::parse("workspace", text.as_bytes()).is_err());
+    // `sandbox: host` is the person's allow, without a grant or network.
+    for rule in [
+        r#"{"pattern":["make"],"origin":"repository","sandbox":"host"}"#,
+        r#"{"pattern":["gh"],"credential":"gh","sandbox":"host"}"#,
+        r#"{"pattern":["curl"],"network":true,"sandbox":"host"}"#,
+        r#"{"pattern":["make"],"decision":"prompt","sandbox":"host"}"#,
+    ] {
+        let text = format!(r#"{{"version":1,"rules":[{rule}]}}"#);
+        assert!(
+            RuleSet::parse("workspace", text.as_bytes()).is_err(),
+            "{rule}"
+        );
+    }
 }

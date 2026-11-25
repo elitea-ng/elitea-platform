@@ -135,6 +135,54 @@ pub struct PatternRedactor {
     emitted: usize,
 }
 
+/// How the tokens of the single-line rules start (the rest need a keyword
+/// that [`WAIT_WHOLE`] holds the line for).
+const TOKEN_STARTS: &[&[u8]] = &[
+    b"ghp_",
+    b"gho_",
+    b"ghu_",
+    b"ghs_",
+    b"ghr_",
+    b"github_pat_",
+    b"glpat-",
+    b"gldt-",
+    b"glptt-",
+    b"glrt-",
+    b"xoxa-",
+    b"xoxb-",
+    b"xoxp-",
+    b"xoxo-",
+    b"xoxs-",
+    b"xoxr-",
+    b"xoxe-",
+    b"xapp-",
+    b"AKIA",
+    b"ASIA",
+    b"ABIA",
+    b"ACCA",
+    b"A3T",
+    b"ya29.",
+    b"1//0",
+    b"eyJ",
+    b"-----",
+];
+
+/// Whether a token could start at the beginning of `word` (or `word` is
+/// the start of one): the word waits for the rest of it. A word that does
+/// not start at a token's word boundary (`abcghp_…`) matches no rule.
+fn may_start_token(word: &[u8]) -> bool {
+    // Every place a rule's `\b` allows a token to start: the word's start,
+    // and after each character that is not a word character (`AWS=AKIA…`).
+    (0..word.len())
+        .filter(|&at| at == 0 || !(word[at - 1].is_ascii_alphanumeric() || word[at - 1] == b'_'))
+        .any(|at| {
+            let rest = &word[at..];
+            TOKEN_STARTS
+                .iter()
+                .any(|start| rest.starts_with(start) || start.starts_with(rest))
+        })
+}
+
 /// `line` with every single-line rule applied.
 fn redact_line(line: &[u8]) -> Vec<u8> {
     let mut text = line.to_vec();
@@ -222,11 +270,16 @@ impl PatternRedactor {
         if self.in_block || WAIT_WHOLE.is_match(&self.pending) {
             return;
         }
-        let boundary = self
+        let mut boundary = self
             .pending
             .iter()
             .rposition(u8::is_ascii_whitespace)
             .map_or(0, |at| at + 1);
+        // The last word goes out too when no token can start with it, so a
+        // prompt (`Proceed (y/n)?`, `name:`) is not held until its answer.
+        if !may_start_token(&self.pending[boundary..]) {
+            boundary = self.pending.len();
+        }
         if boundary > self.emitted {
             out.extend_from_slice(&redact_line(&self.pending[self.emitted..boundary]));
             self.emitted = boundary;
@@ -360,6 +413,15 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_is_not_held_until_its_answer() {
+        let mut redactor = PatternRedactor::new();
+        assert_eq!(redactor.push(b"Proceed (y/n)?"), b"Proceed (y/n)?");
+        assert_eq!(redactor.push(b"name:"), b"name:");
+        // The start of a token waits.
+        assert!(redactor.push(b" gh").is_empty() || !redactor.pending.is_empty());
+    }
+
+    #[test]
     fn cloud_cli_logins_are_redacted() {
         let aws_secret = format!(
             "aws_secret_access_key = {}",
@@ -402,13 +464,14 @@ mod tests {
     fn ordinary_output_streams_through_unchanged() {
         let text = "total 8\ndrwxr-xr-x  2 me  staff  64 Nov 25 build\nCompiling elitea v0.1\n";
         assert_eq!(streamed(&[text]), text);
-        // An unfinished line emits up to its last word at once.
+        // An unfinished line emits at once what cannot start a token.
         let mut redactor = PatternRedactor::new();
         assert_eq!(
             redactor.push(b"Password for user: "),
             b"Password for user: "
         );
-        assert_eq!(redactor.push(b"hunter"), b"");
-        assert_eq!(redactor.finish(), b"hunter");
+        assert_eq!(redactor.push(b"hunter"), b"hunter");
+        assert_eq!(redactor.push(b" AK"), b" ");
+        assert_eq!(redactor.finish(), b"AK");
     }
 }
