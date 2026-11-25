@@ -43,9 +43,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
 // The refusal codes. Clients key their message on these, so they are stable.
@@ -106,14 +108,40 @@ func (h *Handler) requireIdentityTrust(w http.ResponseWriter, r *http.Request, g
 	if caller.SuperAdmin || caller.Administration[adminaccess.IdentitySSOTrustManage] {
 		return true
 	}
-	// The caller is the STANDING set (ADR-0059 R2.1b), so no elevation
-	// passes here: an approved online elevation never changes identity trust
-	// (ADR-0059 decision 5, the rejected option "Let an approved elevation
-	// change identity trust"). The one elevation that may, a super_admin-level
-	// elevation on the sealed path, is opened here by R2.7a together with the
-	// sealed kind's union; until then the check fails closed.
+	// The caller is the STANDING set (ADR-0059 R2.1b), so no approved or
+	// self elevation passes here: an approved online elevation never changes
+	// identity trust (ADR-0059 decision 5, the rejected option "Let an
+	// approved elevation change identity trust"). The one elevation that
+	// may, a super_admin-level elevation on the sealed path, is read from the
+	// full resolution of a sealed session only (story R2.8a), and the row is
+	// flagged for the review.
+	if h.sealedSuperAdminTrust(r) {
+		adminaccess.FlagElevation(r.Context())
+		return true
+	}
 	writeTrustRefusal(w, r, gate, &adminaccess.Refusal{Code: gate.code, Message: gate.message})
 	return false
+}
+
+// sealedSuperAdminTrust reports whether the caller is a sealed session whose
+// sealed super_admin elevation gives identity trust: the full
+// administration-mode resolution, for the sealed credential kind only. Any
+// other kind, a failed resolution, or a sealed session at the admin level
+// answers false.
+func (h *Handler) sealedSuperAdminTrust(r *http.Request) bool {
+	principal, ok := auth.UserFromContext(r.Context())
+	if !ok || h.resolver == nil || !principal.Credential().IsSealed() {
+		return false
+	}
+	resolution, err := h.resolver.ResolvePermissions(r.Context(), principal, auth.PermissionModeAdministration, "")
+	if err != nil || resolution.UserID <= 0 {
+		return false
+	}
+	if !adminaccess.ElevationCallerOf(principal.Credential(), resolution).SealedSuperAdmin {
+		return false
+	}
+	return slices.Contains(resolution.ElevatedPermissions, adminaccess.SuperAdminPermission) ||
+		slices.Contains(resolution.ElevatedPermissions, adminaccess.IdentitySSOTrustManage)
 }
 
 // writeTrustRefusal is adminaccess.Write with this surface's audit action and

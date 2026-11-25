@@ -780,6 +780,24 @@ func TestASealedSessionGets403ForAdminScopes(t *testing.T) {
 	requireScopeRefusal(t, got, CodeScopesSealedSession)
 }
 
+// An elevation creates no token at all (ADR-0059 R2.8a): a plain token from an
+// elevated browser session, or from a sealed session, is refused with
+// elevation_restricted and nothing is written; without an elevation the same
+// request mints.
+func TestAnElevatedOrSealedSessionCreatesNoToken(t *testing.T) {
+	const plain = `{"name":"ci"}`
+	got := scopeRequest(t, freshSession, scopeResolver{set: adminCallerSet, elevated: true}, http.MethodPost, "/token/", plain)
+	requireScopeRefusal(t, got, CodeMintElevated)
+	got = scopeRequest(t, sealedCaller, scopeResolver{set: adminCallerSet}, http.MethodPost, "/token/", plain)
+	requireScopeRefusal(t, got, CodeMintElevated)
+	if got = scopeRequest(t, freshSession, scopeResolver{set: adminCallerSet}, http.MethodPost, "/token/", plain); got.status != http.StatusOK || got.created == nil {
+		t.Fatalf("a standing session: %d %s, want a token", got.status, got.body)
+	}
+	if CodeMintElevated != adminaccess.CodeElevationRestricted {
+		t.Fatalf("the mint refusal code is %q, want the restriction's own", CodeMintElevated)
+	}
+}
+
 func TestAnElevatedSessionGets403ForAdminScopes(t *testing.T) {
 	elevated := scopeResolver{set: adminCallerSet, elevated: true}
 	got := scopeRequest(t, freshSession, elevated, http.MethodPost, "/token/", createScoped("admin.auth.users"))

@@ -590,6 +590,19 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 	if admin.granted() && !h.authorizeAdminScopes(w, r, user, admin.Scopes, TokenMintRefusedAuditAction) {
 		return
 	}
+	// An elevation creates no token (ADR-0059 decision 5, "What an elevation
+	// cannot do"; R2.8a): a token would outlive it. A sealed session holds
+	// its elevation and nothing else, so it never mints. After the scope
+	// rules, which refuse scopes under an elevation with their own codes.
+	elevated, err := h.elevatedMintRefusal(r, user, credential)
+	if err != nil {
+		writeTokenMintFault(w, r, credential, err)
+		return
+	}
+	if elevated != nil {
+		writeTokenMintRefusal(w, r, elevated)
+		return
+	}
 	if !request.Name.present {
 		apierr.Write(w, apierr.BadRequest("Name is required"))
 		return

@@ -13,8 +13,14 @@
 #
 # Each role is its STANDING permission set from the registry
 # (internal/adminaccess builtin_roles.go), resolved for every
-# administration-mode check of the request. No elevation takes part: the
-# elevated columns are R2.8's.
+# administration-mode check of the request, with no elevation.
+#
+# The two elevated columns (ADR-0059 R2.8a, #2522) are a Form browser session
+# with NO standing set under one approved elevation at the admin, then the
+# super_admin level: every permission the request resolves is the level's
+# role set, given by the elevation. They show what the action table's
+# elevation values do (internal/adminaccess action_rows.go): the test also
+# checks each such row against the registry.
 #
 # The classes:
 #   allowed     the administration checks admitted the request. The answer is
@@ -24,6 +30,10 @@
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
+#   flagged     (elevated columns) allowed, and the admin audit row is marked
+#               elevation_flagged for the review.
+#   restricted  (elevated columns) 403 elevation_restricted: an elevation
+#               cannot do the action.
 #   pending #N  the row belongs to issue N, which pins it against a database.
 #               R0.9b (#2587) owns: role assignment (the set_admin_role
 #               action, the mode role writes), the Roles matrix save and sync,
@@ -39,317 +49,318 @@
 # tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
-# security_auditor emergency_access, then class, method, route and action.
-allowed allowed refused refused allowed refused read    GET /api/v2/admin/access/history -
-allowed allowed refused refused allowed refused read    GET /api/v2/admin/access/roles -
-allowed allowed refused refused allowed refused read    GET /api/v2/admin/access/tokens -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/agent_identities -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/agent_identities -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/agent_identities/{id}/toolkits/{toolkitID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/agent_identities/{id}/toolkits/{toolkitID} -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/agent_identities/{id}:approve -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/agent_identities/{id}:repin -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/agent_identities/{id}:revoke -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/agent_identities/{id}:suspend -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/agent_registry -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/auth_users/{mode} -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/auth_users/{mode} action delete
-pending #2587                                   write   POST /api/v2/admin/auth_users/{mode} action set_admin_role
-allowed allowed refused refused refused refused read    GET /api/v2/admin/background_jobs/administration -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/background_jobs/administration/pat_expiry_notices:run -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/branding/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/branding/administration -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/branding/administration -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/branding/assets/{kind} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/branding/package/administration -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/branding/package/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/branding/package/administration/versions -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/branding/package/administration/versions/{digest}/restore -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/branding/test_email/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/connector_inventory -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/connector_inventory/requests -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/connector_requests -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/connector_requests/{requestID} -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/connector_requests/{requestID}/approve -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/connector_requests/{requestID}/reject -
-allowed allowed allowed allowed allowed allowed read    GET /api/v2/admin/console -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/credential_inventory -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_inventory/revoke -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/credential_references -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/credential_references/{id} -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/credential_references/{id}:activate -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references/{id}:attach -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references/{id}:cancel_rotation -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references/{id}:detach -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references/{id}:retire -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/credential_references/{id}:rotate -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/delegation_review -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/delegation_review/scan -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/email/administration -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/email/administration -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/email/test/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/entitlements -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/execution_suspensions -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/execution_suspensions -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/execution_suspensions/{suspension_id}:resume -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/external_agent_identities -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/external_agent_identities -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/external_agent_identities/drift -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/external_agent_identities/{id}:activate -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/external_agent_identities/{id}:provision -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/external_agent_identities/{id}:resume -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/external_agent_identities/{id}:retire -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/external_agent_identities/{id}:suspend -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/*/budget-alerts -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/*/budget-alerts -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/admin/gateway/default_model/ -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/default_model/ -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/default_model/ -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/governance -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/governance -
-allowed allowed allowed refused refused refused read    POST /api/v2/admin/gateway/governance/validate-cel -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/admin/gateway/governance/{id} -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/governance/{id} -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/logs -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/metered-prices -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/metered-prices -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/models -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/models -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/admin/gateway/models/{id} -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/platform_models/ -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/platform_models/ -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/admin/gateway/platform_models/{configID} -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/platform_models/{configID} -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/platform_models/{configID}/default_usage -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/providers/ -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/providers/ -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/admin/gateway/providers/{configID} -
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/gateway/providers/{configID} -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/providers/{configID}/check -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/providers/{configID}/models -
-allowed allowed allowed refused refused refused write   POST /api/v2/admin/gateway/providers/{configID}/revalidate -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/status -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/usage -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/identity_providers/administration -
-pending #2587                                   write   DELETE /api/v2/admin/identity_providers/administration/{key} -
-pending #2587                                   write   PUT /api/v2/admin/identity_providers/administration/{key} -
-pending #2587                                   write   POST /api/v2/admin/identity_providers/administration/{key}/rebind -
-pending #2587                                   write   POST /api/v2/admin/invites_bulk/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/legal_holds -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/legal_holds -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/legal_holds/{id}/release -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/maintenance/{mode} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/maintenance/{mode} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/mandate_attachments/index_schedules/{projectID}/{toolkitID}/{indexName} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/mandate_attachments/index_schedules/{projectID}/{toolkitID}/{indexName} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/mandate_attachments/pipeline_schedules/{projectID}/{versionID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/mandate_attachments/pipeline_schedules/{projectID}/{versionID} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/mandate_attachments/pipeline_triggers/{projectID}/{versionID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/mandate_attachments/pipeline_triggers/{projectID}/{versionID} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/mandates -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/mandates -
-allowed allowed refused refused refused refused approve POST /api/v2/admin/mandates/{id}:approve -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/mandates/{id}:revoke -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/mandates/{id}:suspend -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/mcp_prebuilt_servers/administration -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/mcp_prebuilt_servers/administration/{key} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/mcp_prebuilt_servers/administration/{key} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/microsoft_oauth_apps -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/microsoft_oauth_apps -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/microsoft_oauth_apps/settings -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/microsoft_oauth_apps/{id} -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/microsoft_oauth_apps/{id}/disable -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/microsoft_oauth_apps/{id}/enable -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/microsoft_oauth_apps/{id}/test -
-allowed allowed refused allowed refused refused write   PUT /api/v2/admin/moderation_status/administration -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/moderation_statuses/administration -
-pending #2587                                   write   DELETE /api/v2/admin/modes/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/modes/administration -
-pending #2587                                   write   POST /api/v2/admin/modes/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/native_clients/administration -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/native_clients/administration/{clientID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/native_clients/administration/{clientID} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/native_devices/administration -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/native_devices/administration/{deviceID} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/permission_trimming -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/permission_trimming/remove -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/permissions/{scope}/{mode} -
-pending #2587                                   write   POST /api/v2/admin/permissions/{scope}/{mode} -
-pending #2587                                   write   PUT /api/v2/admin/permissions/{scope}/{mode} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/platform_routines/administration -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/platform_routines/administration/{id} -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_schemas/{mode} -
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_suggestions/{mode}/{key} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agents
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section ai_disclosure
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section analytics
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section approval_policy
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section auth
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section branding
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section browser
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section cloud_executor
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section credential_review
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section dedicated_banner
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section email
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section governance
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
-allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section maintenance
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_configuration
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_servers
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section microsoft_apps
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section native_client_policy
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section native_clients
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section notifications
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section platform_preamble
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section proactivity
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section remote_agents
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section resources
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section run_caps
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section service_descriptors
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section session_policy
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section skill_publishing
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section support_assistant
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section voice_features
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section web_search
-allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section worker_egress
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agents
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section ai_disclosure
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section analytics
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section approval_policy
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section auth
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section branding
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section browser
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section cloud_executor
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section credential_review
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section dedicated_banner
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section email
-allowed allowed refused refused refused refused read    PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
-allowed allowed allowed refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section governance
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section maintenance
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_configuration
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_servers
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section microsoft_apps
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section native_client_policy
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section native_clients
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section notifications
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section platform_preamble
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section proactivity
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section remote_agents
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section resources
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section run_caps
-refused refused refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section service_descriptors
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section session_policy
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section skill_publishing
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section support_assistant
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section voice_features
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section web_search
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section worker_egress
-allowed allowed allowed allowed refused refused read    GET /api/v2/admin/project_cloud_executor/administration/{projectID} -
-allowed allowed refused allowed refused refused write   PUT /api/v2/admin/project_cloud_executor/administration/{projectID} -
-allowed allowed refused allowed refused refused write   PUT /api/v2/admin/project_suspend/{mode}/{projectID} -
-allowed allowed allowed allowed refused refused read    GET /api/v2/admin/projects/{mode} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/retention/policies -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/retention/policies/{dataClass} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/roles/administration/{projectID} -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/roles/{mode}/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/roles/{scope}/{mode} -
-pending #2587                                   write   POST /api/v2/admin/roles/{scope}/{mode} -
-pending #2587                                   write   PUT /api/v2/admin/roles/{scope}/{mode} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/scim_clients/administration -
-allowed refused refused refused refused refused write   POST /api/v2/admin/scim_clients/administration -
-allowed refused refused refused refused refused write   DELETE /api/v2/admin/scim_clients/administration/{id} -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/scim_clients/administration/{id}/revoke -
-allowed refused refused refused refused refused write   POST /api/v2/admin/scim_clients/administration/{id}/rotate -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/scim_group_bindings/administration -
-pending #2587                                   write   POST /api/v2/admin/scim_group_bindings/administration -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/scim_group_bindings/administration/project_roles/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/scim_group_bindings/administration/{id} -
-pending #2587                                   write   PUT /api/v2/admin/scim_group_bindings/administration/{id} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/system_info/{mode} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/toolkit_types/administration -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/toolkit_types/administration/bulk -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/toolkit_types/administration/{type} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID} -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID} -
-allowed allowed refused refused refused refused write   POST /api/v2/admin/user_invite/administration -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/user_project_permissions/administration -
-pending #2587                                   write   PUT /api/v2/admin/user_project_permissions/administration -
-allowed allowed refused refused refused refused write   PUT /api/v2/admin/user_suspend/{mode}/{userID} -
-pending #2587                                   write   DELETE /api/v2/admin/users/administration/{projectID} -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   POST /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   PUT /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/users/{mode}/{projectID} -
-allowed allowed refused allowed refused refused read    GET /api/v2/admin/users/{mode}/{projectID} -
-pending #2587                                   write   POST /api/v2/admin/users/{mode}/{projectID} -
-pending #2587                                   write   PUT /api/v2/admin/users/{mode}/{projectID} -
-allowed allowed refused refused refused refused read    GET /api/v2/admin/worker_egress/hosts -
-allowed allowed allowed allowed allowed allowed read    GET /api/v2/auth/permissions/administration -
-refused refused refused refused refused refused write   POST /api/v2/auth/token/ native_session
-pending #2587                                   write   DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   write   PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   write   DELETE /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   write   PUT /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{projectID} -
-allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin_published_agents/administration -
-allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/applications/prompt_lib/{projectID} maintenance_window
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/audit/{mode} -
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/audit_chain_verify/administration -
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/audit_heatmap/{mode} -
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/audit_trace_heatmap/{mode} -
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/audit_traces/{mode} -
-allowed allowed refused refused refused refused read    PATCH /api/v2/elitea_core/marketplace_listing/prompt_lib/{projectID}/{listingID} moderation
-allowed allowed allowed allowed allowed allowed read    GET /api/v2/elitea_core/platform_settings/prompt_lib maintenance_window
-allowed allowed allowed refused refused refused write   DELETE /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
-allowed allowed allowed allowed refused refused read    GET /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
-allowed allowed allowed refused refused refused write   PUT /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
-allowed allowed allowed refused refused refused write   PUT /api/v2/elitea_core/project_budget/administration/{projectID}/budget maintenance_window
-allowed allowed allowed allowed refused refused read    GET /api/v2/elitea_core/project_budgets/administration -
-allowed allowed refused refused allowed refused read    GET /api/v2/elitea_core/project_user_activity/{mode} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/elitea_core/register_descriptor/{projectID} -
-allowed allowed refused refused refused refused write   POST /api/v2/elitea_core/register_descriptor/{projectID} -
-allowed allowed refused refused refused refused write   POST /api/v2/elitea_core/register_descriptor/{projectID}/activate -
-allowed allowed refused refused refused refused write   POST /api/v2/elitea_core/register_descriptor/{projectID}/deactivate -
-allowed allowed allowed refused refused refused write   DELETE /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
-allowed allowed allowed allowed refused refused read    GET /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
-allowed allowed allowed refused refused refused write   PUT /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
-allowed allowed allowed allowed refused refused read    GET /api/v2/elitea_core/user_budgets/administration/{projectID} -
-allowed allowed refused allowed refused refused write   POST /api/v2/projects/project/{mode} -
-allowed allowed refused allowed refused refused write   DELETE /api/v2/projects/project/{mode}/{projectID} -
-allowed allowed refused refused refused refused write   POST /api/v2/secrets/hide/{mode}/{projectID}/{name} -
-allowed allowed refused refused refused refused write   DELETE /api/v2/secrets/secret/{mode}/{projectID}/{name} -
-allowed allowed refused refused refused refused read    GET /api/v2/secrets/secret/{mode}/{projectID}/{name} -
-allowed allowed refused refused refused refused write   POST /api/v2/secrets/secret/{mode}/{projectID}/{name} -
-allowed allowed refused refused refused refused write   PUT /api/v2/secrets/secret/{mode}/{projectID}/{name} -
-allowed allowed refused refused refused refused read    GET /api/v2/secrets/secrets/{mode}/{projectID} -
-allowed allowed refused refused refused refused read    GET /api/v2/tracing/status/administration -
+# security_auditor emergency_access, elevated admin, elevated super_admin,
+# then class, method, route and action.
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/history -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/roles -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/tokens -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/agent_identities -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/agent_identities -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/agent_identities/{id}/toolkits/{toolkitID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/agent_identities/{id}/toolkits/{toolkitID} -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/agent_identities/{id}:approve -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/agent_identities/{id}:repin -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/agent_identities/{id}:revoke -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/agent_identities/{id}:suspend -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/agent_registry -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/auth_users/{mode} -
+allowed allowed refused refused refused refused flagged    flagged    write   POST /api/v2/admin/auth_users/{mode} action delete
+pending #2587                                                         write   POST /api/v2/admin/auth_users/{mode} action set_admin_role
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/background_jobs/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/background_jobs/administration/pat_expiry_notices:run -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/branding/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/branding/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/branding/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/branding/assets/{kind} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/branding/package/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/branding/package/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/branding/package/administration/versions -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/branding/package/administration/versions/{digest}/restore -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/branding/test_email/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/connector_inventory -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/connector_inventory/requests -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/connector_requests -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/connector_requests/{requestID} -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/connector_requests/{requestID}/approve -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/connector_requests/{requestID}/reject -
+allowed allowed allowed allowed allowed allowed allowed    allowed    read    GET /api/v2/admin/console -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/credential_inventory -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_inventory/revoke -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/credential_references -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/credential_references/{id} -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/credential_references/{id}:activate -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references/{id}:attach -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references/{id}:cancel_rotation -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references/{id}:detach -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references/{id}:retire -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/credential_references/{id}:rotate -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/delegation_review -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/delegation_review/scan -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/email/administration -
+allowed allowed refused refused refused refused restricted restricted write   PUT /api/v2/admin/email/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/email/test/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/entitlements -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/execution_suspensions -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/execution_suspensions -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/execution_suspensions/{suspension_id}:resume -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/external_agent_identities -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/external_agent_identities -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/external_agent_identities/drift -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/external_agent_identities/{id}:activate -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/external_agent_identities/{id}:provision -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/external_agent_identities/{id}:resume -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/external_agent_identities/{id}:retire -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/external_agent_identities/{id}:suspend -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/*/budget-alerts -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/*/budget-alerts -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/default_model/ -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/default_model/ -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/default_model/ -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/governance -
+allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/governance -
+allowed allowed allowed refused refused refused allowed    allowed    read    POST /api/v2/admin/gateway/governance/validate-cel -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/governance/{id} -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/governance/{id} -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/logs -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/metered-prices -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/metered-prices -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/models -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/models -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/models/{id} -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/platform_models/ -
+allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/platform_models/ -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/platform_models/{configID} -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/platform_models/{configID} -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/platform_models/{configID}/default_usage -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/providers/ -
+allowed allowed allowed refused refused refused flagged    flagged    write   POST /api/v2/admin/gateway/providers/ -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/providers/{configID} -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/providers/{configID} -
+allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/providers/{configID}/check -
+allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/providers/{configID}/models -
+allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/providers/{configID}/revalidate -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/status -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/usage -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/identity_providers/administration -
+pending #2587                                                         write   DELETE /api/v2/admin/identity_providers/administration/{key} -
+pending #2587                                                         write   PUT /api/v2/admin/identity_providers/administration/{key} -
+pending #2587                                                         write   POST /api/v2/admin/identity_providers/administration/{key}/rebind -
+pending #2587                                                         write   POST /api/v2/admin/invites_bulk/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/legal_holds -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/legal_holds -
+allowed allowed refused refused refused refused restricted restricted write   POST /api/v2/admin/legal_holds/{id}/release -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/maintenance/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/maintenance/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/mandate_attachments/index_schedules/{projectID}/{toolkitID}/{indexName} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/mandate_attachments/index_schedules/{projectID}/{toolkitID}/{indexName} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/mandate_attachments/pipeline_schedules/{projectID}/{versionID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/mandate_attachments/pipeline_schedules/{projectID}/{versionID} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/mandate_attachments/pipeline_triggers/{projectID}/{versionID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/mandate_attachments/pipeline_triggers/{projectID}/{versionID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/mandates -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/mandates -
+allowed allowed refused refused refused refused allowed    allowed    approve POST /api/v2/admin/mandates/{id}:approve -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/mandates/{id}:revoke -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/mandates/{id}:suspend -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/mcp_prebuilt_servers/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/mcp_prebuilt_servers/administration/{key} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/mcp_prebuilt_servers/administration/{key} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/microsoft_oauth_apps -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/microsoft_oauth_apps -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/microsoft_oauth_apps/settings -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/microsoft_oauth_apps/{id} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/microsoft_oauth_apps/{id}/disable -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/microsoft_oauth_apps/{id}/enable -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/microsoft_oauth_apps/{id}/test -
+allowed allowed refused allowed refused refused allowed    allowed    write   PUT /api/v2/admin/moderation_status/administration -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/moderation_statuses/administration -
+pending #2587                                                         write   DELETE /api/v2/admin/modes/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/modes/administration -
+pending #2587                                                         write   POST /api/v2/admin/modes/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/native_clients/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/native_clients/administration/{clientID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/native_clients/administration/{clientID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/native_devices/administration -
+allowed allowed refused refused refused refused flagged    flagged    write   DELETE /api/v2/admin/native_devices/administration/{deviceID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/permission_trimming -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/permission_trimming/remove -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/permissions/{scope}/{mode} -
+pending #2587                                                         write   POST /api/v2/admin/permissions/{scope}/{mode} -
+pending #2587                                                         write   PUT /api/v2/admin/permissions/{scope}/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/platform_routines/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/platform_routines/administration/{id} -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_schemas/{mode} -
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_suggestions/{mode}/{key} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agents
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section ai_disclosure
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section analytics
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section approval_policy
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section auth
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section branding
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section browser
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section cloud_executor
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section credential_review
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section dedicated_banner
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section email
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section governance
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
+allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section maintenance
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_configuration
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_servers
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section microsoft_apps
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section native_client_policy
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section native_clients
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section notifications
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section platform_preamble
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section proactivity
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section remote_agents
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section resources
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section run_caps
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section service_descriptors
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section session_policy
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section skill_publishing
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section support_assistant
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section voice_features
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section web_search
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section worker_egress
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agents
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section ai_disclosure
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section analytics
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section approval_policy
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section approvals
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section auth
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section branding
+allowed allowed refused refused refused refused restricted restricted write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section break_glass
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section browser
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section catalogue
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section circuit_breaker
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section cloud_executor
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section credential_review
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section dedicated_banner
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
+allowed allowed refused refused refused refused restricted restricted write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section email
+allowed allowed refused refused refused refused allowed    allowed    read    PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section governance
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy
+allowed allowed refused refused refused refused flagged    flagged    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section maintenance
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_configuration
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section mcp_servers
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section microsoft_apps
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section native_client_policy
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section native_clients
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section notifications
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section platform_preamble
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section proactivity
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section remote_agents
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section resources
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section run_caps
+refused refused refused refused refused refused refused    refused    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section service_descriptors
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section session_policy
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section skill_publishing
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section support_assistant
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section voice_features
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section web_search
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section worker_egress
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/admin/project_cloud_executor/administration/{projectID} -
+allowed allowed refused allowed refused refused flagged    flagged    write   PUT /api/v2/admin/project_cloud_executor/administration/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    write   PUT /api/v2/admin/project_suspend/{mode}/{projectID} -
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/admin/projects/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/retention/policies -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/retention/policies/{dataClass} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/roles/administration/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/roles/{mode}/{projectID} -
+pending #2587                                                         write   DELETE /api/v2/admin/roles/{scope}/{mode} -
+pending #2587                                                         write   POST /api/v2/admin/roles/{scope}/{mode} -
+pending #2587                                                         write   PUT /api/v2/admin/roles/{scope}/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/scim_clients/administration -
+allowed refused refused refused refused refused restricted restricted write   POST /api/v2/admin/scim_clients/administration -
+allowed refused refused refused refused refused refused    refused    write   DELETE /api/v2/admin/scim_clients/administration/{id} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/scim_clients/administration/{id}/revoke -
+allowed refused refused refused refused refused restricted restricted write   POST /api/v2/admin/scim_clients/administration/{id}/rotate -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/scim_group_bindings/administration -
+pending #2587                                                         write   POST /api/v2/admin/scim_group_bindings/administration -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/scim_group_bindings/administration/project_roles/{projectID} -
+pending #2587                                                         write   DELETE /api/v2/admin/scim_group_bindings/administration/{id} -
+pending #2587                                                         write   PUT /api/v2/admin/scim_group_bindings/administration/{id} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/system_info/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/toolkit_types/administration -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/admin/toolkit_types/administration/bulk -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/toolkit_types/administration/{type} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID} -
+allowed allowed refused refused refused refused flagged    flagged    write   POST /api/v2/admin/user_invite/administration -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/user_project_permissions/administration -
+pending #2587                                                         write   PUT /api/v2/admin/user_project_permissions/administration -
+allowed allowed refused refused refused refused flagged    flagged    write   PUT /api/v2/admin/user_suspend/{mode}/{userID} -
+pending #2587                                                         write   DELETE /api/v2/admin/users/administration/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/users/administration/{projectID} -
+pending #2587                                                         write   POST /api/v2/admin/users/administration/{projectID} -
+pending #2587                                                         write   PUT /api/v2/admin/users/administration/{projectID} -
+pending #2587                                                         write   DELETE /api/v2/admin/users/{mode}/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    read    GET /api/v2/admin/users/{mode}/{projectID} -
+pending #2587                                                         write   POST /api/v2/admin/users/{mode}/{projectID} -
+pending #2587                                                         write   PUT /api/v2/admin/users/{mode}/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/admin/worker_egress/hosts -
+allowed allowed allowed allowed allowed allowed allowed    allowed    read    GET /api/v2/auth/permissions/administration -
+refused refused refused refused refused refused allowed    allowed    write   POST /api/v2/auth/token/ native_session
+pending #2587                                                         write   DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+pending #2587                                                         read    GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+pending #2587                                                         write   PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+pending #2587                                                         write   DELETE /api/v2/configurations/configuration/{projectID}/{configID} -
+pending #2587                                                         read    GET /api/v2/configurations/configuration/{projectID}/{configID} -
+pending #2587                                                         write   PUT /api/v2/configurations/configuration/{projectID}/{configID} -
+pending #2587                                                         read    GET /api/v2/configurations/configurations/{mode}/{projectID} -
+pending #2587                                                         write   POST /api/v2/configurations/configurations/{mode}/{projectID} -
+pending #2587                                                         read    GET /api/v2/configurations/configurations/{projectID} -
+pending #2587                                                         write   POST /api/v2/configurations/configurations/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/elitea_core/admin/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/elitea_core/admin_published_agents/administration -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/elitea_core/applications/prompt_lib/{projectID} maintenance_window
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/audit/{mode} -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/audit_chain_verify/administration -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/audit_heatmap/{mode} -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/audit_trace_heatmap/{mode} -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/audit_traces/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    read    PATCH /api/v2/elitea_core/marketplace_listing/prompt_lib/{projectID}/{listingID} moderation
+allowed allowed allowed allowed allowed allowed allowed    allowed    read    GET /api/v2/elitea_core/platform_settings/prompt_lib maintenance_window
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/elitea_core/project_budget/administration/{projectID}/budget -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/elitea_core/project_budget/administration/{projectID}/budget maintenance_window
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/elitea_core/project_budgets/administration -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/elitea_core/project_user_activity/{mode} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/elitea_core/register_descriptor/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/elitea_core/register_descriptor/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/elitea_core/register_descriptor/{projectID}/activate -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/elitea_core/register_descriptor/{projectID}/deactivate -
+allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
+allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
+allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/elitea_core/user_budgets/administration/{projectID} -
+allowed allowed refused allowed refused refused allowed    allowed    write   POST /api/v2/projects/project/{mode} -
+allowed allowed refused allowed refused refused allowed    allowed    write   DELETE /api/v2/projects/project/{mode}/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/secrets/hide/{mode}/{projectID}/{name} -
+allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/secrets/secret/{mode}/{projectID}/{name} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/secrets/secret/{mode}/{projectID}/{name} -
+allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/secrets/secret/{mode}/{projectID}/{name} -
+allowed allowed refused refused refused refused allowed    allowed    write   PUT /api/v2/secrets/secret/{mode}/{projectID}/{name} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/secrets/secrets/{mode}/{projectID} -
+allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/tracing/status/administration -

@@ -286,12 +286,17 @@ func (r *PostgresResolver) withElevation(
 	resolution auth.PermissionResolution,
 	userID int64,
 ) (auth.PermissionResolution, error) {
-	ids, granted, err := r.elevationGrants(ctx, userID, resolution.ElevationSessionRef)
+	elevations, granted, err := r.elevationGrants(ctx, userID, resolution.ElevationSessionRef)
 	if err != nil {
 		return auth.PermissionResolution{}, err
 	}
 	resolution.Permissions, resolution.ElevatedPermissions = UnionElevation(resolution.Permissions, granted)
+	var ids []string
+	for _, elevation := range elevations {
+		ids = append(ids, elevation.ID)
+	}
 	resolution.ElevationIDs = ids
+	resolution.Elevations = elevations
 	if len(ids) > 0 {
 		// The resolver's elevation indicator (R1.3a reads it to refuse
 		// token scopes under an elevation): set whenever an active
@@ -335,11 +340,12 @@ func UnionElevation(standing, granted []string) (union, elevatedOnly []string) {
 //     the ledger allows one open elevation per session, and the resolver
 //     never picks one row of several.
 //
-// The ids are of the rows that matched, sorted, nil for none; a level whose
-// role is missing or empty still names its elevation and grants nothing.
-func (r *PostgresResolver) elevationGrants(ctx context.Context, userID, sessionRef int64) ([]string, []string, error) {
+// The elevations are the rows that matched, with their level and path,
+// sorted by id, nil for none; a level whose role is missing or empty still
+// names its elevation and grants nothing.
+func (r *PostgresResolver) elevationGrants(ctx context.Context, userID, sessionRef int64) ([]auth.ElevationGrant, []string, error) {
 	rows, err := r.store.Query(ctx, `
-SELECT elevation.id::text, role_grant.permission
+SELECT elevation.id::text, elevation.level, elevation.path, role_grant.permission
 FROM elitea_auth.admin_elevations AS elevation
 LEFT JOIN public.auth_core__role AS role
   ON role.name = elevation.level AND role.mode = $3
@@ -356,14 +362,15 @@ WHERE elevation.user_id = $1
 		return nil, nil, fmt.Errorf("resolve the elevations of the session: %w", err)
 	}
 	defer rows.Close()
-	var ids, permissions []string
+	var elevations []auth.ElevationGrant
+	var permissions []string
 	for rows.Next() {
-		var id string
+		var elevation auth.ElevationGrant
 		var permission *string
-		if err := rows.Scan(&id, &permission); err != nil {
+		if err := rows.Scan(&elevation.ID, &elevation.Level, &elevation.Path, &permission); err != nil {
 			return nil, nil, fmt.Errorf("scan an elevation of the session: %w", err)
 		}
-		ids = append(ids, id)
+		elevations = append(elevations, elevation)
 		if permission != nil {
 			permissions = append(permissions, *permission)
 		}
@@ -371,9 +378,10 @@ WHERE elevation.user_id = $1
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read the elevations of the session: %w", err)
 	}
-	slices.Sort(ids)
+	slices.SortFunc(elevations, func(a, b auth.ElevationGrant) int { return strings.Compare(a.ID, b.ID) })
 	slices.Sort(permissions)
-	return slices.Compact(ids), slices.Compact(permissions), nil
+	return slices.CompactFunc(elevations, func(a, b auth.ElevationGrant) bool { return a.ID == b.ID }),
+		slices.Compact(permissions), nil
 }
 
 func (r *PostgresResolver) clock() time.Time {

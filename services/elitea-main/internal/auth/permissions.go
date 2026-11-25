@@ -74,6 +74,20 @@ type PermissionResolution struct {
 	// part in Permissions, sorted; nil when none did. An elevation adds no
 	// role name: Roles stays the standing roles.
 	ElevationIDs []string
+	// Elevations are the active elevations of ElevationIDs with their level
+	// and path, in the same order: what the restriction of the action table
+	// (ADR-0059 R2.8a) needs to tell a sealed super_admin elevation from any
+	// other. nil when none took part.
+	Elevations []ElevationGrant
+}
+
+// ElevationGrant is one active elevation that took part in a resolution.
+type ElevationGrant struct {
+	ID string
+	// Level is admin or super_admin; Path is approved, self or sealed
+	// (elitea_auth.admin_elevations, shared 0269).
+	Level string
+	Path  string
 }
 
 // StandingPermissions is Permissions without what only an elevation gives:
@@ -91,7 +105,7 @@ func (r PermissionResolution) StandingPermissions() []string {
 
 // Elevated reports whether an elevation took part in the resolution.
 func (r PermissionResolution) Elevated() bool {
-	return r.ElevationID != "" || len(r.ElevationIDs) > 0 || len(r.ElevatedPermissions) > 0
+	return r.ElevationID != "" || len(r.ElevationIDs) > 0 || len(r.ElevatedPermissions) > 0 || len(r.Elevations) > 0
 }
 
 // StandingAdministrationResolver is the standing-set call (ADR-0059 decision
@@ -130,6 +144,7 @@ func withoutElevation(resolution PermissionResolution) PermissionResolution {
 	resolution.Permissions = resolution.StandingPermissions()
 	resolution.ElevatedPermissions = nil
 	resolution.ElevationIDs = nil
+	resolution.Elevations = nil
 	resolution.ElevationID = ""
 	return resolution
 }

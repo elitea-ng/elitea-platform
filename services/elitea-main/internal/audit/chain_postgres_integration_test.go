@@ -442,7 +442,7 @@ ALTER TABLE centry.audit_events
 			EventType: "api", Action: fmt.Sprintf("PUT /after/%d", i), StatusCode: &status,
 			ActingRoles: []string{"admin", "llm_manager"}, CredentialKind: CredentialKindToken,
 			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: override,
-			ReasonCode: "incident", Reason: "INC-42", ReasonMissing: &missing,
+			ReasonCode: "incident", Reason: "INC-42", ReasonMissing: &missing, ElevationFlagged: true,
 		})
 	}
 	if err := recorder.Close(ctx); err != nil {
@@ -456,7 +456,8 @@ ALTER TABLE centry.audit_events
 SELECT count(*) FROM centry.audit_events
  WHERE acting_roles = '{admin,llm_manager}' AND credential_kind = 'token'
    AND elevation_id = '0192f0c1-7b6e-7c3a-8f00-000000000001' AND central_override
-   AND reason_code = 'incident' AND reason = 'INC-42' AND NOT reason_missing`).Scan(&stored); err != nil {
+   AND reason_code = 'incident' AND reason = 'INC-42' AND NOT reason_missing
+   AND elevation_flagged`).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored != 2 {
@@ -473,7 +474,8 @@ SELECT count(*) FROM centry.audit_events
 	if _, err := pool.Exec(ctx, `
 UPDATE centry.audit_events
    SET acting_roles = '{super_admin}', credential_kind = 'session', elevation_id = NULL,
-       central_override = false, reason_code = 'other', reason = 'changed', reason_missing = true
+       central_override = false, reason_code = 'other', reason = 'changed', reason_missing = true,
+       elevation_flagged = false
  WHERE action LIKE 'PUT /after/%'`); err != nil {
 		t.Fatalf("UPDATE of the role-use columns: %v", err)
 	}

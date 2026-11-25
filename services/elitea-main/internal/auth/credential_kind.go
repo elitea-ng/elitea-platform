@@ -76,6 +76,10 @@ func (c Credential) ElevationSessionRef() int64 {
 	return 0
 }
 
+// IsSealed reports a sealed break-glass session (ADR-0059 decision 7), which
+// holds its elevation and nothing else.
+func (c Credential) IsSealed() bool { return c.Kind == CredentialKindSealed }
+
 // IsBrowserSession reports a credential a person holds in a browser: an
 // `elitea_session` session, a Form session or a sealed session.
 func (c Credential) IsBrowserSession() bool {

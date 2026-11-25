@@ -15,6 +15,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/oapiserver"
 	v2adminconsole "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/adminaccess"
 	v2agentidentity "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/agentidentity"
@@ -149,6 +150,12 @@ func ComposedRouter() (Composed, error) {
 
 		// The Postgres recorder writes from a goroutine of its own, which
 		// panics on the unconnected pool.
+		// The Form session of an elevated variant (Variant.Elevation): the
+		// one browser session the driver sends, so the elevation restriction
+		// of the action table (ADR-0059 R2.8a) is driven too. A request with
+		// a bearer credential never reads it.
+		Auth: api.AuthDeps{FormSessions: elevatedFormSessions{}},
+
 		AuditRecorder:              discardAudit{},
 		AuthValidator:              tokenValidator{},
 		PrincipalValidator:         principalValidator{},
@@ -328,6 +335,34 @@ func (c Composed) ConfigurationSections() ([]Section, error) {
 
 func authenticate(r *http.Request) { r.Header.Set("Authorization", "Bearer "+Token) }
 
+// ElevatedSessionCookie is the Form session cookie of an elevated variant;
+// ElevatedSessionRef is that session's reference, which an elevation binds to.
+const (
+	ElevatedSessionCookie       = "adminsurface_elevated_session"
+	ElevatedSessionRef    int64 = 7
+)
+
+// AuthenticateElevatedSession adds the Form session cookie of an elevated
+// variant, with the headers of a same-origin browser write.
+func AuthenticateElevatedSession(r *http.Request) {
+	r.AddCookie(&http.Cookie{Name: ElevatedSessionCookie, Value: "1"})
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+}
+
+// elevatedFormSessions authenticates the cookie of an elevated variant as the
+// synthetic principal in a Form session, and no other.
+type elevatedFormSessions struct{}
+
+func (elevatedFormSessions) AuthenticateFormSession(r *http.Request) (auth.User, error) {
+	if _, err := r.Cookie(ElevatedSessionCookie); err != nil {
+		return auth.User{}, apimw.ErrFormSessionAbsent
+	}
+	user := Principal()
+	user.AuthType = "session"
+	user.BrowserSessionRef = ElevatedSessionRef
+	return user, nil
+}
+
 // AuthenticateNative adds the native device session credential of the
 // synthetic principal.
 func AuthenticateNative(r *http.Request) { r.Header.Set("Authorization", "Bearer "+NativeToken) }
@@ -370,7 +405,13 @@ func (unreachableGateway) Status(context.Context) (json.RawMessage, error) { ret
 
 type discardAudit struct{}
 
-func (discardAudit) Record(context.Context, audit.Event) {}
+// Record keeps nothing but the elevation review mark, on the recorder of the
+// request Drive sent (Answer.Flagged).
+func (discardAudit) Record(ctx context.Context, event audit.Event) {
+	if rec, ok := ctx.Value(recorderKey{}).(*recorder); ok && event.ElevationFlagged {
+		rec.flag()
+	}
+}
 
 type tokenValidator struct{}
 

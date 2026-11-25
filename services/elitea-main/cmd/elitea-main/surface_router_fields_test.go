@@ -76,10 +76,7 @@ var surfaceRouterUnsetFields = map[string]string{
 	"AttachmentExtensions":       "the attachment extensions the discovery document lists; no route",
 	"AttachmentExtractionWarmer": "the upload-time extraction warm-up of the conversation routes; no decision",
 	"CodeSandboxLanguages":       "the sandbox languages the toolkit catalogue lists; no route",
-	"Auth": "the browser sign-in planes (Form, OIDC, SAML) and their session stores; the composed router " +
-		"authenticates with its own bearer validator (AuthValidator), and no sign-in route makes an " +
-		"administration decision",
-	"ProductionAuth": "the Form sign-in routes under /auth; no administration decision",
+	"ProductionAuth":             "the Form sign-in routes under /auth; no administration decision",
 	"Branding": "the brand resolver; nil makes router.go compose the same resolver from the pool, " +
 		"so the branding routes are the same",
 	"BrandingPackages": "the brand package service behind the admin branding package routes, which are mounted " +

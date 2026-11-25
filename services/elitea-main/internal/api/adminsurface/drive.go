@@ -98,7 +98,21 @@ type Variant struct {
 	// router must read the window through MaintenanceState (ComposedRouter
 	// does), since no database holds one.
 	Maintenance bool
+	// Elevation, when set, drives the variant as a Form browser session of
+	// the synthetic principal with no standing set, whose every
+	// administration-mode resolution reports the grant as given by one
+	// active elevation of this level and path (ADR-0059 R2.8a). The
+	// variant's Authenticate is replaced by AuthenticateElevatedSession.
+	Elevation *Elevation
 }
+
+// Elevation is the elevation an elevated variant resolves under.
+type Elevation struct {
+	Level, Path string
+}
+
+// ElevationID is the id of the elevation of an elevated variant.
+const ElevationID = "0b7c2d4e-0000-4000-8000-00000000e1e7"
 
 type maintenanceKey struct{}
 
@@ -254,6 +268,9 @@ type Answer struct {
 	Body   string
 	// Calls are the permission resolutions the request made.
 	Calls []Call
+	// Flagged: the admin audit row of the request was marked for the
+	// elevation review (ADR-0059 R2.8a).
+	Flagged bool
 }
 
 // Maintenance reports whether the answer is the maintenance gate's refusal:
@@ -276,7 +293,7 @@ func Send(handler http.Handler, route Route, variant Variant, opts Options, gran
 	}
 	d := driver{handler: handler, opts: opts}
 	out := d.run(route, variant, func(int) []string { return grant })
-	return Answer{Status: out.status, Body: out.body, Calls: out.calls}
+	return Answer{Status: out.status, Body: out.body, Calls: out.calls, Flagged: out.flagged}
 }
 
 func defaultBody(method string) string {
@@ -295,9 +312,10 @@ type driver struct {
 
 // outcome is what one request did: its answer and every resolution it made.
 type outcome struct {
-	status int
-	body   string
-	calls  []Call
+	status  int
+	body    string
+	calls   []Call
+	flagged bool
 }
 
 // The statuses of a request that did not answer normally.
@@ -456,7 +474,7 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	if variant.OtherModes != nil {
 		others = variant.OtherModes
 	}
-	rec := &recorder{grant: grant, others: others}
+	rec := &recorder{grant: grant, others: others, elevation: variant.Elevation}
 	base := context.WithValue(context.Background(), recorderKey{}, rec)
 	if variant.Maintenance {
 		base = context.WithValue(base, maintenanceKey{}, true)
@@ -470,6 +488,8 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 		req.Header.Set("Content-Type", "application/json")
 	}
 	switch {
+	case variant.Elevation != nil:
+		AuthenticateElevatedSession(req)
 	case variant.Authenticate != nil:
 		variant.Authenticate(req)
 	case d.opts.Authenticate != nil:
@@ -499,7 +519,7 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	if ctx.Err() != nil {
 		return outcome{status: statusTimedOut, calls: rec.snapshot()}
 	}
-	out := outcome{status: w.Code, body: w.Body.String(), calls: rec.snapshot()}
+	out := outcome{status: w.Code, body: w.Body.String(), calls: rec.snapshot(), flagged: rec.isFlagged()}
 	if panicked != "" {
 		// A panic the router did not recover is an answer like any other:
 		// the stability check in drive catches one that is not repeatable.
