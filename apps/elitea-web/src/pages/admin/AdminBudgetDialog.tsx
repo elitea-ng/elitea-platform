@@ -43,6 +43,7 @@ import {
   type BudgetPeriod,
   type FailModeChoice,
 } from './api/adminBudgetsApi';
+import { useAdminWriteControl } from './adminWriteAccess';
 
 /** What the dialog opens on. Every field is the STORED value or its default. */
 export interface BudgetDialogInitialValues {
@@ -272,16 +273,25 @@ export function AdminBudgetDialog({
         <Button variant="text" disabled={isSaving} onClick={onClose}>
           {t('pages.admin.budgets.dialog.cancel', 'Cancel')}
         </Button>
-        <Button
-          variant="contained"
-          disabled={isSaving || isLoading}
-          onClick={handleSubmit}
-          data-testid="admin-budget-save"
-        >
-          {t('pages.admin.budgets.dialog.save', 'Save')}
-        </Button>
+        <BudgetSaveButton busy={isSaving || isLoading} onClick={handleSubmit} />
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** Save, disabled while busy and in view-only mode (R3.4a, issue 2534). */
+function BudgetSaveButton({ busy, onClick }: { readonly busy: boolean; readonly onClick: () => void }): ReactNode {
+  const { disabled, reason } = useAdminWriteControl();
+  return (
+    <Button
+      variant="contained"
+      disabled={busy || disabled}
+      title={reason}
+      onClick={onClick}
+      data-testid="admin-budget-save"
+    >
+      {t('pages.admin.budgets.dialog.save', 'Save')}
+    </Button>
   );
 }
 

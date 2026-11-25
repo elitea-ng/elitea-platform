@@ -48,6 +48,17 @@ function RoutedPage({ leaf }: { readonly leaf: string | undefined }): ReactNode 
   );
 }
 
+/**
+ * The first item the document opens. The TEMPORARY Roles link (an unavailable
+ * item, remove in R3.6, issue 2537) is passed over while any other item is
+ * open: it would otherwise land the security auditor on a page it can only
+ * read and that is not under the read-only wrapper yet.
+ */
+function landingItem(areas: readonly AdminConsoleNavArea[]): AdminConsoleNavArea['items'][number] | undefined {
+  const items = areas.flatMap((area) => area.items);
+  return items.find((entry) => entry.available) ?? items[0];
+}
+
 export function AdminConsoleOutlet({ itemLevel, areas }: AdminConsoleOutletProps): ReactNode {
   const route = useRouterState({
     select: (state) => {
@@ -58,7 +69,7 @@ export function AdminConsoleOutlet({ itemLevel, areas }: AdminConsoleOutletProps
   });
   const entry = adminConsoleNavItems().find((candidate) => candidate.id === route.itemId);
   if (entry === undefined || consoleItemOpen(entry, itemLevel) !== false) return <RoutedPage leaf={route.leaf} />;
-  const first = areas[0]?.items[0];
+  const first = landingItem(areas);
   if (route.index && first !== undefined) return <Navigate to={first.path} replace />;
   return <AdminItemAccessDenied itemId={entry.id} label={entry.label} />;
 }
