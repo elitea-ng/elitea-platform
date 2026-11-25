@@ -85,6 +85,13 @@ INSERT INTO elitea_identity.token_lifecycle (token_id, inherit_notice_delivered_
 		t.Fatal(err)
 	}
 
+	// An owner with no address is listed, with "" (the notifier counts them).
+	unreachable := seedInheritAccount(t, pool, false)
+	seedInheritToken(t, pool, unreachable, "no-mail", "inherit", nil)
+	if _, err := pool.Exec(ctx, `UPDATE public.auth_core__user SET email = '' WHERE id = $1`, unreachable); err != nil {
+		t.Fatal(err)
+	}
+
 	repo, err := NewPATExpiryNotificationRepository(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -94,13 +101,20 @@ INSERT INTO elitea_identity.token_lifecycle (token_id, inherit_notice_delivered_
 		t.Fatalf("list: %v", err)
 	}
 	var mine []patexpiry.InheritOwner
+	sawUnreachable := false
 	for _, candidate := range owners {
 		switch candidate.UserID {
 		case owner:
 			mine = append(mine, candidate)
+		case unreachable:
+			// Listed with no address, for the notifier to count.
+			sawUnreachable = candidate.Email == ""
 		case plain, suspended, told:
 			t.Errorf("user %d is a candidate: %+v", candidate.UserID, candidate)
 		}
+	}
+	if !sawUnreachable {
+		t.Errorf("the owner with no address is not listed with an empty address: %+v", owners)
 	}
 	if len(mine) != 1 {
 		t.Fatalf("the owner is listed %d times, want once: %+v", len(mine), owners)
@@ -125,6 +139,16 @@ INSERT INTO elitea_identity.token_lifecycle (token_id, inherit_notice_delivered_
 SELECT count(*) FROM elitea_auth.admin_access_notices WHERE kind = 'inherit_token' AND recipient_user_id = $1`,
 		owner).Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("outbox rows = %d (%v), want 1", rows, err)
+	}
+	// While that row waits, the owner takes no slot of the limit again.
+	waiting, err := repo.ListInheritTokenOwners(ctx, now, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range waiting {
+		if candidate.UserID == owner {
+			t.Fatalf("an owner whose notice waits is listed again: %+v", candidate)
+		}
 	}
 
 	// The end date: the sunset date before the delivery, the later of the

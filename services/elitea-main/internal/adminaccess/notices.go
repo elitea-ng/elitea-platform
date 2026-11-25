@@ -318,8 +318,11 @@ type InheritTokenOwner struct {
 
 // QueueInheritTokenNotice writes the one notice row of an owner, for the
 // sunset date sunsetAfter, and reports whether it wrote one. The row is keyed
-// by the owner, the date and the tokens it lists, so a pass that runs again
-// before the row is delivered writes nothing.
+// by the owner and the date only (a fixed-size key: the token ids would grow
+// it past the unique index's row limit), so a pass that runs again writes
+// nothing. One row per owner and date suffices: no request sets `inherit`,
+// so an owner's `inherit` tokens only ever shrink, and the row lists them
+// all. The candidate query also leaves out an owner whose row waits.
 func QueueInheritTokenNotice(ctx context.Context, q Execer, owner InheritTokenOwner, sunsetAfter string, at time.Time) (bool, error) {
 	switch {
 	case q == nil:
@@ -335,15 +338,11 @@ func QueueInheritTokenNotice(ctx context.Context, q Execer, owner InheritTokenOw
 	}
 	tokens := slices.Clone(owner.Tokens)
 	slices.SortFunc(tokens, func(a, b NoticeToken) int { return cmp.Compare(a.ID, b.ID) })
-	ids := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		ids = append(ids, strconv.FormatInt(token.ID, 10))
-	}
 	encoded, err := json.Marshal(noticeDetail{Tokens: tokens, SunsetAfter: sunsetAfter})
 	if err != nil {
 		return false, fmt.Errorf("queue the inherit token notice: %w", err)
 	}
-	key := "inherit_token:" + strconv.FormatInt(owner.UserID, 10) + ":" + sunsetAfter + ":" + strings.Join(ids, ",")
+	key := InheritTokenNoticeKey(owner.UserID, sunsetAfter)
 	tag, err := q.Exec(ctx, `
 INSERT INTO elitea_auth.admin_access_notices
     (kind, channel, recipient_user_id, recipient_email, recipient_name, detail, dedupe_key,
@@ -355,6 +354,12 @@ ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
 		return false, fmt.Errorf("queue the inherit token notice: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// InheritTokenNoticeKey is the dedupe key of an owner's `inherit` token
+// notice for one sunset date.
+func InheritTokenNoticeKey(userID int64, sunsetAfter string) string {
+	return "inherit_token:" + strconv.FormatInt(userID, 10) + ":" + sunsetAfter
 }
 
 /* ── the sender ────────────────────────────────────────────────────────── */
@@ -380,6 +385,10 @@ const (
 	noticeMaxRetry   = time.Hour
 	// maxNoticeError bounds the stored error text, in characters.
 	maxNoticeError = 500
+	// maxNoticeFailuresInARow ends a pass after that many failed sends in a
+	// row, so an unreachable mailer holds one pass for a few SMTP timeouts,
+	// not for a whole batch of them (and never past the lease).
+	maxNoticeFailuresInARow = 3
 )
 
 // Notice is one notice as the mailer renders it. Names are display names
@@ -454,6 +463,10 @@ type NoticeSender struct {
 	origin string
 	now    func() time.Time
 	batch  int
+	// sunsetAfter is the live sunset date (InheritEndsOn); the date an
+	// `inherit` notice states is computed from it at send time, as the token
+	// routes compute theirs, so the e-mail and the token list agree.
+	sunsetAfter func() string
 }
 
 // NewNoticeSender builds the sender. origin is the deployment's public
@@ -468,7 +481,7 @@ func NewNoticeSender(db NoticeDB, mailer NoticeMailer, origin string, now func()
 		return nil, errors.New("access notice sender: no clock")
 	}
 	return &NoticeSender{db: db, mailer: mailer, origin: strings.TrimRight(origin, "/"), now: now,
-		batch: defaultNoticeBatch}, nil
+		batch: defaultNoticeBatch, sunsetAfter: InheritEndsOn}, nil
 }
 
 // Pass sends the due rows, one claim per row. A row whose send fails stays
@@ -484,7 +497,14 @@ func (s *NoticeSender) Pass(ctx context.Context) (NoticeSendResult, error) {
 	}
 	result.MailerConfigured = true
 	var errs []error
+	failedInARow := 0
 	for range s.batch {
+		if failedInARow >= maxNoticeFailuresInARow {
+			// The mailer is configured but refusing or unreachable: each
+			// further send would wait out the SMTP timeout. The backoff of
+			// the failed rows and the next pass take the rest.
+			break
+		}
 		notice, claimed, err := s.claim(ctx)
 		if err != nil {
 			errs = append(errs, err)
@@ -495,11 +515,13 @@ func (s *NoticeSender) Pass(ctx context.Context) (NoticeSendResult, error) {
 		}
 		if sendErr := s.mailer.SendAccessNotice(ctx, notice.Notice); sendErr != nil {
 			result.Failed++
+			failedInARow++
 			if err := s.markFailed(ctx, notice, sendErr); err != nil {
 				errs = append(errs, err)
 			}
 			continue
 		}
+		failedInARow = 0
 		if err := s.markSent(ctx, notice); err != nil {
 			errs = append(errs, err)
 			continue
@@ -519,6 +541,10 @@ type claimedNotice struct {
 	Notice
 	attempts int
 	tokenIDs []int64
+	// at is the instant of the claim: the end date an `inherit` notice
+	// states and the delivery time stamped on its tokens both derive from
+	// it, so the two never disagree across a midnight.
+	at time.Time
 }
 
 // claim takes one due row, withheld from the other senders for the lease.
@@ -562,6 +588,7 @@ LEFT JOIN public.auth_core__user actor ON actor.id = claimed.actor_user_id`,
 		return claimedNotice{}, false, fmt.Errorf("access notice sender: claim a row: %w", err)
 	}
 	notice.Kind = NoticeKind(kind)
+	notice.at = now
 	if expires != nil {
 		notice.ExpiresAt = expires.UTC()
 	}
@@ -583,7 +610,15 @@ LEFT JOIN public.auth_core__user actor ON actor.id = claimed.actor_user_id`,
 	}
 	if notice.Kind == NoticeInheritToken {
 		notice.Tokens = parsed.Tokens
-		notice.EndsOn = InheritTokenEndsOn(parsed.SunsetAfter, now)
+		// The live date, as the token routes read it; the date stored at
+		// queue time only when the live one was withdrawn since.
+		sunset := parsed.SunsetAfter
+		if s.sunsetAfter != nil {
+			if live := s.sunsetAfter(); live != "" {
+				sunset = live
+			}
+		}
+		notice.EndsOn = InheritTokenEndsOn(sunset, now)
 		for _, token := range parsed.Tokens {
 			notice.tokenIDs = append(notice.tokenIDs, token.ID)
 		}
@@ -593,9 +628,13 @@ LEFT JOIN public.auth_core__user actor ON actor.id = claimed.actor_user_id`,
 
 // markSent records the delivery. For an `inherit` notice it also stamps the
 // delivery time on each listed token that still exists, once: a later notice
-// never moves it.
+// never moves it. The stamp is the claim instant, from which the e-mail's
+// date was computed (seconds before the mailer accepted it).
 func (s *NoticeSender) markSent(ctx context.Context, notice claimedNotice) error {
-	at := s.now().UTC()
+	at := notice.at
+	if at.IsZero() {
+		at = s.now().UTC()
+	}
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 UPDATE elitea_auth.admin_access_notices SET sent_at = $2, last_error = NULL
@@ -632,11 +671,11 @@ WHERE id = $1 AND sent_at IS NULL`,
 	return nil
 }
 
-// pending counts the unsent rows.
+// pending counts the unsent e-mail rows (the ones this sender sends).
 func (s *NoticeSender) pending(ctx context.Context) (int, error) {
 	var pending int
-	if err := s.db.QueryRow(ctx,
-		`SELECT count(*) FROM elitea_auth.admin_access_notices WHERE sent_at IS NULL`).Scan(&pending); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM elitea_auth.admin_access_notices
+WHERE sent_at IS NULL AND channel = '`+NoticeChannelEmail+`'`).Scan(&pending); err != nil {
 		return 0, fmt.Errorf("access notice sender: count the pending rows: %w", err)
 	}
 	return pending, nil

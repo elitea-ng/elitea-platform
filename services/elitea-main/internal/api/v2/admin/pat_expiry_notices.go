@@ -97,14 +97,16 @@ func (h *Handler) RunPATExpiryNotices(w http.ResponseWriter, r *http.Request) {
 	// a broken pass if only one number comes back.
 	// `inherit_owners` and `inherit_queued` are the second half (ADR-0059
 	// R3.15b): the owners of `inherit` tokens not yet told, and the notices
-	// this run queued for the access notice sender. Both are 0 while the
+	// this run queued for the access notice sender; `inherit_unreachable`
+	// the owners among them with no e-mail address. All are 0 while the
 	// sunset date is not set.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"examined":       result.Examined,
-		"produced":       result.Produced,
-		"skipped":        result.Skipped,
-		"inherit_owners": result.InheritOwners,
-		"inherit_queued": result.InheritQueued,
+		"examined":            result.Examined,
+		"produced":            result.Produced,
+		"skipped":             result.Skipped,
+		"inherit_owners":      result.InheritOwners,
+		"inherit_queued":      result.InheritQueued,
+		"inherit_unreachable": result.InheritUnreachable,
 	})
 }
 

@@ -54,10 +54,17 @@ func NewPATNotifier(pool *pgxpool.Pool) (*patexpiry.Notifier, error) {
 //	inherit_notice_delivered_at NULL not delivered yet. LEFT JOIN: a token
 //	                                 with no lifecycle row was never told.
 //	expires NULL or in the future    an expired token needs no notice.
-//	unsuspended, with an address     someone who can receive it; a suspended
-//	                                 owner's token resolves nothing.
+//	unsuspended                      a suspended owner's token resolves
+//	                                 nothing.
+//	no notice waiting                an owner whose notice is queued and not
+//	                                 sent yet does not take a slot of the
+//	                                 limit again (the mailer may be down).
+//
+// An owner with no address IS listed, with Email "": the notifier counts
+// them as unreachable (Result.InheritUnreachable) instead of dropping them
+// silently; no notice can reach them, so their tokens end at the sunset date.
 const inheritTokenOwnerQuery = `
-SELECT owner.id, btrim(owner.email), COALESCE(owner.name, ''),
+SELECT owner.id, COALESCE(btrim(owner.email), ''), COALESCE(owner.name, ''),
        array_agg(token.id::bigint ORDER BY token.id),
        array_agg(COALESCE(token.name, '')::text ORDER BY token.id)
 FROM public.auth_core__token AS token
@@ -68,7 +75,10 @@ WHERE token.admin_access = 'inherit'
   AND lifecycle.inherit_notice_delivered_at IS NULL
   AND (token.expires IS NULL OR token.expires > ($1::timestamptz AT TIME ZONE 'UTC'))
   AND owner.suspended = false
-  AND owner.email IS NOT NULL AND btrim(owner.email) <> ''
+  AND NOT EXISTS (
+      SELECT 1 FROM elitea_auth.admin_access_notices AS waiting
+      WHERE waiting.kind = 'inherit_token' AND waiting.recipient_user_id = owner.id
+        AND waiting.sent_at IS NULL)
 GROUP BY owner.id, owner.email, owner.name
 ORDER BY owner.id
 LIMIT $2`

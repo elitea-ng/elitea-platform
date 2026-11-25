@@ -572,3 +572,32 @@ SELECT inherit_notice_delivered_at FROM elitea_identity.token_lifecycle WHERE to
 		t.Fatalf("notice = %+v", notice)
 	}
 }
+
+// A mailer that is configured but refusing ends the pass after three failed
+// sends in a row: the rest are not claimed (no attempt counted), so one pass
+// never waits out a whole batch of SMTP timeouts.
+func TestUnreachableMailerEndsThePassEarly(t *testing.T) {
+	pool := newNoticeDatabase(t)
+	at := time.Date(2027, 1, 10, 9, 0, 0, 0, time.UTC)
+	for range 5 {
+		owner, email := seedRecipient(t, pool)
+		candidate := adminaccess.InheritTokenOwner{UserID: owner, Email: email,
+			Tokens: []adminaccess.NoticeToken{{ID: owner*100 + 1, Name: "ci"}}}
+		if queued, err := adminaccess.QueueInheritTokenNotice(t.Context(), pool, candidate, "2027-01-31", at); err != nil || !queued {
+			t.Fatalf("queue = %v, %v", queued, err)
+		}
+	}
+	sender := newNoticeSender(t, pool, &noticeMailer{failing: true}, func() time.Time { return at })
+	if result := sendPass(t, sender); result.Failed != 3 || result.Sent != 0 || result.Pending != 5 {
+		t.Fatalf("pass against a refusing mailer = %+v, want 3 failed, 5 pending", result)
+	}
+	untouched := 0
+	for _, row := range noticeRows(t, pool) {
+		if row.attempts == 0 {
+			untouched++
+		}
+	}
+	if untouched != 2 {
+		t.Fatalf("%d rows were left unclaimed, want 2", untouched)
+	}
+}

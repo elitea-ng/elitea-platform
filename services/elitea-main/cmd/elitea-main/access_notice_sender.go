@@ -37,6 +37,9 @@ func startAccessNoticeSender(ctx context.Context, pool *pgxpool.Pool, mailer adm
 	return nil
 }
 
+// accessNoticeWaitWarnEvery spaces the "notices wait for a mailer" warning.
+const accessNoticeWaitWarnEvery = 15 * time.Minute
+
 // runAccessNoticeSender runs pass on the routine's loop until ctx ends; the
 // returned channel closes when the loop has stopped.
 func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
@@ -54,14 +57,24 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 		Logger: logger,
 	}
 	done := make(chan struct{})
+	// The "no mailer" warning is logged when the waiting starts and then at
+	// most every accessNoticeWaitWarnEvery, not on every 30-second pass.
+	var lastWaitWarn time.Time
 	go func() {
 		defer close(done)
 		loop.Run(ctx, func(ctx context.Context) (string, error) {
 			result, err := pass(ctx)
+			waiting := !result.MailerConfigured && result.Pending > 0
+			if !waiting {
+				lastWaitWarn = time.Time{}
+			}
 			switch {
-			case !result.MailerConfigured && result.Pending > 0:
-				logger.Warn("access notices wait for a mailer: configure outbound e-mail",
-					"pending", result.Pending)
+			case waiting:
+				if lastWaitWarn.IsZero() || time.Since(lastWaitWarn) >= accessNoticeWaitWarnEvery {
+					lastWaitWarn = time.Now()
+					logger.Warn("access notices wait for a mailer: configure outbound e-mail",
+						"pending", result.Pending)
+				}
 			case result.Sent > 0 || result.Failed > 0:
 				logger.Info("access notice sender pass",
 					"sent", result.Sent, "failed", result.Failed, "pending", result.Pending)

@@ -10,7 +10,10 @@ sends it and stamps the delivery time on each listed token. An `inherit` token
 ends at the later of the sunset date and 30 days after that delivery, and the
 token responses (`inherit_ends_on`, on `/api/v2/auth/token/` and
 `/api/v2/admin/access/tokens`) state that date. The "run now" route of the
-expiry sweep answers two more numbers, `inherit_owners` and `inherit_queued`.
+expiry sweep answers three more numbers, `inherit_owners`, `inherit_queued`
+and `inherit_unreachable` (owners with no e-mail address: no notice reaches
+them, so their `inherit` tokens end at the sunset date; the sweep also logs
+a warning for them).
 
 **The upgrade.** One column, no default, no data change. While the sunset date
 is not set (this release) nothing is queued and nothing is read.

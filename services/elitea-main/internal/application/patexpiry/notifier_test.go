@@ -142,6 +142,8 @@ type inheritStore struct {
 	delivered map[int64]time.Time
 	queued    int
 	lists     int
+	// failFor is an owner whose queue write fails.
+	failFor int64
 }
 
 type inheritMailer struct {
@@ -166,6 +168,9 @@ func (s *inheritStore) ListInheritTokenOwners(context.Context, time.Time, int32)
 func (s *inheritStore) QueueInheritTokenNotice(_ context.Context, owner patexpiry.InheritOwner, sunsetAfter string, now time.Time) (bool, error) {
 	if sunsetAfter == "" {
 		return false, errors.New("queued with no sunset date")
+	}
+	if owner.UserID == s.failFor {
+		return false, errors.New("the outbox refused the row")
 	}
 	s.queued++
 	if s.mailer.failing {
@@ -268,5 +273,41 @@ func TestWithInheritNoticesRefusesMissingParts(t *testing.T) {
 	}
 	if err := notifier.WithInheritNotices(&inheritStore{}, nil); err == nil {
 		t.Error("no sunset date was accepted")
+	}
+}
+
+// One owner whose queue write fails does not hold back the owners after
+// them, and an owner with no address is counted, not queued.
+func TestInheritPassCarriesOnPastAFailingOwner(t *testing.T) {
+	owners := append(inheritOwners(), patexpiry.InheritOwner{UserID: 3, Email: " ", Tokens: []patexpiry.InheritToken{{ID: 31}}})
+	store := &inheritStore{owners: owners, mailer: &inheritMailer{}, delivered: map[int64]time.Time{}, failFor: 1}
+	result, err := newInheritNotifier(t, store, "2027-01-31").Run(context.Background(), time.Now(), time.Hour)
+	if err == nil {
+		t.Fatal("the failing owner was not reported")
+	}
+	if result.InheritOwners != 3 || result.InheritQueued != 1 || result.InheritUnreachable != 1 {
+		t.Fatalf("result = %+v, want 3 owners, 1 queued, 1 unreachable", result)
+	}
+	if got := store.mailer.sent; len(got) != 1 || got[0] != "grace@example.com" {
+		t.Fatalf("sent = %v, want the owner after the failing one", got)
+	}
+}
+
+// A failing expiry half does not stop the `inherit` half.
+func TestInheritPassRunsWhenTheExpiryHalfFails(t *testing.T) {
+	store := &inheritStore{owners: inheritOwners(), mailer: &inheritMailer{}, delivered: map[int64]time.Time{}}
+	notifier, err := patexpiry.New(&fakeStore{listErr: errors.New("the notifications table is gone")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := notifier.WithInheritNotices(store, func() string { return "2027-01-31" }); err != nil {
+		t.Fatal(err)
+	}
+	result, err := notifier.Run(context.Background(), time.Now(), time.Hour)
+	if err == nil {
+		t.Fatal("the expiry failure was not reported")
+	}
+	if result.InheritQueued != 2 {
+		t.Fatalf("result = %+v, want both inherit notices queued", result)
 	}
 }

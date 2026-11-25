@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -59,6 +60,10 @@ type Result struct {
 	// (one per owner; 0 for an owner whose notice already waits to be sent).
 	InheritOwners int
 	InheritQueued int
+	// InheritUnreachable is the owners among InheritOwners with no e-mail
+	// address: no notice can reach them, so their tokens end at the sunset
+	// date. An administrator gives them an address to start their 30 days.
+	InheritUnreachable int
 }
 
 // InheritStore is the persistence of the `inherit` token notice (R3.15b).
@@ -130,6 +135,14 @@ func (n *Notifier) Run(ctx context.Context, now time.Time, within time.Duration)
 	if within <= 0 {
 		within = n.window
 	}
+	result, expiryErr := n.expiryPass(ctx, now, within)
+	// The two halves are independent: a failing expiry half does not hold
+	// back the `inherit` notices (whose 30 days start only at delivery).
+	result, inheritErr := n.inheritPass(ctx, now, result)
+	return result, errors.Join(expiryErr, inheritErr)
+}
+
+func (n *Notifier) expiryPass(ctx context.Context, now time.Time, within time.Duration) (Result, error) {
 	candidates, err := n.store.ListPATsNeedingExpiryNotice(ctx, now, within, n.limit)
 	if err != nil {
 		return Result{}, fmt.Errorf("list expiring personal access tokens: %w", err)
@@ -151,13 +164,16 @@ func (n *Notifier) Run(ctx context.Context, now time.Time, within time.Duration)
 		}
 		result.Skipped++
 	}
-	return n.inheritPass(ctx, now, result)
+	return result, nil
 }
 
 // inheritPass queues the `inherit` token notices. It does nothing while the
-// sunset date is not set. A queue failure stops it and the next pass retries:
+// sunset date is not set. A queue failure of one owner is reported and the
+// pass carries on with the others (a queued row is deduped per owner and
+// date, so carrying on cannot duplicate one); the next pass retries it:
 // nothing is stored as delivered until the mailer accepted the message, so an
-// owner whose notice failed is listed again.
+// owner whose notice failed is listed again. An owner with no address is
+// counted as unreachable and queued nothing.
 func (n *Notifier) inheritPass(ctx context.Context, now time.Time, result Result) (Result, error) {
 	if n.inherit == nil {
 		return result, nil
@@ -171,14 +187,20 @@ func (n *Notifier) inheritPass(ctx context.Context, now time.Time, result Result
 		return result, fmt.Errorf("list owners of inherit tokens: %w", err)
 	}
 	result.InheritOwners = len(owners)
+	var errs []error
 	for _, owner := range owners {
+		if strings.TrimSpace(owner.Email) == "" {
+			result.InheritUnreachable++
+			continue
+		}
 		queued, err := n.inherit.QueueInheritTokenNotice(ctx, owner, sunsetAfter, now)
 		if err != nil {
-			return result, fmt.Errorf("queue the inherit token notice of user %d: %w", owner.UserID, err)
+			errs = append(errs, fmt.Errorf("queue the inherit token notice of user %d: %w", owner.UserID, err))
+			continue
 		}
 		if queued {
 			result.InheritQueued++
 		}
 	}
-	return result, nil
+	return result, errors.Join(errs...)
 }
