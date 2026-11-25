@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.66
+
+| Area | What |
+|---|---|
+| Agent activity (ADR-0061 decision 4a, #3068) | An `agent_state` frame may carry `activity`: `tool` (a sanitised tool name, at most 64 characters, never arguments) and `tool_kind` with `working`, `waiting_on` (`person` or `agent`) with `waiting`, and later `peer_participant_id` and `handoff_to`. A sub-agent's frames now move the caller to `waiting` on an agent instead of `working`, and a change of activity alone writes a frame. The app reads it through client-core; a build that does not shows the state alone. A server before 1.66 sends no `activity`. |
+
 ## Client contract 1.65
 
 | Area | What |

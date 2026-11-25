@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.65",
+  "client_contract": "1.66",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -41181,6 +41181,38 @@
         "type"
       ],
       "properties": {
+        "activity": {
+          "type": "object",
+          "properties": {
+            "handoff_to": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "peer_participant_id": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "program": {
+              "type": "string",
+              "max_length": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "tool": {
+              "type": "string",
+              "max_length": 64,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            "tool_kind": {
+              "type": "string"
+            },
+            "waiting_on": {
+              "type": "string"
+            }
+          }
+        },
         "addressed_to": {
           "type": "array",
           "items": {

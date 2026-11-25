@@ -751,6 +751,19 @@ const AgentStateMessageSchema = z.looseObject({
   participant_id: z.number().int().optional(),
   addressed_to: z.array(z.number().int()).optional(),
   state: z.string().optional(),
+  // Client contract 1.66 (ADR-0061 decision 4a): what the agent does in its
+  // state. Loose and optional: an old server sends none, and client-core's
+  // `applyAgentStateFrame` validates every field it reads.
+  activity: z
+    .looseObject({
+      tool: z.string().optional(),
+      tool_kind: z.string().optional(),
+      program: z.string().optional(),
+      waiting_on: z.string().optional(),
+      peer_participant_id: z.number().int().optional(),
+      handoff_to: z.array(z.number().int()).optional(),
+    })
+    .optional(),
   execution_generation: z.string().optional(),
   response_metadata: responseMetadataSchema.optional(),
 });

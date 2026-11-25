@@ -41,6 +41,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { AgentStateActivity } from "./agentStateActivity.zod";
 import { ClientFrameEnvelope } from "./clientFrameEnvelope.zod";
 
 export const ClientFrameAgentState = ClientFrameEnvelope.and(
@@ -57,11 +58,12 @@ export const ClientFrameAgentState = ClientFrameEnvelope.and(
         "waking",
       ])
       .describe(
-        "`thinking` before the model answers or after a tool, `speaking` while text streams, `working` in a tool or a sub-agent, `waiting` on a person (an approval, a question, an authorization), `success` and `error` at the end, `waking` when a continuation resumes a paused answer.",
+        "`thinking` before the model answers or after a tool, `speaking` while text streams, `working` in a tool, `waiting` on a person (an approval, a question, an authorization) or on a sub-agent, `success` and `error` at the end, `waking` when a continuation resumes a paused answer.",
       ),
+    activity: AgentStateActivity.optional(),
   }),
 ).describe(
-  "Client contract 1.38: the participant moved to a new state. The server derives it from the frame before it and writes it only on a change, without an SSE id, so it never moves the client's resume cursor. A stream resumed with a Last-Event-ID starts with one `agent_state`, the participant's state at the cursor. `idle` is the state before a run's first frame. A pause of a sub-agent is `waiting`, its other frames `working`. Not terminal.",
+  "Client contract 1.38: the participant moved to a new state. The server derives it from the frame before it and writes it only on a change, without an SSE id, so it never moves the client's resume cursor. A stream resumed with a Last-Event-ID starts with one `agent_state`, the participant's state at the cursor. `idle` is the state before a run's first frame. A pause of a sub-agent is `waiting` on a person, its other frames `waiting` on an agent (contract 1.66; `working` before). Contract 1.66 (ADR-0061 decision 4a): a change of the state OR of its `activity` writes a frame. Not terminal.",
 );
 
 export type ClientFrameAgentState = zod.input<typeof ClientFrameAgentState>;
