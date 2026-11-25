@@ -132,6 +132,9 @@ func TestActionTableRefusesACriticalTokenWithoutAReason(t *testing.T) {
 func TestActionTableRefusesABadEntry(t *testing.T) {
 	t.Parallel()
 	get := fixtureAction(http.MethodGet, "/fixture/read")
+	get.Danger = adminaccess.DangerDangerous
+	selectedGet := fixtureAction(http.MethodGet, "/fixture/read")
+	selectedGet.Name, selectedGet.Selector = "x", adminaccess.Selector{In: adminaccess.SelectPath, Field: "x", Value: "x"}
 	unknown := fixtureAction(http.MethodPost, "/fixture/unknown")
 	unknown.Permission = "fixture.not.registered"
 	unnamed := fixtureAction(http.MethodPost, "/fixture/multi")
@@ -150,7 +153,8 @@ func TestActionTableRefusesABadEntry(t *testing.T) {
 	reasoned.TokenReason = "only a critical action that says allowed carries one"
 
 	for name, entries := range map[string][]adminaccess.Action{
-		"a GET":                                  {get},
+		"a dangerous GET":                        {get},
+		"a GET with a selector":                  {selectedGet},
 		"an unregistered permission":             {unknown},
 		"an entry that appears twice":            {fixtureAction(http.MethodPost, "/fixture/x"), fixtureAction(http.MethodPost, "/fixture/x")},
 		"an unnamed action beside a named one":   {unnamed, named},
@@ -162,6 +166,31 @@ func TestActionTableRefusesABadEntry(t *testing.T) {
 		if _, err := adminaccess.NewActions(entries, adminaccess.Registry()); err == nil {
 			t.Errorf("NewActions accepted %s", name)
 		}
+	}
+}
+
+// A read has an entry only when the ADR restricts it beyond its gate, and
+// then it takes the elevation and token rules like a write (R2.17).
+func TestARestrictedReadHasAnEntry(t *testing.T) {
+	t.Parallel()
+	read := fixtureAction(http.MethodGet, "/fixture/read")
+	read.Elevation, read.Token = adminaccess.ElevationDeny, adminaccess.TokenNever
+	table, err := adminaccess.NewActions([]adminaccess.Action{read}, adminaccess.Registry())
+	if err != nil {
+		t.Fatalf("NewActions(restricted GET) = %v; want it accepted", err)
+	}
+	if got := table.Entries()[0]; got.Reason || got.Danger != adminaccess.DangerNone {
+		t.Fatalf("restricted GET = %+v; want no danger and no reason", got)
+	}
+	entry, ok := adminaccess.ActionFor(http.MethodGet, adminaccess.SealedCredentialsPattern, "")
+	if !ok || entry.Permission != adminaccess.AccessBreakglassManage ||
+		entry.Elevation != adminaccess.ElevationDeny || entry.Token != adminaccess.TokenNever {
+		t.Fatalf("the sealed credential list's entry = %+v, %v; want access.breakglass.manage, deny, never", entry, ok)
+	}
+	entry, ok = adminaccess.ActionFor(http.MethodGet, adminaccess.AccessPosturePattern, "")
+	if !ok || entry.Permission != adminaccess.AccessRolesView ||
+		entry.Elevation != adminaccess.ElevationAllow || entry.Token != adminaccess.TokenAllowed {
+		t.Fatalf("the access posture's entry = %+v, %v; want access.roles.view, allow, allowed", entry, ok)
 	}
 }
 

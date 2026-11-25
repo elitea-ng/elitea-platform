@@ -87,12 +87,13 @@ An elevation must not make itself permanent or switch off the controls that watc
 
 The value belongs to the action, not to the permission: shortening a retention policy is refused, lengthening it with the same permission is not. A person whose **standing** roles already admit an action is not restricted by these values, elevated or not. An elevation also creates no personal access token (`403 elevation_restricted` on **Create token**; a request with admin scopes gets the scope rules' own codes `token_scopes_elevated` or `token_scopes_sealed_session` first), and a sealed session never does.
 
-The table lists every action whose value is not `allow`, with the action name a request carries in its body or path (`-` for a route that is one action). It is checked against the action table on every build.
+The table lists every action whose value is not `allow`, reads included (reading the sealed credential list is refused), with the action name a request carries in its body or path (`-` for a route that is one action). It is checked against the action table on every build.
 
 {/* elevation-table:start (generated from the action table; see elevation_doc_test.go) */}
 
 | Action | Route | Under an elevation |
 |---|---|---|
+| `-` | `GET /api/v2/admin/access/sealed_credentials` | refused (`deny`) |
 | `delete` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
 | `set_admin_role` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
 | `-` | `PUT /api/v2/admin/email/administration` | refused (`deny`) |
@@ -143,6 +144,22 @@ The table lists every action whose value is not `allow`, with the action name a 
 | `-` | `POST /api/v2/configurations/configurations/{projectID}` | allowed and flagged (`flag`) |
 
 {/* elevation-table:end */}
+
+## The sealed credential list
+
+The console reads the sealed credentials with `GET /api/v2/admin/access/sealed_credentials`, for a holder of `access.breakglass.manage`. Issuing and revoking a credential stay operator commands (see the [runbook](/deployment/break-glass-runbook#sealed-credentials)); there is no route for either.
+
+The list is metadata only. Each row has:
+
+- the credential's id and its custodian label;
+- its level, `admin` or `super_admin`;
+- the person it is bound to (id, name and e-mail address), or, for an unbound credential, the reserved break-glass account `break-glass@centry.user`, marked `unbound`;
+- when it was issued, when it expires, when it was used and when it was revoked (empty when it was not), and its state at the time of the read: `active`, `used`, `revoked` or `expired`;
+- whether its verifier was printed as two halves for two custodians (`split`).
+
+It never shows the selector, the verifier, the stored digest or anything derived from them, in whole or in part. The list names the people with emergency access, so it follows the rule for lists of administrators: only a holder of `access.breakglass.manage` reads it. An elevation cannot read it (`403 elevation_restricted`, in the table above), and no personal access token can (`403 token_critical_action_refused`), whatever its scopes. Every read is recorded as a security audit decision event, `admin.elevation.credential_list`, with the number of rows, exactly as the operator command `break-glass list` records its read. That is why a client reads the list once per page view and never polls it.
+
+A credential whose account was deleted by hand still lists, with the account's id and no name or e-mail address. If that account was the reserved one, the row reads as bound, not `unbound`, because the credential itself records only the account it names.
 
 ## Sealed sessions
 

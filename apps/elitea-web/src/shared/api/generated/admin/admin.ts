@@ -54,6 +54,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AccessPosture,
   AdminAuthUsersActionRequest,
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
@@ -201,6 +202,7 @@ import type {
   RetentionPolicyUpdate,
   Role,
   RoleListParams,
+  SealedCredentialList,
   SendBrandingTestEmail200,
   SendBrandingTestEmailBody,
   SystemInfo,
@@ -4749,6 +4751,423 @@ export function useListAdministrationAccessTokens<
     params,
     options,
   );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAccessPostureResponse200 = {
+  data: AccessPosture;
+  status: 200;
+};
+
+export type getAccessPostureResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAccessPostureResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAccessPostureResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAccessPostureResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getAccessPostureResponseSuccess = getAccessPostureResponse200 & {
+  headers: Headers;
+};
+export type getAccessPostureResponseError = (
+  | getAccessPostureResponse401
+  | getAccessPostureResponse403
+  | getAccessPostureResponse500
+  | getAccessPostureResponse503
+) & {
+  headers: Headers;
+};
+
+export type getAccessPostureResponse =
+  getAccessPostureResponseSuccess | getAccessPostureResponseError;
+
+export const getGetAccessPostureUrl = () => {
+  return `/admin/access/posture`;
+};
+
+/**
+ * What is wrong with the administration roles and tokens, and what is
+ * only worth knowing (ADR-0059 decision 8, R2.14a). Every check has a
+ * severity, `fail`, `warn` or `info`; only a `fail` that does not pass
+ * is a failure. The Access page and the Home posture card read it.
+ *
+ * For a holder of `access.roles.view` (or `admin.auth.users` or
+ * `modes.users`, which it narrows): the facts name the people who hold
+ * `system` and `super_admin`. A scoped personal access token that holds
+ * `access.roles.view` may read it. Computed on every read, no cache.
+ * @summary The access posture checks
+ */
+export const getAccessPosture = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAccessPostureResponse> => {
+  return eliteaFetch<getAccessPostureResponse>(getGetAccessPostureUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAccessPostureQueryKey = () => {
+  return [`/admin/access/posture`] as const;
+};
+
+export const getGetAccessPostureQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAccessPosture>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof getAccessPosture>>, TError, TData>
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAccessPostureQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAccessPosture>>
+  > = ({ signal }) => getAccessPosture({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAccessPosture>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAccessPostureQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAccessPosture>>
+>;
+export type GetAccessPostureQueryError =
+  N401Response | N403Response | N500Response | ErrorResponse;
+
+export function useGetAccessPosture<
+  TData = Awaited<ReturnType<typeof getAccessPosture>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessPosture>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccessPosture>>,
+          TError,
+          Awaited<ReturnType<typeof getAccessPosture>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAccessPosture<
+  TData = Awaited<ReturnType<typeof getAccessPosture>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessPosture>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccessPosture>>,
+          TError,
+          Awaited<ReturnType<typeof getAccessPosture>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAccessPosture<
+  TData = Awaited<ReturnType<typeof getAccessPosture>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessPosture>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The access posture checks
+ */
+
+export function useGetAccessPosture<
+  TData = Awaited<ReturnType<typeof getAccessPosture>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessPosture>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAccessPostureQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listSealedCredentialsResponse200 = {
+  data: SealedCredentialList;
+  status: 200;
+};
+
+export type listSealedCredentialsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listSealedCredentialsResponse403 = {
+  data: AdminRoleRefusal;
+  status: 403;
+};
+
+export type listSealedCredentialsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listSealedCredentialsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listSealedCredentialsResponseSuccess =
+  listSealedCredentialsResponse200 & {
+    headers: Headers;
+  };
+export type listSealedCredentialsResponseError = (
+  | listSealedCredentialsResponse401
+  | listSealedCredentialsResponse403
+  | listSealedCredentialsResponse500
+  | listSealedCredentialsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listSealedCredentialsResponse =
+  listSealedCredentialsResponseSuccess | listSealedCredentialsResponseError;
+
+export const getListSealedCredentialsUrl = () => {
+  return `/admin/access/sealed_credentials`;
+};
+
+/**
+ * Every sealed break-glass credential (ADR-0059 R2.17), newest first:
+ * its label, level, the person it is bound to (or the reserved
+ * break-glass account for an unbound one), its times, its state and
+ * whether it is split. The Access page reads it.
+ *
+ * METADATA ONLY: never the selector, the verifier or the stored
+ * digest, nor any part of them. Issuing and revoking a credential are
+ * operator commands (`elitea-main break-glass issue|revoke`) and have
+ * no route.
+ *
+ * For a holder of `access.breakglass.manage`. The list names the
+ * people with emergency access, so an elevation never reads it
+ * (`elevation_restricted`) and no personal access token does
+ * (`token_critical_action_refused`). Every read is recorded as a
+ * security audit decision event (`admin.elevation.credential_list`),
+ * so a client fetches it once per page view and never polls it.
+ * @summary List the sealed break-glass credentials, metadata only
+ */
+export const listSealedCredentials = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listSealedCredentialsResponse> => {
+  return eliteaFetch<listSealedCredentialsResponse>(
+    getListSealedCredentialsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListSealedCredentialsQueryKey = () => {
+  return [`/admin/access/sealed_credentials`] as const;
+};
+
+export const getListSealedCredentialsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listSealedCredentials>>,
+  TError = N401Response | AdminRoleRefusal | N500Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listSealedCredentials>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListSealedCredentialsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listSealedCredentials>>
+  > = ({ signal }) => listSealedCredentials({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listSealedCredentials>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListSealedCredentialsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listSealedCredentials>>
+>;
+export type ListSealedCredentialsQueryError =
+  N401Response | AdminRoleRefusal | N500Response | ErrorResponse;
+
+export function useListSealedCredentials<
+  TData = Awaited<ReturnType<typeof listSealedCredentials>>,
+  TError = N401Response | AdminRoleRefusal | N500Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listSealedCredentials>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSealedCredentials>>,
+          TError,
+          Awaited<ReturnType<typeof listSealedCredentials>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListSealedCredentials<
+  TData = Awaited<ReturnType<typeof listSealedCredentials>>,
+  TError = N401Response | AdminRoleRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listSealedCredentials>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listSealedCredentials>>,
+          TError,
+          Awaited<ReturnType<typeof listSealedCredentials>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListSealedCredentials<
+  TData = Awaited<ReturnType<typeof listSealedCredentials>>,
+  TError = N401Response | AdminRoleRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listSealedCredentials>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the sealed break-glass credentials, metadata only
+ */
+
+export function useListSealedCredentials<
+  TData = Awaited<ReturnType<typeof listSealedCredentials>>,
+  TError = N401Response | AdminRoleRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listSealedCredentials>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListSealedCredentialsQueryOptions(options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

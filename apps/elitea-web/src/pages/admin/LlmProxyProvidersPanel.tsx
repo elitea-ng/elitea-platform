@@ -44,6 +44,8 @@ import {
   type ProviderRowActions,
 } from './LlmProviderTableParts';
 import { PlatformModelsPanel } from './PlatformModelsPanel';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
 import { SharedScopeWarning } from './LlmProviderScopeWarning';
 import {
@@ -128,11 +130,12 @@ export function LlmProxyProvidersPanel(): ReactNode {
   const [adoptFrom, setAdoptFrom] = useState<LlmProvider | undefined>(undefined);
 
   const { data, isPending, error } = useAdminLlmProviders();
-  const createProvider = useCreateAdminLlmProvider();
-  const updateProvider = useUpdateAdminLlmProvider();
-  const deleteProvider = useDeleteAdminLlmProvider();
-  const checkProvider = useCheckAdminLlmProvider();
-  const revalidateProvider = useRevalidateAdminLlmProvider();
+  const access = useAdminWritable(ADMIN_ITEM.providersModels);
+  const createProvider = access.guard(useCreateAdminLlmProvider());
+  const updateProvider = access.guard(useUpdateAdminLlmProvider());
+  const deleteProvider = access.guard(useDeleteAdminLlmProvider());
+  const checkProvider = access.guard(useCheckAdminLlmProvider());
+  const revalidateProvider = access.guard(useRevalidateAdminLlmProvider());
 
   // This session's own live-check verdicts, kept locally rather than in the
   // query cache: a check writes NOTHING server-side (see the api module's own
@@ -210,6 +213,7 @@ export function LlmProxyProvidersPanel(): ReactNode {
           variant="elitea" color="primary"
           size="small"
           data-testid="llm-providers-add"
+          disabled={!access.writable}
           onClick={() => setEditor({ open: true, row: undefined })}
         >
           {t('pages.admin.llmProviders.add', 'Add a platform provider')}

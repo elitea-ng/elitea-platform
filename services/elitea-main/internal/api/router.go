@@ -136,6 +136,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	dbrepos "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/vectorclient"
@@ -147,6 +148,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/releasegate"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimclient"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/scimdirectory"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit/accessevent"
 	platformmigrations "github.com/elitea-ng/elitea-platform/services/elitea-main/migrations"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -857,6 +859,15 @@ type RouterConfig struct {
 	// document names (ADR-0059 R3.1a). Nil reads them from Pool; a test
 	// router with an unconnected pool sets a reader of its own.
 	ConsoleRoles v2adminconsole.RoleReader
+	// PostureInitialGlobalAdmins is the identity.initial_global_admins list
+	// main applies at first sign-in (the document's, or the environment's on
+	// a single-sign-on-only deployment). The access posture warns while it
+	// is configured and a global administrator exists (ADR-0059 R2.14a).
+	PostureInitialGlobalAdmins []string
+	// SealedCredentials reads the sealed credential list of the console
+	// (ADR-0059 R2.17). Nil reads it from Pool; a test router with an
+	// unconnected pool sets a lister of its own.
+	SealedCredentials v2adminconsole.SealedCredentialLister
 	// ConsoleElevations reads the caller's active elevation for the
 	// capability document. Nil answers none until the elevation ledger
 	// ships (story R3.10a).
@@ -2976,6 +2987,33 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// The tokens with administration access, with their owners
 				// (ADR-0059 R1.3a): no secret, no digest.
 				r.With(requireAccessRolesView).Get("/access/tokens", adminHandler.AccessTokens)
+				// The sealed credential list (ADR-0059 R2.17): metadata only,
+				// never a selector, a verifier or a digest, for a holder of
+				// access.breakglass.manage. The action table refuses it to an
+				// elevation and to any token. Issue and revoke stay operator
+				// commands; there is no route for either.
+				sealedCredentials := cfg.SealedCredentials
+				if sealedCredentials == nil && cfg.Pool != nil {
+					sealedCredentials = v2adminconsole.NewPostgresSealedCredentials(cfg.Pool,
+						accessevent.DefaultAppender("elitea-main/admin"))
+				}
+				v2adminconsole.NewSealedCredentialsHandler(sealedCredentials).
+					Register(r, central(adminaccess.AccessBreakglassManage))
+				// The access posture (ADR-0059 R2.14a): what is wrong with the
+				// roles and tokens, and what is only worth knowing, behind the
+				// gate of the other Access reads. A scoped token that holds
+				// access.roles.view reads it.
+				postureSources := adminaccess.PostureSources{
+					InitialGlobalAdmins: append([]string(nil), cfg.PostureInitialGlobalAdmins...),
+				}
+				if cfg.Pool != nil {
+					pool := cfg.Pool
+					postureSources.DB = pool
+					postureSources.GlobalAdministratorExists = func(ctx context.Context) (bool, error) {
+						return identityrepo.GlobalAdministratorExists(ctx, pool)
+					}
+				}
+				v2adminconsole.NewPostureHandler(postureSources).Register(r, requireAccessRolesView)
 				// The MODES registry and the GLOBAL invite (#255). Both are
 				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC

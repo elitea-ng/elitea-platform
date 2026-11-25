@@ -58,6 +58,8 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
 import { AppRequestsTable } from './AppRequestsTable';
 import { RejectAppRequestDialog } from './RejectAppRequestDialog';
 import {
@@ -91,7 +93,16 @@ function savedText(status: string): string {
     : t('pages.admin.appRequests.saved.rejected', 'Request rejected. The user has been notified.');
 }
 
+/** The page under the read-only wrapper (R3.4b, issue 2613). */
 export function AdminAppRequests() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.appRequests}>
+      <AppRequestsPage />
+    </AdminWritable>
+  );
+}
+
+function AppRequestsPage() {
   const state = useAdminAppRequestsPage();
 
   const { total, page } = state;
@@ -155,6 +166,8 @@ export function AdminAppRequests() {
           'Access requests raised from the application catalogue. Approving or rejecting one records your answer and notifies the person who asked; it does not itself configure the application.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Tabs
         value={state.statusFilter}

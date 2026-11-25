@@ -17,6 +17,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import type { AdminIdentityProvider } from './api/adminIdentityProvidersApi';
 import { monoFontFamily } from '@/shared/brand/typeScale';
 
@@ -43,6 +44,7 @@ export function ProviderTable({
   readonly onEdit: (provider: AdminIdentityProvider) => void;
   readonly onRemove: (provider: AdminIdentityProvider) => void;
 }) {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableContainer>
       {/* Named, so the table has an accessible name for a screen reader and a
@@ -102,6 +104,7 @@ export function ProviderTable({
                 <Button
             variant="elitea" color="tertiary"
                   size="small"
+                  disabled={viewOnly}
                   onClick={() => {
                     onEdit(provider);
                   }}
@@ -112,7 +115,8 @@ export function ProviderTable({
                 <Button
             variant="elitea" color="alarm"
                   size="small"
-                                    onClick={() => {
+                  disabled={viewOnly}
+                  onClick={() => {
                     onRemove(provider);
                   }}
                   sx={{ textTransform: 'none' }}

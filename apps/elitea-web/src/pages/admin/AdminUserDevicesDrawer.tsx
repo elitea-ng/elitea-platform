@@ -24,6 +24,9 @@ import type { NativeDevice } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { NativeDeviceRevokeDialog, NativeDevicesTable } from '@/shared/ui/NativeDevicesTable';
 
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { adminUiShowsControlFor } from './adminUiConfig';
+import { useAdminWritable } from './adminWriteAccess';
 import type { AdminUserRow } from './api/adminUsersApi';
 import {
   isNativeServerAbsent,
@@ -94,9 +97,16 @@ function TruncatedHistoryNotice({ list }: { readonly list: AdminUserNativeDevice
   );
 }
 
+/** Revoke needs the page's write level and `admin.auth.users`, as it did before R3.4b. */
+function canRevokeDevices(writable: boolean): boolean {
+  return writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.usersManage);
+}
+
 function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readonly onClose: () => void }) {
   const devicesQuery = useAdminUserNativeDevices(user.id);
-  const revoke = useRevokeAdminNativeDevice();
+  const access = useAdminWritable(ADMIN_ITEM.users);
+  const revoke = access.guard(useRevokeAdminNativeDevice());
+  const canRevoke = canRevokeDevices(access.writable);
   const [pending, setPending] = useState<NativeDevice | undefined>(undefined);
   const [revokeError, setRevokeError] = useState<string | undefined>(undefined);
 
@@ -161,6 +171,7 @@ function DevicesContent({ user, onClose }: { readonly user: AdminUserRow; readon
           busyId={revoke.isPending ? revoke.variables : undefined}
           onRevoke={setPending}
           label={t('pages.admin.users.devices.tableLabel', 'Devices of this account')}
+          revokeDisabled={!canRevoke}
         />
       ) : null}
 

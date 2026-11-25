@@ -1,0 +1,34 @@
+/**
+ * The console item ids a page passes to the read-only wrapper (ADR-0059
+ * decision 6; R3.4b, issue 2613): the server's ids
+ * (`internal/adminaccess/console.go`), so the level a page reads is the one
+ * the capability document gives that item. A Configuration tab that stands
+ * for its own item (R3.5a, issue 2535; R3.6, issue 2537) reads that item.
+ */
+/**
+ * The permissions of actions narrower than their page's item, for
+ * `useAdminActionControl`. The names are the server's (`internal/adminaccess`).
+ */
+export const ADMIN_ACTION_PERMISSION = {
+  usersManage: 'admin.auth.users',
+  roleCreate: 'configuration.roles.roles.create',
+  roleRename: 'configuration.roles.roles.edit',
+  roleDelete: 'configuration.roles.roles.delete',
+  rolePermissionsEdit: 'configuration.roles.permissions.edit',
+  projectCreate: 'projects.projects.project.create',
+  projectDelete: 'projects.projects.project.delete',
+  projectsEdit: 'projects.projects.projects.edit',
+} as const;
+
+export const ADMIN_ITEM = {
+  users: 'users',
+  identityProviders: 'identity-providers',
+  scim: 'scim',
+  projects: 'projects',
+  appRequests: 'app-requests',
+  providersModels: 'providers-models',
+  modelsPricing: 'models-pricing',
+  toolPrices: 'tool-prices',
+  llmGovernance: 'llm-governance',
+  budgetsAlerts: 'budgets-alerts',
+} as const;

@@ -31,7 +31,8 @@ import { useQueryClient } from '@tanstack/react-query';
 
 import { t } from '@/shared/i18n';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import type { ProjectDeleteFailure } from './AdminProjectDeleteDialog';
 import {
   failedProvisioningSteps,
@@ -44,20 +45,12 @@ import {
 } from './api/adminProjectProvisioningApi';
 import { adminProjectsKeys, type AdminProjectRow } from './api/adminProjectsApi';
 
-/**
- * The two permissions the provisioning routes are gated on, server-side.
- *
- * They are NOT `projects.projects.projects.edit`, and it matters that they are
- * separate: suspending a project is reversible and dropping one is not, so a
- * deployment can grant the first without the second. Collapsing them would show
- * a delete control to every operator who can suspend — and the server would then
- * answer 403 to a dialog that had already listed what it was about to destroy.
- *
- * Presentation only, as ever. `./adminUiConfig` explains why a hidden control is
- * never the thing that stops the request.
+/*
+ * Create and delete are offered to every caller the projects item opens to;
+ * at its `read` level the page disables them (R3.4b, issue 2613) and both
+ * writes go through the read-only guard. The server gates each on its own
+ * permission (`projects.projects.project.{create,delete}`) regardless.
  */
-const PERMISSION_PROJECT_CREATE = 'projects.projects.project.create';
-const PERMISSION_PROJECT_DELETE = 'projects.projects.project.delete';
 
 export interface AdminProjectProvisioningState {
   readonly selectedIds: readonly number[];
@@ -100,11 +93,9 @@ export function useAdminProjectProvisioning(
   const [deleteFailures, setDeleteFailures] = useState<readonly ProjectDeleteFailure[]>([]);
   const [isDeleting, setDeleting] = useState(false);
 
-  const canCreate = adminUiShowsControlFor(PERMISSION_PROJECT_CREATE);
-  const canDelete = adminUiShowsControlFor(PERMISSION_PROJECT_DELETE);
-
-  const createProject = useCreateAdminProject();
-  const deleteProject = useDeleteAdminProject();
+  const access = useAdminWritable(ADMIN_ITEM.projects);
+  const createProject = access.guard(useCreateAdminProject());
+  const deleteProject = access.guard(useDeleteAdminProject());
   const queryClient = useQueryClient();
 
   /**
@@ -240,10 +231,10 @@ export function useAdminProjectProvisioning(
   return {
     selectedIds,
     selectedProjects,
-    onSelectionChange: canDelete ? onSelectionChange : undefined,
+    onSelectionChange,
     clearSelection,
 
-    onOpenCreate: canCreate ? onOpenCreate : undefined,
+    onOpenCreate,
     isCreateOpen,
     isCreating: createProject.isPending,
     createError,
@@ -251,7 +242,7 @@ export function useAdminProjectProvisioning(
     onCloseCreate,
     onCreate,
 
-    onOpenDelete: canDelete ? onOpenDelete : undefined,
+    onOpenDelete,
     isDeleteOpen,
     isDeleting,
     deleteFailures,

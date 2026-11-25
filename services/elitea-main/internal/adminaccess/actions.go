@@ -29,8 +29,14 @@ package adminaccess
 //     into the entry's Name.
 //
 // A GET or HEAD changes nothing, so it is classed `read` whatever permission
-// gates it and has no entry. A POST that changes nothing (a validation, a
-// connection check) still has one, with no danger.
+// gates it and needs no entry. A read has one only when the ADR restricts it
+// beyond its gate: reading the sealed credential list is `deny` under an
+// elevation and `never` for a token (ADR-0059 decision 5, "What an elevation
+// cannot do"; story R2.17), and the access posture states that a scoped token
+// may read it (R2.14a). Such an entry has no danger, no reason, no selector
+// and no classifier, and the token and elevation rules apply it like any
+// other (read). A POST that changes nothing (a validation, a connection
+// check) still has one, with no danger.
 //
 // An entry on a pattern with a `{mode}` segment describes the request in the
 // `administration` mode only. The same route in the default mode is not on
@@ -211,7 +217,11 @@ func fill(a Action, permissions Table) (Action, error) {
 	switch a.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 	case http.MethodGet, http.MethodHead:
-		return a, fmt.Errorf("adminaccess: action %q: a %s changes nothing and has no action entry", key, a.Method)
+		// A read changes nothing: no danger, so no reason, and one action.
+		if a.Danger != DangerNone || a.Reason || a.Selector != (Selector{}) || a.Classifier != "" || a.Name != "" {
+			return a, fmt.Errorf("adminaccess: action %q: a %s changes nothing; its entry has no danger, "+
+				"reason, selector, classifier or name", key, a.Method)
+		}
 	default:
 		return a, fmt.Errorf("adminaccess: action %q has the unknown method %q", key, a.Method)
 	}

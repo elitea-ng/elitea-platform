@@ -40,7 +40,10 @@ import {
   shareScopeOf,
   sharedWithOf,
 } from './platformModelGrant';
-import { PlatformDefaultModelCard, PlatformModelDeleteImpact } from './PlatformDefaultModelCard';
+import { PlatformDefaultModelCard } from './PlatformDefaultModelCard';
+import { ConfirmModelDelete } from './PlatformModelConfirmDelete';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
 import {
   platformModelTypeLabel,
@@ -77,6 +80,7 @@ function ModelRows({
   readonly onEdit: (row: PlatformModel) => void;
   readonly onDelete: (row: PlatformModel) => void;
 }): ReactNode {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableContainer component={Paper} variant="outlined">
       <Table size="small" data-testid="platform-models-table">
@@ -145,11 +149,11 @@ function ModelRows({
               </TableCell>
               <TableCell align="right">
                 <Button
-            variant="elitea" color="tertiary" size="small" onClick={() => onEdit(row)}>
+            variant="elitea" color="tertiary" size="small" disabled={viewOnly} onClick={() => onEdit(row)}>
                   {t('pages.admin.platformModels.edit', 'Edit')}
                 </Button>
                 <Button
-            variant="elitea" color="alarm" size="small" onClick={() => onDelete(row)}>
+            variant="elitea" color="alarm" size="small" disabled={viewOnly} onClick={() => onDelete(row)}>
                   {t('pages.admin.platformModels.delete', 'Delete')}
                 </Button>
               </TableCell>
@@ -246,65 +250,16 @@ function ModelAlerts({
   );
 }
 
-/**
- * The delete confirmation, matching the provider surface's.
- *
- * Deleting a platform model withdraws it from every project at once, and the
- * next call from any of them answers `model_not_found`. That is not an action a
- * single click on a table row should perform — and the providers table beside
- * this one already confirms, so leaving this one immediate would make the more
- * destructive-looking surface the safer one.
- */
-function ConfirmModelDelete({
-  model,
-  onCancel,
-  onConfirm,
-}: {
-  readonly model: PlatformModel | undefined;
-  readonly onCancel: () => void;
-  readonly onConfirm: (model: PlatformModel) => void;
-}): ReactNode {
-  if (model === undefined) return null;
-  return (
-    <Alert
-      severity="warning"
-      data-testid="platform-models-confirm-delete"
-      action={
-        <>
-          <Button
-            variant="elitea" color="tertiary" size="small" onClick={onCancel}>
-            {t('pages.admin.platformModels.cancel', 'Cancel')}
-          </Button>
-          <Button
-            variant="elitea" color="alarm"
-            size="small"
-                        data-testid="platform-models-confirm-delete-button"
-            onClick={() => onConfirm(model)}
-          >
-            {t('pages.admin.platformModels.delete', 'Delete')}
-          </Button>
-        </>
-      }
-    >
-      {t(
-        'pages.admin.platformModels.confirmDelete',
-        'Deleting “{{name}}” withdraws it from every project at once. Calls addressing it then fail with model_not_found.',
-        { name: model.elitea_title },
-      )}
-      <PlatformModelDeleteImpact modelId={model.id} />
-    </Alert>
-  );
-}
-
 export function PlatformModelsPanel(): ReactNode {
   const [editor, setEditor] = useState<{ readonly open: boolean; readonly row: PlatformModel | undefined }>(
     { open: false, row: undefined },
   );
   const [pendingDelete, setPendingDelete] = useState<PlatformModel | undefined>(undefined);
   const { data, isPending, error } = useAdminPlatformModels();
-  const createModel = useCreatePlatformModel();
-  const updateModel = useUpdatePlatformModel();
-  const deleteModel = useDeletePlatformModel();
+  const access = useAdminWritable(ADMIN_ITEM.providersModels);
+  const createModel = access.guard(useCreatePlatformModel());
+  const updateModel = access.guard(useUpdatePlatformModel());
+  const deleteModel = access.guard(useDeletePlatformModel());
 
   const items = useMemo(() => data?.items ?? EMPTY_MODELS, [data?.items]);
   const unresolved = useMemo(() => items.filter((row) => !row.credential_resolves), [items]);
@@ -354,6 +309,7 @@ export function PlatformModelsPanel(): ReactNode {
           variant="elitea" color="primary"
           size="small"
           data-testid="platform-models-add"
+          disabled={!access.writable}
           onClick={() => setEditor({ open: true, row: undefined })}
         >
           {t('pages.admin.platformModels.add', 'Add a platform model')}

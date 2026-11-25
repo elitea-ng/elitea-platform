@@ -29,7 +29,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
 import { adminUiShowsControlFor } from './adminUiConfig';
+import { useAdminWritable } from './adminWriteAccess';
 import { deprecatedGrants, type DeprecatedGrants } from './deprecatedGrants';
 import {
   permissionMatrixFailureReason,
@@ -39,6 +41,7 @@ import {
   type PermissionMatrixRow,
   type PermissionMatrixTarget,
 } from './api/adminRolesApi';
+import { ROLES_ITEM_ID } from './temporaryRolesLink';
 import { useAdminRoleDefinitions, type AdminRoleDefinitionsState } from './useAdminRoleDefinitions';
 
 /** The four tabs, in render order, with the endpoint each addresses. */
@@ -57,9 +60,6 @@ type RoleTabKey = (typeof ROLE_TABS)[number]['key'];
  * rather than hidden — an invisible role column is an invisible privilege.
  */
 const ROLE_ORDER: readonly string[] = ['system', 'super_admin', 'admin', 'editor', 'viewer'];
-
-/** The permission the (hardcoded) admin-panel config advertises for editing. */
-const PERMISSION_ROLES_EDIT = 'configuration.roles.permissions.edit';
 
 interface AdminRolesMatrixState {
   readonly activeTab: number;
@@ -81,7 +81,10 @@ interface AdminRolesMatrixState {
   readonly errorMessage: string;
   readonly savedMessage: string;
 
-  /** Presentation only — the server authorises every write on its own. */
+  /**
+   * False at the `read` level of the page's console item (R3.4b, issue
+   * 2613). Presentation only: the server authorises every write on its own.
+   */
   readonly canEdit: boolean;
 
   readonly onTabChange: (event: unknown, next: number) => void;
@@ -162,8 +165,9 @@ export function useAdminRolesPage(): AdminRolesPageState {
   );
 
   const matrixQuery = usePermissionMatrix(target);
-  const saveMatrix = useSavePermissionMatrix();
-  const syncMatrix = useSyncPermissionMatrix();
+  const access = useAdminWritable(ROLES_ITEM_ID);
+  const saveMatrix = access.guard(useSavePermissionMatrix());
+  const syncMatrix = access.guard(useSyncPermissionMatrix());
 
   const serverRows = matrixQuery.data?.rows;
   const deprecatedList = matrixQuery.data?.deprecated;
@@ -236,7 +240,7 @@ export function useAdminRolesPage(): AdminRolesPageState {
     setSeedToken((previous) => previous + 1);
     setSavedMessage(message);
   }, []);
-  const definitions = useAdminRoleDefinitions(target, onRoleWritten);
+  const definitions = useAdminRoleDefinitions(target, onRoleWritten, access);
   const { onCloseRoleDialog } = definitions;
 
   const onTabChange = useCallback(
@@ -252,7 +256,8 @@ export function useAdminRolesPage(): AdminRolesPageState {
     [onCloseRoleDialog],
   );
 
-  const canEdit = adminUiShowsControlFor(PERMISSION_ROLES_EDIT);
+  // The matrix writes under permissions.edit, narrower than the item (R3.4b).
+  const canEdit = access.writable && adminUiShowsControlFor(ADMIN_ACTION_PERMISSION.rolePermissionsEdit);
 
   return {
     activeTab,
@@ -287,7 +292,7 @@ export function useAdminRolesPage(): AdminRolesPageState {
     // default-mode role into every in-scope project, so a create followed by
     // this button is the whole propagation path (gap G9). No second control
     // was invented for it.
-    onApplyToProjects: canEdit && tab.key === 'standard' ? onApply : undefined,
+    onApplyToProjects: tab.key === 'standard' ? onApply : undefined,
 
     ...definitions,
   };

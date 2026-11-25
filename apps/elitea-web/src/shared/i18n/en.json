@@ -7456,5 +7456,6 @@
   "pages.admin.viewOnly.noRole": "You can see this page but not change it. No role on this deployment can change it.",
   "pages.admin.viewOnly.roles": "You can see this page but not change it. These roles can change it: {{roles}}.",
   "pages.admin.viewOnly.title": "View only",
-  "pages.admin.viewOnly.unnamed": "You can see this page but not change it."
+  "pages.admin.viewOnly.unnamed": "You can see this page but not change it.",
+  "pages.admin.viewOnly.actionReason": "Your roles can change this page, but not with this action."
 }

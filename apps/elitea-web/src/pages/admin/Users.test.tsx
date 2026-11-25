@@ -28,6 +28,7 @@ import { server } from '@/test/setup';
 
 import { AdminUsers } from './Users';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 /**
  * The contract's own examples (v2.yaml `listAdminAuthUsers` and
@@ -444,17 +445,21 @@ describe('Admin › Users', () => {
     expect(clickSpy).not.toHaveBeenCalled();
   });
 
-  it('renders no write control at all when the served config advertises none', async () => {
-    grantAdminUiPermissions([]);
+  // Read-only mode (R3.4b, issue 2613): at the `read` level of the users item
+  // every write is disabled, not hidden, and the listing and its reads stay.
+  it('is view only at the read level: every write control disabled, reads kept', async () => {
+    serveConsoleLevel('read', 'users');
     renderAdminRoute(<AdminUsers />);
     await screen.findByText('Ada Admin');
 
-    // Presentation only — the server refuses these regardless. What matters
-    // here is that hiding them does not also hide the LISTING.
-    expect(screen.queryByRole('button', { name: 'Delete user' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Suspend user' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Administration roles' })).not.toBeInTheDocument();
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete user' })[0]).toBeDisabled());
+    expect(screen.getAllByRole('button', { name: 'Suspend user' })[0]).toBeDisabled();
+    expect(screen.getByTestId('admin-bulk-invite-open')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(screen.getAllByRole('button', { name: 'User activity' })[0]).toBeEnabled();
     expect(screen.getByText('ada@example.com')).toBeInTheDocument();
+    expect(recorded.filter((entry) => entry.method !== 'GET')).toEqual([]);
   });
 
   it('switches to the system tab without offering the write controls there', async () => {

@@ -27,6 +27,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/adminui"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/gateway"
@@ -382,7 +383,14 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The runtime safety metrics (ADR-0041: active suspensions, breaker
 	// trips), served on the main metrics listener with the audit export's.
 	safetyMetrics := breaker.NewMetrics()
-	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool, safetyMetrics, logger)
+	// The break-glass metrics (ADR-0059 R2.10a): the active elevations, read
+	// from the ledger at scrape time, and this replica's activations.
+	var breakGlassMetrics *adminaccess.BreakGlassMetrics
+	if pool != nil {
+		breakGlassMetrics = adminaccess.NewBreakGlassMetrics(pool)
+	}
+	auditExport, closeAuditExport, err := auditExportAtBoot(ctx, os.LookupEnv, credentialAdmission, pool,
+		safetyMetrics, breakGlassMetrics, logger)
 	if err != nil {
 		return err
 	}
@@ -3174,6 +3182,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	defer stopMonitor()
 	go readinessMonitor.Run(monitorCtx)
 	r := api.NewRouter(api.RouterConfig{
+		// The access posture warns while the bootstrap list outlives it (ADR-0059 R2.14a).
+		PostureInitialGlobalAdmins:    firstLoginPolicy.InitialGlobalAdmins,
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,

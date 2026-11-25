@@ -45,6 +45,7 @@ import { memo, useMemo } from 'react';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import type { AppRequestRow, AppRequestStatus } from './api/adminAppRequestsApi';
 
 export interface AppRequestsTableProps {
@@ -148,6 +149,8 @@ export const AppRequestsTable = memo(function AppRequestsTable({
   pendingIds,
 }: AppRequestsTableProps) {
   const theme = useTheme();
+  // View-only mode (R3.4b, issue 2613): the decisions are disabled, not hidden.
+  const viewOnly = useAdminWriteControl().disabled;
 
   const sortModel: GridSortModel = useMemo(
     () => (sortField ? [{ field: sortField, sort: sortDirection }] : []),
@@ -276,7 +279,7 @@ export const AppRequestsTable = memo(function AppRequestsTable({
           // accept a second approval, but re-notifying the requester of a
           // decision they already have is not a control worth offering.
           if (row.status !== 'pending') return null;
-          const busy = pendingIds.has(row.id);
+          const busy = viewOnly || pendingIds.has(row.id);
           const approveLabel = t('pages.admin.appRequests.action.approve', 'Approve request');
           const rejectLabel = t('pages.admin.appRequests.action.reject', 'Reject request');
           return (
@@ -314,7 +317,7 @@ export const AppRequestsTable = memo(function AppRequestsTable({
         },
       },
     ],
-    [onApprove, onOpenReject, pendingIds],
+    [onApprove, onOpenReject, pendingIds, viewOnly],
   );
 
   if (!isLoading && requests.length === 0) {

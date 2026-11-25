@@ -987,7 +987,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // updateHttpActionRule, listHttpActionRuleNames.
 // 593 -> 594 (issue 3010): importTeam, the Workshop Import of a team zip (all agents and the
 // saved team in one transaction). The import dialog calls it, so MANIFEST_ENTRY_COUNT moves too.
-const GENERATED_OPERATION_COUNT = 594;
+// 594 -> 596 (issues 2610/2528, ADR-0059 R2.17/R2.14a, 2026-11-25): listSealedCredentials and
+// getAccessPosture, two Access reads. The Access page that consumes them is R3.9 (issue 2540), so
+// MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 596;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

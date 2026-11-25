@@ -16,6 +16,14 @@ const ConfigurationValuesPattern = adminPrefix + "/plugin_config_values/administ
 // `action` of the body (AuthUsersAction in internal/api/v2/admin/users.go).
 const AuthUsersActionPattern = adminPrefix + "/auth_users/{mode}"
 
+// The Access reads with an action entry (actions.go, "A GET or HEAD changes
+// nothing"): the sealed credential list (ADR-0059 R2.17) and the access
+// posture (R2.14a).
+const (
+	SealedCredentialsPattern = adminPrefix + "/access/sealed_credentials"
+	AccessPosturePattern     = adminPrefix + "/access/posture"
+)
+
 // IdentityProviderSavePattern is the identity provider save, whose handler
 // classifies the save and applies the token rule itself (TokenRuleInHandler).
 const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
@@ -38,6 +46,10 @@ func write(method, pattern, permission string) Action {
 	return Action{Method: method, Pattern: pattern, Permission: permission}
 }
 
+// read is the entry of a GET the ADR restricts beyond its gate (actions.go,
+// "A GET or HEAD changes nothing").
+func read(pattern, permission string) Action { return write(http.MethodGet, pattern, permission) }
+
 func post(pattern, permission string) Action  { return write(http.MethodPost, pattern, permission) }
 func put(pattern, permission string) Action   { return write(http.MethodPut, pattern, permission) }
 func del(pattern, permission string) Action   { return write(http.MethodDelete, pattern, permission) }
@@ -47,6 +59,7 @@ func (a Action) dangerous() Action            { a.Danger = DangerDangerous; retu
 func (a Action) elevation(e Elevation) Action { a.Elevation = e; return a }
 func (a Action) critical(e Elevation) Action  { a.Danger = DangerCritical; a.Elevation = e; return a }
 func (a Action) selected(s Selector) Action   { a.Selector = s; a.Name = s.Value; return a }
+func (a Action) tokenNever() Action           { a.Token = TokenNever; return a }
 
 // tokenAllowed lets a token call a critical action, with the written reason
 // ADR-0059 decision 7 requires. The token rule (token_rule.go) still admits
@@ -120,6 +133,14 @@ func actionRows() []Action {
 		"global administrator (ADR-0059 decision 5)"
 
 	rows := []Action{
+		// The two Access reads the ADR restricts beyond their gate. The
+		// sealed credential list (R2.17) names who holds emergency access:
+		// an elevation cannot read it (decision 5) and a token never does.
+		// The access posture (R2.14a) is an ordinary read, and its entry
+		// says so: a scoped token that holds access.roles.view reads it.
+		read(SealedCredentialsPattern, AccessBreakglassManage).elevation(deny).tokenNever(),
+		read(AccessPosturePattern, AccessRolesView),
+
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),
 		// Assigns or removes an administrator role. Provisional under an
