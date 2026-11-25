@@ -80,6 +80,8 @@ GET	/api/v2/admin/plugin_config_values/administration/maintenance	403
 PUT	/api/v2/admin/plugin_config_values/administration/maintenance	403
 GET	/api/v2/admin/plugin_config_values/administration/analytics	403
 PUT	/api/v2/admin/plugin_config_values/administration/analytics	403
+GET	/api/v2/admin/plugin_config_values/administration/admin_console	403
+PUT	/api/v2/admin/plugin_config_values/administration/admin_console	403
 GET	/api/v2/admin/plugin_config_values/administration/email	403
 PUT	/api/v2/admin/plugin_config_values/administration/email	403
 GET	/api/v2/admin/plugin_config_values/administration/microsoft_apps	403
@@ -171,6 +173,8 @@ GET	/api/v2/admin/plugin_config_values/administration/maintenance	500
 PUT	/api/v2/admin/plugin_config_values/administration/maintenance	500
 GET	/api/v2/admin/plugin_config_values/administration/analytics	500
 PUT	/api/v2/admin/plugin_config_values/administration/analytics	500
+GET	/api/v2/admin/plugin_config_values/administration/admin_console	500
+PUT	/api/v2/admin/plugin_config_values/administration/admin_console	500
 GET	/api/v2/admin/plugin_config_values/administration/email	501
 PUT	/api/v2/admin/plugin_config_values/administration/email	501
 GET	/api/v2/admin/plugin_config_values/administration/microsoft_apps	403

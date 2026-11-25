@@ -91,20 +91,45 @@ type NoElevation struct{}
 // ActiveElevation answers none.
 func (NoElevation) ActiveElevation(context.Context, int64) (*Elevation, error) { return nil, nil }
 
+// AreasFlag reads the `admin_console_areas` platform setting (R3.2, issue
+// 2532): whether the console renders the six labelled areas. *PlatformFlags
+// is the production one.
+type AreasFlag interface {
+	ConsoleAreas(ctx context.Context) (bool, error)
+}
+
+// DefaultAreas is the AreasFlag with no store: the setting's code default,
+// on.
+type DefaultAreas struct{}
+
+// ConsoleAreas answers the code default.
+func (DefaultAreas) ConsoleAreas(context.Context) (bool, error) { return true, nil }
+
 // Handler serves the two routes.
 type Handler struct {
 	resolver   auth.PermissionResolver
 	roles      RoleReader
 	elevations ElevationReader
+	areas      AreasFlag
 }
 
 // NewHandler returns the handler. A nil resolver or role reader answers 503;
-// a nil elevation reader is NoElevation.
+// a nil elevation reader is NoElevation. The areas switch is its code
+// default until WithAreasFlag names a store.
 func NewHandler(resolver auth.PermissionResolver, roles RoleReader, elevations ElevationReader) *Handler {
 	if elevations == nil {
 		elevations = NoElevation{}
 	}
-	return &Handler{resolver: resolver, roles: roles, elevations: elevations}
+	return &Handler{resolver: resolver, roles: roles, elevations: elevations, areas: DefaultAreas{}}
+}
+
+// WithAreasFlag reads the `admin_console_areas` setting from flag; nil keeps
+// the code default.
+func (h *Handler) WithAreasFlag(flag AreasFlag) *Handler {
+	if flag != nil {
+		h.areas = flag
+	}
+	return h
 }
 
 // Register mounts the routes on the /api/v2/admin router, behind
@@ -120,6 +145,10 @@ type documentBody struct {
 	Areas     []areaBody     `json:"areas"`
 	Roles     []roleBody     `json:"roles"`
 	Elevation *elevationBody `json:"elevation"`
+	// AdminConsoleAreas is the platform setting of the same name, carried
+	// here so the console needs no second read to know which navigation to
+	// render. It is the same for every caller.
+	AdminConsoleAreas bool `json:"admin_console_areas"`
 }
 
 type areaBody struct {
@@ -202,7 +231,18 @@ func (h *Handler) Console(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the console capability document is not configured")
 		return
 	}
-	body := documentBody{Areas: []areaBody{}, Roles: []roleBody{}}
+	// The switch only chooses which navigation renders; it grants and hides
+	// nothing the server enforces. An unreadable store answers the code
+	// default, as the other platform switches do (eliteacore
+	// platform_flags.go), rather than failing the document the console
+	// cannot work without.
+	areasOn, err := h.areas.ConsoleAreas(r.Context())
+	if err != nil {
+		slog.WarnContext(r.Context(), "admin console: the admin_console settings are unreadable; answering the default",
+			"error", err)
+		areasOn = true
+	}
+	body := documentBody{Areas: []areaBody{}, Roles: []roleBody{}, AdminConsoleAreas: areasOn}
 	// No administration route gate admits a native device session
 	// (ADR-0059 decision 7), and the gates refuse it before resolving
 	// anything: so does the document, with no role and no elevation, since

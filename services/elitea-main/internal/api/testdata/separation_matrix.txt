@@ -185,6 +185,7 @@ allowed allowed refused refused refused refused read    GET /api/v2/admin/platfo
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/platform_routines/administration/{id} -
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_schemas/{mode} -
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_suggestions/{mode}/{key} -
+allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section admin_console
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section agents
@@ -227,6 +228,7 @@ allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section voice_features
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section web_search
 allowed allowed refused refused refused refused read    GET /api/v2/admin/plugin_config_values/administration/{plugin} section worker_egress
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section admin_console
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_lifecycle
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agent_publishing
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section agents

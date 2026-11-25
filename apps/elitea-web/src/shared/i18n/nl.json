@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Opnieuw proberen",
   "pages.admin.console.error.title": "De console kon niet worden geladen",
   "pages.admin.console.loading": "Console laden…",
-  "pages.admin.console.refused": "U hebt geen toegang tot de beheerconsole."
+  "pages.admin.console.refused": "U hebt geen toegang tot de beheerconsole.",
+  "pages.admin.console.area.people_access": "Personen en toegang",
+  "pages.admin.console.area.projects": "Projecten",
+  "pages.admin.console.area.models_spend": "Modellen en kosten",
+  "pages.admin.console.area.agents_governance": "Agents en governance",
+  "pages.admin.console.area.security": "Beveiliging",
+  "pages.admin.console.area.platform": "Platform",
+  "pages.admin.console.item.schedules-tasks": "Planningen en taken",
+  "pages.admin.schedulesTasks.tab.schedules": "Planningen",
+  "pages.admin.itemDenied.title": "U kunt {{item}} niet openen",
+  "pages.admin.itemDenied.explanation": "Uw beheerrollen omvatten {{item}} niet. De server weigert de pagina's en wijzigingen ervan voor u.",
+  "pages.admin.itemDenied.rolesLoading": "De rollen die het openen worden opgezocht…",
+  "pages.admin.itemDenied.rolesError": "De rollen die het openen konden niet worden gelezen.",
+  "pages.admin.itemDenied.noRole": "Geen rol in deze implementatie opent het.",
+  "pages.admin.itemDenied.rolesIntro": "Deze rollen openen het:",
+  "pages.admin.itemDenied.askSupport": "Neem contact op met uw IT-ondersteuning om een van deze rollen aan te vragen:",
+  "pages.admin.itemDenied.askFallback": "Neem contact op met de mensen die deze implementatie beheren om een van deze rollen aan te vragen."
 }

@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Tentar novamente",
   "pages.admin.console.error.title": "Não foi possível carregar o console",
   "pages.admin.console.loading": "Carregando o console…",
-  "pages.admin.console.refused": "Você não tem acesso ao console de administração."
+  "pages.admin.console.refused": "Você não tem acesso ao console de administração.",
+  "pages.admin.console.area.people_access": "Pessoas e acesso",
+  "pages.admin.console.area.projects": "Projetos",
+  "pages.admin.console.area.models_spend": "Modelos e gastos",
+  "pages.admin.console.area.agents_governance": "Agentes e governança",
+  "pages.admin.console.area.security": "Segurança",
+  "pages.admin.console.area.platform": "Plataforma",
+  "pages.admin.console.item.schedules-tasks": "Agendamentos e tarefas",
+  "pages.admin.schedulesTasks.tab.schedules": "Agendamentos",
+  "pages.admin.itemDenied.title": "Você não pode abrir {{item}}",
+  "pages.admin.itemDenied.explanation": "Suas funções de administração não incluem {{item}}. O servidor recusa as páginas e alterações dele para você.",
+  "pages.admin.itemDenied.rolesLoading": "Procurando as funções que o abrem…",
+  "pages.admin.itemDenied.rolesError": "Não foi possível ler as funções que o abrem.",
+  "pages.admin.itemDenied.noRole": "Nenhuma função desta implantação o abre.",
+  "pages.admin.itemDenied.rolesIntro": "Estas funções o abrem:",
+  "pages.admin.itemDenied.askSupport": "Para solicitar uma dessas funções, entre em contato com o suporte de TI:",
+  "pages.admin.itemDenied.askFallback": "Para solicitar uma dessas funções, entre em contato com as pessoas que gerenciam esta implantação."
 }

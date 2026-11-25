@@ -385,7 +385,7 @@ func TestTokenAdminAccessBackfillKeepsWhatEveryTokenResolves(t *testing.T) {
 		}
 		// The token resolves what its owner's session resolves after the
 		// upgrade, and loses nothing it resolved before. A later migration of
-		// the corpus may grant the owner's role a new permission (0273 gives
+		// the corpus may grant the owner's role a new permission (0274 gives
 		// admin entitlements.export.manage), which an `inherit` token then
 		// resolves too, so the sets before and after are not compared for
 		// equality.

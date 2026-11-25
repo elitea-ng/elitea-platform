@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Riprova",
   "pages.admin.console.error.title": "Impossibile caricare la console",
   "pages.admin.console.loading": "Caricamento della console…",
-  "pages.admin.console.refused": "Non hai accesso alla console di amministrazione."
+  "pages.admin.console.refused": "Non hai accesso alla console di amministrazione.",
+  "pages.admin.console.area.people_access": "Persone e accesso",
+  "pages.admin.console.area.projects": "Progetti",
+  "pages.admin.console.area.models_spend": "Modelli e spesa",
+  "pages.admin.console.area.agents_governance": "Agenti e governance",
+  "pages.admin.console.area.security": "Sicurezza",
+  "pages.admin.console.area.platform": "Piattaforma",
+  "pages.admin.console.item.schedules-tasks": "Pianificazioni e attività",
+  "pages.admin.schedulesTasks.tab.schedules": "Pianificazioni",
+  "pages.admin.itemDenied.title": "Non puoi aprire {{item}}",
+  "pages.admin.itemDenied.explanation": "I tuoi ruoli di amministrazione non includono {{item}}. Il server rifiuta le sue pagine e modifiche per te.",
+  "pages.admin.itemDenied.rolesLoading": "Ricerca dei ruoli che lo aprono…",
+  "pages.admin.itemDenied.rolesError": "Impossibile leggere i ruoli che lo aprono.",
+  "pages.admin.itemDenied.noRole": "Nessun ruolo di questa installazione lo apre.",
+  "pages.admin.itemDenied.rolesIntro": "Questi ruoli lo aprono:",
+  "pages.admin.itemDenied.askSupport": "Per richiedere uno di questi ruoli, contatta il supporto IT:",
+  "pages.admin.itemDenied.askFallback": "Per richiedere uno di questi ruoli, contatta le persone che gestiscono questa installazione."
 }

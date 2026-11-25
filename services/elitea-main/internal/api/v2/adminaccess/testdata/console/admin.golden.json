@@ -189,5 +189,6 @@
       "built_in": true
     }
   ],
-  "elevation": null
+  "elevation": null,
+  "admin_console_areas": true
 }

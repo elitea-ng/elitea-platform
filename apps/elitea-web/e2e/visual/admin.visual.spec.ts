@@ -142,14 +142,14 @@ const ADMIN_SCREENSHOT_STYLE = fileURLToPath(new URL('./admin-screenshot.css', i
  * `admin-nav` proves the SPA mounted (the Go handler serves the same
  * `index.html` for every path under the basepath, so a 200 alone proves
  * nothing about the router). The expanded-rail assertion is the load-bearing
- * half: `SchedulesTasks`' nav label is rendered only when the rail is expanded,
+ * half: the "Schedules and tasks" nav label is rendered only when the rail is expanded,
  * so its visibility is the inverse of the collapsed state, read off the real
  * DOM rather than off `localStorage`.
  */
 async function adminShellSettled(page: Page): Promise<void> {
   await expect(page.getByTestId('admin-nav')).toBeVisible({ timeout: 20_000 });
   await expect(
-    page.getByRole('navigation', { name: 'Admin navigation' }).getByText('Schedules & Tasks'),
+    page.getByRole('navigation', { name: 'Admin navigation' }).getByText('Schedules and tasks'),
   ).toBeVisible({ timeout: 20_000 });
 }
 
