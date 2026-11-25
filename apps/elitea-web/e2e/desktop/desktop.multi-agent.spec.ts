@@ -32,10 +32,12 @@ interface ParticipantRow {
 
 interface HarnessWindow {
   __harness: {
-    ipc: { calls: { started: Record<string, unknown>[] } };
+    ipc: { calls: { started: Record<string, unknown>[]; exchangeStops: string[] } };
     participantPosts: ParticipantRow[][];
     metaWrites: unknown[];
     playFloor: () => void;
+    playExchange: () => void;
+    stopExchange: () => void;
     setLead: (participantId: number) => void;
     playTurn: () => void;
   };
@@ -46,6 +48,9 @@ const harness = (page: Page) => ({
   posts: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.participantPosts),
   metaWrites: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.metaWrites),
   playFloor: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.playFloor()),
+  playExchange: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.playExchange()),
+  stopExchange: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.stopExchange()),
+  exchangeStops: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.ipc.calls.exchangeStops),
   setLead: (id: number) => page.evaluate((lead) => (window as unknown as HarnessWindow).__harness.setLead(lead), id),
   playTurn: () => page.evaluate(() => (window as unknown as HarnessWindow).__harness.playTurn()),
 });
@@ -193,5 +198,58 @@ test('a thread run by a team writes its lead and starts on it', async ({ page })
 
   await h.playTurn();
   await expect(page.getByTestId('workspace-send-button')).toBeVisible();
+});
+
+/**
+ * ADR-0061 decisions 2b and 2c (#3056, #3058), in a thread run by a team (Coder and Reviewer, Reviewer leads): "@" lists
+ * the thread's agents first, and picking one addresses the message to it; while a message's agents answer in turn, the
+ * exchange strip shows who answers now and next, and Stop exchange tells the host to stop (no later agent starts).
+ */
+test('the @ menu addresses an agent, and Stop exchange starts no later agent', async ({ page }) => {
+  const h = harness(page);
+  await page.goto('/?harness&at=/workspaces/w1');
+
+  const chip = page.getByTestId('agent-chip');
+  await expect(chip).toContainText('Coder', { timeout: 150_000 });
+  await chip.click();
+  await page.getByTestId('agent-team').click();
+  await page.getByTestId('agent-team-3').click();
+  await expect(chip).toContainText('Review crew');
+  await page.getByRole('textbox').fill('look at the flaky test');
+  await page.getByTestId('workspace-send-button').click();
+  await expect.poll(async () => (await h.started()).length).toBe(1);
+  await h.playTurn();
+  await expect(page.getByTestId('workspace-send-button')).toBeVisible();
+
+  // "@Rev": Reviewer leads the menu; picking it puts "@Reviewer " into the message.
+  const input = page.getByRole('textbox');
+  await input.click();
+  await input.pressSequentially('@Rev');
+  const menu = page.getByTestId('workspace-file-menu');
+  await expect(menu.getByRole('option').first()).toHaveAccessibleName('@Reviewer');
+  await menu.getByRole('option', { name: '@Reviewer' }).click();
+  await input.pressSequentially('check the fix');
+  await expect(page.getByTestId('workspace-to-chip')).toContainText('Reviewer');
+  await page.getByTestId('workspace-send-button').click();
+  await expect.poll(async () => (await h.started()).length).toBe(2);
+  expect((await h.started())[1]?.['addressed_to']).toEqual([88]);
+  await h.playTurn();
+  await expect(page.getByTestId('workspace-send-button')).toBeVisible();
+
+  // Two agents answer in turn: the strip names them, and Stop exchange stops the rest.
+  await input.fill('@Coder run the tests, then @Reviewer check them');
+  await page.getByTestId('workspace-send-button').click();
+  await expect.poll(async () => (await h.started()).length).toBe(3);
+  await h.playExchange();
+  const strip = page.getByTestId('workspace-exchange-strip').first();
+  await expect(strip).toBeVisible();
+  await expect(strip.getByTestId('workspace-exchange-now')).toContainText('Coder');
+  await expect(strip.getByTestId('workspace-exchange-next')).toContainText('Reviewer');
+  await strip.getByTestId('workspace-exchange-stop').click();
+  await expect.poll(async () => (await h.exchangeStops()).length).toBe(1);
+  await h.stopExchange();
+  await expect(page.getByTestId('turn-floor-stopped')).toContainText('You stopped the exchange.');
+  await expect(page.getByTestId('workspace-exchange-strip')).toHaveCount(0);
+  expect(await h.started()).toHaveLength(3);
 });
 
