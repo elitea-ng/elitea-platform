@@ -29,6 +29,10 @@ A second view mode, alongside events, shows execution traces and their individua
 
 From the Users page's row menu, the activity drawer filters this same audit data to one account — useful when investigating a specific person's actions rather than browsing the whole trail. See [Users and roles](/admin/users-and-roles).
 
+## What is recorded
+
+Every change made through the administration surface writes a row, wherever its route lives: the administration pages, budgets, project creation and deletion, secrets, configurations, and the Marketplace featuring and delisting of a listing. A request refused for lack of permission writes a row too. A change whose request fails on an unexpected error still writes its row, with status 500. A platform test checks this for every administration change, so a new one cannot ship without its row.
+
 ## Role use on administration rows
 
 Every row of a request to the administration surface also records the capacity the person acted in. The page does not show these fields yet; the break-glass review, the reason prompt and the access export will. They are in the `centry.audit_events` table today:

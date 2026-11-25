@@ -186,6 +186,13 @@ var auditedSurfaces = []string{
 	// recorded, with the grant. The reads are GETs.
 	"/api/v2/elitea_core/delegation_grants/",
 	"/api/v2/elitea_core/delegation_grant/",
+	// Marketplace moderation (ADR-0051, ADR-0059 R0.4b): featuring and
+	// delisting a listing is a platform administrator's alone, decided in
+	// the handler. The listing page under it is a GET; the search
+	// (marketplace_listings/) and the publisher's version state
+	// (marketplace_listing_version/) are other prefixes. Found by the audit
+	// coverage test (ADR-0059 R1.7).
+	"/api/v2/elitea_core/marketplace_listing/",
 	// HTTP action rules: which origin, path, method and credential a pipeline
 	// may call out to — an egress grant written by project admins.
 	"/api/v2/httpactions/",
@@ -265,7 +272,28 @@ func Audit(recorder audit.Recorder) func(http.Handler) http.Handler {
 			recording := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 
 			start := time.Now()
+			// A handler that panics has still been reached, and a mutation
+			// may have happened before the panic: the row is written with
+			// status 500, then the panic goes on to the Recover middleware
+			// above, which answers and logs it (ADR-0059 R1.7, #2511). The
+			// deferred re-panic keeps the original frames on the stack the
+			// recoverer prints.
+			returned := false
+			defer func() {
+				if returned {
+					return // the handler returned; a panic after it is not the handler's
+				}
+				recovered := recover()
+				if recovered == nil {
+					return // runtime.Goexit, not a panic: let it go on
+				}
+				if auditWorthy(r.Method, http.StatusInternalServerError) {
+					recorder.Record(ctx, buildEvent(request, http.StatusInternalServerError, time.Since(start), slot))
+				}
+				panic(recovered)
+			}()
 			next.ServeHTTP(recording, request)
+			returned = true
 			elapsed := time.Since(start)
 
 			if !auditWorthy(r.Method, recording.status) {

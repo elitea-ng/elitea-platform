@@ -172,6 +172,33 @@ and never exported: only the code leaves the row. The same fields (without
 the text) are in the `elitea.audit.v1` export's `details` of an
 `admin_audit` event.
 
+## Admin audit coverage
+
+<a id="admin-audit-coverage"></a>
+
+Every administration mutation writes an admin audit row (ADR-0059,
+Verification; story R1.7, issue 2511). The audit middleware
+(`services/elitea-main/internal/api/middleware/audit.go`) still decides by path
+prefix (`auditedSurfaces`), but the prefix list is no longer the proof: the
+test `TestEveryAdministrationMutationWritesAnAuditRow`
+(`services/elitea-main/internal/api/admin_mutation_audit_coverage_test.go`)
+walks every write of the administration surface found by driving the composed
+router (`internal/api/adminsurface`, every variant of the action table and the
+Configuration sections), every write pair of the central override and every
+write block of the separation matrix
+(`internal/api/testdata/separation_matrix_writes.txt`). It drives each as a
+caller who holds every administration permission and fails when the request
+wrote no row, or wrote one without `acting_roles` or `credential_kind` (a
+check that resolved with a detached context). A route mounted outside the
+prefixes with an in-handler check, the shape a prefix list misses, fails it.
+
+The reviewed exemption list is
+`services/elitea-main/internal/api/testdata/admin_mutation_audit_exemptions.reviewed`:
+one `METHOD pattern: reason` per line, each with a written reason, and an
+entry that no longer matches a driven mutation fails the test. It is empty.
+A handler that panics on an audited mutation still writes its row (status
+500) before the panic reaches the recoverer.
+
 ## Shared Libraries
 
 | Library | Purpose |

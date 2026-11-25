@@ -341,6 +341,39 @@ func TestAuditRecordRunsAfterTheResponseIsWritten(t *testing.T) {
 	router.ServeHTTP(response, authenticatedRequest(http.MethodPut, "/api/v2/admin/x"))
 }
 
+// A handler that panics on an audited mutation still writes its row, with
+// status 500, and the panic still reaches the Recover middleware above
+// (ADR-0059 R1.7, #2511). A GET that panics is no mutation and no refusal.
+func TestAuditRecordsAMutationWhoseHandlerPanics(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		rows   int
+	}{{http.MethodPut, 1}, {http.MethodGet, 0}} {
+		recorder := &captureRecorder{}
+		router := chi.NewRouter()
+		router.Use(Audit(recorder))
+		router.MethodFunc(tc.method, "/api/v2/admin/x", func(http.ResponseWriter, *http.Request) {
+			panic("handler failed")
+		})
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != "handler failed" {
+					t.Errorf("%s: recovered %v, want the handler's panic", tc.method, recovered)
+				}
+			}()
+			router.ServeHTTP(httptest.NewRecorder(), authenticatedRequest(tc.method, "/api/v2/admin/x"))
+		}()
+		events := recorder.all()
+		if len(events) != tc.rows {
+			t.Fatalf("%s: %d rows, want %d", tc.method, len(events), tc.rows)
+		}
+		if tc.rows == 1 && (*events[0].StatusCode != http.StatusInternalServerError || !events[0].IsError ||
+			events[0].Action != "PUT /api/v2/admin/x") {
+			t.Errorf("row of a panicking PUT = %+v", events[0])
+		}
+	}
+}
+
 func TestAuditedSurfacesIsACopy(t *testing.T) {
 	surfaces := AuditedSurfaces()
 	if len(surfaces) == 0 {

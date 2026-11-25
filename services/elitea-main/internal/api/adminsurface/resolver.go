@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -68,6 +69,19 @@ func (r *Resolver) answer(ctx context.Context, mode, projectID string) (auth.Per
 	}
 	permissions := rec.record(call)
 	resolution := auth.PermissionResolution{UserID: principalUserID, Permissions: permissions}
+	if mode == auth.PermissionModeAdministration {
+		// What the production resolver (legacyrbac.PostgresResolver) records
+		// on the request being audited (ADR-0059 R1.4a): the standing roles
+		// the caller acted with, none under an elevation, and the elevation.
+		// It reaches the row only when the caller resolved with the request's
+		// own context, which is what the audit coverage test asserts.
+		roles := []string{ActingRole}
+		if rec.elevation != nil {
+			roles = []string{}
+		}
+		resolution.Roles = roles
+		audit.RecordAdministration(ctx, audit.Administration{ActingRoles: roles})
+	}
 	if rec.elevation != nil && mode == auth.PermissionModeAdministration {
 		// No standing set: everything the answer holds the elevation gave.
 		resolution.ElevationSessionRef = ElevatedSessionRef
@@ -77,9 +91,15 @@ func (r *Resolver) answer(ctx context.Context, mode, projectID string) (auth.Per
 		resolution.Elevations = []auth.ElevationGrant{{
 			ID: ElevationID, Level: rec.elevation.Level, Path: rec.elevation.Path,
 		}}
+		_ = audit.ContextWithElevationID(ctx, ElevationID)
 	}
 	return resolution, nil
 }
+
+// ActingRole is the standing administration role the synthetic principal
+// acts with: the acting_roles of every administration-mode audit row of a
+// request that is not elevated.
+const ActingRole = "adminsurface_role"
 
 // principalUserID is the numeric id of the synthetic principal.
 const principalUserID = 1
@@ -99,6 +119,7 @@ type recorder struct {
 	// (Variant.Elevation).
 	elevation *Elevation
 	flagged   bool
+	audited   []audit.Event
 }
 
 func (rec *recorder) record(call Call) []string {
@@ -113,12 +134,21 @@ func (rec *recorder) record(call Call) []string {
 	return append([]string{}, rec.grant(n)...)
 }
 
-// flag records that the request's admin audit row was marked for the
-// elevation review.
-func (rec *recorder) flag() {
+// keep records an admin audit row the request wrote, and whether it was
+// marked for the elevation review.
+func (rec *recorder) keep(event audit.Event) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	rec.flagged = true
+	rec.audited = append(rec.audited, event)
+	if event.ElevationFlagged {
+		rec.flagged = true
+	}
+}
+
+func (rec *recorder) auditedEvents() []audit.Event {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return append([]audit.Event(nil), rec.audited...)
 }
 
 func (rec *recorder) isFlagged() bool {
