@@ -1,0 +1,176 @@
+{
+  "contract": "elitea.agent-state-activity.v1",
+  "description": "ADR-0061 decision 4b: the runtime events that move an agent's avatar state, and the state and activity each one gives, on both producers. The desktop host (apps/elitea-desktop/src-tauri/src/d0/agent_state.rs) reads the desktop rows; elitea-main (internal/api/v2/executions/participant_frames.go) reads the cloud rows. A row's `activity` is the whole activity the frame carries: absent means none. Tool names are sanitised to [A-Za-z0-9_.:-] and cut to 64 characters; no row ever carries command text or arguments.",
+  "tool_name_pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+  "tool_name_max": 64,
+  "desktop": [
+    {
+      "name": "status running",
+      "event": { "kind": "status", "payload": { "phase": "running" } },
+      "state": "thinking"
+    },
+    {
+      "name": "turn_continued",
+      "event": { "kind": "turn_continued", "payload": { "kind": "step_limit", "continuation_index": 1 } },
+      "state": "waking"
+    },
+    {
+      "name": "thinking_delta",
+      "event": { "kind": "thinking_delta", "payload": { "text": "Let me look." } },
+      "state": "thinking"
+    },
+    {
+      "name": "text_delta",
+      "event": { "kind": "text_delta", "payload": { "text": "Done." } },
+      "state": "speaking"
+    },
+    {
+      "name": "tool_call",
+      "event": { "kind": "tool_call", "payload": { "call_id": "c1", "tool": "read_file", "args_summary": "src/main.rs", "remote": false } },
+      "state": "working",
+      "activity": { "tool": "read_file", "tool_kind": "read" }
+    },
+    {
+      "name": "tool_call run_command",
+      "event": { "kind": "tool_call", "payload": { "call_id": "c2", "tool": "run_command", "args_summary": "cargo test --token=sk-secret-123", "remote": false } },
+      "state": "working",
+      "activity": { "tool": "run_command", "tool_kind": "code_execution", "program": "cargo" }
+    },
+    {
+      "name": "tool_result",
+      "event": { "kind": "tool_result", "payload": { "call_id": "c1", "ok": true, "summary": "ok", "truncated": false } },
+      "state": "thinking"
+    },
+    {
+      "name": "process_started",
+      "event": { "kind": "process_started", "payload": { "process_id": "p1", "call_id": "c3", "command": "npm run dev", "tty": false, "sandbox": "workspace-write", "loopback": true } },
+      "state": "working",
+      "activity": { "tool": "run_command", "tool_kind": "code_execution", "program": "npm" }
+    },
+    {
+      "name": "approval_request",
+      "event": { "kind": "approval_request", "payload": { "request_id": "r1", "tool": "run_command", "title": "Run a command", "detail": "", "reason": "", "can_remember": true } },
+      "state": "waiting",
+      "activity": { "waiting_on": "person" }
+    },
+    {
+      "name": "subagent_started",
+      "event": { "kind": "subagent_started", "payload": { "agent_id": "a1", "parent_call_id": "c4", "ordinal": 1 } },
+      "state": "waiting",
+      "activity": { "waiting_on": "agent" }
+    },
+    {
+      "name": "subagent_finished",
+      "event": { "kind": "subagent_finished", "payload": { "agent_id": "a1", "status": "completed", "steps": 2, "input_tokens": 10, "output_tokens": 5 } },
+      "state": "thinking"
+    },
+    {
+      "name": "done",
+      "event": { "kind": "done", "payload": { "committed": false, "commit": "pending", "conversation_id": 42, "message_ids": [], "changed_files": 0 } },
+      "state": "success"
+    },
+    {
+      "name": "done with floor_next",
+      "event": { "kind": "done", "payload": { "committed": false, "commit": "pending", "conversation_id": 42, "message_ids": [], "changed_files": 0, "continuing": true, "floor_next": { "participant_id": 88, "agent_name": "Reviewer", "position": 1 } } },
+      "state": "success"
+    },
+    {
+      "name": "error",
+      "event": { "kind": "error", "payload": { "code": "model_failed", "message": "The model call failed." } },
+      "state": "error"
+    },
+    {
+      "name": "commit_failed",
+      "event": { "kind": "commit_failed", "payload": { "execution_id": "e1", "code": "commit_failed", "message": "Not saved." } },
+      "state": "error"
+    },
+    {
+      "name": "status cancelled",
+      "event": { "kind": "status", "payload": { "phase": "cancelled" } },
+      "state": "idle"
+    },
+    {
+      "name": "floor_stopped",
+      "event": { "kind": "floor_stopped", "payload": { "code": "stopped_by_person", "message": "You stopped the exchange." } },
+      "state": "idle"
+    },
+    {
+      "name": "chain_ended",
+      "event": { "kind": "chain_ended", "payload": { "outcome": "completed" } },
+      "state": "idle"
+    }
+  ],
+  "cloud": [
+    {
+      "name": "agent_start",
+      "frame": { "type": "agent_start" },
+      "state": "thinking"
+    },
+    {
+      "name": "agent_start continuation",
+      "frame": { "type": "agent_start", "sio_event": "chat_continue_predict" },
+      "state": "waking"
+    },
+    {
+      "name": "agent_llm_start",
+      "frame": { "type": "agent_llm_start" },
+      "state": "thinking"
+    },
+    {
+      "name": "agent_llm_chunk",
+      "frame": { "type": "agent_llm_chunk" },
+      "state": "speaking"
+    },
+    {
+      "name": "agent_tool_start",
+      "frame": { "type": "agent_tool_start", "response_metadata": { "tool_name": "jira_get_issue" } },
+      "state": "working",
+      "activity": { "tool": "jira_get_issue" }
+    },
+    {
+      "name": "agent_tool_end",
+      "frame": { "type": "agent_tool_end", "response_metadata": { "tool_name": "jira_get_issue" } },
+      "state": "thinking"
+    },
+    {
+      "name": "agent_hitl_interrupt",
+      "frame": { "type": "agent_hitl_interrupt" },
+      "state": "waiting",
+      "activity": { "waiting_on": "person" }
+    },
+    {
+      "name": "agent_requires_confirmation",
+      "frame": { "type": "agent_requires_confirmation" },
+      "state": "waiting",
+      "activity": { "waiting_on": "person" }
+    },
+    {
+      "name": "agent_tool_paused",
+      "frame": { "type": "agent_tool_paused" },
+      "state": "waiting",
+      "activity": { "waiting_on": "person" }
+    },
+    {
+      "name": "mcp_authorization_required",
+      "frame": { "type": "mcp_authorization_required" },
+      "state": "waiting",
+      "activity": { "waiting_on": "person" }
+    },
+    {
+      "name": "sub-agent frame",
+      "frame": { "type": "agent_llm_chunk", "response_metadata": { "parent_agent_name": "Reviewer" } },
+      "state": "waiting",
+      "activity": { "waiting_on": "agent" }
+    },
+    {
+      "name": "full_message",
+      "frame": { "type": "full_message" },
+      "state": "success"
+    },
+    {
+      "name": "agent_exception",
+      "frame": { "type": "agent_exception" },
+      "state": "error"
+    }
+  ]
+}

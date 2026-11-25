@@ -175,6 +175,37 @@ export const AGENT_STATE = {
 
 export type AgentState = (typeof AGENT_STATE)[keyof typeof AGENT_STATE];
 
+/** `agent_state.activity.waiting_on` (ADR-0061 decision 4a). */
+export const WAITING_ON = {
+  /** An approval, a question, an authorization. */
+  Person: 'person',
+  /** A consulted agent, or the agent a hand-off went to. */
+  Agent: 'agent',
+} as const;
+
+export type WaitingOn = (typeof WAITING_ON)[keyof typeof WAITING_ON];
+
+/**
+ * The optional `activity` of an `agent_state` frame (ADR-0061 decision 4a):
+ * what the state is about. Every field is optional and additive; a frame
+ * without it carries the state alone, as before. It never holds command text
+ * or tool arguments: `tool` and `program` are sanitised names.
+ */
+export interface AgentActivity {
+  /** The tool's display name (`[A-Za-z0-9_.:-]`, at most 64), only with `working`. */
+  readonly tool?: string | undefined;
+  /** The tool's category (`tool-categories-v1.json`). */
+  readonly tool_kind?: string | undefined;
+  /** The program a command runs (argv[0]'s base name, never its arguments); desktop only. */
+  readonly program?: string | undefined;
+  /** Who a `waiting` agent waits on. */
+  readonly waiting_on?: WaitingOn | undefined;
+  /** The agent waited on, consulted or handed to. */
+  readonly peer_participant_id?: number | undefined;
+  /** The receivers, on the frame that ends a turn with a hand-off. */
+  readonly handoff_to?: readonly number[] | undefined;
+}
+
 export type FrameType = (typeof FRAME_TYPE)[keyof typeof FRAME_TYPE];
 
 /** The three chunk flavours: each carries a DELTA of the answer text. */
