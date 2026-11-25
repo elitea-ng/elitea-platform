@@ -63,7 +63,7 @@ describe('useAdminWritable', () => {
     expect(result.current.guard(mutation)).toBe(mutation);
   });
 
-  it('sends nothing at read: mutate does nothing and mutateAsync rejects', async () => {
+  it('sends nothing at read: mutate reports the refusal to its callbacks and mutateAsync rejects', async () => {
     serveDocument('read');
     const { result } = renderHook(() => useAdminWritable('budgets-alerts'), { wrapper });
     await waitFor(() => expect(result.current.access).toBe('read'));
@@ -71,7 +71,13 @@ describe('useAdminWritable', () => {
     const mutation = fakeMutation();
     const guarded = result.current.guard(mutation);
     expect(result.current.writable).toBe(false);
-    guarded.mutate();
+    const onError = vi.fn();
+    const onSettled = vi.fn();
+    const onSuccess = vi.fn();
+    (guarded.mutate as (variables: unknown, options: unknown) => void)({ id: 1 }, { onError, onSettled, onSuccess });
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ name: 'AdminViewOnlyError' }), { id: 1 }, undefined, undefined);
+    expect(onSettled).toHaveBeenCalledTimes(1);
+    expect(onSuccess).not.toHaveBeenCalled();
     await expect(guarded.mutateAsync()).rejects.toThrow(/view only/);
     expect(mutation.mutate).not.toHaveBeenCalled();
     expect(mutation.mutateAsync).not.toHaveBeenCalled();

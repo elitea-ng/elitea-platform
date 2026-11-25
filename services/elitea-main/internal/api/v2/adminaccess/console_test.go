@@ -352,6 +352,21 @@ func TestConsoleItemNamesTheGrantingRolesAndNoPerson(t *testing.T) {
 	}
 }
 
+// TestConsoleItemAccessGolden: the roles that open the Access item, which ships
+// in R3.6. The web console's temporary Roles link (R3.4a, issue 2534) shows for
+// a caller holding one of them, and its tests read this golden, so a change in
+// which built-in roles open the item reaches them.
+func TestConsoleItemAccessGolden(t *testing.T) {
+	t.Parallel()
+	d := newDirectory()
+	d.users[16] = nil
+	rec := serve(t, console.NewHandler(d, d, nil), session(16), "/console/items/access")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	golden(t, "item-access", rec.Body.Bytes())
+}
+
 func TestConsoleItemUnknownAndUnavailable(t *testing.T) {
 	t.Parallel()
 	d := newDirectory()

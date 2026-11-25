@@ -1,0 +1,27 @@
+{
+  "id": "access",
+  "area": "people_access",
+  "label_key": "pages.admin.console.item.access",
+  "area_label_key": "pages.admin.console.area.people_access",
+  "available": false,
+  "granting_roles": [
+    {
+      "name": "super_admin",
+      "display_name": "Global administrator",
+      "built_in": true,
+      "level": "write"
+    },
+    {
+      "name": "admin",
+      "display_name": "Platform administrator",
+      "built_in": true,
+      "level": "write"
+    },
+    {
+      "name": "security_auditor",
+      "display_name": "Security auditor",
+      "built_in": true,
+      "level": "read"
+    }
+  ]
+}

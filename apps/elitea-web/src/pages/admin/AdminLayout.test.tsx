@@ -149,7 +149,7 @@ describe('AdminLayout once the document answers', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
-    function serveRolesCase(callerRole: string, itemStatus = 200): void {
+    function serveRolesCase(callerRole: string, itemStatus = 200, builtIn = true): void {
       itemReads = 0;
       server.use(
         getGetAdminConsoleDocumentMockHandler({
@@ -160,7 +160,7 @@ describe('AdminLayout once the document answers', () => {
               items: [{ id: 'users', label_key: 'pages.admin.console.item.users', level: 'read' }],
             },
           ],
-          roles: [{ name: callerRole, built_in: true }],
+          roles: [{ name: callerRole, built_in: builtIn }],
           elevation: null,
           admin_console_areas: true,
         }),
@@ -194,6 +194,15 @@ describe('AdminLayout once the document answers', () => {
 
     it('leaves Roles out for a caller none of whose roles opens it', async () => {
       serveRolesCase('llm_manager');
+      await mountLayout();
+
+      await screen.findByTestId('admin-nav-item-users');
+      await settled();
+      expect(screen.queryByTestId('admin-nav-item-access')).not.toBeInTheDocument();
+    });
+
+    it('leaves Roles out for a custom role that only shares a built-in role name', async () => {
+      serveRolesCase('security_auditor', 200, false);
       await mountLayout();
 
       await screen.findByTestId('admin-nav-item-users');

@@ -99,14 +99,17 @@ export interface AdminWriteControlProps {
 
 /**
  * One mutation control. A disabled button fires no pointer events, so the
- * tooltip that explains it sits on a wrapping span.
+ * tooltip sits on a wrapping span, in both states: one element tree means a
+ * level that changes under a focused control (a refetch on focus, after a
+ * 403) does not remount it. The disabled control is not focusable, so the
+ * tooltip is a pointer convenience; the page's "View only" notice is the
+ * explanation every reader gets.
  */
 export function AdminWriteControl({ label, children }: AdminWriteControlProps): ReactNode {
   const { disabled, reason } = useAdminWriteControl();
-  if (!disabled) return <Tooltip title={label}>{children(false)}</Tooltip>;
   return (
-    <Tooltip title={reason}>
-      <span>{children(true)}</span>
+    <Tooltip title={disabled ? reason : label}>
+      <span>{children(disabled)}</span>
     </Tooltip>
   );
 }

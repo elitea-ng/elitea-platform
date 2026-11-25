@@ -20,6 +20,14 @@ import type { AdminConsoleRole } from '@/shared/api/generated/model';
 /** The console item of the Roles page. */
 const ROLES_ITEM_ID = 'access';
 
+/**
+ * A role by name AND kind: a custom role may share a built-in role's name,
+ * and it does not open what the built-in one opens.
+ */
+function roleKey(role: { readonly name: string; readonly built_in: boolean }): string {
+  return `${role.built_in ? 'built-in' : 'custom'}:${role.name}`;
+}
+
 /** Whether to show the temporary Roles link; `false` until the answer is known. */
 export function useTemporaryRolesLink(callerRoles: readonly AdminConsoleRole[] | undefined, enabled: boolean): boolean {
   const ask = enabled && callerRoles !== undefined && callerRoles.length > 0;
@@ -29,10 +37,10 @@ export function useTemporaryRolesLink(callerRoles: readonly AdminConsoleRole[] |
       retry: false,
       staleTime: 60_000,
       select: (response) =>
-        response.status === 200 ? response.data.granting_roles.map((role) => role.name) : undefined,
+        response.status === 200 ? response.data.granting_roles.map((role) => roleKey(role)) : undefined,
     },
   });
   if (!ask || query.data === undefined) return false;
   const granting = new Set(query.data);
-  return callerRoles.some((role) => granting.has(role.name));
+  return callerRoles.some((role) => granting.has(roleKey(role)));
 }

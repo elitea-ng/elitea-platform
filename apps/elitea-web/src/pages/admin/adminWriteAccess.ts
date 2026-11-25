@@ -61,15 +61,31 @@ class AdminViewOnlyError extends Error {
   }
 }
 
+/** The per-call callbacks of TanStack's `mutate(variables, options)`, loosely typed. */
+interface MutateCallbacks {
+  readonly onError?: (error: Error, variables: unknown, onMutateResult: undefined, context: undefined) => unknown;
+  readonly onSettled?: (
+    data: undefined,
+    error: Error,
+    variables: unknown,
+    onMutateResult: undefined,
+    context: undefined,
+  ) => unknown;
+}
+
 function guardMutation<M extends GuardableMutation>(mutation: M, itemId: string, writable: boolean): M {
   if (writable) return mutation;
-  // The controls are disabled, so this is the belt behind them: a control
-  // that forgot `useAdminWriteControl` still sends nothing the server would
-  // refuse. `mutate` is fire-and-forget, so it does nothing; `mutateAsync`
-  // rejects so an awaiting caller does not hang.
+  // The controls are disabled, so this is the belt behind them: a path that
+  // forgot `useAdminWriteControl` still sends nothing the server would
+  // refuse, and its caller hears why through the callbacks it passed, as it
+  // would hear a 403. `mutateAsync` rejects so an awaiting caller does not hang.
   return {
     ...mutation,
-    mutate: () => undefined,
+    mutate: (variables: unknown, options?: MutateCallbacks) => {
+      const error = new AdminViewOnlyError(itemId);
+      options?.onError?.(error, variables, undefined, undefined);
+      options?.onSettled?.(undefined, error, variables, undefined, undefined);
+    },
     mutateAsync: () => Promise.reject(new AdminViewOnlyError(itemId)),
   };
 }

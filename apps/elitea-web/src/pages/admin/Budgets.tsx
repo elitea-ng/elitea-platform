@@ -63,113 +63,126 @@ function savedText(kind: string): string {
     : t('pages.admin.budgets.saved.saved', 'The budget was saved.');
 }
 
+/** The page under the read-only wrapper (R3.4a, issue 2534). */
 export function AdminBudgets() {
+  return (
+    <AdminWritable itemId={BUDGETS_ITEM_ID}>
+      <BudgetsPage />
+    </AdminWritable>
+  );
+}
+
+function BudgetsPage() {
   const state = useAdminBudgetsPage();
   const activeTab = Math.max(0, TAB_FILTERS.indexOf(state.projectType));
 
   return (
-    <AdminWritable itemId={BUDGETS_ITEM_ID}>
-      <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: '1rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <Typography variant="headingLarge" component="h1">
-            {t('pages.admin.budgets.title', 'Budgets')}
-          </Typography>
-          <SimpleSearchBar
-            value={state.search}
-            onChange={state.onSearchChange}
-            placeholder={t('pages.admin.budgets.search', 'Search by project, id or owner')}
-            data-testid="admin-budgets-search"
-          />
-        </Box>
-
-        <Typography variant="bodySmall" color="text.secondary">
-          {t('pages.admin.budgets.subtitle', 'A limit takes effect on the next LLM call, not at the next period.')}
+    <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: '1rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <Typography variant="headingLarge" component="h1">
+          {t('pages.admin.budgets.title', 'Budgets')}
         </Typography>
+        <SimpleSearchBar
+          value={state.search}
+          onChange={state.onSearchChange}
+          placeholder={t('pages.admin.budgets.search', 'Search by project, id or owner')}
+          data-testid="admin-budgets-search"
+        />
+      </Box>
 
-        <AdminViewOnlyNotice />
-
-        <Tabs
-          value={activeTab}
-          onChange={(_event, value: number) => {
-            state.onProjectTypeChange(TAB_FILTERS[value] ?? 'all');
-          }}
-          sx={{ minHeight: '2.5rem' }}
-        >
-          <Tab label={t('pages.admin.budgets.tab.all', 'All')} sx={{ textTransform: 'none', minHeight: '2.5rem' }} />
-          <Tab
-            label={`${t('pages.admin.budgets.tab.team', 'Team')} (${state.counts['team'] ?? 0})`}
-            sx={{ textTransform: 'none', minHeight: '2.5rem' }}
-          />
-          <Tab
-            label={`${t('pages.admin.budgets.tab.personal', 'Personal')} (${state.counts['personal'] ?? 0})`}
-            sx={{ textTransform: 'none', minHeight: '2.5rem' }}
-          />
-        </Tabs>
-
-        <BudgetEnforcementWarning hasBudgets={state.anyBudgetAuthored} />
-
-        {state.errorMessage !== '' ? (
-          <Alert severity="error" onClose={state.onDismissError}>
-            {state.errorMessage}
-          </Alert>
-        ) : null}
-        {state.savedMessage !== '' ? (
-          <Alert severity="success" onClose={state.onDismissSaved}>
-            {savedText(state.savedMessage)}
-          </Alert>
-        ) : null}
-
-        {/* A failed read is reported rather than rendered as an empty table: the
-          two look identical and mean opposite things (#130). */}
-        {state.loadFailed ? (
-          <Alert severity="warning" data-testid="admin-budgets-unavailable">
-            {t('pages.admin.budgets.error.load', 'Failed to load project budgets.')}
-          </Alert>
-        ) : (
-          <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-            <AdminBudgetsTable
-              rows={state.rows}
-              isLoading={state.isLoading}
-              onEdit={state.onEditProject}
-              onClear={state.onClearProject}
-              onOpenMembers={state.onOpenMembers}
-            />
-            <BudgetsPager state={state} />
-          </Box>
+      <Typography variant="bodySmall" color="text.secondary">
+        {t(
+          'pages.admin.budgets.subtitle',
+          'A limit takes effect on the next LLM call, not at the next period.',
         )}
+      </Typography>
 
-        <AdminBudgetDialog
-          open={state.dialogOpen}
-          scope={state.dialogScope}
-          subjectName={state.dialogSubject}
-          initial={state.dialogInitial}
-          isLoading={state.dialogLoading}
-          isSaving={state.isSaving}
-          serverError={state.saveError}
-          onClose={state.onDialogClose}
-          onSubmit={state.onDialogSubmit}
-        />
+      <AdminViewOnlyNotice />
 
-        <AdminBudgetMembersDrawer
-          open={state.membersOpen}
-          projectName={state.membersProjectName}
-          rows={state.memberRows}
-          isLoading={state.membersLoading}
-          loadError={state.membersError}
-          onClose={state.onCloseMembers}
-          onEdit={state.onEditMember}
-          onClear={state.onClearMember}
+      <Tabs
+        value={activeTab}
+        onChange={(_event, value: number) => {
+          state.onProjectTypeChange(TAB_FILTERS[value] ?? 'all');
+        }}
+        sx={{ minHeight: '2.5rem' }}
+      >
+        <Tab
+          label={t('pages.admin.budgets.tab.all', 'All')}
+          sx={{ textTransform: 'none', minHeight: '2.5rem' }}
         />
-      </DrawerPage>
-    </AdminWritable>
+        <Tab
+          label={`${t('pages.admin.budgets.tab.team', 'Team')} (${state.counts['team'] ?? 0})`}
+          sx={{ textTransform: 'none', minHeight: '2.5rem' }}
+        />
+        <Tab
+          label={`${t('pages.admin.budgets.tab.personal', 'Personal')} (${state.counts['personal'] ?? 0})`}
+          sx={{ textTransform: 'none', minHeight: '2.5rem' }}
+        />
+      </Tabs>
+
+      <BudgetEnforcementWarning hasBudgets={state.anyBudgetAuthored} />
+
+      {state.errorMessage !== '' ? (
+        <Alert severity="error" onClose={state.onDismissError}>
+          {state.errorMessage}
+        </Alert>
+      ) : null}
+      {state.savedMessage !== '' ? (
+        <Alert severity="success" onClose={state.onDismissSaved}>
+          {savedText(state.savedMessage)}
+        </Alert>
+      ) : null}
+
+      {/* A failed read is reported rather than rendered as an empty table: the
+          two look identical and mean opposite things (#130). */}
+      {state.loadFailed ? (
+        <Alert severity="warning" data-testid="admin-budgets-unavailable">
+          {t('pages.admin.budgets.error.load', 'Failed to load project budgets.')}
+        </Alert>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <AdminBudgetsTable
+            rows={state.rows}
+            isLoading={state.isLoading}
+            onEdit={state.onEditProject}
+            onClear={state.onClearProject}
+            onOpenMembers={state.onOpenMembers}
+          />
+          <BudgetsPager state={state} />
+        </Box>
+      )}
+
+      <AdminBudgetDialog
+        open={state.dialogOpen}
+        scope={state.dialogScope}
+        subjectName={state.dialogSubject}
+        initial={state.dialogInitial}
+        isLoading={state.dialogLoading}
+        isSaving={state.isSaving}
+        serverError={state.saveError}
+        onClose={state.onDialogClose}
+        onSubmit={state.onDialogSubmit}
+      />
+
+      <AdminBudgetMembersDrawer
+        open={state.membersOpen}
+        projectName={state.membersProjectName}
+        rows={state.memberRows}
+        isLoading={state.membersLoading}
+        loadError={state.membersError}
+        onClose={state.onCloseMembers}
+        onEdit={state.onEditMember}
+        onClear={state.onClearMember}
+      />
+    </DrawerPage>
   );
 }
 

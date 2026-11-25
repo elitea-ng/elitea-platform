@@ -116,7 +116,9 @@ export function AdminBudgetMembersDrawer({
                 <TableCell>{t('pages.admin.budgets.members.column.member', 'Member')}</TableCell>
                 <TableCell>{t('pages.admin.budgets.members.column.cap', 'Cap')}</TableCell>
                 <TableCell>{t('pages.admin.budgets.members.column.spend', 'Spend')}</TableCell>
-                <TableCell align="right">{t('pages.admin.budgets.members.column.actions', 'Actions')}</TableCell>
+                <TableCell align="right">
+                  {t('pages.admin.budgets.members.column.actions', 'Actions')}
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>

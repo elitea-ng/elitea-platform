@@ -144,7 +144,9 @@ export function AdminBudgetDialog({
     }
     const parsedThreshold = parseThreshold(threshold);
     if ('error' in parsedThreshold) {
-      setLocalError(t('pages.admin.budgets.error.thresholdRange', 'The warning threshold must be 1 to 100.'));
+      setLocalError(
+        t('pages.admin.budgets.error.thresholdRange', 'The warning threshold must be 1 to 100.'),
+      );
       return;
     }
     setLocalError('');
@@ -199,7 +201,10 @@ export function AdminBudgetDialog({
           value={threshold}
           disabled={isSaving || isLoading}
           onChange={(event) => setThreshold(event.target.value)}
-          helperText={t('pages.admin.budgets.field.thresholdHelp', 'Leave empty to inherit the platform threshold.')}
+          helperText={t(
+            'pages.admin.budgets.field.thresholdHelp',
+            'Leave empty to inherit the platform threshold.',
+          )}
           slotProps={{ htmlInput: { 'data-testid': 'admin-budget-threshold' } }}
         />
 
@@ -313,6 +318,9 @@ function failModeLabel(mode: (typeof NATS_FAIL_MODES)[number]): string {
     case 'fail_closed':
       return t('pages.admin.budgets.failMode.failClosed', 'Fail closed — refuse the call');
     case 'tiered_hybrid':
-      return t('pages.admin.budgets.failMode.tieredHybrid', 'Tiered hybrid — fall back to Postgres');
+      return t(
+        'pages.admin.budgets.failMode.tieredHybrid',
+        'Tiered hybrid — fall back to Postgres',
+      );
   }
 }
