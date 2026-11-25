@@ -19490,6 +19490,79 @@ components:
       description: >
         NOTE(W2): internal/api/v2/admin/access_tokens.go (AccessTokens).
 
+    SealedCredentialBoundUser:
+      type: object
+      required: [id, name, email]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/sealed_credentials.go
+        (boundAccountBody). The account the credential signs in as: the
+        person it is bound to, or the reserved break-glass account
+        `break-glass@centry.user` for an unbound credential.
+      properties:
+        id:
+          type: integer
+          format: int64
+        name: { type: string }
+        email: { type: string }
+
+    SealedCredential:
+      type: object
+      required: [id, label, level, state, split, unbound, bound_user, issued_at, expires_at, used_at, revoked_at]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/sealed_credentials.go
+        (sealedCredentialBody). Metadata only: there is no field for the
+        selector, the verifier or its digest, and nothing derived from them.
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          description: What the custodians call the credential; empty when none was given.
+        level:
+          type: string
+          description: "`admin` or `super_admin`: the level of the elevation the credential starts."
+        state:
+          type: string
+          description: >
+            At the time of the read: `active`, `used`, `revoked` or `expired`
+            (an unused, unrevoked credential past its expiry).
+        split:
+          type: boolean
+          description: The verifier was printed as two halves for two custodians.
+        unbound:
+          type: boolean
+          description: The credential is unbound, and `bound_user` is the reserved break-glass account.
+        bound_user:
+          $ref: '#/components/schemas/SealedCredentialBoundUser'
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        used_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    SealedCredentialList:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/sealed_credentials.go (List).
+      properties:
+        total:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/SealedCredential'
+
     TokenExpiration:
       type: object
       required: [measure, value]
@@ -21372,8 +21445,10 @@ components:
             project and creates no token. `elevation_restricted` (403,
             ADR-0059 R2.8a): the caller's active elevation may not do the
             action, which needs the permission by a standing role, or only a
-            sealed break-glass elevation at the super_admin level. Absent on a
-            403 of the route gate.
+            sealed break-glass elevation at the super_admin level.
+            `token_critical_action_refused` (403, ADR-0059 R1.2b): a personal
+            access token may not call the action, which says `token: never`
+            in the action table. Absent on a 403 of the route gate.
         role:
           type: string
           description: The role the refusal is about, when there is one.
@@ -26130,6 +26205,101 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+
+  /admin/access/sealed_credentials:
+    get:
+      operationId: listSealedCredentials
+      summary: List the sealed break-glass credentials, metadata only
+      description: |
+        Every sealed break-glass credential (ADR-0059 R2.17), newest first:
+        its label, level, the person it is bound to (or the reserved
+        break-glass account for an unbound one), its times, its state and
+        whether it is split. The Access page reads it.
+
+        METADATA ONLY: never the selector, the verifier or the stored
+        digest, nor any part of them. Issuing and revoking a credential are
+        operator commands (`elitea-main break-glass issue|revoke`) and have
+        no route.
+
+        For a holder of `access.breakglass.manage`. The list names the
+        people with emergency access, so an elevation never reads it
+        (`elevation_restricted`) and no personal access token does
+        (`token_critical_action_refused`). Every read is recorded as a
+        security audit decision event (`admin.elevation.credential_list`).
+      tags: [admin]
+      responses:
+        '200':
+          description: The sealed credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SealedCredentialList'
+              example:
+                total: 2
+                rows:
+                  - id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                    label: safe B, envelope 2
+                    level: super_admin
+                    state: active
+                    split: true
+                    unbound: true
+                    bound_user:
+                      id: 77
+                      name: Break-glass account
+                      email: break-glass@centry.user
+                    issued_at: '2026-11-20T09:00:00Z'
+                    expires_at: '2027-11-20T09:00:00Z'
+                    used_at: null
+                    revoked_at: null
+                  - id: 0193a1c4-6b2d-7f00-8e44-90ab12cd34ef
+                    label: on-call laptop
+                    level: admin
+                    state: revoked
+                    split: false
+                    unbound: false
+                    bound_user:
+                      id: 11
+                      name: Ada Admin
+                      email: ada@example.com
+                    issued_at: '2026-06-02T08:30:00Z'
+                    expires_at: '2027-06-02T08:30:00Z'
+                    used_at: null
+                    revoked_at: '2026-10-01T12:00:00Z'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The caller lacks `access.breakglass.manage` (`error` only), the
+            caller's active elevation took part in the session's permissions
+            (`elevation_restricted`, ADR-0059 decision 5), or the caller is a
+            personal access token (`token_critical_action_refused`, whatever
+            its scopes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminRoleRefusal'
+              examples:
+                route_gate:
+                  summary: The caller lacks access.breakglass.manage
+                  value:
+                    error: insufficient permissions
+                elevation_restricted:
+                  summary: An elevation may not read the list
+                  value:
+                    error: 'an elevation cannot do this administration action: it needs the permission by a standing role'
+                    code: elevation_restricted
+                token_critical_action_refused:
+                  summary: A personal access token may not read the list
+                  value:
+                    error: >-
+                      a personal access token cannot call this administration action: sign in to the
+                      console to do it
+                    code: token_critical_action_refused
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The sealed credential list is not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   # ==========================================================================
   # ADMIN — roles

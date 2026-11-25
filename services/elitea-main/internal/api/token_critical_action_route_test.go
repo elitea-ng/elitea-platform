@@ -143,6 +143,27 @@ func TestAScopedTokenIsRefusedCriticalActions(t *testing.T) {
 	}
 }
 
+// The sealed credential list (ADR-0059 R2.17) says `token: never`: a scoped
+// or inherit token is refused by the token rule, whatever it holds. The
+// access posture (R2.14a) is an ordinary read: a scoped token that holds
+// access.roles.view passes the rule. Without a database the handlers answer
+// what they answer; what is held here is the rule's refusal.
+func TestNoTokenReadsTheSealedCredentialList(t *testing.T) {
+	const sealed = "/api/v2/admin/access/sealed_credentials"
+	granted := append([]string{adminaccess.AccessBreakglassManage, adminaccess.AccessRolesView}, tokenRuleSuperAdmin...)
+	for _, access := range []string{adminaccess.TokenAccessScoped, adminaccess.TokenAccessInherit} {
+		router := newTokenRuleRouter(t, auth.CredentialKindToken, access, granted)
+		if status, code := tokenRuleAnswer(t, router, http.MethodGet, sealed, ""); status != http.StatusForbidden ||
+			code != adminaccess.CodeTokenCriticalAction {
+			t.Errorf("%s token: %d %q, want 403 %s", access, status, code, adminaccess.CodeTokenCriticalAction)
+		}
+	}
+	session := newTokenRuleRouter(t, auth.CredentialKindNone, "", granted)
+	if status, code := tokenRuleAnswer(t, session, http.MethodGet, sealed, ""); status == http.StatusForbidden {
+		t.Errorf("a session that holds access.breakglass.manage: %d %q, want it past the gates", status, code)
+	}
+}
+
 // The identity trust exception is for a standing global administrator only.
 func TestTheTrustExceptionNeedsAStandingGlobalAdministrator(t *testing.T) {
 	admin := newTokenRuleRouter(t, auth.CredentialKindToken, adminaccess.TokenAccessInherit,

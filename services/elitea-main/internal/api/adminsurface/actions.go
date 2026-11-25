@@ -50,7 +50,8 @@ func driveKey(method, pattern, selector string) string {
 // something (IsWrite) with no action entry for its (method, pattern, selector
 // value), unless it NamesNoPermission: an action entry names the permission
 // the action requires, and such a route requires none (a test pins which
-// writes those are); per action entry whose permission none of the route's checks accepts, unless
+// writes those are); per action entry (a write's, or a restricted read's)
+// whose permission none of the route's checks accepts, unless
 // permissionExceptions holds the entry's Key with a reason; per stale
 // exception; and per action entry whose route and selector value the surface
 // does not have, so that the table and the surface stay one list.
@@ -60,7 +61,7 @@ func (res Result) ActionFailures(table adminaccess.Actions, permissionExceptions
 	usedException := map[string]bool{}
 	for _, entry := range res.Surface {
 		driven[driveKey(entry.Method, entry.Pattern, entry.SelectorValue())] = true
-		if !entry.IsWrite() || entry.NamesNoPermission() {
+		if entry.NamesNoPermission() {
 			continue
 		}
 		var matched []adminaccess.Action
@@ -68,6 +69,11 @@ func (res Result) ActionFailures(table adminaccess.Actions, permissionExceptions
 			if action.Selector.Value == entry.SelectorValue() {
 				matched = append(matched, action)
 			}
+		}
+		// A read needs no entry; one the ADR restricts has one, and its
+		// permission is held to the route's checks like a write's.
+		if !entry.IsWrite() && len(matched) == 0 {
+			continue
 		}
 		if len(matched) == 0 {
 			failures = append(failures, fmt.Sprintf(
