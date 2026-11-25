@@ -868,6 +868,13 @@ type RouterConfig struct {
 	// (ADR-0059 R2.17). Nil reads it from Pool; a test router with an
 	// unconnected pool sets a lister of its own.
 	SealedCredentials v2adminconsole.SealedCredentialLister
+	// ElevationRequests runs the elevation request routes (ADR-0059 R2.2b).
+	// Nil writes to the ledger in Pool; a test router with an unconnected
+	// pool sets a store of its own.
+	ElevationRequests v2adminconsole.ElevationStore
+	// BreakGlassSettings reads the break_glass section for the elevation
+	// request routes. Nil reads it from Pool.
+	BreakGlassSettings v2adminconsole.BreakGlassSettingsReader
 	// ConsoleElevations reads the caller's active elevation for the
 	// capability document. Nil answers none until the elevation ledger
 	// ships (story R3.10a).
@@ -2999,6 +3006,38 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				}
 				v2adminconsole.NewSealedCredentialsHandler(sealedCredentials).
 					Register(r, central(adminaccess.AccessBreakglassManage))
+				// The elevation requests (ADR-0059 R2.2b): request, approve,
+				// deny, the caller's own request, the approval queue and the
+				// history. None starts an elevation (R2.2c). Only a browser
+				// session of the kind session or form reaches the gates: a
+				// token, a native session, a run token and a sealed session
+				// answer 403 before any permission is read. The action table
+				// refuses the writes to an elevation and every route to a
+				// token.
+				elevationRequests := cfg.ElevationRequests
+				breakGlassSettings := cfg.BreakGlassSettings
+				elevationRoles := cfg.ConsoleRoles
+				if cfg.Pool != nil {
+					pool := cfg.Pool
+					if elevationRequests == nil {
+						elevationRequests = v2adminconsole.NewPostgresElevations(pool,
+							accessevent.DefaultAppender("elitea-main/admin"))
+					}
+					if breakGlassSettings == nil {
+						breakGlassSettings = func(ctx context.Context) (platformconfig.BreakGlassSettings, error) {
+							return platformconfig.LoadBreakGlassSettings(ctx, pool)
+						}
+					}
+					if elevationRoles == nil {
+						elevationRoles = v2adminconsole.NewPostgresRoles(pool)
+					}
+				}
+				v2adminconsole.NewElevationsHandler(elevationRequests, breakGlassSettings, elevationRoles).
+					Register(r, v2adminconsole.ElevationGates{
+						Request: central(adminaccess.AccessBreakglassRequest),
+						Approve: central(adminaccess.AccessBreakglassApprove),
+						History: requireAccessRolesView,
+					})
 				// The access posture (ADR-0059 R2.14a): what is wrong with the
 				// roles and tokens, and what is only worth knowing, behind the
 				// gate of the other Access reads. A scoped token that holds

@@ -15,6 +15,21 @@ import (
 
 const adminElevationsMigration = "shared/0269_admin_elevations.sql"
 
+// adminElevationsAmendments are the later files that change the ledger 0269
+// created: 0279 (R2.2b) adds the request columns and replaces the trigger
+// function. A re-apply of 0269 reinstalls 0269's function, so every re-apply
+// below runs the amendments after it, in the order a re-run of the corpus
+// takes.
+var adminElevationsAmendments = []string{"shared/0279_admin_elevation_requests.sql"}
+
+func reapplyAdminElevations(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	execMigrationFile(t, pool, adminElevationsMigration)
+	for _, file := range adminElevationsAmendments {
+		execMigrationFile(t, pool, file)
+	}
+}
+
 func TestAdminElevationsAppliesTwiceWithNoChange(t *testing.T) {
 	for name, build := range map[string]func(*testing.T) *pgxpool.Pool{
 		"bootstrap and corpus": newMigratedPool,
@@ -27,7 +42,7 @@ func TestAdminElevationsAppliesTwiceWithNoChange(t *testing.T) {
 		},
 		"no auth_core": func(t *testing.T) *pgxpool.Pool {
 			pool := newEmptyDatabase(t)
-			execMigrationFile(t, pool, adminElevationsMigration)
+			reapplyAdminElevations(t, pool)
 			return pool
 		},
 	} {
@@ -45,7 +60,7 @@ INSERT INTO elitea_auth.admin_elevations
 VALUES (7, 41, 'admin', 'approved', 'incident', 'r', 7, 8, now(), 'approved', now(), now(), now() + interval '1 hour')
 RETURNING id::text`, &rowID)
 
-			execMigrationFile(t, pool, adminElevationsMigration)
+			reapplyAdminElevations(t, pool)
 
 			if after := adminElevationsShape(t, pool); after != before {
 				t.Fatalf("re-applying 0269 changed the table:\nbefore:\n%s\nafter:\n%s", before, after)

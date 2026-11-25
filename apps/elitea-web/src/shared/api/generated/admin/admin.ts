@@ -110,6 +110,15 @@ import type {
   DelegationGovernedError,
   DelegationReview,
   DelegationScanResult,
+  Elevation,
+  ElevationAnswerRefusedResponse,
+  ElevationDenial,
+  ElevationList,
+  ElevationNotFoundResponse,
+  ElevationRefusal,
+  ElevationRequestCreate,
+  ElevationRequestDecidedResponse,
+  ElevationRequestExpiredResponse,
   EntitlementGrantList,
   ErrorResponse,
   ExecutionSuspension,
@@ -144,6 +153,7 @@ import type {
   ListCredentialInventoryParams,
   ListCredentialReferencesParams,
   ListCredentialUseGrantsParams,
+  ListElevationsParams,
   ListExecutionSuspensionsParams,
   ListExternalAgentIdentitiesParams,
   ListExternalAgentIdentityDriftFindingsParams,
@@ -184,6 +194,7 @@ import type {
   NativeClientWriteResult,
   NativeOAuthError,
   OkResponse,
+  OwnElevationRequest,
   PermissionTrimmingRemoveRequest,
   PermissionTrimmingRemoveResult,
   PermissionTrimmingReport,
@@ -5168,6 +5179,1535 @@ export function useListSealedCredentials<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getListSealedCredentialsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type createElevationRequestResponse201 = {
+  data: Elevation;
+  status: 201;
+};
+
+export type createElevationRequestResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type createElevationRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type createElevationRequestResponse403 = {
+  data: ElevationRefusal;
+  status: 403;
+};
+
+export type createElevationRequestResponse409 = {
+  data: ElevationRefusal;
+  status: 409;
+};
+
+export type createElevationRequestResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type createElevationRequestResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type createElevationRequestResponseSuccess =
+  createElevationRequestResponse201 & {
+    headers: Headers;
+  };
+export type createElevationRequestResponseError = (
+  | createElevationRequestResponse400
+  | createElevationRequestResponse401
+  | createElevationRequestResponse403
+  | createElevationRequestResponse409
+  | createElevationRequestResponse500
+  | createElevationRequestResponse503
+) & {
+  headers: Headers;
+};
+
+export type createElevationRequestResponse =
+  createElevationRequestResponseSuccess | createElevationRequestResponseError;
+
+export const getCreateElevationRequestUrl = () => {
+  return `/admin/access/elevations`;
+};
+
+/**
+ * Asks for a time-boxed elevation of the caller's own browser session
+ * (ADR-0059 decision 5, "Path 1", R2.2b). Nothing starts here: an
+ * approved request is started by its requester in a later step.
+ *
+ * For a holder of `access.breakglass.request` through a STANDING role,
+ * in a browser session (`session` or `form`) with a server-side row. A
+ * personal access token, a native session, a run token and a sealed
+ * session answer 403 `elevation_credential_refused` before any
+ * permission is read. An elevation cannot ask for another
+ * (`elevation_restricted`): more time is a new request after the
+ * elevation ends.
+ *
+ * `duration_minutes` defaults to the break_glass section's online
+ * default and may not exceed its online cap (400
+ * `elevation_duration_over_cap`). The request waits for an answer for
+ * the section's request lifetime (30 minutes by default); every holder
+ * of `access.breakglass.approve` other than the requester is told by
+ * e-mail. With approval switched off (and its delay over) the request
+ * is approved at once by the platform, at the `admin` level, on the
+ * path `self`, and nobody is asked.
+ * @summary Ask for a break-glass elevation
+ */
+export const createElevationRequest = async (
+  elevationRequestCreate: ElevationRequestCreate,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<createElevationRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<createElevationRequestResponse>(
+    getCreateElevationRequestUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(elevationRequestCreate),
+    },
+  );
+};
+
+export const getCreateElevationRequestQueryKey = (
+  elevationRequestCreate?: ElevationRequestCreate,
+) => {
+  return ["POST", `/admin/access/elevations`, elevationRequestCreate] as const;
+};
+
+export const getCreateElevationRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof createElevationRequest>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  elevationRequestCreate: ElevationRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCreateElevationRequestQueryKey(elevationRequestCreate);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof createElevationRequest>>
+  > = ({ signal }) =>
+    createElevationRequest(elevationRequestCreate, {
+      signal,
+      ...requestOptions,
+    });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof createElevationRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CreateElevationRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof createElevationRequest>>
+>;
+export type CreateElevationRequestQueryError =
+  ElevationRefusal | N401Response | N500Response | ErrorResponse;
+
+export function useCreateElevationRequest<
+  TData = Awaited<ReturnType<typeof createElevationRequest>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  elevationRequestCreate: ElevationRequestCreate,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateElevationRequest<
+  TData = Awaited<ReturnType<typeof createElevationRequest>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  elevationRequestCreate: ElevationRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof createElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof createElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCreateElevationRequest<
+  TData = Awaited<ReturnType<typeof createElevationRequest>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  elevationRequestCreate: ElevationRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Ask for a break-glass elevation
+ */
+
+export function useCreateElevationRequest<
+  TData = Awaited<ReturnType<typeof createElevationRequest>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  elevationRequestCreate: ElevationRequestCreate,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof createElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCreateElevationRequestQueryOptions(
+    elevationRequestCreate,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listElevationsResponse200 = {
+  data: ElevationList;
+  status: 200;
+};
+
+export type listElevationsResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type listElevationsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listElevationsResponse403 = {
+  data: ElevationRefusal;
+  status: 403;
+};
+
+export type listElevationsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listElevationsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listElevationsResponseSuccess = listElevationsResponse200 & {
+  headers: Headers;
+};
+export type listElevationsResponseError = (
+  | listElevationsResponse400
+  | listElevationsResponse401
+  | listElevationsResponse403
+  | listElevationsResponse500
+  | listElevationsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listElevationsResponse =
+  listElevationsResponseSuccess | listElevationsResponseError;
+
+export const getListElevationsUrl = (params?: ListElevationsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/elevations?${stringifiedParams}`
+    : `/admin/access/elevations`;
+};
+
+/**
+ * Every request and elevation of the ledger, newest first, paged
+ * (ADR-0059 R2.2b). For a holder of `access.roles.view`, in a browser
+ * session (a token is refused with `elevation_credential_refused`).
+ *
+ * The reason TEXT is returned only to a holder of
+ * `access.breakglass.review` through a standing role, the requester,
+ * the person elevated and the approver; to anyone else `reason` is
+ * null and the reason code is the list's.
+ * @summary The history of elevation requests and elevations
+ */
+export const listElevations = async (
+  params?: ListElevationsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listElevationsResponse> => {
+  return eliteaFetch<listElevationsResponse>(getListElevationsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListElevationsQueryKey = (params?: ListElevationsParams) => {
+  return [`/admin/access/elevations`, ...(params ? [params] : [])] as const;
+};
+
+export const getListElevationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listElevations>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  params?: ListElevationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listElevations>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListElevationsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listElevations>>> = ({
+    signal,
+  }) => listElevations(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listElevations>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListElevationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listElevations>>
+>;
+export type ListElevationsQueryError =
+  ElevationRefusal | N401Response | N500Response | ErrorResponse;
+
+export function useListElevations<
+  TData = Awaited<ReturnType<typeof listElevations>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  params: undefined | ListElevationsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listElevations>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listElevations>>,
+          TError,
+          Awaited<ReturnType<typeof listElevations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListElevations<
+  TData = Awaited<ReturnType<typeof listElevations>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  params?: ListElevationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listElevations>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listElevations>>,
+          TError,
+          Awaited<ReturnType<typeof listElevations>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListElevations<
+  TData = Awaited<ReturnType<typeof listElevations>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  params?: ListElevationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listElevations>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The history of elevation requests and elevations
+ */
+
+export function useListElevations<
+  TData = Awaited<ReturnType<typeof listElevations>>,
+  TError = ElevationRefusal | N401Response | N500Response | ErrorResponse,
+>(
+  params?: ListElevationsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof listElevations>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListElevationsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getOwnElevationRequestResponse200 = {
+  data: OwnElevationRequest;
+  status: 200;
+};
+
+export type getOwnElevationRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getOwnElevationRequestResponse403 = {
+  data: ElevationRefusal;
+  status: 403;
+};
+
+export type getOwnElevationRequestResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getOwnElevationRequestResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getOwnElevationRequestResponseSuccess =
+  getOwnElevationRequestResponse200 & {
+    headers: Headers;
+  };
+export type getOwnElevationRequestResponseError = (
+  | getOwnElevationRequestResponse401
+  | getOwnElevationRequestResponse403
+  | getOwnElevationRequestResponse500
+  | getOwnElevationRequestResponse503
+) & {
+  headers: Headers;
+};
+
+export type getOwnElevationRequestResponse =
+  getOwnElevationRequestResponseSuccess | getOwnElevationRequestResponseError;
+
+export const getGetOwnElevationRequestUrl = () => {
+  return `/admin/access/elevations/mine`;
+};
+
+/**
+ * The caller's latest request (Home, ADR-0059 R2.2b), with its state,
+ * the time left (until the request expires while it waits, until the
+ * elevation ends while it is active) and the roles that can approve
+ * it. `request` is null when the caller never asked. A denied request
+ * carries its `denial_reason_code`; a request past its lifetime reads
+ * `request_expired`. For a holder of `access.breakglass.request`, in a
+ * browser session.
+ * @summary The caller's latest elevation request
+ */
+export const getOwnElevationRequest = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getOwnElevationRequestResponse> => {
+  return eliteaFetch<getOwnElevationRequestResponse>(
+    getGetOwnElevationRequestUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetOwnElevationRequestQueryKey = () => {
+  return [`/admin/access/elevations/mine`] as const;
+};
+
+export const getGetOwnElevationRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof getOwnElevationRequest>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getOwnElevationRequest>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetOwnElevationRequestQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getOwnElevationRequest>>
+  > = ({ signal }) => getOwnElevationRequest({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getOwnElevationRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetOwnElevationRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getOwnElevationRequest>>
+>;
+export type GetOwnElevationRequestQueryError =
+  N401Response | ElevationRefusal | N500Response | ErrorResponse;
+
+export function useGetOwnElevationRequest<
+  TData = Awaited<ReturnType<typeof getOwnElevationRequest>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getOwnElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getOwnElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getOwnElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetOwnElevationRequest<
+  TData = Awaited<ReturnType<typeof getOwnElevationRequest>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getOwnElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getOwnElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof getOwnElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetOwnElevationRequest<
+  TData = Awaited<ReturnType<typeof getOwnElevationRequest>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getOwnElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The caller's latest elevation request
+ */
+
+export function useGetOwnElevationRequest<
+  TData = Awaited<ReturnType<typeof getOwnElevationRequest>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getOwnElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetOwnElevationRequestQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listPendingElevationRequestsResponse200 = {
+  data: ElevationList;
+  status: 200;
+};
+
+export type listPendingElevationRequestsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listPendingElevationRequestsResponse403 = {
+  data: ElevationRefusal;
+  status: 403;
+};
+
+export type listPendingElevationRequestsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listPendingElevationRequestsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listPendingElevationRequestsResponseSuccess =
+  listPendingElevationRequestsResponse200 & {
+    headers: Headers;
+  };
+export type listPendingElevationRequestsResponseError = (
+  | listPendingElevationRequestsResponse401
+  | listPendingElevationRequestsResponse403
+  | listPendingElevationRequestsResponse500
+  | listPendingElevationRequestsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listPendingElevationRequestsResponse =
+  | listPendingElevationRequestsResponseSuccess
+  | listPendingElevationRequestsResponseError;
+
+export const getListPendingElevationRequestsUrl = () => {
+  return `/admin/access/elevations/pending`;
+};
+
+/**
+ * The requests that wait for an answer within their lifetime, oldest
+ * first, with their count (ADR-0059 R2.2b): the approval queue. The
+ * caller's own requests are left out, since nobody answers their own.
+ * The reason text is in every row: the answer depends on it. For a
+ * holder of `access.breakglass.approve`, in a browser session.
+ * @summary The requests waiting for an answer
+ */
+export const listPendingElevationRequests = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listPendingElevationRequestsResponse> => {
+  return eliteaFetch<listPendingElevationRequestsResponse>(
+    getListPendingElevationRequestsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListPendingElevationRequestsQueryKey = () => {
+  return [`/admin/access/elevations/pending`] as const;
+};
+
+export const getListPendingElevationRequestsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPendingElevationRequests>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof listPendingElevationRequests>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListPendingElevationRequestsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listPendingElevationRequests>>
+  > = ({ signal }) =>
+    listPendingElevationRequests({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPendingElevationRequests>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListPendingElevationRequestsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPendingElevationRequests>>
+>;
+export type ListPendingElevationRequestsQueryError =
+  N401Response | ElevationRefusal | N500Response | ErrorResponse;
+
+export function useListPendingElevationRequests<
+  TData = Awaited<ReturnType<typeof listPendingElevationRequests>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPendingElevationRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPendingElevationRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listPendingElevationRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPendingElevationRequests<
+  TData = Awaited<ReturnType<typeof listPendingElevationRequests>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPendingElevationRequests>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listPendingElevationRequests>>,
+          TError,
+          Awaited<ReturnType<typeof listPendingElevationRequests>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListPendingElevationRequests<
+  TData = Awaited<ReturnType<typeof listPendingElevationRequests>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPendingElevationRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The requests waiting for an answer
+ */
+
+export function useListPendingElevationRequests<
+  TData = Awaited<ReturnType<typeof listPendingElevationRequests>>,
+  TError = N401Response | ElevationRefusal | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listPendingElevationRequests>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListPendingElevationRequestsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type approveElevationRequestResponse200 = {
+  data: Elevation;
+  status: 200;
+};
+
+export type approveElevationRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type approveElevationRequestResponse403 = {
+  data: ElevationAnswerRefusedResponse;
+  status: 403;
+};
+
+export type approveElevationRequestResponse404 = {
+  data: ElevationNotFoundResponse;
+  status: 404;
+};
+
+export type approveElevationRequestResponse409 = {
+  data: ElevationRequestDecidedResponse;
+  status: 409;
+};
+
+export type approveElevationRequestResponse410 = {
+  data: ElevationRequestExpiredResponse;
+  status: 410;
+};
+
+export type approveElevationRequestResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type approveElevationRequestResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type approveElevationRequestResponseSuccess =
+  approveElevationRequestResponse200 & {
+    headers: Headers;
+  };
+export type approveElevationRequestResponseError = (
+  | approveElevationRequestResponse401
+  | approveElevationRequestResponse403
+  | approveElevationRequestResponse404
+  | approveElevationRequestResponse409
+  | approveElevationRequestResponse410
+  | approveElevationRequestResponse500
+  | approveElevationRequestResponse503
+) & {
+  headers: Headers;
+};
+
+export type approveElevationRequestResponse =
+  approveElevationRequestResponseSuccess | approveElevationRequestResponseError;
+
+export const getApproveElevationRequestUrl = (elevationID: string) => {
+  return `/admin/access/elevations/${elevationID}/approve`;
+};
+
+/**
+ * Approves a waiting request (ADR-0059 decision 5, "Path 1" step 2,
+ * R2.2b). The level is the approver's: `super_admin` when the approver
+ * holds `admin.auth.users.super_admin` through a standing role,
+ * otherwise `admin`. Nothing starts here.
+ *
+ * For a holder of `access.breakglass.approve` through a standing role,
+ * in a browser session. Nobody answers their own request
+ * (`elevation_own_request`), and a person who holds an active
+ * elevation, in any session, answers none
+ * (`elevation_approver_elevated`). An answer after the request
+ * lifetime answers 410 `elevation_request_expired` and records the
+ * expiry, so the request reads as expired at once. No body.
+ * @summary Approve an elevation request
+ */
+export const approveElevationRequest = async (
+  elevationID: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<approveElevationRequestResponse> => {
+  return eliteaFetch<approveElevationRequestResponse>(
+    getApproveElevationRequestUrl(elevationID),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getApproveElevationRequestQueryKey = (elevationID: string) => {
+  return ["POST", `/admin/access/elevations/${elevationID}/approve`] as const;
+};
+
+export const getApproveElevationRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof approveElevationRequest>>,
+  TError =
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getApproveElevationRequestQueryKey(elevationID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof approveElevationRequest>>
+  > = ({ signal }) =>
+    approveElevationRequest(elevationID, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: elevationID !== null && elevationID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof approveElevationRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ApproveElevationRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof approveElevationRequest>>
+>;
+export type ApproveElevationRequestQueryError =
+  | N401Response
+  | ElevationAnswerRefusedResponse
+  | ElevationNotFoundResponse
+  | ElevationRequestDecidedResponse
+  | ElevationRequestExpiredResponse
+  | N500Response
+  | ErrorResponse;
+
+export function useApproveElevationRequest<
+  TData = Awaited<ReturnType<typeof approveElevationRequest>>,
+  TError =
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof approveElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveElevationRequest<
+  TData = Awaited<ReturnType<typeof approveElevationRequest>>,
+  TError =
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof approveElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof approveElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useApproveElevationRequest<
+  TData = Awaited<ReturnType<typeof approveElevationRequest>>,
+  TError =
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Approve an elevation request
+ */
+
+export function useApproveElevationRequest<
+  TData = Awaited<ReturnType<typeof approveElevationRequest>>,
+  TError =
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof approveElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getApproveElevationRequestQueryOptions(
+    elevationID,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type denyElevationRequestResponse200 = {
+  data: Elevation;
+  status: 200;
+};
+
+export type denyElevationRequestResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type denyElevationRequestResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type denyElevationRequestResponse403 = {
+  data: ElevationAnswerRefusedResponse;
+  status: 403;
+};
+
+export type denyElevationRequestResponse404 = {
+  data: ElevationNotFoundResponse;
+  status: 404;
+};
+
+export type denyElevationRequestResponse409 = {
+  data: ElevationRequestDecidedResponse;
+  status: 409;
+};
+
+export type denyElevationRequestResponse410 = {
+  data: ElevationRequestExpiredResponse;
+  status: 410;
+};
+
+export type denyElevationRequestResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type denyElevationRequestResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type denyElevationRequestResponseSuccess =
+  denyElevationRequestResponse200 & {
+    headers: Headers;
+  };
+export type denyElevationRequestResponseError = (
+  | denyElevationRequestResponse400
+  | denyElevationRequestResponse401
+  | denyElevationRequestResponse403
+  | denyElevationRequestResponse404
+  | denyElevationRequestResponse409
+  | denyElevationRequestResponse410
+  | denyElevationRequestResponse500
+  | denyElevationRequestResponse503
+) & {
+  headers: Headers;
+};
+
+export type denyElevationRequestResponse =
+  denyElevationRequestResponseSuccess | denyElevationRequestResponseError;
+
+export const getDenyElevationRequestUrl = (elevationID: string) => {
+  return `/admin/access/elevations/${elevationID}/deny`;
+};
+
+/**
+ * Denies a waiting request with a reason code the requester reads on
+ * Home (ADR-0059 decision 6, R2.2b). The same callers and the same
+ * refusals as the approval; an unknown reason code answers 400
+ * `elevation_request_invalid`.
+ * @summary Deny an elevation request
+ */
+export const denyElevationRequest = async (
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<denyElevationRequestResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<denyElevationRequestResponse>(
+    getDenyElevationRequestUrl(elevationID),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(elevationDenial),
+    },
+  );
+};
+
+export const getDenyElevationRequestQueryKey = (
+  elevationID: string,
+  elevationDenial?: ElevationDenial,
+) => {
+  return [
+    "POST",
+    `/admin/access/elevations/${elevationID}/deny`,
+    elevationDenial,
+  ] as const;
+};
+
+export const getDenyElevationRequestQueryOptions = <
+  TData = Awaited<ReturnType<typeof denyElevationRequest>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof denyElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDenyElevationRequestQueryKey(elevationID, elevationDenial);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof denyElevationRequest>>
+  > = ({ signal }) =>
+    denyElevationRequest(elevationID, elevationDenial, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: elevationID !== null && elevationID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof denyElevationRequest>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DenyElevationRequestQueryResult = NonNullable<
+  Awaited<ReturnType<typeof denyElevationRequest>>
+>;
+export type DenyElevationRequestQueryError =
+  | ElevationRefusal
+  | N401Response
+  | ElevationAnswerRefusedResponse
+  | ElevationNotFoundResponse
+  | ElevationRequestDecidedResponse
+  | ElevationRequestExpiredResponse
+  | N500Response
+  | ErrorResponse;
+
+export function useDenyElevationRequest<
+  TData = Awaited<ReturnType<typeof denyElevationRequest>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof denyElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof denyElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof denyElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDenyElevationRequest<
+  TData = Awaited<ReturnType<typeof denyElevationRequest>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof denyElevationRequest>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof denyElevationRequest>>,
+          TError,
+          Awaited<ReturnType<typeof denyElevationRequest>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDenyElevationRequest<
+  TData = Awaited<ReturnType<typeof denyElevationRequest>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof denyElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Deny an elevation request
+ */
+
+export function useDenyElevationRequest<
+  TData = Awaited<ReturnType<typeof denyElevationRequest>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationAnswerRefusedResponse
+    | ElevationNotFoundResponse
+    | ElevationRequestDecidedResponse
+    | ElevationRequestExpiredResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationDenial: ElevationDenial,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof denyElevationRequest>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDenyElevationRequestQueryOptions(
+    elevationID,
+    elevationDenial,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

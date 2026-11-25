@@ -176,6 +176,12 @@ type ElevationRecord struct {
 	EndedAt           time.Time
 	EndReason         string
 	ReviewState       string
+	// Duration is the duration a request asked for (shared 0279), from which
+	// the start computes the expiry; zero on a row that started at insert.
+	Duration time.Duration
+	// DenialReasonCode is why a request was denied (ElevationDenial*); ""
+	// otherwise.
+	DenialReasonCode string
 }
 
 // ActiveAt reports whether the elevation grants anything at `now`: started,
@@ -324,17 +330,20 @@ func (s ElevationStart) decidedAt() time.Time {
 const elevationColumns = `id, user_id, browser_session_ref, COALESCE(level, ''), path, reason_code, reason,
     COALESCE(ticket, ''), requester_user_id, COALESCE(approver_user_id, 0), requested_at,
     COALESCE(decision, ''), decided_at, started_at, expires_at, ended_at,
-    COALESCE(end_reason, ''), COALESCE(review_state, '')`
+    COALESCE(end_reason, ''), COALESCE(review_state, ''), COALESCE(duration_minutes, 0),
+    COALESCE(denial_reason_code, '')`
 
 func scanElevation(row pgx.Row) (ElevationRecord, error) {
 	var e ElevationRecord
 	var decided, started, expires, ended *time.Time
+	var minutes int64
 	if err := row.Scan(&e.ID, &e.UserID, &e.BrowserSessionRef, &e.Level, &e.Path, &e.ReasonCode, &e.Reason,
 		&e.Ticket, &e.RequesterUserID, &e.ApproverUserID, &e.RequestedAt,
 		&e.Decision, &decided, &started, &expires, &ended,
-		&e.EndReason, &e.ReviewState); err != nil {
+		&e.EndReason, &e.ReviewState, &minutes, &e.DenialReasonCode); err != nil {
 		return ElevationRecord{}, err
 	}
+	e.Duration = time.Duration(minutes) * time.Minute
 	for _, field := range []struct {
 		from *time.Time
 		to   *time.Time

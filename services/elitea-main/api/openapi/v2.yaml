@@ -239,6 +239,14 @@ components:
         format: date
       description: End of date range (inclusive)
 
+    ElevationID:
+      name: elevationID
+      in: path
+      required: true
+      description: The id of the elevation request (a UUID); any other value answers 404 `elevation_not_found`.
+      schema:
+        type: string
+        format: uuid
   schemas:
     EditorTestRunsPage:
       type: object
@@ -19661,6 +19669,190 @@ components:
           items:
             $ref: '#/components/schemas/SealedCredential'
 
+    ElevationRequestCreate:
+      type: object
+      required: [reason_code, reason]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:295-300
+        (elevationRequestBody). An unknown field is refused.
+      properties:
+        reason_code:
+          type: string
+          description: >
+            `incident`, `identity_outage`, `recovery` or `other` (the
+            reason codes of the ledger, ADR-0059 decision 5).
+        reason:
+          type: string
+          maxLength: 2000
+          description: Why the elevation is needed; required, never blank.
+        ticket:
+          type: string
+          nullable: true
+          maxLength: 200
+          description: An incident or change ticket, optional.
+        duration_minutes:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: >
+            The elevation's duration once started. Absent or null is the
+            break_glass section's online default; above the section's online
+            cap answers 400 `elevation_duration_over_cap`.
+
+    ElevationDenial:
+      type: object
+      required: [reason_code]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:302-304
+        (elevationDenyBody). Never free text.
+      properties:
+        reason_code:
+          type: string
+          description: >
+            `not_justified`, `more_information_needed`,
+            `standing_access_suffices` or `other`.
+
+    ElevationPerson:
+      type: object
+      required: [id, name, email]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:306-310
+        (personBody). Empty name and e-mail when the account row no longer
+        exists.
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        email: { type: string }
+
+    Elevation:
+      type: object
+      required: [id, state, path, level, reason_code, reason, ticket, duration_minutes, person, approver,
+                 denial_reason_code, requested_at, request_expires_at, decided_at, started_at, expires_at,
+                 ended_at, end_reason, review_state, time_left_seconds]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:312-333
+        (elevationView). One row of the elevation ledger: a request, its
+        decision and, once started, the elevation.
+      properties:
+        id: { type: string, format: uuid }
+        state:
+          type: string
+          description: >
+            At the time of the read: `requested`, `approved`, `denied`,
+            `request_expired` (also an undecided request past its lifetime
+            before the platform records it), `active`, `ended`, `expired`,
+            `review_pending`, `reviewed` or `unreviewed_no_reviewer`.
+        path:
+          type: string
+          description: >
+            `approved` (a second person answers), `self` (approval was off:
+            the platform approved and nobody was asked) or `sealed` (the
+            sealed credential).
+        level:
+          type: string
+          nullable: true
+          description: "`admin` or `super_admin`; null until a decision approves it."
+        reason_code: { type: string }
+        reason:
+          type: string
+          nullable: true
+          description: >
+            The reason text; null on a history row for a caller who is
+            neither a standing holder of `access.breakglass.review`, the
+            requester, the person nor the approver.
+        ticket: { type: string, nullable: true }
+        duration_minutes:
+          type: integer
+          nullable: true
+          description: The duration asked for; null on a row with no request (the sealed path).
+        person:
+          $ref: '#/components/schemas/ElevationPerson'
+        approver:
+          allOf:
+            - $ref: '#/components/schemas/ElevationPerson'
+          nullable: true
+          description: Who approved or denied; null while undecided and on the paths self and sealed.
+        denial_reason_code:
+          type: string
+          nullable: true
+          description: The reason code of a denial (see ElevationDenial).
+        requested_at: { type: string, format: date-time }
+        request_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When a waiting request expires; null in every other state.
+        decided_at: { type: string, format: date-time, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        ended_at: { type: string, format: date-time, nullable: true }
+        end_reason: { type: string, nullable: true }
+        review_state: { type: string, nullable: true }
+        time_left_seconds:
+          type: integer
+          format: int64
+          description: >
+            Seconds until a waiting request expires, or until an active
+            elevation ends; 0 in every other state.
+
+    OwnElevationRequest:
+      type: object
+      required: [request, approving_roles]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:335-338
+        (ownElevationBody).
+      properties:
+        request:
+          allOf:
+            - $ref: '#/components/schemas/Elevation'
+          nullable: true
+          description: The caller's latest request; null when there is none.
+        approving_roles:
+          type: array
+          items: { type: string }
+          description: >
+            The administration roles that hold `access.breakglass.approve`,
+            by name, sorted; never the unassignable `system` role.
+
+    ElevationList:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:340-343
+        (elevationListBody).
+      properties:
+        total:
+          type: integer
+          description: Every row of the list (the history counts all pages; the queue is one page).
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/Elevation'
+
+    ElevationRefusal:
+      type: object
+      required: [error]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:772-777
+        (writeElevationRefusal). A refusal of an elevation request route.
+        `error` is the message; a client keys a translated message on
+        `code`, which a route gate's plain refusal does not carry.
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          description: >
+            `elevation_credential_refused` (403: not a browser session),
+            `elevation_request_invalid` (400), `elevation_duration_over_cap`
+            (400), `elevation_requester_not_eligible` (403),
+            `elevation_request_pending` (409), `elevation_not_found` (404),
+            `elevation_request_decided` (409), `elevation_request_expired`
+            (410), `elevation_own_request` (403),
+            `elevation_approver_elevated` (403),
+            `elevation_approver_not_eligible` (403), or
+            `elevation_restricted` (403, ADR-0059 R2.8a: an elevation may
+            not answer or ask).
+
     TokenExpiration:
       type: object
       required: [measure, value]
@@ -24859,6 +25051,61 @@ components:
 
 
   responses:
+    ElevationAnswerRefused:
+      description: >-
+        403: the credential is not a browser session
+        (`elevation_credential_refused`), the caller lacks
+        `access.breakglass.approve` (`error` only) or holds it by no
+        standing role or is suspended (`elevation_approver_not_eligible`),
+        the request is the caller's own (`elevation_own_request`), the
+        caller holds an active elevation in any session
+        (`elevation_approver_elevated`), or the caller's active elevation
+        took part in the session's permissions (`elevation_restricted`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          examples:
+            elevation_own_request:
+              summary: The requester answers their own request
+              value: { error: nobody answers their own request, code: elevation_own_request }
+            elevation_approver_elevated:
+              summary: The approver holds an active elevation
+              value:
+                error: a person under an elevation cannot answer an elevation request
+                code: elevation_approver_elevated
+            elevation_credential_refused:
+              summary: A personal access token of an approver
+              value: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
+    ElevationNotFound:
+      description: '404: no such elevation request (`elevation_not_found`).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          example: { error: no such elevation request, code: elevation_not_found }
+    ElevationRequestDecided:
+      description: >-
+        409: the request was approved, denied or started already, or it is
+        not a request that takes an answer (`elevation_request_decided`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          example: { error: the request was decided already, code: elevation_request_decided }
+    ElevationRequestExpired:
+      description: >-
+        410 Gone: the request outlived its lifetime unanswered
+        (`elevation_request_expired`). The expiry is recorded by this call
+        when nothing recorded it before, so the request reads as
+        `request_expired` at once; the requester can make a new one.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          example:
+            error: the request expired unanswered; the requester can make a new one
+            code: elevation_request_expired
     SyncCursorInvalid:
       description: >-
         400: `changes_since` is not a cursor this list issued, or `limit` is
@@ -26490,6 +26737,451 @@ paths:
         '500': { $ref: '#/components/responses/500' }
         '503':
           description: The sealed credential list is not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations:
+    post:
+      operationId: createElevationRequest
+      summary: Ask for a break-glass elevation
+      description: |
+        Asks for a time-boxed elevation of the caller's own browser session
+        (ADR-0059 decision 5, "Path 1", R2.2b). Nothing starts here: an
+        approved request is started by its requester in a later step.
+
+        For a holder of `access.breakglass.request` through a STANDING role,
+        in a browser session (`session` or `form`) with a server-side row. A
+        personal access token, a native session, a run token and a sealed
+        session answer 403 `elevation_credential_refused` before any
+        permission is read. An elevation cannot ask for another
+        (`elevation_restricted`): more time is a new request after the
+        elevation ends.
+
+        `duration_minutes` defaults to the break_glass section's online
+        default and may not exceed its online cap (400
+        `elevation_duration_over_cap`). The request waits for an answer for
+        the section's request lifetime (30 minutes by default); every holder
+        of `access.breakglass.approve` other than the requester is told by
+        e-mail. With approval switched off (and its delay over) the request
+        is approved at once by the platform, at the `admin` level, on the
+        path `self`, and nobody is asked.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ElevationRequestCreate'
+            example:
+              reason_code: incident
+              reason: The model provider is down and the routing must be changed now.
+              ticket: INC-4711
+              duration_minutes: 60
+      responses:
+        '201':
+          description: The request, as recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Elevation'
+              example:
+                id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                state: requested
+                path: approved
+                level: null
+                reason_code: incident
+                reason: The model provider is down and the routing must be changed now.
+                ticket: INC-4711
+                duration_minutes: 60
+                person: { id: 12, name: Rui Responder, email: rui@example.com }
+                approver: null
+                denial_reason_code: null
+                requested_at: '2026-11-25T10:00:00Z'
+                request_expires_at: '2026-11-25T10:30:00Z'
+                decided_at: null
+                started_at: null
+                expires_at: null
+                ended_at: null
+                end_reason: null
+                review_state: null
+                time_left_seconds: 1800
+        '400':
+          description: >
+            The body is not a valid request (`elevation_request_invalid`: no
+            reason, an unknown reason code, an unknown field), or the duration
+            is over the section's cap (`elevation_duration_over_cap`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              examples:
+                elevation_request_invalid:
+                  summary: No reason was given
+                  value: { error: a request needs a reason, code: elevation_request_invalid }
+                elevation_duration_over_cap:
+                  summary: The duration is over the cap
+                  value: { error: duration_minutes is over the cap of 240 minutes, code: elevation_duration_over_cap }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The credential is not a browser session
+            (`elevation_credential_refused`), the caller lacks
+            `access.breakglass.request` (`error` only) or holds it by no
+            standing role (`elevation_requester_not_eligible`), or the caller's
+            active elevation took part in the session's permissions
+            (`elevation_restricted`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              examples:
+                elevation_credential_refused:
+                  summary: A personal access token
+                  value:
+                    error: >-
+                      an elevation route takes a browser session only: a token, a native session, a run
+                      token and a sealed session cannot call it
+                    code: elevation_credential_refused
+                elevation_requester_not_eligible:
+                  summary: No standing access.breakglass.request
+                  value:
+                    error: a request needs access.breakglass.request through a standing role
+                    code: elevation_requester_not_eligible
+        '409':
+          description: A request of the caller waits for an answer (`elevation_request_pending`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: a request of yours is waiting for an answer, code: elevation_request_pending }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    get:
+      operationId: listElevations
+      summary: The history of elevation requests and elevations
+      description: |
+        Every request and elevation of the ledger, newest first, paged
+        (ADR-0059 R2.2b). For a holder of `access.roles.view`, in a browser
+        session (a token is refused with `elevation_credential_refused`).
+
+        The reason TEXT is returned only to a holder of
+        `access.breakglass.review` through a standing role, the requester,
+        the person elevated and the approver; to anyone else `reason` is
+        null and the reason code is the list's.
+      tags: [admin]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Rows per page, 1 to 200 (default 50).
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the history, with the total
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationList'
+              example:
+                total: 1
+                rows:
+                  - id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                    state: denied
+                    path: approved
+                    level: null
+                    reason_code: incident
+                    reason: null
+                    ticket: INC-4711
+                    duration_minutes: 60
+                    person: { id: 12, name: Rui Responder, email: rui@example.com }
+                    approver: { id: 11, name: Ada Admin, email: ada@example.com }
+                    denial_reason_code: standing_access_suffices
+                    requested_at: '2026-11-25T10:00:00Z'
+                    request_expires_at: null
+                    decided_at: '2026-11-25T10:05:00Z'
+                    started_at: null
+                    expires_at: null
+                    ended_at: null
+                    end_reason: null
+                    review_state: null
+                    time_left_seconds: 0
+        '400':
+          description: The limit or the offset is not valid (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: limit must be between 1 and 200, code: elevation_request_invalid }
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The credential is not a browser session
+            (`elevation_credential_refused`), or the caller lacks
+            `access.roles.view` (`error` only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              examples:
+                elevation_credential_refused:
+                  summary: A personal access token
+                  value: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
+                route_gate:
+                  summary: The caller lacks access.roles.view
+                  value: { error: insufficient permissions }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/mine:
+    get:
+      operationId: getOwnElevationRequest
+      summary: The caller's latest elevation request
+      description: |
+        The caller's latest request (Home, ADR-0059 R2.2b), with its state,
+        the time left (until the request expires while it waits, until the
+        elevation ends while it is active) and the roles that can approve
+        it. `request` is null when the caller never asked. A denied request
+        carries its `denial_reason_code`; a request past its lifetime reads
+        `request_expired`. For a holder of `access.breakglass.request`, in a
+        browser session.
+      tags: [admin]
+      responses:
+        '200':
+          description: The caller's latest request and the approving roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnElevationRequest'
+              example:
+                request:
+                  id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                  state: requested
+                  path: approved
+                  level: null
+                  reason_code: incident
+                  reason: The model provider is down and the routing must be changed now.
+                  ticket: INC-4711
+                  duration_minutes: 60
+                  person: { id: 12, name: Rui Responder, email: rui@example.com }
+                  approver: null
+                  denial_reason_code: null
+                  requested_at: '2026-11-25T10:00:00Z'
+                  request_expires_at: '2026-11-25T10:30:00Z'
+                  decided_at: null
+                  started_at: null
+                  expires_at: null
+                  ended_at: null
+                  end_reason: null
+                  review_state: null
+                  time_left_seconds: 1200
+                approving_roles: [admin, super_admin]
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The credential is not a browser session
+            (`elevation_credential_refused`), or the caller lacks
+            `access.breakglass.request` (`error` only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/pending:
+    get:
+      operationId: listPendingElevationRequests
+      summary: The requests waiting for an answer
+      description: |
+        The requests that wait for an answer within their lifetime, oldest
+        first, with their count (ADR-0059 R2.2b): the approval queue. The
+        caller's own requests are left out, since nobody answers their own.
+        The reason text is in every row: the answer depends on it. For a
+        holder of `access.breakglass.approve`, in a browser session.
+      tags: [admin]
+      responses:
+        '200':
+          description: The waiting requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationList'
+              example:
+                total: 1
+                rows:
+                  - id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                    state: requested
+                    path: approved
+                    level: null
+                    reason_code: incident
+                    reason: The model provider is down and the routing must be changed now.
+                    ticket: INC-4711
+                    duration_minutes: 60
+                    person: { id: 12, name: Rui Responder, email: rui@example.com }
+                    approver: null
+                    denial_reason_code: null
+                    requested_at: '2026-11-25T10:00:00Z'
+                    request_expires_at: '2026-11-25T10:30:00Z'
+                    decided_at: null
+                    started_at: null
+                    expires_at: null
+                    ended_at: null
+                    end_reason: null
+                    review_state: null
+                    time_left_seconds: 1500
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            The credential is not a browser session
+            (`elevation_credential_refused`), or the caller lacks
+            `access.breakglass.approve` (`error` only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: insufficient permissions }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/{elevationID}/approve:
+    post:
+      operationId: approveElevationRequest
+      summary: Approve an elevation request
+      description: |
+        Approves a waiting request (ADR-0059 decision 5, "Path 1" step 2,
+        R2.2b). The level is the approver's: `super_admin` when the approver
+        holds `admin.auth.users.super_admin` through a standing role,
+        otherwise `admin`. Nothing starts here.
+
+        For a holder of `access.breakglass.approve` through a standing role,
+        in a browser session. Nobody answers their own request
+        (`elevation_own_request`), and a person who holds an active
+        elevation, in any session, answers none
+        (`elevation_approver_elevated`). An answer after the request
+        lifetime answers 410 `elevation_request_expired` and records the
+        expiry, so the request reads as expired at once. No body.
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/ElevationID'
+      responses:
+        '200':
+          description: The approved request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Elevation'
+              example:
+                id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                state: approved
+                path: approved
+                level: admin
+                reason_code: incident
+                reason: The model provider is down and the routing must be changed now.
+                ticket: INC-4711
+                duration_minutes: 60
+                person: { id: 12, name: Rui Responder, email: rui@example.com }
+                approver: { id: 11, name: Ada Admin, email: ada@example.com }
+                denial_reason_code: null
+                requested_at: '2026-11-25T10:00:00Z'
+                request_expires_at: null
+                decided_at: '2026-11-25T10:05:00Z'
+                started_at: null
+                expires_at: null
+                ended_at: null
+                end_reason: null
+                review_state: null
+                time_left_seconds: 0
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationAnswerRefused' }
+        '404': { $ref: '#/components/responses/ElevationNotFound' }
+        '409': { $ref: '#/components/responses/ElevationRequestDecided' }
+        '410': { $ref: '#/components/responses/ElevationRequestExpired' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/{elevationID}/deny:
+    post:
+      operationId: denyElevationRequest
+      summary: Deny an elevation request
+      description: |
+        Denies a waiting request with a reason code the requester reads on
+        Home (ADR-0059 decision 6, R2.2b). The same callers and the same
+        refusals as the approval; an unknown reason code answers 400
+        `elevation_request_invalid`.
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/ElevationID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ElevationDenial'
+            example:
+              reason_code: standing_access_suffices
+      responses:
+        '200':
+          description: The denied request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Elevation'
+              example:
+                id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                state: denied
+                path: approved
+                level: null
+                reason_code: incident
+                reason: The model provider is down and the routing must be changed now.
+                ticket: INC-4711
+                duration_minutes: 60
+                person: { id: 12, name: Rui Responder, email: rui@example.com }
+                approver: { id: 11, name: Ada Admin, email: ada@example.com }
+                denial_reason_code: standing_access_suffices
+                requested_at: '2026-11-25T10:00:00Z'
+                request_expires_at: null
+                decided_at: '2026-11-25T10:05:00Z'
+                started_at: null
+                expires_at: null
+                ended_at: null
+                end_reason: null
+                review_state: null
+                time_left_seconds: 0
+        '400':
+          description: The reason code is not one of the list (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: reason_code must be one of not_justified, more_information_needed, standing_access_suffices, other
+                code: elevation_request_invalid
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationAnswerRefused' }
+        '404': { $ref: '#/components/responses/ElevationNotFound' }
+        '409': { $ref: '#/components/responses/ElevationRequestDecided' }
+        '410': { $ref: '#/components/responses/ElevationRequestExpired' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation requests are not configured on this deployment.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

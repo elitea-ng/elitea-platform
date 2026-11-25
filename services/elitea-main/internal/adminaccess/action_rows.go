@@ -24,6 +24,16 @@ const (
 	AccessPosturePattern     = adminPrefix + "/access/posture"
 )
 
+// The elevation request routes (ADR-0059 R2.2b): the request, its answers,
+// the caller's own request, the approval queue and the history.
+const (
+	ElevationsPattern        = adminPrefix + "/access/elevations"
+	ElevationsMinePattern    = adminPrefix + "/access/elevations/mine"
+	ElevationsPendingPattern = adminPrefix + "/access/elevations/pending"
+	ElevationApprovePattern  = adminPrefix + "/access/elevations/{elevationID}/approve"
+	ElevationDenyPattern     = adminPrefix + "/access/elevations/{elevationID}/deny"
+)
+
 // IdentityProviderSavePattern is the identity provider save, whose handler
 // classifies the save and applies the token rule itself (TokenRuleInHandler).
 const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
@@ -140,6 +150,21 @@ func actionRows() []Action {
 		// says so: a scoped token that holds access.roles.view reads it.
 		read(SealedCredentialsPattern, AccessBreakglassManage).elevation(deny).tokenNever(),
 		read(AccessPosturePattern, AccessRolesView),
+
+		// The elevation requests (R2.2b). No token calls an elevation
+		// route (decision 5, "Tokens"; decision 7, the credentials table),
+		// whatever its scopes: every entry says `token: never`, and the
+		// routes refuse every credential but a browser session before
+		// their gate. The ledger's writes are `deny` under an elevation
+		// (R2.8, "the elevation ledger (approve, deny, review)"): the
+		// request, too, since more time is a new request from a standing
+		// holder. The reads change nothing an elevation could misuse.
+		post(ElevationsPattern, AccessBreakglassRequest).elevation(deny).tokenNever(),
+		post(ElevationApprovePattern, AccessBreakglassApprove).elevation(deny).tokenNever(),
+		post(ElevationDenyPattern, AccessBreakglassApprove).elevation(deny).tokenNever(),
+		read(ElevationsMinePattern, AccessBreakglassRequest).tokenNever(),
+		read(ElevationsPendingPattern, AccessBreakglassApprove).tokenNever(),
+		read(ElevationsPattern, AccessRolesView).tokenNever(),
 
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),
