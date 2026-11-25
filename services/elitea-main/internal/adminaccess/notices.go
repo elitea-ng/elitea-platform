@@ -146,6 +146,11 @@ type NoticeToken struct {
 	Name string `json:"name"`
 }
 
+// RowsQuerier is the part of a pool or a transaction a multi-row read needs.
+type RowsQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
 // Execer is the part of a transaction or a pool a write needs.
 type Execer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
@@ -259,6 +264,47 @@ func InheritTokenEndsOn(sunsetAfter string, delivered time.Time) string {
 		return end
 	}
 	return sunsetAfter
+}
+
+// InheritTokenEndDates answers the end date of each `inherit` token in ids
+// (InheritTokenEndsOn of the registry's sunset date and the token's
+// delivery). It reads nothing while the sunset date is not set: every date is
+// then absent. The token routes and the central listing state it, so a client
+// does no date arithmetic.
+func InheritTokenEndDates(ctx context.Context, q RowsQuerier, ids []int64) (map[int64]string, error) {
+	return InheritTokenEndDatesAt(ctx, q, InheritEndsOn(), ids)
+}
+
+// InheritTokenEndDatesAt is InheritTokenEndDates for the sunset date sunsetAfter.
+func InheritTokenEndDatesAt(ctx context.Context, q RowsQuerier, sunsetAfter string, ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	if sunsetAfter == "" || len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `
+SELECT token.id::bigint, lifecycle.inherit_notice_delivered_at
+FROM unnest($1::bigint[]) AS token(id)
+LEFT JOIN elitea_identity.token_lifecycle AS lifecycle ON lifecycle.token_id = token.id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read the inherit notice deliveries: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var delivered *time.Time
+		if err := rows.Scan(&id, &delivered); err != nil {
+			return nil, fmt.Errorf("read the inherit notice deliveries: %w", err)
+		}
+		var at time.Time
+		if delivered != nil {
+			at = *delivered
+		}
+		out[id] = InheritTokenEndsOn(sunsetAfter, at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the inherit notice deliveries: %w", err)
+	}
+	return out, nil
 }
 
 // InheritTokenOwner is one owner of `inherit` tokens whose notice was not

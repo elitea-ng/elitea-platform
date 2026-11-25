@@ -60,7 +60,7 @@ export const AdministrationAccessToken = zod
       .date()
       .optional()
       .describe(
-        "The sunset date of an `inherit` token, absent while it is not set.",
+        "The date an `inherit` token ends: the later of the sunset date and 30 days after its owner's notice was delivered (the sunset date until then). Absent while the sunset date is not set.\n",
       ),
     owner_id: zod.int(),
     owner_name: zod.string(),

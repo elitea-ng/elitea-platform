@@ -85,7 +85,7 @@ export const PersonalAccessToken = zod
       .date()
       .optional()
       .describe(
-        "The date an `inherit` token ends (the sunset date of ADR-0059 decision 2). ABSENT while that date is not set, and for every other access.\n",
+        "The date an `inherit` token ends: the later of the sunset date of ADR-0059 decision 2 and 30 days after its owner's notice was delivered; the sunset date until the notice is delivered. ABSENT while the sunset date is not set, and for every other access.\n",
       ),
   })
   .describe(

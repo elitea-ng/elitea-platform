@@ -47,7 +47,9 @@
 --
 -- NO FOREIGN KEY to auth_core__user (as 0269): the shared corpus also runs on
 -- databases without the auth_core tables, and the notice outlives the
--- account. The foreign key to the ledger is inside this corpus (0269).
+-- account. None to the ledger either: a reference would make the ledger's
+-- own TRUNCATE guard (0269's trigger) answer a foreign-key error first, and
+-- the writer only ever names a row it just read in the same transaction.
 --
 -- Every time column is timestamptz. IDEMPOTENT throughout. No BEGIN/COMMIT:
 -- the ledgered runner executes each file inside one transaction with its
@@ -59,7 +61,7 @@ CREATE TABLE IF NOT EXISTS elitea_auth.admin_access_notices (
     id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     kind              text        NOT NULL,
     channel           text        NOT NULL DEFAULT 'email',
-    elevation_id      uuid        REFERENCES elitea_auth.admin_elevations (id) ON DELETE CASCADE,
+    elevation_id      uuid,
     recipient_user_id bigint      NOT NULL,
     recipient_email   text        NOT NULL,
     recipient_name    text        NOT NULL DEFAULT '',

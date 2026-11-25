@@ -34,8 +34,10 @@ type accessToken struct {
 	Expires     *time.Time `json:"expires"`
 	AdminAccess string     `json:"admin_access"`
 	AdminScopes []string   `json:"admin_scopes"`
-	// InheritEndsOn is the sunset date of an `inherit` token, absent while
-	// it is not set and for a `scoped` token.
+	// InheritEndsOn is the end date of an `inherit` token
+	// (adminaccess.InheritTokenEndDates: the later of the sunset date and 30
+	// days after its owner's notice), absent while the sunset date is not
+	// set and for a `scoped` token.
 	InheritEndsOn  string `json:"inherit_ends_on,omitempty"`
 	OwnerID        int    `json:"owner_id"`
 	OwnerName      string `json:"owner_name"`
@@ -140,6 +142,23 @@ LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	if tokens == nil {
 		tokens = []accessToken{}
+	}
+	// The end date counts from each owner's notice (R3.15b); the sunset date
+	// stands until a delivery is read.
+	var inherit []int64
+	for _, token := range tokens {
+		if token.AdminAccess == adminaccess.TokenAccessInherit {
+			inherit = append(inherit, token.ID)
+		}
+	}
+	ends, err := adminaccess.InheritTokenEndDates(ctx, h.pool, inherit)
+	if err != nil {
+		return nil, fmt.Errorf("list tokens with administration access: %w", err)
+	}
+	for i := range tokens {
+		if endsOn := ends[tokens[i].ID]; endsOn != "" {
+			tokens[i].InheritEndsOn = endsOn
+		}
 	}
 	return tokens, nil
 }
