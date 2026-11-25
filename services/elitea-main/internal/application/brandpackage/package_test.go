@@ -255,6 +255,76 @@ func TestValuesFromPack_HandTunedTokensAreKept(t *testing.T) {
 	}
 }
 
+// preRolesDefault is the product default as it was before ADR-0062 PR 3: the
+// same pack without its 27 role.* ids, 408 ids per scheme, which is what every
+// package exported with the default colours before that release states.
+func preRolesDefault(t *testing.T) *v2branding.Pack {
+	t.Helper()
+	pack := v2branding.ProductDefault()
+	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
+		for id := range record {
+			if strings.HasPrefix(id, "role.") {
+				delete(record, id)
+			}
+		}
+	}
+	if len(pack.Schemes.Light) != 408 || len(pack.Schemes.Dark) != 408 {
+		t.Fatalf("pre-roles default states %d/%d ids, want 408/408", len(pack.Schemes.Light), len(pack.Schemes.Dark))
+	}
+	return pack
+}
+
+func TestExportImport_PackageFromBeforeTheRoleIds(t *testing.T) {
+	// A package exported before the product default gained ids must import as
+	// untouched: no scheme tokens, so nothing pinned and no rgba value sent to
+	// the section, which takes six-digit hex only.
+	ctx := context.Background()
+	svc, _ := newService(t)
+	old := preRolesDefault(t)
+	old.Product.Name = "Acme AI"
+	data, _, err := svc.Export(ctx, old)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	imported, problems := svc.Parse(data)
+	if len(problems) != 0 {
+		t.Fatalf("problems: %+v", problems)
+	}
+	values, err := svc.Apply(ctx, imported)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if tokens, _ := values[platformconfig.KeyBrandingSchemeTokens].(map[string]any); len(tokens) != 0 {
+		t.Fatalf("a package of the earlier default pinned %d schemes of tokens", len(tokens))
+	}
+	if values[platformconfig.KeyBrandingProductName] != "Acme AI" {
+		t.Errorf("product name = %v", values[platformconfig.KeyBrandingProductName])
+	}
+}
+
+func TestValuesFromPack_TunedRecordOfTheEarlierDefault(t *testing.T) {
+	// One id changed in a package of the earlier default is still a tuning.
+	old := preRolesDefault(t)
+	old.Schemes.Dark["text.primary"] = "#123456"
+	tokens := ValuesFromPack(old, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	dark, _ := tokens["dark"].(map[string]any)
+	if dark["text.primary"] != "#123456" {
+		t.Fatalf("tuned token lost: %v", tokens["dark"])
+	}
+	// A hand-tuned deployment's export states only the ids it set.
+	tuned := v2branding.ProductDefault()
+	tuned.Schemes.Light = map[string]string{"text.secondary": "#654321"}
+	tuned.Schemes.Dark = map[string]string{}
+	tokens = ValuesFromPack(tuned, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	light, _ := tokens["light"].(map[string]any)
+	if len(light) != 1 || light["text.secondary"] != "#654321" {
+		t.Fatalf("tuned record = %v", tokens)
+	}
+	if _, ok := tokens["dark"]; ok {
+		t.Fatalf("an empty record was carried: %v", tokens)
+	}
+}
+
 func TestParse_Refusals(t *testing.T) {
 	svc, _ := newService(t)
 	good, _, _ := svc.Export(context.Background(), nil)
