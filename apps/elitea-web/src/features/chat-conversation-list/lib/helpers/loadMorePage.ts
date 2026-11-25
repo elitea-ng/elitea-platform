@@ -94,20 +94,28 @@ export function resyncLimit(bucket: LoadMoreBucket, pageSize: number): number {
 }
 
 /**
- * The bucket re-read from offset 0 (`resyncLimit` rows) after a stale page:
- * the server's rows, in its order, replace what the bucket held. A row the
- * bucket held keeps its fields, with the server's on top; a held row the
- * window no longer carries has left the bucket and is dropped.
+ * The bucket re-read from offset 0 (`limit` rows, `resyncLimit`) after a
+ * stale page: the server's rows, in its order, replace what the bucket held.
+ * A row the bucket held keeps its fields, with the server's on top; a held
+ * row the window no longer carries has left the bucket and is dropped.
+ *
+ * The re-read is the last word: a window shorter than `limit` holds the
+ * whole bucket, so it ends the bucket even when its total says more (a
+ * server whose total and rows disagree would otherwise keep "Show more" up
+ * for ever). An empty window keeps the rows the bucket held and ends it.
  */
-export function resyncBucket(bucket: LoadMoreBucket, page: LoadMorePage, pinnedIds: ReadonlySet<string>): MergedBucket {
+export function resyncBucket(bucket: LoadMoreBucket, page: LoadMorePage, pinnedIds: ReadonlySet<string>, limit: number): MergedBucket {
+  const total = page.total ?? bucket.total;
+  if (page.conversations.length === 0) {
+    return { conversations: bucket.conversations, offset: nextPageOffset(bucket), ...(total !== undefined ? { total } : {}), exhausted: true };
+  }
   const held = new Map(bucket.conversations.map((c) => [c.id, c]));
   const conversations = page.conversations.filter((ref) => !pinnedIds.has(ref.id)).map((ref) => ({ ...held.get(ref.id), ...toConversation(ref) }));
   const offset = page.conversations.length;
-  const total = page.total ?? bucket.total;
   return {
     conversations,
     offset,
     ...(total !== undefined ? { total } : {}),
-    exhausted: total === undefined ? page.conversations.length === 0 : offset >= total,
+    exhausted: offset < limit || (total !== undefined && offset >= total),
   };
 }

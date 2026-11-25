@@ -125,8 +125,9 @@ function useLoadMore(projectId: string | undefined, filter: ListingFilter, conta
           update((current) => appendLoadMorePage(current, page, pinnedIds));
           return;
         }
-        const top = await read(0, resyncLimit(bucket, PAGE_SIZE));
-        update((current) => resyncBucket(current, top, pinnedIds));
+        const limit = resyncLimit(bucket, PAGE_SIZE);
+        const top = await read(0, limit);
+        update((current) => resyncBucket(current, top, pinnedIds, limit));
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
       } finally {

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 
@@ -90,18 +90,31 @@ export function conversationPagesAreStale(pages: readonly ConversationPage[] | u
   return false;
 }
 
-/** Refetches every page, from offset 0, once the pages are stale. */
+/**
+ * Refetches every page, from offset 0, once per stale episode: pages that
+ * are still stale after that one refetch (a server whose total and rows
+ * disagree), or a refetch that failed, are left alone until the pages stop
+ * being stale, so the list never refetches in a loop.
+ */
 function useRefetchStalePages(query: {
   readonly data: InfiniteData<ConversationPage, unknown> | undefined;
   readonly isFetching: boolean;
+  readonly isError: boolean;
   readonly isPlaceholderData: boolean;
   readonly refetch: () => Promise<unknown>;
 }): void {
   const stale = !query.isPlaceholderData && conversationPagesAreStale(query.data?.pages);
-  const { isFetching, refetch } = query;
+  const attempted = useRef(false);
+  const { isFetching, isError, refetch } = query;
   useEffect(() => {
-    if (stale && !isFetching) void refetch();
-  }, [stale, isFetching, refetch]);
+    if (!stale) {
+      attempted.current = false;
+      return;
+    }
+    if (isFetching || isError || attempted.current) return;
+    attempted.current = true;
+    void refetch();
+  }, [stale, isFetching, isError, refetch]);
 }
 
 /**

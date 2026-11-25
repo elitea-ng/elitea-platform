@@ -124,8 +124,11 @@ func currentConfigurationMutationEndpoint(
 func (h *currentConfigurationMutationHandler) settingsWriteForbidden(
 	w http.ResponseWriter, r *http.Request, projectID int32, typeNames ...string,
 ) bool {
-	// The tracing rule first, as on the compatibility routes, so the two
-	// answer a caller who fails both with the same refusal (#3032).
+	// The tracing rule before the guarded-type rule, as on the compatibility
+	// routes, so a caller who fails both rules gets the same 403 body from
+	// either route (#3032). Body validation runs before both on each route,
+	// with each route's own validator, so a malformed body may answer 400
+	// differently.
 	if h.tracing.forbidden(r.Context(), int64(projectID), typeNames...) {
 		writeCurrentConfigurationMutationError(w, http.StatusForbidden, tracingConfigurationsForbiddenMessage, "type")
 		return true

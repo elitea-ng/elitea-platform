@@ -74,11 +74,33 @@ describe('resyncBucket', () => {
       offset: 2,
       total: 3,
     };
-    const resynced = resyncBucket(bucket, { conversations: [{ id: 'kept', name: 'new name', isPrivate: false }, { id: 'older' }, { id: 'pinned' }], total: 3 }, new Set(['pinned']));
+    const resynced = resyncBucket(bucket, { conversations: [{ id: 'kept', name: 'new name', isPrivate: false }, { id: 'older' }, { id: 'pinned' }], total: 3 }, new Set(['pinned']), 12);
 
     expect(resynced.conversations.map((c) => c.id)).toEqual(['kept', 'older']);
     expect(resynced.conversations[0]).toMatchObject({ name: 'new name', folderId: '4' });
     expect(resynced).toMatchObject({ offset: 3, total: 3, exhausted: true });
+  });
+
+  // A server whose total and rows disagree must not keep "Show more" up for
+  // ever: the re-read from the top is the last word.
+  it('ends the bucket when the re-read window is shorter than asked, whatever the total says', () => {
+    const resynced = resyncBucket({ conversations: [], offset: 10, total: 12 }, { conversations: [{ id: 'a' }, { id: 'b' }], total: 12 }, new Set(), 20);
+
+    expect(resynced).toMatchObject({ offset: 2, total: 12, exhausted: true });
+  });
+
+  it('keeps the held rows and ends the bucket when the re-read comes back empty', () => {
+    const held = [{ id: 'a', name: 'a', isPrivate: true }];
+    const resynced = resyncBucket({ conversations: held, offset: 1, total: 5 }, { conversations: [], total: 5 }, new Set(), 11);
+
+    expect(resynced.conversations).toBe(held);
+    expect(resynced).toMatchObject({ offset: 1, exhausted: true });
+  });
+
+  it('keeps a full re-read window open below the total', () => {
+    const page = { conversations: Array.from({ length: 11 }, (_, i) => ({ id: String(i) })), total: 30 };
+
+    expect(resyncBucket({ conversations: [], offset: 1, total: 31 }, page, new Set(), 11)).toMatchObject({ offset: 11, exhausted: false });
   });
 
   it('reads what the bucket holds and one more page', () => {
