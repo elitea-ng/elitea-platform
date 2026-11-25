@@ -5312,7 +5312,7 @@ impl ApplicationAgentTool {
                             cause_message = report["failure"]["message"].as_str(),
                             recovery = report["failure"]["recovery_action"].as_str(),
                             failure_diagnostic = %crate::diagnostics::failure::capture()
-                                .as_deref().unwrap_or("disabled_or_rate_limited"),
+                                .as_deref().unwrap_or(crate::diagnostics::failure::NOT_CAPTURED),
                             "child model failed; returning failure to the orchestrator"
                         );
                         return Ok(report);

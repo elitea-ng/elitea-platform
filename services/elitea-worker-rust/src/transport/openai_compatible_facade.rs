@@ -1973,6 +1973,10 @@ struct OpenAiStreamState {
     semantic_bytes: usize,
     terminal: Option<LlmResponse>,
     completed_text: Option<String>,
+    /// A partial response with semantic parts (text or reasoning) already
+    /// left the facade: the person has seen output of this model call, so the
+    /// replay layer's repair (`replay_history::recovery`) no longer applies.
+    emitted: bool,
 }
 
 impl OpenAiStreamState {
@@ -1985,6 +1989,7 @@ impl OpenAiStreamState {
             semantic_bytes: 0,
             terminal: None,
             completed_text: None,
+            emitted: false,
         }
     }
 
@@ -2016,6 +2021,7 @@ impl OpenAiStreamState {
                 .map_err(|error| tool_call_error(&error))?;
         }
         let Some(finish) = delta.finish else {
+            self.emitted |= !parts.is_empty();
             return Ok((!parts.is_empty()).then(|| LlmResponse {
                 content: Some(Content {
                     role: "model".to_owned(),
@@ -2026,9 +2032,23 @@ impl OpenAiStreamState {
             }));
         };
 
-        let has_tool_calls = matches!(finish, OpenAiFinish::ToolCalls);
+        let mut has_tool_calls = matches!(finish, OpenAiFinish::ToolCalls);
         if has_tool_calls {
-            parts.extend(self.finish_tool_calls()?);
+            let (calls, rejected) = self.finish_tool_calls()?;
+            if let Some(name) = rejected.filter(|_| calls.is_empty()) {
+                // Issue 3050: every call was outside the admitted toolset and
+                // the answer already streamed. The turn ends on that answer
+                // and a note, not as a failure.
+                has_tool_calls = false;
+                let note = super::model_facade::unadmitted_tool_note(
+                    &name,
+                    !self.accumulated_text.is_empty(),
+                );
+                self.add_semantic_bytes(note.len())?;
+                self.accumulated_text.push_str(&note);
+                parts.push(Part::Text { text: note });
+            }
+            parts.extend(calls);
         } else if !self.tool_calls.is_empty() {
             return Err(invalid_sse());
         }
@@ -2074,39 +2094,60 @@ impl OpenAiStreamState {
         Ok(())
     }
 
-    /// The assembled calls, in index order. Each is checked as it comes —
-    /// its id (present, unique), then an admitted tool, then JSON-object
-    /// arguments — so the first failing call decides the error.
-    fn finish_tool_calls(&mut self) -> Result<Vec<Part>, AdkError> {
+    /// The assembled calls, in index order, and the name of the first call
+    /// outside the admitted toolset that was dropped. Each is checked as it
+    /// comes — its id (present, unique), then an admitted tool, then
+    /// JSON-object arguments — so the first failing call decides the error.
+    ///
+    /// A call outside the admitted toolset is never emitted. Before any
+    /// output left the facade it is refused (`TOOL_NOT_ADMITTED_CODE`), which
+    /// the replay layer repairs once by asking again. After output streamed
+    /// that repair cannot run (it would repeat what the person read), so the
+    /// call is dropped instead (issue 3050): the admitted calls next to it
+    /// run, and with none the turn ends on the streamed answer.
+    fn finish_tool_calls(&mut self) -> Result<(Vec<Part>, Option<String>), AdkError> {
         let assembler = std::mem::replace(
             &mut self.tool_calls,
             ToolCallAssembler::new(ToolCallProfile::Strict, TOOL_CALL_LIMITS),
         );
-        assembler
-            .finish()
-            .map_err(|_| invalid_sse())?
-            .map(|call| {
-                let call = call.map_err(|_| invalid_sse())?;
-                if !self.allowed_tools.contains(&call.name) {
+        let mut calls = Vec::new();
+        let mut rejected = None;
+        for call in assembler.finish().map_err(|_| invalid_sse())? {
+            let call = call.map_err(|_| invalid_sse())?;
+            if !self.allowed_tools.contains(&call.name) {
+                if !self.emitted {
+                    tracing::warn!(
+                        event = "model_tool_not_admitted",
+                        tool_name = %super::model_facade::noted_tool_name(&call.name),
+                        "refused a model tool call outside the admitted toolset"
+                    );
                     return Err(model_error(
                         ErrorCategory::Unsupported,
                         super::model_facade::TOOL_NOT_ADMITTED_CODE,
                         "the model requested a tool outside the admitted toolset",
                     ));
                 }
-                let args: serde_json::Value =
-                    serde_json::from_str(&call.arguments).map_err(|_| invalid_sse())?;
-                if !args.is_object() {
-                    return Err(invalid_sse());
-                }
-                Ok(Part::FunctionCall {
-                    name: call.name,
-                    args,
-                    id: Some(call.id),
-                    thought_signature: None,
-                })
-            })
-            .collect()
+                tracing::warn!(
+                    event = "model_tool_not_admitted_dropped",
+                    tool_name = %super::model_facade::noted_tool_name(&call.name),
+                    "dropped a model tool call outside the admitted toolset after streamed output"
+                );
+                rejected.get_or_insert(call.name);
+                continue;
+            }
+            let args: serde_json::Value =
+                serde_json::from_str(&call.arguments).map_err(|_| invalid_sse())?;
+            if !args.is_object() {
+                return Err(invalid_sse());
+            }
+            calls.push(Part::FunctionCall {
+                name: call.name,
+                args,
+                id: Some(call.id),
+                thought_signature: None,
+            });
+        }
+        Ok((calls, rejected))
     }
 
     fn finish(mut self) -> Result<(LlmResponse, Option<String>), AdkError> {

@@ -29,7 +29,8 @@ import (
 
 // ErrFloorAddressee refuses a message that addresses an agent that is not
 // in the conversation. The route answers 422 `addressee_not_in_conversation`.
-var ErrFloorAddressee = errors.New("an addressed agent is not in the conversation")
+// It is turntaking's, shared with the desktop Local work start.
+var ErrFloorAddressee = turntaking.ErrNotInConversation
 
 // ErrFloorTurnNotQueued refuses starting a floor turn that is no longer
 // QUEUED (a newer human message superseded it, or a failure skipped it).
@@ -194,19 +195,10 @@ func (service *CurrentApplicationStartService) planFloor(
 	for _, agent := range conversation.Agents {
 		ids = append(ids, agent.ParticipantID)
 	}
-	participant := request.TargetParticipantID
-	if len(request.AddressedTo) > 0 && !containsInt64(request.AddressedTo, participant) {
-		// The composer's sticky target is not one the person addressed:
-		// the address wins.
-		participant = 0
-	}
-	targets, err := turntaking.Route(conversation.Settings, participant, request.AddressedTo, ids)
-	switch {
-	case errors.Is(err, turntaking.ErrNoTarget):
-		return nil, ErrAgentTargetRequired
-	case errors.Is(err, turntaking.ErrNotInConversation):
-		return nil, ErrFloorAddressee
-	case err != nil:
+	// The rule the desktop Local work start uses too (turntaking.RouteMessage);
+	// its errors are ErrAgentTargetRequired and ErrFloorAddressee.
+	targets, err := turntaking.RouteMessage(conversation.Settings, request.TargetParticipantID, request.AddressedTo, ids)
+	if err != nil {
 		return nil, err
 	}
 	request.TargetParticipantID = targets[0]
@@ -237,6 +229,58 @@ func soleAgentAddressee(agents []FloorAgent, request *CurrentApplicationStartReq
 	}
 	request.TargetParticipantID = request.AddressedTo[0]
 	return nil
+}
+
+// adhocLead is the lead a person's model-chat start goes to: a start that
+// names no participant, in a conversation with two or more agents whose floor
+// has a lead that is still one of them (turntaking.Route: under `lead` an
+// unaddressed message goes to the lead). 0 keeps the repository's refusal,
+// ErrAgentTargetRequired (issue 1602). StartCurrentAdhoc asks only after the
+// repository refused the start for naming no agent among several, so a plain
+// model chat never reads the floor.
+//
+// A client that shows "To: <lead> (lead)" over a fresh team conversation and
+// sends no participant (the web composer before issue 3049, and any client
+// that cannot read the floor) is answered by the lead, as the chip says,
+// instead of "Pick the agent this message is for".
+func (service *CurrentApplicationStartService) adhocLead(ctx context.Context, request CurrentAdhocStartRequest) (int64, error) {
+	if service.floor == nil || request.TargetParticipantID != 0 || !HumanOrigin(request.TriggerOrigin) ||
+		request.UnattendedContinuation != nil || request.HandoffCompletion != nil || request.ThreadRun != nil {
+		return 0, nil
+	}
+	conversation, err := service.floor.ConversationFloor(ctx, request.ProjectID, request.ConversationUUID)
+	if err != nil {
+		return 0, err
+	}
+	if len(conversation.Agents) < 2 {
+		return 0, nil
+	}
+	ids := make([]int64, 0, len(conversation.Agents))
+	for _, agent := range conversation.Agents {
+		ids = append(ids, agent.ParticipantID)
+	}
+	return turntaking.Lead(conversation.Settings, ids), nil
+}
+
+// leadStart is the agent start of a model-chat start that goes to the lead.
+// The model chat's llm_settings are deliberately not carried: they are the
+// composer's model selector for the conversation's plain model, which this
+// message does not reach. The lead answers with its own agent version, as it
+// does for any message the floor routes to it (an agent start never takes
+// llm_settings: the route refuses them on agent.execute.application.v1).
+func (request CurrentAdhocStartRequest) leadStart(lead int64) CurrentApplicationStartRequest {
+	return CurrentApplicationStartRequest{
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ConversationUUID: request.ConversationUUID, TargetParticipantID: lead,
+		QuestionID: request.QuestionID, UserInput: request.UserInput,
+		InteractionUUID:  request.InteractionUUID,
+		MCPTokens:        request.MCPTokens,
+		Attachments:      request.Attachments,
+		MentionedUserIDs: request.MentionedUserIDs, MentionsEveryone: request.MentionsEveryone,
+		TriggerOrigin:   request.TriggerOrigin,
+		ProjectSkillIDs: request.ProjectSkillIDs,
+		Unattended:      request.Unattended,
+	}
 }
 
 // input is the turn's AgentFloorV1 for the agent that answers.
@@ -344,13 +388,4 @@ func validAddressedTo(ids []int64) bool {
 		seen[id] = true
 	}
 	return true
-}
-
-func containsInt64(ids []int64, id int64) bool {
-	for _, candidate := range ids {
-		if candidate == id {
-			return true
-		}
-	}
-	return false
 }
