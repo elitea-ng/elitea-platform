@@ -34,7 +34,6 @@ const GENERATED_DIR = fileURLToPath(new URL('../../../shared/api/generated', imp
  * `src/pages/admin`. Remove a line when its page is converted; never add one.
  */
 const NOT_CONVERTED: readonly string[] = [
-  'AdminBulkInviteDialog.tsx',
   'AdminEmailEditor.tsx',
   'AdminIdentityProvidersEditor.tsx',
   'AdminLlmProxyEditor.tsx',
@@ -44,7 +43,6 @@ const NOT_CONVERTED: readonly string[] = [
   'AdminProjectCloudExecutorDialog.tsx',
   'AdminScimClientsEditor.tsx',
   'AdminScimGroupBindingsEditor.tsx',
-  'AdminUserDevicesDrawer.tsx',
   'ConnectorRequests.tsx',
   'CredentialRevokeDialog.tsx',
   'DelegationReview.tsx',
@@ -72,7 +70,6 @@ const NOT_CONVERTED: readonly string[] = [
   'useAdminSchedulesPage.ts',
   'useAdminSecretsPage.ts',
   'useAdminTasksPage.ts',
-  'useAdminUsersPage.ts',
   'useAdoptProviderModels.ts',
   'useBrandingPackage.ts',
   'useGatewayGovernancePage.ts',

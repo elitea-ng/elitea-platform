@@ -63,31 +63,36 @@ import { AdminEntitlementsExportButton } from './AdminEntitlementsExportButton';
 import { AdminUserDevicesDrawer } from './AdminUserDevicesDrawer';
 import { AdminUsersTable, type AdminUserRowActions } from './AdminUsersTable';
 import type { AdminUserRow } from './api/adminUsersApi';
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { UserActivityDrawer } from './UserActivityDrawer';
 import { ADMIN_USERS_PAGE_SIZE, useAdminUsersPage } from './useAdminUsersPage';
 
-
-/** The permission the native device routes require (router.go `requireAdminUsers`). */
-const ADMIN_USERS_PERMISSION = 'admin.auth.users';
-
+/** The page under the read-only wrapper (R3.4b, issue 2613). */
 export function AdminUsers() {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.users}>
+      <UsersPage />
+    </AdminWritable>
+  );
+}
+
+function UsersPage() {
   const state = useAdminUsersPage();
+  const writeControl = useAdminWriteControl();
   // The cross-project bulk invite (issue 247). It lives on this page because
   // its subject is ACCOUNTS: the legacy runtime put "add every user to a
   // project" under Invites, beside the global user list, and the picker it
   // needs is the very list this page already holds.
   const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
-  // The devices drawer (ADR-0025 WP3). Its permission is the one the device
-  // routes require — `admin.auth.users`, the one that gates suspension — so
-  // the control is offered on both tabs to exactly the operators the server
-  // will answer.
+  // The devices drawer (ADR-0025 WP3), on both tabs. Listing is a read; its
+  // revoke is disabled at the `read` level of the page (R3.4b, issue 2613).
   const [devicesUser, setDevicesUser] = useState<AdminUserRow | null>(null);
-  const showsDevices = adminUiShowsControlFor(ADMIN_USERS_PERMISSION);
   const baseRowActions = state.rowActions;
   const rowActions = useMemo<AdminUserRowActions>(
-    () => ({ ...baseRowActions, onOpenDevices: showsDevices ? setDevicesUser : undefined }),
-    [baseRowActions, showsDevices],
+    () => ({ ...baseRowActions, onOpenDevices: setDevicesUser }),
+    [baseRowActions],
   );
 
   const { total, page, deleteIds, rows } = state;
@@ -145,6 +150,7 @@ export function AdminUsers() {
               color="alarm"
               size="small"
               startIcon={<DeleteIcon fontSize="small" />}
+              disabled={writeControl.disabled}
               onClick={() => state.onRequestDelete(state.selectedIds)}
               sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             >
@@ -156,6 +162,8 @@ export function AdminUsers() {
             color="tertiary"
             size="small"
             startIcon={<GroupAddOutlinedIcon fontSize="small" />}
+            disabled={writeControl.disabled}
+            title={writeControl.reason}
             onClick={() => setBulkInviteOpen(true)}
             sx={{ flexShrink: 0, whiteSpace: 'nowrap' }}
             data-testid="admin-bulk-invite-open"
@@ -183,6 +191,8 @@ export function AdminUsers() {
           </Tooltip>
         </Box>
       </Box>
+
+      <AdminViewOnlyNotice />
 
       <Tabs value={state.activeTab} onChange={state.onTabChange} sx={{ minHeight: '2.5rem' }}>
         <Tab

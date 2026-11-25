@@ -59,7 +59,10 @@ export function enabledWriteControls(container: HTMLElement = document.body): HT
   const buttons = scope
     .queryAllByRole('button')
     .filter((button) => WRITE_CONTROL.test(button.getAttribute('aria-label') ?? button.textContent));
-  const toggles = [...scope.queryAllByRole('checkbox'), ...scope.queryAllByRole('switch')];
+  // A grid's "Select all rows" selects nothing when no row is selectable: a read.
+  const toggles = [...scope.queryAllByRole('checkbox'), ...scope.queryAllByRole('switch')].filter(
+    (toggle) => toggle.getAttribute('aria-label') !== 'Select all rows',
+  );
   return [...buttons, ...toggles].filter((control) => !(control as HTMLButtonElement | HTMLInputElement).disabled);
 }
 
