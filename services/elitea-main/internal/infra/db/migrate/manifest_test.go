@@ -1256,7 +1256,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 272: shared/0272_sealed_browser_sessions.sql, the provider CHECK of
 	// elitea_auth.browser_sessions widened by `sealed`, the session kind of a
 	// sealed break-glass sign-in (issue 2521, ADR-0059 R2.7a). No permission.
-	require.EqualValues(t, 272, Head(shared))
+	//
+	// 273: shared/0273_admin_console_areas_default.sql, the switch
+	// admin_console.admin_console_areas written off in centry.platform_config
+	// on a database that already holds an administration role assignment, so
+	// an upgrade keeps the two-group navigation for one release (issue 2532,
+	// ADR-0059 R3.2). No permission.
+	require.EqualValues(t, 273, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

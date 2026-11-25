@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	registry "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // PostgresRoles reads the roles from auth_core__role and the seed record
@@ -123,4 +124,32 @@ func newRole(name string, seed *string) Role {
 		return Role{Name: name}
 	}
 	return Role{Name: name, BuiltIn: true, Marker: *seed}
+}
+
+/* ── the admin_console_areas setting ───────────────────────────────────── */
+
+// PlatformFlags reads the console's switches from centry.platform_config.
+type PlatformFlags struct {
+	pool registry.Querier
+}
+
+// NewPlatformFlags returns the reader.
+func NewPlatformFlags(pool registry.Querier) *PlatformFlags {
+	return &PlatformFlags{pool: pool}
+}
+
+// ConsoleAreas answers the stored `admin_console_areas`, or its code default
+// (on) when no row was written. A database without the table (a test
+// database with part of the corpus) has written none.
+func (p *PlatformFlags) ConsoleAreas(ctx context.Context) (bool, error) {
+	values, err := platformconfig.LoadVia(ctx, func(ctx context.Context, sql string, args ...any) (platformconfig.Rows, error) {
+		return p.pool.Query(ctx, sql, args...)
+	}, platformconfig.SectionAdminConsole)
+	if platformconfig.UndefinedTable(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the admin_console settings: %w", err)
+	}
+	return values.Bool(platformconfig.KeyAdminConsoleAreas, true), nil
 }

@@ -66,6 +66,12 @@ export interface AdminConsole {
   readonly roles: readonly AdminConsoleRole[] | undefined;
   /** The active elevation; `null` when there is none; `undefined` while unknown. */
   readonly elevation: AdminConsoleElevation | null | undefined;
+  /**
+   * The `admin_console_areas` switch (R3.2, issue 2532): `true` for the six
+   * labelled areas, `false` for the two-group navigation; `undefined` while
+   * unknown.
+   */
+  readonly areasEnabled: boolean | undefined;
 }
 
 /** One read, aborted after `CONSOLE_TIMEOUT_MS` or when the query is cancelled. */
@@ -139,6 +145,7 @@ export function useAdminConsole(): AdminConsole {
     itemLevel: (itemId) => (known === undefined ? undefined : levelOfItem(known, itemId)),
     roles: known?.roles,
     elevation: known === undefined ? undefined : known.elevation,
+    areasEnabled: known?.admin_console_areas,
   };
 }
 

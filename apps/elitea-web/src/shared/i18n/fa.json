@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "تلاش دوباره",
   "pages.admin.console.error.title": "بارگیری کنسول ممکن نشد",
   "pages.admin.console.loading": "در حال بارگیری کنسول…",
-  "pages.admin.console.refused": "شما به کنسول مدیریت دسترسی ندارید."
+  "pages.admin.console.refused": "شما به کنسول مدیریت دسترسی ندارید.",
+  "pages.admin.console.area.people_access": "افراد و دسترسی",
+  "pages.admin.console.area.projects": "پروژه‌ها",
+  "pages.admin.console.area.models_spend": "مدل‌ها و هزینه",
+  "pages.admin.console.area.agents_governance": "عامل‌ها و راهبری",
+  "pages.admin.console.area.security": "امنیت",
+  "pages.admin.console.area.platform": "پلتفرم",
+  "pages.admin.console.item.schedules-tasks": "زمان‌بندی‌ها و وظایف",
+  "pages.admin.schedulesTasks.tab.schedules": "زمان‌بندی‌ها",
+  "pages.admin.itemDenied.title": "نمی‌توانید {{item}} را باز کنید",
+  "pages.admin.itemDenied.explanation": "نقش‌های مدیریتی شما شامل {{item}} نیست. سرور صفحه‌ها و تغییرات آن را برای شما رد می‌کند.",
+  "pages.admin.itemDenied.rolesLoading": "در حال یافتن نقش‌هایی که آن را باز می‌کنند…",
+  "pages.admin.itemDenied.rolesError": "نقش‌هایی که آن را باز می‌کنند خوانده نشد.",
+  "pages.admin.itemDenied.noRole": "هیچ نقشی در این استقرار آن را باز نمی‌کند.",
+  "pages.admin.itemDenied.rolesIntro": "این نقش‌ها آن را باز می‌کنند:",
+  "pages.admin.itemDenied.askSupport": "برای درخواست یکی از این نقش‌ها، با پشتیبانی فناوری اطلاعات تماس بگیرید:",
+  "pages.admin.itemDenied.askFallback": "برای درخواست یکی از این نقش‌ها، با افرادی که این استقرار را مدیریت می‌کنند تماس بگیرید."
 }

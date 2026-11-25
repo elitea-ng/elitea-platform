@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "Spróbuj ponownie",
   "pages.admin.console.error.title": "Nie udało się wczytać konsoli",
   "pages.admin.console.loading": "Wczytywanie konsoli…",
-  "pages.admin.console.refused": "Nie masz dostępu do konsoli administracyjnej."
+  "pages.admin.console.refused": "Nie masz dostępu do konsoli administracyjnej.",
+  "pages.admin.console.area.people_access": "Osoby i dostęp",
+  "pages.admin.console.area.projects": "Projekty",
+  "pages.admin.console.area.models_spend": "Modele i wydatki",
+  "pages.admin.console.area.agents_governance": "Agenci i nadzór",
+  "pages.admin.console.area.security": "Bezpieczeństwo",
+  "pages.admin.console.area.platform": "Platforma",
+  "pages.admin.console.item.schedules-tasks": "Harmonogramy i zadania",
+  "pages.admin.schedulesTasks.tab.schedules": "Harmonogramy",
+  "pages.admin.itemDenied.title": "Nie możesz otworzyć: {{item}}",
+  "pages.admin.itemDenied.explanation": "Twoje role administracyjne nie obejmują: {{item}}. Serwer odrzuca dla Ciebie jego strony i zmiany.",
+  "pages.admin.itemDenied.rolesLoading": "Wyszukiwanie ról, które to otwierają…",
+  "pages.admin.itemDenied.rolesError": "Nie udało się odczytać ról, które to otwierają.",
+  "pages.admin.itemDenied.noRole": "Żadna rola w tym wdrożeniu tego nie otwiera.",
+  "pages.admin.itemDenied.rolesIntro": "Te role to otwierają:",
+  "pages.admin.itemDenied.askSupport": "Aby poprosić o jedną z tych ról, skontaktuj się z pomocą techniczną IT:",
+  "pages.admin.itemDenied.askFallback": "Aby poprosić o jedną z tych ról, skontaktuj się z osobami zarządzającymi tym wdrożeniem."
 }

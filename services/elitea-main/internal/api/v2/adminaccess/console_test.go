@@ -184,7 +184,8 @@ type document struct {
 	Roles []struct {
 		Name string `json:"name"`
 	} `json:"roles"`
-	Elevation *json.RawMessage `json:"elevation"`
+	Elevation         *json.RawMessage `json:"elevation"`
+	AdminConsoleAreas *bool            `json:"admin_console_areas"`
 }
 
 func decode(t *testing.T, rec *httptest.ResponseRecorder) document {
@@ -370,5 +371,44 @@ func TestConsoleItemUnknownAndUnavailable(t *testing.T) {
 	}
 	if rec := serve(t, console.NewHandler(d, d, nil), nil, "/console/items/users"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("no principal: status %d, want 401", rec.Code)
+	}
+}
+
+// areasFlag is a fake admin_console_areas store.
+type areasFlag struct {
+	on  bool
+	err error
+}
+
+func (f areasFlag) ConsoleAreas(context.Context) (bool, error) { return f.on, f.err }
+
+// TestConsoleCarriesTheAreasSwitch (R3.2, issue 2532): the document carries
+// the stored switch for every caller, the code default (on) with no store,
+// and the default too when the store cannot be read, since the switch only
+// chooses a navigation.
+func TestConsoleCarriesTheAreasSwitch(t *testing.T) {
+	t.Parallel()
+	d := newDirectory()
+	d.users[21] = []string{registry.RoleAdmin}
+	d.users[22] = nil
+	for name, tc := range map[string]struct {
+		flag console.AreasFlag
+		want bool
+	}{
+		"no store":   {flag: nil, want: true},
+		"stored off": {flag: areasFlag{on: false}, want: false},
+		"stored on":  {flag: areasFlag{on: true}, want: true},
+		"unreadable": {flag: areasFlag{err: errors.New("pool exhausted")}, want: true},
+	} {
+		for _, user := range []int64{21, 22} {
+			rec := serve(t, console.NewHandler(d, d, nil).WithAreasFlag(tc.flag), session(user), "/console")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s, user %d: status %d", name, user, rec.Code)
+			}
+			doc := decode(t, rec)
+			if doc.AdminConsoleAreas == nil || *doc.AdminConsoleAreas != tc.want {
+				t.Errorf("%s, user %d: admin_console_areas = %v, want %v", name, user, doc.AdminConsoleAreas, tc.want)
+			}
+		}
 	}
 }

@@ -12,11 +12,18 @@
  * here only the shape a role cannot share with another is asserted: the
  * emergency persona opens no area, every other persona opens one at least.
  *
+ * The second half (ADR-0059 decision 6, R3.2, issue 2532) opens the console
+ * in a browser as each persona: the navigation shows exactly the persona's
+ * labelled areas and items, and a typed URL to an item its role does not open
+ * shows the access-denied page for that item. `AdminNav.test.tsx` renders the
+ * same table from the server's golden documents; this is the running stack's
+ * answer.
+ *
  * Read-only: it changes nothing, so both engines run it in parallel.
  */
 import { test, expect, request as playwrightRequest } from '@playwright/test';
 
-import { ADMIN_PERSONAS } from '../../fixtures/adminPersonas';
+import { ADMIN_PERSONAS, type BuiltInAdminRole } from '../../fixtures/adminPersonas';
 import { API_BASE } from '../../fixtures/api';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
@@ -53,6 +60,80 @@ for (const persona of ADMIN_PERSONAS) {
       }
     } finally {
       await context.dispose();
+    }
+  });
+}
+
+/** Every item the web table places, by area: what a global or platform administrator sees. */
+const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
+  people_access: ['users'],
+  projects: ['projects', 'app-requests'],
+  models_spend: ['llm-governance', 'budgets-alerts'],
+  agents_governance: [
+    'agent-registry',
+    'connector-requests',
+    'delegation-review',
+    'toolkits',
+    'credential-inventory',
+    'permission-trimming',
+    'kill-switch',
+  ],
+  security: ['audit-trail', 'data-retention'],
+  platform: ['configuration', 'features', 'branding', 'email', 'schedules-tasks', 'service-descriptors', 'secrets'],
+};
+
+/**
+ * Each persona's areas and items in the navigation. The gateway tabs and
+ * SCIM are still tabs of Configuration, which stands for them; Access (Roles)
+ * is placed when its item ships (R3.6).
+ */
+const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, readonly string[]>>>> = {
+  super_admin: EVERY_AREA,
+  admin: EVERY_AREA,
+  llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
+  project_administrator: {
+    projects: ['projects', 'app-requests'],
+    models_spend: ['budgets-alerts'],
+    platform: ['configuration'],
+  },
+  security_auditor: { security: ['audit-trail'] },
+  emergency_access: {},
+};
+
+for (const persona of ADMIN_PERSONAS) {
+  test(`the ${persona.role} persona's navigation shows exactly its areas`, async ({ browser }) => {
+    const context = await browser.newContext({ storageState: STORAGE_STATE.personas[persona.role] });
+    try {
+      const page = await context.newPage();
+      await page.goto(`${BASE_URL}/admin/app/`, { waitUntil: 'domcontentloaded' });
+      const nav = page.getByTestId('admin-nav');
+      await expect(nav).toBeVisible({ timeout: 30_000 });
+
+      const expected = PERSONA_AREAS[persona.role];
+      const expectedLinks = Object.values(expected).flat();
+      await expect(nav.getByRole('link')).toHaveCount(expectedLinks.length, { timeout: 20_000 });
+      const rendered = await nav.locator('section[data-testid^="admin-nav-area-"]').evaluateAll((sections) =>
+        Object.fromEntries(
+          sections.map((section) => [
+            (section.getAttribute('data-testid') ?? '').replace('admin-nav-area-', ''),
+            [...section.querySelectorAll('a[data-testid^="admin-nav-item-"]')].map((anchor) =>
+              (anchor.getAttribute('data-testid') ?? '').replace('admin-nav-item-', ''),
+            ),
+          ]),
+        ),
+      );
+      expect(rendered).toEqual(expected);
+
+      // One refusal by typed URL, for every role that Users is not open to.
+      if (persona.role === 'super_admin' || persona.role === 'admin') return;
+      await page.goto(`${BASE_URL}/admin/app/users`, { waitUntil: 'domcontentloaded' });
+      const denied = page.getByTestId('admin-item-denied');
+      await expect(denied).toHaveAttribute('data-item-id', 'users', { timeout: 20_000 });
+      await expect(page.getByTestId('admin-item-denied-roles')).toContainText('Platform administrator', {
+        timeout: 20_000,
+      });
+    } finally {
+      await context.close();
     }
   });
 }

@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "دوبارہ کوشش کریں",
   "pages.admin.console.error.title": "کنسول لوڈ نہیں ہو سکا",
   "pages.admin.console.loading": "کنسول لوڈ ہو رہا ہے…",
-  "pages.admin.console.refused": "آپ کو انتظامی کنسول تک رسائی حاصل نہیں ہے۔"
+  "pages.admin.console.refused": "آپ کو انتظامی کنسول تک رسائی حاصل نہیں ہے۔",
+  "pages.admin.console.area.people_access": "افراد اور رسائی",
+  "pages.admin.console.area.projects": "پروجیکٹس",
+  "pages.admin.console.area.models_spend": "ماڈلز اور اخراجات",
+  "pages.admin.console.area.agents_governance": "ایجنٹس اور گورننس",
+  "pages.admin.console.area.security": "سیکیورٹی",
+  "pages.admin.console.area.platform": "پلیٹ فارم",
+  "pages.admin.console.item.schedules-tasks": "شیڈولز اور ٹاسکس",
+  "pages.admin.schedulesTasks.tab.schedules": "شیڈولز",
+  "pages.admin.itemDenied.title": "آپ {{item}} نہیں کھول سکتے",
+  "pages.admin.itemDenied.explanation": "آپ کے انتظامی کرداروں میں {{item}} شامل نہیں ہے۔ سرور آپ کے لیے اس کے صفحات اور تبدیلیاں مسترد کرتا ہے۔",
+  "pages.admin.itemDenied.rolesLoading": "اسے کھولنے والے کردار تلاش کیے جا رہے ہیں…",
+  "pages.admin.itemDenied.rolesError": "اسے کھولنے والے کردار پڑھے نہیں جا سکے۔",
+  "pages.admin.itemDenied.noRole": "اس تعیناتی میں کوئی کردار اسے نہیں کھولتا۔",
+  "pages.admin.itemDenied.rolesIntro": "یہ کردار اسے کھولتے ہیں:",
+  "pages.admin.itemDenied.askSupport": "ان میں سے کسی کردار کی درخواست کے لیے اپنی IT سپورٹ سے رابطہ کریں:",
+  "pages.admin.itemDenied.askFallback": "ان میں سے کسی کردار کی درخواست کے لیے اس تعیناتی کا انتظام کرنے والوں سے رابطہ کریں۔"
 }

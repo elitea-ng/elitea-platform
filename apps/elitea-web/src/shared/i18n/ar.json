@@ -4985,5 +4985,21 @@
   "pages.admin.console.error.retry": "حاول مرة أخرى",
   "pages.admin.console.error.title": "تعذّر تحميل وحدة التحكم",
   "pages.admin.console.loading": "جارٍ تحميل وحدة التحكم…",
-  "pages.admin.console.refused": "ليست لديك صلاحية الوصول إلى وحدة تحكم الإدارة."
+  "pages.admin.console.refused": "ليست لديك صلاحية الوصول إلى وحدة تحكم الإدارة.",
+  "pages.admin.console.area.people_access": "الأشخاص والوصول",
+  "pages.admin.console.area.projects": "المشاريع",
+  "pages.admin.console.area.models_spend": "النماذج والإنفاق",
+  "pages.admin.console.area.agents_governance": "الوكلاء والحوكمة",
+  "pages.admin.console.area.security": "الأمان",
+  "pages.admin.console.area.platform": "المنصة",
+  "pages.admin.console.item.schedules-tasks": "الجداول والمهام",
+  "pages.admin.schedulesTasks.tab.schedules": "الجداول",
+  "pages.admin.itemDenied.title": "لا يمكنك فتح {{item}}",
+  "pages.admin.itemDenied.explanation": "لا تتضمن أدوارك الإدارية {{item}}. يرفض الخادم صفحاته وتغييراته بالنسبة إليك.",
+  "pages.admin.itemDenied.rolesLoading": "جارٍ البحث عن الأدوار التي تفتحه…",
+  "pages.admin.itemDenied.rolesError": "تعذّرت قراءة الأدوار التي تفتحه.",
+  "pages.admin.itemDenied.noRole": "لا يوجد دور في هذا النشر يفتحه.",
+  "pages.admin.itemDenied.rolesIntro": "تفتحه هذه الأدوار:",
+  "pages.admin.itemDenied.askSupport": "لطلب أحد هذه الأدوار، تواصل مع دعم تقنية المعلومات:",
+  "pages.admin.itemDenied.askFallback": "لطلب أحد هذه الأدوار، تواصل مع الأشخاص الذين يديرون هذا النشر."
 }

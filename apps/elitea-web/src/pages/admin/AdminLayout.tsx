@@ -12,11 +12,19 @@
  *
  * The layout reads the console capability document (ADR-0059 decision 6,
  * R3.1b, issue 2611) and mounts its two refetch triggers (an admin 403, the
- * window regaining focus). `consoleNavigation` is the switch R3.2 (issue
- * 2532) sets from the document's `admin_console_areas` flag: with it on, the
- * column shows the document's loading and error states instead of a
- * navigation; with it off (the only state until R3.2 lands) the navigation
- * keeps reading `window.admin_ui_config` and nothing visible changes.
+ * window regaining focus). The document's `admin_console_areas` switch (R3.2,
+ * issue 2532) chooses the navigation:
+ *
+ *  - on: the six labelled areas, each with the items the document opens, and
+ *    the access-denied page for a typed URL whose item it does not open
+ *    (`./AdminConsoleOutlet`);
+ *  - off (an upgraded deployment, for one release): the two unlabelled groups
+ *    of `./adminNavGroups`, unchanged.
+ *
+ * The switch rides in the document, so until the document answers the column
+ * shows its loading state, and when the read fails, its error with a retry,
+ * never an empty navigation. The page itself renders meanwhile: the server
+ * answers for its routes either way.
  */
 import type { ReactNode } from 'react';
 
@@ -24,23 +32,24 @@ import { Outlet } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
 
+import { AdminConsoleOutlet } from './AdminConsoleOutlet';
 import { AdminConsoleStatus } from './AdminConsoleStatus';
 import { AdminNav } from './AdminNav';
+import { visibleConsoleNavAreas } from './adminConsoleAreas';
 import { useAdminConsole, useAdminConsoleRefresh } from './api/adminConsoleApi';
 
-export interface AdminLayoutProps {
-  /** Navigation driven by the capability document (R3.2's flag); off by default. */
-  readonly consoleNavigation?: boolean;
-}
-
-export function AdminLayout({ consoleNavigation = false }: AdminLayoutProps = {}): ReactNode {
-  const { status, retry } = useAdminConsole();
+export function AdminLayout(): ReactNode {
+  const { status, retry, areasEnabled, itemLevel } = useAdminConsole();
   useAdminConsoleRefresh();
+  const areas = areasEnabled === true ? visibleConsoleNavAreas(itemLevel) : undefined;
+  let navigation: ReactNode;
+  if (status !== 'success') navigation = <AdminConsoleStatus status={status} onRetry={retry} />;
+  else navigation = <AdminNav areas={areas} />;
   return (
     <Box sx={{ display: 'flex', height: '100vh', width: '100%', overflow: 'hidden' }}>
-      {consoleNavigation && status !== 'success' ? <AdminConsoleStatus status={status} onRetry={retry} /> : <AdminNav />}
+      {navigation}
       <Box component="main" sx={{ flex: 1, minWidth: 0, height: '100%', overflow: 'hidden' }}>
-        <Outlet />
+        {areas === undefined ? <Outlet /> : <AdminConsoleOutlet itemLevel={itemLevel} areas={areas} />}
       </Box>
     </Box>
   );
