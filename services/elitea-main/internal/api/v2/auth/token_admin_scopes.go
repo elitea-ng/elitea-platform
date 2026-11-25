@@ -110,6 +110,18 @@ const (
 type tokenAdminAccess struct {
 	Access string
 	Scopes []string
+	// EndsOn is the end date of an `inherit` token as read with it
+	// (adminaccess.InheritTokenEndDates); "" when nothing was read.
+	EndsOn string
+}
+
+// inheritEndsOn is the date the responses state for an `inherit` token: the
+// date read with the row, else the sunset date (the earliest it can end).
+func (a tokenAdminAccess) inheritEndsOn() string {
+	if a.EndsOn != "" {
+		return a.EndsOn
+	}
+	return adminaccess.InheritEndsOn()
 }
 
 // granted reports an access that carries administration rights to write:
@@ -523,6 +535,7 @@ WHERE token.id = ANY($1::integer[])`, ids)
 		return nil, fmt.Errorf("read token administration access: %w", err)
 	}
 	defer rows.Close()
+	var inherit []int64
 	for rows.Next() {
 		var id int32
 		var access tokenAdminAccess
@@ -530,9 +543,24 @@ WHERE token.id = ANY($1::integer[])`, ids)
 			return nil, fmt.Errorf("scan token administration access: %w", err)
 		}
 		out[id] = access
+		if access.Access == adminAccessInherit {
+			inherit = append(inherit, int64(id))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read token administration access: %w", err)
+	}
+	rows.Close()
+	// The end date of an `inherit` token counts from its owner's notice
+	// (ADR-0059 R3.15b); nothing is read while the sunset date is not set.
+	ends, err := adminaccess.InheritTokenEndDates(ctx, q, inherit)
+	if err != nil {
+		return nil, err
+	}
+	for id, endsOn := range ends {
+		access := out[int32(id)]
+		access.EndsOn = endsOn
+		out[int32(id)] = access
 	}
 	return out, nil
 }

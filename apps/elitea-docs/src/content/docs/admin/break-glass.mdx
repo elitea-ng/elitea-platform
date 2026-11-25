@@ -53,6 +53,29 @@ An elevation that ends early (by its holder, an approver or the operator command
 
 To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).
 
+## Who is told
+
+Break-glass is loud. Each of these events writes its notices in the same transaction as the event, and the platform then sends them by e-mail:
+
+| Event | Who gets an e-mail |
+|---|---|
+| A request for an elevation | Every holder of `access.breakglass.approve`, except the person who asked. The e-mail links to the approval page. |
+| An elevation starts | Every holder of the `admin` or `super_admin` role and every holder of `access.breakglass.review`. When approval is off, or the sealed credential was used, the e-mail says that no approver was involved. |
+| A `critical` change made under an elevation | The same people as for a start. |
+| A review that is overdue | The same people. |
+| An elevation left with no eligible reviewer (`unreviewed_no_reviewer`) | The same people. |
+| A review with the outcome `unauthorized` | The same people. |
+
+The people are decided from **standing** roles when the event happens: an elevation never counts, a suspended account or one without an e-mail address is not told, and a person whose role is taken away afterwards still gets the notice of the event that happened. Nobody needs a project membership to be told.
+
+Each e-mail names the person and the reason code. The reason text is in the e-mail only for a recipient who may read it in the console (a holder of `access.breakglass.approve` or `access.breakglass.review`), and never in a subject. The link to the approval page is built from the deployment's public address (`DEPLOYMENT_URL`), or from the public base URL of the e-mail settings when that is not set.
+
+<Note>
+Break-glass notices need outbound e-mail. Configure it (the **E-mail** section of [Configuration](/admin/features-and-configuration#configuration), or the [SMTP environment](/deployment/configuration#e-mail-smtp-bootstrap-defaults)) before you rely on break-glass. A notice is never dropped: while no mail server is configured, or while it refuses a message, the notice waits and is retried (after a minute at first, then at most every hour) by the `main.access_notice_sender` routine (see [Schedules and tasks](/admin/schedules-and-tasks#access-notice-sender)). A mail server that is down never blocks or ends an elevation. Waiting notices are rows of `elitea_auth.admin_access_notices` with no `sent_at`; the `attempts` and `last_error` columns say what was tried.
+</Note>
+
+The notice in the bell icon of the application comes in a later release; until then the e-mail is the only notice. The routes that write these events (request, start, review) ship in later releases too.
+
 ## What an elevation cannot do
 
 An elevation must not make itself permanent or switch off the controls that watch it. Every administration action carries an elevation value in the platform's action table, and the platform applies it when the permission that admitted the request came from the elevation:

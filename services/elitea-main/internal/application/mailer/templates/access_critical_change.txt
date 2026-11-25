@@ -1,0 +1,13 @@
+Critical change under break-glass access - {{.ProductName}}
+
+{{if .Notice.ActorName}}{{.Notice.ActorName}}{{else}}{{.Notice.PersonName}}{{end}} made a critical change under break-glass access: {{.Notice.Action}}.
+
+Person: {{.Notice.PersonName}}
+{{if .Notice.Level}}Level: {{.Notice.Level}}
+{{end}}Reason code: {{.Notice.ReasonCode}}
+{{if .Notice.Reason}}Reason: {{.Notice.Reason}}
+{{end}}{{if not .Notice.ExpiresAt.IsZero}}Expires: {{.Notice.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}}
+{{end}}
+{{.ActionURL}}
+{{if .SupportEmail}}
+Need help? {{.SupportEmail}}{{end}}

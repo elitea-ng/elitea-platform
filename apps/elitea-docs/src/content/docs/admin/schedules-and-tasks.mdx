@@ -43,6 +43,10 @@ The routine `main.marketplace_signals` runs once a day and pauses in maintenance
 
 The routine `main.elevation_reconciler` runs every minute and keeps running in maintenance. It records each break-glass elevation that ran out as ended with the reason `expired` and moves it to review, and it records each elevation request that nobody answered within the request lifetime as `request_expired`, each with its security audit event. It never decides access: an elevation stops granting at its expiry whether or not the routine has run. You can change its schedule here; switched off, the records and their events wait until it runs again. See [Break-glass access](/admin/break-glass#when-an-elevation-or-a-request-runs-out).
 
+## Access notice sender
+
+The routine `main.access_notice_sender` runs every 30 seconds and keeps running in maintenance. It sends the break-glass notices and the notice to owners of tokens with inherited administration access by e-mail, and retries a notice the mail server refused, after a minute at first and at most every hour. With no outbound e-mail configured it sends nothing and the notices wait. You can change its schedule here; switched off, the notices wait until it runs again. See [Who is told](/admin/break-glass#who-is-told).
+
 ## See what is running
 
 Open the **Tasks** tab (or, with the six areas off, the separate **Tasks** page) for a live view of background work this platform actually tracks: index runs, agent turns, toolkit tool calls, scheduled occurrences, and evaluation runs.
