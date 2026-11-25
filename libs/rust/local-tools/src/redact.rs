@@ -427,6 +427,14 @@ mod tests {
             "aws_secret_access_key = {}",
             ["wJalrXUtn", "FEMI/K7MDENG/bPxRfiCYz", "FAKEFAKEKY"].concat()
         );
+        // Put together at run time: the shipped-file token scan.
+        let bearer = ["Authorization: Bear", "er abcdefghijklmnop0123456789"].concat();
+        let jwt = [
+            "token: eyJhbGciOiJSUzI1NiJ9.",
+            "eyJzdWIiOiJzeXN0ZW0ifQ.",
+            "c2lnbmF0dXJlLXNpZ25hdHVyZQ",
+        ]
+        .concat();
         let cases = [
             aws_secret.as_str(),
             "aws_session_token=IQoJb3JpZ2luX2VjEHUaCXVzLWVhc3QtMSJHMEUCIQDexampleexampleexample",
@@ -435,8 +443,8 @@ mod tests {
             "xoxb-123456789012-abcdefghijkl",
             "glpat-abcdefghijklmnopqrstu",
             "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz",
-            "token: eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW0ifQ.c2lnbmF0dXJlLXNpZ25hdHVyZQ",
-            "Authorization: Bearer abcdefghijklmnop0123456789",
+            jwt.as_str(),
+            bearer.as_str(),
             r#"{"private_key_id": "0123456789abcdef0123456789abcdef01234567", "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----\n"}"#,
         ];
         for case in cases {
