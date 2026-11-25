@@ -3015,6 +3015,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					}
 				}
 				v2adminconsole.NewPostureHandler(postureSources).Register(r, requireAccessRolesView)
+				// What each administration role can do, as areas, and whether
+				// the caller may hand it out (ADR-0059 R3.9a): role names only,
+				// behind the gate of the other Access reads.
+				var roleDefinitions v2adminconsole.RoleDefinitionReader
+				if cfg.Pool != nil {
+					roleDefinitions = v2adminconsole.NewPostgresRoles(cfg.Pool)
+				}
+				v2adminconsole.NewRoleDefinitionsHandler(permissionResolver, roleDefinitions).
+					Register(r, requireAccessRolesView)
 				// The MODES registry and the GLOBAL invite (#255). Both are
 				// legacy `AdminAPI`-only surfaces — `mode_handlers` names
 				// `administration` and nothing else — so the segment is STATIC

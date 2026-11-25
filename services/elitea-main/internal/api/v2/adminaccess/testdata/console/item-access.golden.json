@@ -3,7 +3,7 @@
   "area": "people_access",
   "label_key": "pages.admin.console.item.access",
   "area_label_key": "pages.admin.console.area.people_access",
-  "available": false,
+  "available": true,
   "granting_roles": [
     {
       "name": "super_admin",

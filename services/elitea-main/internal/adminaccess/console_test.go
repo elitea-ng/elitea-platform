@@ -68,7 +68,7 @@ func TestConsoleItemsThatShipLater(t *testing.T) {
 			unavailable = append(unavailable, item.ID)
 		}
 	}
-	want := []string{"access", "project-settings", "security-signals", "access-history", "break-glass"}
+	want := []string{"project-settings", "security-signals", "access-history", "break-glass"}
 	if !slices.Equal(unavailable, want) {
 		t.Errorf("unavailable items: got %q, want %q", unavailable, want)
 	}

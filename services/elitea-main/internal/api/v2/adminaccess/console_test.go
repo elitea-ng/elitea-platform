@@ -126,11 +126,17 @@ func session(id int64) *auth.User {
 
 func golden(t *testing.T, name string, got []byte) {
 	t.Helper()
+	goldenIn(t, "console", name, got)
+}
+
+// goldenIn compares got with testdata/<dir>/<name>.golden.json.
+func goldenIn(t *testing.T, dir, name string, got []byte) {
+	t.Helper()
 	var indented bytes.Buffer
 	if err := json.Indent(&indented, got, "", "  "); err != nil {
 		t.Fatalf("indent: %v (%s)", err, got)
 	}
-	path := filepath.Join("testdata", "console", name+".golden.json")
+	path := filepath.Join("testdata", dir, name+".golden.json")
 	if os.Getenv("UPDATE_GOLDEN") != "" {
 		if err := os.WriteFile(path, indented.Bytes(), 0o644); err != nil {
 			t.Fatal(err)
@@ -171,6 +177,33 @@ func TestConsoleDocumentPerBuiltInRole(t *testing.T) {
 			golden(t, persona, body)
 		})
 	}
+}
+
+// TestConsoleDocumentOfTheIdentitySettingsHalf: a custom role that holds
+// only identity.sso.settings.manage opens Identity providers and SCIM at
+// write and nothing else, and not the Identity trust item (R3.6): the web
+// console reads this golden to lock the trust controls.
+func TestConsoleDocumentOfTheIdentitySettingsHalf(t *testing.T) {
+	t.Parallel()
+	d := newDirectory()
+	d.roles["identity_settings"] = []string{registry.IdentitySSOSettingsManage}
+	d.users[300] = []string{"identity_settings"}
+	rec := serve(t, console.NewHandler(d, d, nil), session(300), "/console")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	doc := decode(t, rec)
+	var opened []string
+	for _, area := range doc.Areas {
+		for _, item := range area.Items {
+			opened = append(opened, area.ID+"/"+item.ID+"="+item.Level)
+		}
+	}
+	want := []string{"people_access/identity-providers=write", "people_access/scim=write"}
+	if !slices.Equal(opened, want) {
+		t.Errorf("opened %v, want %v", opened, want)
+	}
+	golden(t, "identity_settings", rec.Body.Bytes())
 }
 
 type document struct {

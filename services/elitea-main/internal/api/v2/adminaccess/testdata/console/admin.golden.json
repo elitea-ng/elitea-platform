@@ -10,6 +10,11 @@
           "level": "write"
         },
         {
+          "id": "access",
+          "label_key": "pages.admin.console.item.access",
+          "level": "write"
+        },
+        {
           "id": "identity-providers",
           "label_key": "pages.admin.console.item.identity-providers",
           "level": "write"

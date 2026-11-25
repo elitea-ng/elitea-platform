@@ -1,0 +1,28 @@
+{
+  "areas": [
+    {
+      "id": "people_access",
+      "label_key": "pages.admin.console.area.people_access",
+      "items": [
+        {
+          "id": "identity-providers",
+          "label_key": "pages.admin.console.item.identity-providers",
+          "level": "write"
+        },
+        {
+          "id": "scim",
+          "label_key": "pages.admin.console.item.scim",
+          "level": "write"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "name": "identity_settings",
+      "built_in": false
+    }
+  ],
+  "elevation": null,
+  "admin_console_areas": true
+}

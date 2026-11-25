@@ -19556,6 +19556,133 @@ components:
         facts:
           $ref: '#/components/schemas/AccessPostureFacts'
 
+    AccessRoleDefinition:
+      type: object
+      required: [name, built_in, status, locked, permission_count, areas, held_by_caller, assignable_by_caller]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:75 — one
+        administration role as areas, and whether the caller may assign it.
+      properties:
+        name: { type: string }
+        display_name:
+          type: string
+          description: Set for a built-in role only.
+        built_in:
+          type: boolean
+          description: The deployment's seed record holds a row for the role.
+        status:
+          type: string
+          description: >
+            `built_in` (the registry declares its set), `as_found` (locked to
+            the set it held at the upgrade), `unassignable` (locked and given
+            to nobody) or `custom` (the deployment made it).
+        locked:
+          type: boolean
+          description: The set is edited by no caller through the API (`role_set_locked`).
+        permission_count:
+          type: integer
+          description: The raw number of permissions the role grants.
+        areas:
+          type: array
+          description: >
+            The console areas a holder of the role's set alone would open, in
+            console order. Empty for a role that opens no item.
+          items: { $ref: '#/components/schemas/AdminConsoleArea' }
+        held_by_caller:
+          type: boolean
+          description: The caller holds the role as a standing role.
+        assignable_by_caller:
+          type: boolean
+          description: The role rules admit a write by the caller that gives the role to another person.
+        refusal_code:
+          type: string
+          description: >
+            When `assignable_by_caller` is false, the code such a write would
+            get: `role_set_locked`, `role_super_admin_required` or
+            `role_permission_not_held` (AdminRoleRefusal).
+        self_refusal_code:
+          type: string
+          description: >
+            The code a write that gives the caller the role, or takes it from
+            the caller, would get: `role_self_assignment` for anyone but a
+            standing global administrator, or the codes above. Absent when
+            the rules admit it.
+
+    AccessRoleDefinitions:
+      type: object
+      required: [roles]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:71 — every
+        administration role, built-in roles first.
+      properties:
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/AccessRoleDefinition' }
+
+    AccessRoleSummary:
+      type: object
+      required: [name, built_in, status, permission_count]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:94 — one
+        side of a comparison.
+      properties:
+        name: { type: string }
+        display_name: { type: string }
+        built_in: { type: boolean }
+        status:
+          type: string
+          description: As AccessRoleDefinition.status.
+        permission_count: { type: integer }
+
+    AccessRoleComparedItem:
+      type: object
+      required: [id, area, label_key, level_a, level_b]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:100 — one
+        console item either role opens.
+      properties:
+        id: { type: string }
+        area: { type: string }
+        label_key: { type: string }
+        level_a:
+          type: string
+          description: '`read`, `write`, or empty when role a does not open the item.'
+        level_b:
+          type: string
+          description: '`read`, `write`, or empty when role b does not open the item.'
+
+    AccessRoleComparedPermissions:
+      type: object
+      required: [both, only_a, only_b]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:109 — the
+        permissions of two roles, sorted.
+      properties:
+        both:
+          type: array
+          items: { type: string }
+        only_a:
+          type: array
+          items: { type: string }
+        only_b:
+          type: array
+          items: { type: string }
+
+    AccessRoleComparison:
+      type: object
+      required: [a, b, items, permissions]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/role_definitions.go:87 — two
+        administration roles side by side.
+      properties:
+        a: { $ref: '#/components/schemas/AccessRoleSummary' }
+        b: { $ref: '#/components/schemas/AccessRoleSummary' }
+        items:
+          type: array
+          description: In console order.
+          items: { $ref: '#/components/schemas/AccessRoleComparedItem' }
+        permissions: { $ref: '#/components/schemas/AccessRoleComparedPermissions' }
+
     AccessPosture:
       type: object
       required: [checks, failures, warnings, notices, checked_at]
@@ -26066,10 +26193,10 @@ paths:
               examples:
                 super_admin:
                   summary: Global administrator
-                  value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "users", "label_key": "pages.admin.console.item.users", "level": "write"}, {"id": "identity-providers", "label_key": "pages.admin.console.item.identity-providers", "level": "write"}, {"id": "scim", "label_key": "pages.admin.console.item.scim", "level": "write"}]}, {"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "write"}, {"id": "app-requests", "label_key": "pages.admin.console.item.app-requests", "level": "write"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "providers-models", "label_key": "pages.admin.console.item.providers-models", "level": "write"}, {"id": "models-pricing", "label_key": "pages.admin.console.item.models-pricing", "level": "write"}, {"id": "tool-prices", "label_key": "pages.admin.console.item.tool-prices", "level": "write"}, {"id": "usage", "label_key": "pages.admin.console.item.usage", "level": "write"}, {"id": "logs", "label_key": "pages.admin.console.item.logs", "level": "write"}, {"id": "llm-governance", "label_key": "pages.admin.console.item.llm-governance", "level": "write"}, {"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "write"}]}, {"id": "agents_governance", "label_key": "pages.admin.console.area.agents_governance", "items": [{"id": "agent-registry", "label_key": "pages.admin.console.item.agent-registry", "level": "write"}, {"id": "connector-requests", "label_key": "pages.admin.console.item.connector-requests", "level": "write"}, {"id": "delegation-review", "label_key": "pages.admin.console.item.delegation-review", "level": "write"}, {"id": "toolkits", "label_key": "pages.admin.console.item.toolkits", "level": "write"}, {"id": "credential-inventory", "label_key": "pages.admin.console.item.credential-inventory", "level": "write"}, {"id": "permission-trimming", "label_key": "pages.admin.console.item.permission-trimming", "level": "write"}, {"id": "kill-switch", "label_key": "pages.admin.console.item.kill-switch", "level": "write"}]}, {"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}, {"id": "data-retention", "label_key": "pages.admin.console.item.data-retention", "level": "write"}]}, {"id": "platform", "label_key": "pages.admin.console.area.platform", "items": [{"id": "configuration", "label_key": "pages.admin.console.item.configuration", "level": "write"}, {"id": "features", "label_key": "pages.admin.console.item.features", "level": "write"}, {"id": "branding", "label_key": "pages.admin.console.item.branding", "level": "write"}, {"id": "email", "label_key": "pages.admin.console.item.email", "level": "write"}, {"id": "schedules-tasks", "label_key": "pages.admin.console.item.schedules-tasks", "level": "write"}, {"id": "service-descriptors", "label_key": "pages.admin.console.item.service-descriptors", "level": "write"}, {"id": "secrets", "label_key": "pages.admin.console.item.secrets", "level": "write"}, {"id": "client-applications", "label_key": "pages.admin.console.item.client-applications", "level": "write"}]}], "roles": [{"name": "super_admin", "display_name": "Global administrator", "built_in": true}], "elevation": null, "admin_console_areas": true}
+                  value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "users", "label_key": "pages.admin.console.item.users", "level": "write"}, {"id": "access", "label_key": "pages.admin.console.item.access", "level": "write"}, {"id": "identity-providers", "label_key": "pages.admin.console.item.identity-providers", "level": "write"}, {"id": "identity-trust", "label_key": "pages.admin.console.item.identity-trust", "level": "write"}, {"id": "scim", "label_key": "pages.admin.console.item.scim", "level": "write"}]}, {"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "write"}, {"id": "app-requests", "label_key": "pages.admin.console.item.app-requests", "level": "write"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "providers-models", "label_key": "pages.admin.console.item.providers-models", "level": "write"}, {"id": "models-pricing", "label_key": "pages.admin.console.item.models-pricing", "level": "write"}, {"id": "tool-prices", "label_key": "pages.admin.console.item.tool-prices", "level": "write"}, {"id": "usage", "label_key": "pages.admin.console.item.usage", "level": "write"}, {"id": "logs", "label_key": "pages.admin.console.item.logs", "level": "write"}, {"id": "llm-governance", "label_key": "pages.admin.console.item.llm-governance", "level": "write"}, {"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "write"}]}, {"id": "agents_governance", "label_key": "pages.admin.console.area.agents_governance", "items": [{"id": "agent-registry", "label_key": "pages.admin.console.item.agent-registry", "level": "write"}, {"id": "connector-requests", "label_key": "pages.admin.console.item.connector-requests", "level": "write"}, {"id": "delegation-review", "label_key": "pages.admin.console.item.delegation-review", "level": "write"}, {"id": "toolkits", "label_key": "pages.admin.console.item.toolkits", "level": "write"}, {"id": "credential-inventory", "label_key": "pages.admin.console.item.credential-inventory", "level": "write"}, {"id": "permission-trimming", "label_key": "pages.admin.console.item.permission-trimming", "level": "write"}, {"id": "kill-switch", "label_key": "pages.admin.console.item.kill-switch", "level": "write"}]}, {"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}, {"id": "data-retention", "label_key": "pages.admin.console.item.data-retention", "level": "write"}]}, {"id": "platform", "label_key": "pages.admin.console.area.platform", "items": [{"id": "configuration", "label_key": "pages.admin.console.item.configuration", "level": "write"}, {"id": "features", "label_key": "pages.admin.console.item.features", "level": "write"}, {"id": "branding", "label_key": "pages.admin.console.item.branding", "level": "write"}, {"id": "email", "label_key": "pages.admin.console.item.email", "level": "write"}, {"id": "schedules-tasks", "label_key": "pages.admin.console.item.schedules-tasks", "level": "write"}, {"id": "service-descriptors", "label_key": "pages.admin.console.item.service-descriptors", "level": "write"}, {"id": "secrets", "label_key": "pages.admin.console.item.secrets", "level": "write"}, {"id": "client-applications", "label_key": "pages.admin.console.item.client-applications", "level": "write"}]}], "roles": [{"name": "super_admin", "display_name": "Global administrator", "built_in": true}], "elevation": null, "admin_console_areas": true}
                 admin:
                   summary: Platform administrator
-                  value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "users", "label_key": "pages.admin.console.item.users", "level": "write"}, {"id": "identity-providers", "label_key": "pages.admin.console.item.identity-providers", "level": "write"}, {"id": "scim", "label_key": "pages.admin.console.item.scim", "level": "write"}]}, {"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "write"}, {"id": "app-requests", "label_key": "pages.admin.console.item.app-requests", "level": "write"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "providers-models", "label_key": "pages.admin.console.item.providers-models", "level": "write"}, {"id": "models-pricing", "label_key": "pages.admin.console.item.models-pricing", "level": "write"}, {"id": "tool-prices", "label_key": "pages.admin.console.item.tool-prices", "level": "write"}, {"id": "usage", "label_key": "pages.admin.console.item.usage", "level": "write"}, {"id": "logs", "label_key": "pages.admin.console.item.logs", "level": "write"}, {"id": "llm-governance", "label_key": "pages.admin.console.item.llm-governance", "level": "write"}, {"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "write"}]}, {"id": "agents_governance", "label_key": "pages.admin.console.area.agents_governance", "items": [{"id": "agent-registry", "label_key": "pages.admin.console.item.agent-registry", "level": "write"}, {"id": "connector-requests", "label_key": "pages.admin.console.item.connector-requests", "level": "write"}, {"id": "delegation-review", "label_key": "pages.admin.console.item.delegation-review", "level": "write"}, {"id": "toolkits", "label_key": "pages.admin.console.item.toolkits", "level": "write"}, {"id": "credential-inventory", "label_key": "pages.admin.console.item.credential-inventory", "level": "write"}, {"id": "permission-trimming", "label_key": "pages.admin.console.item.permission-trimming", "level": "write"}, {"id": "kill-switch", "label_key": "pages.admin.console.item.kill-switch", "level": "write"}]}, {"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}, {"id": "data-retention", "label_key": "pages.admin.console.item.data-retention", "level": "write"}]}, {"id": "platform", "label_key": "pages.admin.console.area.platform", "items": [{"id": "configuration", "label_key": "pages.admin.console.item.configuration", "level": "write"}, {"id": "features", "label_key": "pages.admin.console.item.features", "level": "write"}, {"id": "branding", "label_key": "pages.admin.console.item.branding", "level": "write"}, {"id": "email", "label_key": "pages.admin.console.item.email", "level": "write"}, {"id": "schedules-tasks", "label_key": "pages.admin.console.item.schedules-tasks", "level": "write"}, {"id": "service-descriptors", "label_key": "pages.admin.console.item.service-descriptors", "level": "write"}, {"id": "secrets", "label_key": "pages.admin.console.item.secrets", "level": "write"}, {"id": "client-applications", "label_key": "pages.admin.console.item.client-applications", "level": "write"}]}], "roles": [{"name": "admin", "display_name": "Platform administrator", "built_in": true}], "elevation": null, "admin_console_areas": true}
+                  value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "users", "label_key": "pages.admin.console.item.users", "level": "write"}, {"id": "access", "label_key": "pages.admin.console.item.access", "level": "write"}, {"id": "identity-providers", "label_key": "pages.admin.console.item.identity-providers", "level": "write"}, {"id": "scim", "label_key": "pages.admin.console.item.scim", "level": "write"}]}, {"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "write"}, {"id": "app-requests", "label_key": "pages.admin.console.item.app-requests", "level": "write"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "providers-models", "label_key": "pages.admin.console.item.providers-models", "level": "write"}, {"id": "models-pricing", "label_key": "pages.admin.console.item.models-pricing", "level": "write"}, {"id": "tool-prices", "label_key": "pages.admin.console.item.tool-prices", "level": "write"}, {"id": "usage", "label_key": "pages.admin.console.item.usage", "level": "write"}, {"id": "logs", "label_key": "pages.admin.console.item.logs", "level": "write"}, {"id": "llm-governance", "label_key": "pages.admin.console.item.llm-governance", "level": "write"}, {"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "write"}]}, {"id": "agents_governance", "label_key": "pages.admin.console.area.agents_governance", "items": [{"id": "agent-registry", "label_key": "pages.admin.console.item.agent-registry", "level": "write"}, {"id": "connector-requests", "label_key": "pages.admin.console.item.connector-requests", "level": "write"}, {"id": "delegation-review", "label_key": "pages.admin.console.item.delegation-review", "level": "write"}, {"id": "toolkits", "label_key": "pages.admin.console.item.toolkits", "level": "write"}, {"id": "credential-inventory", "label_key": "pages.admin.console.item.credential-inventory", "level": "write"}, {"id": "permission-trimming", "label_key": "pages.admin.console.item.permission-trimming", "level": "write"}, {"id": "kill-switch", "label_key": "pages.admin.console.item.kill-switch", "level": "write"}]}, {"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}, {"id": "data-retention", "label_key": "pages.admin.console.item.data-retention", "level": "write"}]}, {"id": "platform", "label_key": "pages.admin.console.area.platform", "items": [{"id": "configuration", "label_key": "pages.admin.console.item.configuration", "level": "write"}, {"id": "features", "label_key": "pages.admin.console.item.features", "level": "write"}, {"id": "branding", "label_key": "pages.admin.console.item.branding", "level": "write"}, {"id": "email", "label_key": "pages.admin.console.item.email", "level": "write"}, {"id": "schedules-tasks", "label_key": "pages.admin.console.item.schedules-tasks", "level": "write"}, {"id": "service-descriptors", "label_key": "pages.admin.console.item.service-descriptors", "level": "write"}, {"id": "secrets", "label_key": "pages.admin.console.item.secrets", "level": "write"}, {"id": "client-applications", "label_key": "pages.admin.console.item.client-applications", "level": "write"}]}], "roles": [{"name": "admin", "display_name": "Platform administrator", "built_in": true}], "elevation": null, "admin_console_areas": true}
                 llm_manager:
                   summary: LLM manager
                   value: {"areas": [{"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "read"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "providers-models", "label_key": "pages.admin.console.item.providers-models", "level": "write"}, {"id": "models-pricing", "label_key": "pages.admin.console.item.models-pricing", "level": "write"}, {"id": "tool-prices", "label_key": "pages.admin.console.item.tool-prices", "level": "write"}, {"id": "usage", "label_key": "pages.admin.console.item.usage", "level": "read"}, {"id": "logs", "label_key": "pages.admin.console.item.logs", "level": "read"}, {"id": "llm-governance", "label_key": "pages.admin.console.item.llm-governance", "level": "write"}, {"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "write"}]}], "roles": [{"name": "llm_manager", "display_name": "LLM manager", "built_in": true}], "elevation": null, "admin_console_areas": true}
@@ -26078,7 +26205,7 @@ paths:
                   value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "scim", "label_key": "pages.admin.console.item.scim", "level": "read"}]}, {"id": "projects", "label_key": "pages.admin.console.area.projects", "items": [{"id": "projects", "label_key": "pages.admin.console.item.projects", "level": "write"}, {"id": "app-requests", "label_key": "pages.admin.console.item.app-requests", "level": "write"}]}, {"id": "models_spend", "label_key": "pages.admin.console.area.models_spend", "items": [{"id": "budgets-alerts", "label_key": "pages.admin.console.item.budgets-alerts", "level": "read"}]}], "roles": [{"name": "project_administrator", "display_name": "Project administrator (all projects)", "built_in": true}], "elevation": null, "admin_console_areas": true}
                 security_auditor:
                   summary: Security auditor
-                  value: {"areas": [{"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}]}], "roles": [{"name": "security_auditor", "display_name": "Security auditor", "built_in": true}], "elevation": null, "admin_console_areas": true}
+                  value: {"areas": [{"id": "people_access", "label_key": "pages.admin.console.area.people_access", "items": [{"id": "access", "label_key": "pages.admin.console.item.access", "level": "read"}]}, {"id": "security", "label_key": "pages.admin.console.area.security", "items": [{"id": "audit-trail", "label_key": "pages.admin.console.item.audit-trail", "level": "read"}]}], "roles": [{"name": "security_auditor", "display_name": "Security auditor", "built_in": true}], "elevation": null, "admin_console_areas": true}
                 emergency_access:
                   summary: Emergency access
                   value: {"areas": [], "roles": [{"name": "emergency_access", "display_name": "Emergency access", "built_in": true}], "elevation": null, "admin_console_areas": true}
@@ -26390,6 +26517,143 @@ paths:
         '500': { $ref: '#/components/responses/500' }
         '503':
           description: The access posture is not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/role-definitions:
+    get:
+      operationId: getAccessRoleDefinitions
+      summary: Every administration role, as areas, and who may assign it
+      description: |
+        What each administration role can do (ADR-0059 decision 8, R3.9a):
+        its set as the console areas and items a holder of that set alone
+        would open, each item at `read` or `write`, its seed status and its
+        raw permission count. `assignable_by_caller` and `refusal_code` are
+        the answer a write giving the role to another person would get from
+        the role rules; `self_refusal_code` is the answer a write changing
+        the caller's own holding of it would get. The page never re-implements
+        the rules: a write still decides for itself.
+
+        For a holder of `access.roles.view` (or `admin.auth.users` or
+        `modes.users`, which it narrows). Role names only: no person.
+      tags: [admin]
+      responses:
+        '200':
+          description: The roles, built-in roles first in console order, then custom roles by name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRoleDefinitions'
+              example:
+                roles:
+                  - name: super_admin
+                    display_name: Global administrator
+                    built_in: true
+                    status: built_in
+                    locked: true
+                    permission_count: 79
+                    areas:
+                      - id: people_access
+                        label_key: pages.admin.console.area.people_access
+                        items:
+                          - { id: users, label_key: pages.admin.console.item.users, level: write }
+                    held_by_caller: false
+                    assignable_by_caller: false
+                    refusal_code: role_super_admin_required
+                    self_refusal_code: role_super_admin_required
+                  - name: admin
+                    display_name: Platform administrator
+                    built_in: true
+                    status: built_in
+                    locked: true
+                    permission_count: 77
+                    areas:
+                      - id: people_access
+                        label_key: pages.admin.console.area.people_access
+                        items:
+                          - { id: users, label_key: pages.admin.console.item.users, level: write }
+                    held_by_caller: true
+                    assignable_by_caller: true
+                    self_refusal_code: role_self_assignment
+                  - name: release_auditors
+                    built_in: false
+                    status: custom
+                    locked: false
+                    permission_count: 1
+                    areas:
+                      - id: security
+                        label_key: pages.admin.console.area.security
+                        items:
+                          - { id: audit-trail, label_key: pages.admin.console.item.audit-trail, level: read }
+                    held_by_caller: false
+                    assignable_by_caller: true
+                    self_refusal_code: role_self_assignment
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The role definitions are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/role-definitions/compare:
+    get:
+      operationId: compareAccessRoleDefinitions
+      summary: Two administration roles side by side
+      description: |
+        Two administration roles by item and by permission (ADR-0059
+        decision 8, R3.9a): every available console item either role opens,
+        with each role's level (empty when it does not open the item), and
+        the permissions both hold, only `a` holds and only `b` holds. Same
+        gate as the role definitions. Role names only: no person.
+      tags: [admin]
+      parameters:
+        - name: a
+          in: query
+          required: true
+          description: The name of the first administration role.
+          schema: { type: string }
+        - name: b
+          in: query
+          required: true
+          description: The name of the second administration role.
+          schema: { type: string }
+      responses:
+        '200':
+          description: The comparison
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessRoleComparison'
+              example:
+                a: { name: admin, display_name: Platform administrator, built_in: true, status: built_in, permission_count: 77 }
+                b: { name: llm_manager, display_name: LLM manager, built_in: true, status: built_in, permission_count: 9 }
+                items:
+                  - { id: users, area: people_access, label_key: pages.admin.console.item.users, level_a: write, level_b: '' }
+                  - { id: llm-governance, area: models_spend, label_key: pages.admin.console.item.llm-governance, level_a: write, level_b: write }
+                permissions:
+                  both: [llm.catalogue.view]
+                  only_a: [admin.auth.users]
+                  only_b: []
+        '400':
+          description: The request does not name two roles, `a` and `b`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: 'name two roles, a and b' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: No administration role has one of the names.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: no such administration role }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The role definitions are not configured on this deployment.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
