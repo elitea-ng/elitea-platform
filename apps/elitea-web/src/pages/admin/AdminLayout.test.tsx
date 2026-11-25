@@ -39,7 +39,7 @@ installWebStorageShim();
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
 
 interface AdminUiConfigWindow {
-  admin_ui_config?: { permissions?: readonly string[] };
+  admin_ui_config?: { permissions?: readonly string[]; access?: string };
 }
 
 beforeEach(() => {
@@ -204,6 +204,24 @@ describe('AdminLayout once the document answers', () => {
       await screen.findByTestId('admin-nav-item-users');
       await settled();
       expect(screen.queryByTestId('admin-nav-item-access')).not.toBeInTheDocument();
+    });
+
+    // A permission list that is not the caller's must not read as "no
+    // matrix permission": failure falls back to the roles, and the server decides.
+    it('keeps Roles for the admin when the handler says the permission list is unavailable', async () => {
+      serveRolesCase('admin', 200, true, false);
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = { permissions: [], access: 'unavailable' };
+      await mountLayout();
+
+      expect(await screen.findByTestId('admin-nav-item-access')).toHaveTextContent('Roles');
+    });
+
+    it('keeps Roles for the admin when no admin config is injected (dev)', async () => {
+      serveRolesCase('admin', 200, true, false);
+      delete (window as unknown as AdminUiConfigWindow).admin_ui_config;
+      await mountLayout();
+
+      expect(await screen.findByTestId('admin-nav-item-access')).toHaveTextContent('Roles');
     });
 
     it('leaves Roles out for a caller none of whose roles opens it', async () => {

@@ -18,6 +18,14 @@ export const ADMIN_ACTION_PERMISSION = {
   projectCreate: 'projects.projects.project.create',
   projectDelete: 'projects.projects.project.delete',
   projectsEdit: 'projects.projects.projects.edit',
+  toolkitTypeManage: 'toolkit_catalogue.type.manage',
+  mcpCatalogueManage: 'mcp.catalogue.manage',
+  retentionManage: 'retention.manage',
+  legalHoldManage: 'legal_hold.manage',
+  operationsManage: 'platform.operations.manage',
+  descriptorActivate: 'provider_hub.descriptor.activate',
+  nativeClients: 'configuration.native_clients',
+  microsoftApps: 'configuration.microsoft_apps',
 } as const;
 
 export const ADMIN_ITEM = {
@@ -31,7 +39,6 @@ export const ADMIN_ITEM = {
   toolPrices: 'tool-prices',
   llmGovernance: 'llm-governance',
   budgetsAlerts: 'budgets-alerts',
-  agentRegistry: 'agent-registry',
   connectorRequests: 'connector-requests',
   delegationReview: 'delegation-review',
   toolkits: 'toolkits',

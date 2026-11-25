@@ -23,8 +23,8 @@ import Typography from '@mui/material/Typography';
 import type { RetentionPolicy } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   retentionFailureReason,
   useDeleteProjectOverride,
@@ -102,8 +102,8 @@ function PlatformRow({
   readonly onSaved: () => void;
 }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
   const save = access.guard(useSetPlatformPolicy());
-  const locked = !access.writable;
   const [minDays, setMinDays] = useState(String(policy.min_age_days));
   const [maxDays, setMaxDays] = useState(policy.max_age_days === null ? '' : String(policy.max_age_days));
   const [allowOverride, setAllowOverride] = useState(policy.allow_project_override);
@@ -198,8 +198,8 @@ function OverrideForm({
   readonly onSaved: () => void;
 }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
   const setOverride = access.guard(useSetProjectOverride());
-  const locked = !access.writable;
   const [dataClass, setDataClass] = useState(classes[0] ?? '');
   const [projectId, setProjectId] = useState('');
   const [maxDays, setMaxDays] = useState('');
@@ -276,6 +276,7 @@ function OverrideForm({
 
 export function RetentionPolicies({ policies }: { readonly policies: readonly RetentionPolicy[] }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
   const removeOverride = access.guard(useDeleteProjectOverride());
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
@@ -360,7 +361,7 @@ export function RetentionPolicies({ policies }: { readonly policies: readonly Re
                 <TableCell>
                   <Button
                     size="small"
-                    disabled={!access.writable || removeOverride.isPending}
+                    disabled={locked || removeOverride.isPending}
                     onClick={() =>
                       removeOverride.mutate(
                         { dataClass: policy.data_class, projectId: policy.project_id ?? 0 },

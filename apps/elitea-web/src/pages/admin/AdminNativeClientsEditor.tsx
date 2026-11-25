@@ -32,8 +32,8 @@ import type { NativeClient } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { AdminWritableSection } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import { AdminNativeClientDialog } from './AdminNativeClientDialog';
 import { NativeClientTable } from './AdminNativeClientTable';
 import {
@@ -201,6 +201,7 @@ export function AdminNativeClientsEditor() {
 function NativeClientsEditor() {
   const listQuery = useAdminNativeClients();
   const access = useAdminWritable(ADMIN_ITEM.clientApplications);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.nativeClients).disabled;
   const saveMutation = access.guard(useSaveNativeClient());
   const enabledMutation = access.guard(useSetNativeClientEnabled());
   const deleteMutation = access.guard(useDeleteNativeClient());
@@ -332,7 +333,7 @@ function NativeClientsEditor() {
           size="small"
           variant="elitea"
           color="primary"
-          disabled={!access.writable}
+          disabled={locked}
           onClick={() => setDialog({ ...CLOSED_DIALOG, open: true })}
           sx={{ textTransform: 'none' }}
           data-testid="admin-native-clients-add"
@@ -372,7 +373,7 @@ function NativeClientsEditor() {
 
       <ConfirmDialog
         action={pending}
-        busy={!access.writable || enabledMutation.isPending || deleteMutation.isPending}
+        busy={locked || enabledMutation.isPending || deleteMutation.isPending}
         onCancel={() => setPending(undefined)}
         onConfirm={handleConfirm}
       />

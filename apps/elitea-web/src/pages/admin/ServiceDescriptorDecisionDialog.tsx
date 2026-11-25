@@ -47,8 +47,8 @@ import {
   useDeactivateServiceDescriptor,
   type AdminServiceDescriptor,
 } from './api/adminServiceDescriptorsApi';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 
 /**
  * The row an operator is deciding about, and which verb they chose. ONE piece
@@ -77,6 +77,7 @@ export function ServiceDescriptorDecisionDialog({
   onClose,
 }: ServiceDescriptorDecisionDialogProps) {
   const access = useAdminWritable(ADMIN_ITEM.serviceDescriptors);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.descriptorActivate).disabled;
   const activate = access.guard(useActivateServiceDescriptor());
   const deactivate = access.guard(useDeactivateServiceDescriptor());
 
@@ -185,7 +186,7 @@ export function ServiceDescriptorDecisionDialog({
         </Button>
         <Button
           variant="contained"
-          disabled={!access.writable || trimmed === '' || submitting}
+          disabled={locked || trimmed === '' || submitting}
           onClick={() => {
             void submit();
           }}

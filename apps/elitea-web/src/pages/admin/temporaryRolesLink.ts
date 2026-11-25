@@ -27,7 +27,7 @@
 import { useGetAdminConsoleItem } from '@/shared/api/generated/admin/admin';
 import type { AdminConsoleGrantingRole, AdminConsoleRole } from '@/shared/api/generated/model';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { adminUiPermissionsKnown, adminUiShowsControlFor } from './adminUiConfig';
 
 /**
  * The level the derivation can answer: a subset of `AdminItemAccess`, kept
@@ -67,8 +67,15 @@ export function temporaryRolesLevel(
   return levels.includes('write') ? 'write' : 'read';
 }
 
-/** Whether the caller holds a matrix permission, as the admin handler states it. */
+/**
+ * Whether the caller holds a matrix permission, as the admin handler states
+ * it. When the list is not the caller's (no config in dev, or a resolver
+ * failure the handler reports as `unavailable`), the answer is yes: failure
+ * must not read as no access, so the level falls back to the roles alone and
+ * the server decides.
+ */
 function holdsMatrixPermission(): boolean {
+  if (!adminUiPermissionsKnown()) return true;
   return MATRIX_PERMISSIONS.some((permission) => adminUiShowsControlFor(permission));
 }
 

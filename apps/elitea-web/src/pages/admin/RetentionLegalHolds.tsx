@@ -30,8 +30,8 @@ import Typography from '@mui/material/Typography';
 import type { LegalHold, LegalHoldCreate } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
   retentionFailureReason,
   useCreateLegalHold,
@@ -68,6 +68,7 @@ function positiveId(value: string): number | undefined {
 
 function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.legalHoldManage).disabled;
   const create = access.guard(useCreateLegalHold());
   const [scope, setScope] = useState<HoldScope>('project');
   const [projectId, setProjectId] = useState('');
@@ -179,7 +180,7 @@ function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly 
       </DialogContent>
       <DialogActions>
         <Button onClick={close}>{t('pages.admin.retention.cancel', 'Cancel')}</Button>
-        <Button variant="contained" disabled={!access.writable || create.isPending} onClick={onSubmit}>
+        <Button variant="contained" disabled={locked || create.isPending} onClick={onSubmit}>
           {t('pages.admin.retention.holds.place', 'Place hold')}
         </Button>
       </DialogActions>
@@ -189,6 +190,7 @@ function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly 
 
 function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null; readonly onClose: () => void }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.legalHoldManage).disabled;
   const release = access.guard(useReleaseLegalHold());
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
@@ -222,7 +224,7 @@ function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null;
         <Button
           variant="contained"
           color="error"
-          disabled={!access.writable || release.isPending || hold === null}
+          disabled={locked || release.isPending || hold === null}
           onClick={() => {
             if (hold === null) return;
             release.mutate(
@@ -250,7 +252,7 @@ export function RetentionLegalHolds() {
   const [creating, setCreating] = useState(false);
   const [releasing, setReleasing] = useState<LegalHold | null>(null);
   const holds = useLegalHolds(activeOnly);
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.legalHoldManage).disabled;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>

@@ -52,7 +52,7 @@ A role can open a page to read it without being able to change it. On such a pag
 
 The level comes from the same capability document as the sidebar: each item is open to you to read or to change. If the console cannot read the document, it does not turn a page read-only; the server answers each change for itself, as before. If it cannot read the roles that can change the page, the notice says the page is view only without naming a role.
 
-Every page of the console has this mode. Some parts of a page have their own level, so you can be able to change one part and only read another:
+Every page of the console that can change something has this mode; a page with nothing to change, such as **Agent registry** or **Audit Trail**, has no notice. An action whose permission is narrower than its page is checked on its own: on **Data retention**, for example, a role that holds only `legal_hold.manage` can place and release legal holds while the retention policy stays disabled. Some parts of a page have their own level, so you can be able to change one part and only read another:
 
 - Each LLM Proxy tab (providers and models, models and pricing, tool prices, budget alerts).
 - The identity providers and SCIM editors.

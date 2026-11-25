@@ -46,8 +46,8 @@ import { t } from '@/shared/i18n';
 
 import { AdminMcpServerDialog } from './AdminMcpServerDialog';
 import { AdminWritableSection } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import { configFailureField, configFailureReason } from './api/adminConfigurationApi';
 import {
   useAdminMcpServers,
@@ -110,7 +110,7 @@ function McpServerTable({
   readonly onEdit: (server: AdminMcpServer) => void;
   readonly onRemove: (server: AdminMcpServer) => void;
 }) {
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.mcpCatalogueManage).disabled;
   return (
     <TableContainer>
       {/* Named, so the table has an accessible name for a screen reader and a
@@ -235,6 +235,7 @@ export function AdminMcpServersEditor() {
 function McpServersEditor() {
   const listQuery = useAdminMcpServers();
   const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.mcpCatalogueManage).disabled;
   const saveMutation = access.guard(useSaveAdminMcpServer());
   const deleteMutation = access.guard(useDeleteAdminMcpServer());
 
@@ -320,7 +321,7 @@ function McpServersEditor() {
         <Button
           size="small"
           variant="elitea" color="primary"
-          disabled={!access.writable}
+          disabled={locked}
           onClick={openCreate}
           sx={{ textTransform: 'none' }}
           data-testid="admin-mcp-servers-add"
@@ -385,7 +386,7 @@ function McpServersEditor() {
           <Button
             variant="elitea" color="alarm"
             onClick={handleDelete}
-            disabled={!access.writable || deleteMutation.isPending}
+            disabled={locked || deleteMutation.isPending}
             sx={{ textTransform: 'none' }}
             data-testid="admin-mcp-server-delete-confirm"
           >

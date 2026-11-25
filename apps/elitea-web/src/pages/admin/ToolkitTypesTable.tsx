@@ -31,7 +31,8 @@ import { DataGrid } from '@mui/x-data-grid';
 
 import { t } from '@/shared/i18n';
 
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import type { AdminToolkitType } from './api/adminToolkitTypesApi';
 
 export interface AdminToolkitTypesTableProps {
@@ -93,7 +94,7 @@ export const AdminToolkitTypesTable = memo(function AdminToolkitTypesTable({
 }: AdminToolkitTypesTableProps) {
   // View-only mode (R3.4b, issue 2613): Decide is disabled; Projects stays,
   // because its dialog lists the exceptions (a read) and disables its writes.
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage).disabled;
   const rows = useMemo<ToolkitTypeGridRow[]>(
     () => types.map((toolkitType) => ({ ...toolkitType, id: toolkitType.type })),
     [types],

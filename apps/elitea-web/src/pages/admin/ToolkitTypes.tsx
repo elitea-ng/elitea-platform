@@ -45,8 +45,8 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import { ToolkitTypeBulkDialog } from './ToolkitTypeBulkDialog';
 import { ToolkitTypeDecisionDialog } from './ToolkitTypeDecisionDialog';
 import { ToolkitTypeProjectsDialog } from './ToolkitTypeProjectsDialog';
@@ -148,7 +148,7 @@ export function AdminToolkitTypes() {
 }
 
 function ToolkitTypesPage() {
-  const writeControl = useAdminWriteControl();
+  const writeControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.toolkitTypeManage);
   const query = useAdminToolkitTypes();
 
   const [search, setSearch] = useState('');

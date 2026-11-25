@@ -24,7 +24,8 @@ import type { MicrosoftApp } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { typeLabel } from './AdminMicrosoftAppFields';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 
 export interface AdminMicrosoftAppsTableProps {
   readonly apps: readonly MicrosoftApp[];
@@ -91,7 +92,7 @@ function ProjectsCell({ app }: { readonly app: MicrosoftApp }) {
 
 export function AdminMicrosoftAppsTable({ apps, busyIds, onEdit, onTest, onToggle }: AdminMicrosoftAppsTableProps) {
   // View-only mode (R3.4b, issue 2613): every row control is disabled, not hidden.
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.microsoftApps).disabled;
   return (
     <TableContainer>
       <Table size="small" aria-label={t('pages.admin.microsoftApps.tableLabel', 'Microsoft apps')} data-testid="admin-microsoft-apps-table">

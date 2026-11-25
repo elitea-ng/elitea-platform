@@ -25,7 +25,8 @@ import type { NativeClient } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
 import { isEditableNativeClient } from './adminNativeClientForm';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 
 function SourceCell({ client }: { readonly client: NativeClient }) {
   if (!isEditableNativeClient(client)) {
@@ -61,7 +62,7 @@ export interface NativeClientTableProps {
 
 export function NativeClientTable({ clients, busyIds, onEdit, onToggleEnabled, onRemove }: NativeClientTableProps) {
   // View-only mode (R3.4b, issue 2613): every row control is disabled, not hidden.
-  const viewOnly = useAdminWriteControl().disabled;
+  const viewOnly = useAdminActionControl(ADMIN_ACTION_PERMISSION.nativeClients).disabled;
   return (
     <TableContainer>
       <Table

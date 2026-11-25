@@ -52,8 +52,8 @@ import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl } from './adminWriteAccess';
 import { AdminTasksTable } from './AdminTasksTable';
 import { TASK_KINDS, type AdminTaskRow } from './api/adminTasksApi';
 import { useAdminTasksPage } from './useAdminTasksPage';
@@ -92,7 +92,7 @@ export function AdminTasks(props: AdminTasksProps = {}): ReactNode {
 
 function TasksPage(props: AdminTasksProps): ReactNode {
   const page = useAdminTasksPage(props.refetchInterval);
-  const writeControl = useAdminWriteControl();
+  const writeControl = useAdminActionControl(ADMIN_ACTION_PERMISSION.operationsManage);
   const [pendingCancel, setPendingCancel] = useState<AdminTaskRow>();
 
   return (

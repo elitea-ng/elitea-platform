@@ -28,6 +28,17 @@ disables, never hides, every control that would change something.
   `configuration.secrets.secret.view`. The Internal tab stays read-only for
   everyone, as before.
 - Downloading the branding package is a read and stays on at the read level.
+- An action whose permission is narrower than its page is checked on its own,
+  as on the pages of the first half: toolkit decisions and project exceptions
+  (`toolkit_catalogue.type.manage`), MCP servers (`mcp.catalogue.manage`),
+  retention policies (`retention.manage`), legal holds (`legal_hold.manage`),
+  Stop on Tasks (`platform.operations.manage`), activate and deactivate on
+  Service Descriptors (`provider_hub.descriptor.activate`), native clients
+  (`configuration.native_clients`) and Microsoft apps
+  (`configuration.microsoft_apps`). Such an action is disabled, and its
+  tooltip says the role cannot do it.
+- Agent registry and Audit Trail have nothing to change, so they show no
+  notice.
 
 **Who is affected.** Any role that reads one of these pages without the
 permission to change it. No one gains or loses a permission, and no API

@@ -31,8 +31,8 @@ import type { MicrosoftApp, MicrosoftAppRequest, MicrosoftAppTestResult } from '
 import { t } from '@/shared/i18n';
 
 import { AdminWritableSection } from './AdminWritable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWritable } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import { DeploymentChecklist } from './AdminMicrosoftAppChecklist';
 import { AdminMicrosoftAppDialog } from './AdminMicrosoftAppDialog';
 import { AdminMicrosoftAppsTable } from './AdminMicrosoftAppsTable';
@@ -81,6 +81,7 @@ export function AdminMicrosoftAppsEditor() {
 function MicrosoftAppsEditor() {
   const listQuery = useAdminMicrosoftApps();
   const access = useAdminWritable(ADMIN_ITEM.clientApplications);
+  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.microsoftApps).disabled;
   const saveMutation = access.guard(useSaveMicrosoftApp());
   const enabledMutation = access.guard(useSetMicrosoftAppEnabled());
   const settingsMutation = access.guard(useSaveMicrosoftAppSettings());
@@ -197,7 +198,7 @@ function MicrosoftAppsEditor() {
           control={
             <Switch
               checked={listQuery.data.settings.custom_apps}
-              disabled={!access.writable || settingsMutation.isPending}
+              disabled={locked || settingsMutation.isPending}
               onChange={(event) => {
                 handleCustomApps(event.target.checked);
               }}
@@ -212,7 +213,7 @@ function MicrosoftAppsEditor() {
           size="small"
           variant="elitea"
           color="primary"
-          disabled={!access.writable}
+          disabled={locked}
           onClick={() => setDialog({ ...CLOSED_DIALOG, open: true })}
           sx={{ textTransform: 'none' }}
           data-testid="admin-microsoft-apps-add"

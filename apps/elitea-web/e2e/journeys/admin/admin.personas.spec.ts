@@ -86,8 +86,10 @@ const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
 /**
  * Each persona's areas and items in the navigation. The gateway tabs and
  * SCIM are still tabs of Configuration, which stands for them. Access shows as
- * the TEMPORARY Roles link for the roles that open it (the administrators and
- * the security auditor, through access.roles.view) until R3.6 ships its item.
+ * the TEMPORARY Roles link for the roles that open it and read the permission
+ * matrix (the administrators) until R3.6 ships its item. The security auditor
+ * opens Access through access.roles.view but holds no matrix permission, so it
+ * has no link (issue 3042).
  */
 const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, readonly string[]>>>> = {
   super_admin: EVERY_AREA,
@@ -98,7 +100,7 @@ const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, r
     models_spend: ['budgets-alerts'],
     platform: ['configuration'],
   },
-  security_auditor: { people_access: ['access'], security: ['audit-trail'] },
+  security_auditor: { security: ['audit-trail'] },
   emergency_access: {},
 };
 
