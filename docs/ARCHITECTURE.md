@@ -142,7 +142,7 @@ engine's callback identity) only admits the call to the service.
 
 ## Admin audit role use and tamper evidence
 
-<a id="admin-audit-role-use-not-tamper-evident"></a>
+<a id="admin-audit-role-use-tamper-evidence"></a>
 
 Every administration-mode row of `centry.audit_events` (a request during which
 the permission resolver answered the `administration` mode for the caller)
@@ -155,13 +155,22 @@ roles, from the resolution the request already made), `elevation_id`,
 0275) `elevation_flagged`, the review mark of an action the action table flags
 under an elevation.
 
-**These fields are not tamper-evident until R1.4b (issue 2576).** They are
-plain nullable columns outside the row hash: `centry.audit_event_canonical`
-(shared 0206) does not name them, so the chain verifier does not cover them
-and the append-only trigger does not guard them. A person with write access
-to the table can change them without breaking the chain. R1.4b moves them
-into a versioned canonical form and into the `elitea.audit.v1` export. Until
-then, read them as recorded facts, not as evidence.
+**Tamper evidence (R1.4b, issue 2576, shared migration 0276).** The chain's
+canonical form is versioned. `elitea_runtime.audit_events_chain_forms` records,
+per partition, the first chain position hashed in each form version; a
+position below every recorded one is form v1 (shared 0206, unchanged).
+`centry.audit_event_canonical` dispatches on the chain position (never the row
+id) to `centry.audit_event_canonical_v1` or `_v2`, and both the chain trigger
+and the verifier call it, so old links verify under the form they were hashed
+in. Form v2 appends `acting_roles`, `elevation_id`, `credential_kind`,
+`central_override`, `reason_code`, `reason_missing` and `elevation_flagged`
+to v1's columns: on a row chained from the cut-over they are covered by the
+hash and guarded by the append-only trigger (which now compares the form the
+row was hashed in). On a row chained before the cut-over they are still
+outside its hash, as they always were. The reason **text** is never hashed
+and never exported: only the code leaves the row. The same fields (without
+the text) are in the `elitea.audit.v1` export's `details` of an
+`admin_audit` event.
 
 ## Shared Libraries
 

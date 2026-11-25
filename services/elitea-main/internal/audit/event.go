@@ -106,9 +106,10 @@ type Event struct {
 	ParentSpanID string
 
 	// The role-use fields of an administration-mode row (ADR-0059 decision
-	// 8, story R1.4a; shared 0268). Each is NULL when not recorded. They are
-	// OUTSIDE the chain hash (centry.audit_event_canonical, shared 0206, does
-	// not name them) and therefore not tamper-evident until R1.4b.
+	// 8, story R1.4a; shared 0268). Each is NULL when not recorded. Every
+	// field but Reason is in the row hash of a row chained in canonical form
+	// v2 (shared 0276, R1.4b); a row chained in v1 does not cover them. The
+	// reason text is never hashed: it stays erasable.
 	//
 	// ActingRoles is the caller's standing administration roles at request
 	// time, by name; nil writes NULL (no administration resolution), an empty

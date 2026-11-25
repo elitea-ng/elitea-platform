@@ -395,53 +395,19 @@ ALTER TABLE centry.audit_events ENABLE TRIGGER zz_audit_events_chain`); err != n
 	}
 }
 
-// The role-use columns of shared 0268 (ADR-0059 R1.4a) are outside the chain
-// hash. On a database whose rows were chained before the columns existed, the
-// chain still verifies after 0268 and after rows that carry them; and a new
-// row's hash does not depend on them: changing one leaves the chain intact.
-func TestRoleUseColumnsStayOutsideTheChainHash(t *testing.T) {
-	pool := newChainPool(t, 4)
+// recordRoleUse writes n rows through the recorder with every role-use field
+// set, the shape of an administration-mode write.
+func recordRoleUse(t *testing.T, pool *pgxpool.Pool, prefix string, n int) {
+	t.Helper()
 	ctx := context.Background()
-	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	// The database as it was before 0268: the template applied it, so its
-	// columns are dropped, and rows are chained without them.
-	if _, err := pool.Exec(ctx, `
-ALTER TABLE centry.audit_events
-    DROP COLUMN acting_roles, DROP COLUMN elevation_id, DROP COLUMN credential_kind,
-    DROP COLUMN central_override, DROP COLUMN reason_code, DROP COLUMN reason,
-    DROP COLUMN reason_missing`); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	for i := range 3 {
-		insertRow(t, pool, fmt.Sprintf("POST /before/%d", i), now.Add(time.Duration(i)*time.Second))
-	}
-	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 3 {
-		t.Fatalf("chain before 0268: %+v (break %+v)", report, report.Break)
-	}
-
-	// 0268 itself, the file the runner applies.
-	migration, err := platformmigrations.Files.ReadFile("shared/0268_admin_audit_role_use.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply 0268: %v", err)
-	}
-	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 3 {
-		t.Fatalf("chain after 0268: %+v (break %+v)", report, report.Break)
-	}
-
-	// New rows through the recorder, with every role-use field set.
-	recorder := NewPostgresRecorder(pool, quiet)
-	override, missing := true, false
-	for i := range 2 {
+	recorder := NewPostgresRecorder(pool, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	missing := false
+	for i := range n {
 		status := int32(200)
 		recorder.Record(ctx, Event{
-			EventType: "api", Action: fmt.Sprintf("PUT /after/%d", i), StatusCode: &status,
+			EventType: "api", Action: fmt.Sprintf("PUT %s/%d", prefix, i), StatusCode: &status,
 			ActingRoles: []string{"admin", "llm_manager"}, CredentialKind: CredentialKindToken,
-			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: override,
+			ElevationID: "0192f0c1-7b6e-7c3a-8f00-000000000001", CentralOverride: true,
 			ReasonCode: "incident", Reason: "INC-42", ReasonMissing: &missing, ElevationFlagged: true,
 		})
 	}
@@ -451,35 +417,164 @@ ALTER TABLE centry.audit_events
 	if recorder.Dropped() != 0 {
 		t.Fatalf("the recorder dropped %d events", recorder.Dropped())
 	}
-	var stored int64
+}
+
+func canonicalOf(t *testing.T, pool *pgxpool.Pool, seq int64) string {
+	t.Helper()
+	var canonical string
+	if err := pool.QueryRow(context.Background(), `
+SELECT centry.audit_event_canonical(e, l.partition_key, l.partition_seq)
+  FROM elitea_runtime.audit_events_chain l JOIN centry.audit_events e ON e.id = l.audit_id
+ WHERE l.partition_key = '0' AND l.partition_seq = $1`, seq).Scan(&canonical); err != nil {
+		t.Fatalf("canonical of position %d: %v", seq, err)
+	}
+	return canonical
+}
+
+// A fresh database is hashed in form v2 from its first position.
+func TestAFreshChainIsHashedInFormV2(t *testing.T) {
+	pool := newChainPool(t, 4)
+	ctx := context.Background()
+	var from int64
 	if err := pool.QueryRow(ctx, `
-SELECT count(*) FROM centry.audit_events
- WHERE acting_roles = '{admin,llm_manager}' AND credential_kind = 'token'
-   AND elevation_id = '0192f0c1-7b6e-7c3a-8f00-000000000001' AND central_override
-   AND reason_code = 'incident' AND reason = 'INC-42' AND NOT reason_missing
-   AND elevation_flagged`).Scan(&stored); err != nil {
+SELECT from_seq FROM elitea_runtime.audit_events_chain_forms WHERE partition_key = '0' AND form_version = 2`).Scan(&from); err != nil || from != 1 {
+		t.Fatalf("form v2 cut-over on a fresh database: %d, %v; want 1", from, err)
+	}
+	recordRoleUse(t, pool, "/fresh", 1)
+	if c := canonicalOf(t, pool, 1); !strings.HasPrefix(c, `["elitea.audit_events.v2"`) || !strings.Contains(c, `"llm_manager"`) ||
+		!strings.Contains(c, `"incident"`) || strings.Contains(c, "INC-42") {
+		t.Fatalf("v2 canonical = %s", c)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 1 {
+		t.Fatalf("fresh v2 chain: %+v (break %+v)", report, report.Break)
+	}
+}
+
+// ADR-0059 R1.4b: the role-use columns move into the hash in canonical form
+// v2 without rewriting a link. A database chained in v1 (rows from before
+// 0268, and rows written between 0268 and 0276 that carry the columns
+// outside their hash) gets shared 0276 applied; new rows are hashed in v2;
+// the chain verifies across the cut-over; a change of acting_roles breaks a
+// v2 row and leaves a v1 row verifying.
+func TestAChainSpanningTheFormChangeVerifies(t *testing.T) {
+	pool := newChainPool(t, 4)
+	ctx := context.Background()
+
+	// The database as it was before 0276: the template applied it, so put
+	// back 0206's functions (the file the runner applied) and drop what 0276
+	// added.
+	chainFile, err := platformmigrations.Files.ReadFile("shared/0206_audit_events_chain.sql")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if stored != 2 {
-		t.Fatalf("%d rows carry the role-use fields, want 2", stored)
+	if _, err := pool.Exec(ctx, string(chainFile)); err != nil {
+		t.Fatalf("re-apply 0206: %v", err)
 	}
-	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 5 {
-		t.Fatalf("chain with role-use rows: %+v (break %+v)", report, report.Break)
+	if _, err := pool.Exec(ctx, `
+DROP TABLE elitea_runtime.audit_events_chain_forms;
+DROP FUNCTION centry.audit_event_canonical_v1(centry.audit_events, text, bigint);
+DROP FUNCTION centry.audit_event_canonical_v2(centry.audit_events, text, bigint)`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	insertRow(t, pool, "POST /before-role-use", now)
+	recordRoleUse(t, pool, "/between", 3)
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 4 {
+		t.Fatalf("v1 chain before 0276: %+v (break %+v)", report, report.Break)
+	}
+	v1Before := canonicalOf(t, pool, 2)
+
+	// 0276 itself, the file the runner applies; twice, it is idempotent.
+	formFile, err := platformmigrations.Files.ReadFile("shared/0276_audit_events_chain_form_v2.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := pool.Exec(ctx, string(formFile)); err != nil {
+			t.Fatalf("apply 0276: %v", err)
+		}
+	}
+	var from int64
+	if err := pool.QueryRow(ctx, `
+SELECT from_seq FROM elitea_runtime.audit_events_chain_forms WHERE partition_key = '0' AND form_version = 2`).Scan(&from); err != nil || from != 5 {
+		t.Fatalf("form v2 cut-over: %d, %v; want the head's next position 5", from, err)
+	}
+	if c := canonicalOf(t, pool, 2); c != v1Before {
+		t.Fatalf("0276 changed the canonical text of a v1 row:\n%s\n%s", v1Before, c)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 4 {
+		t.Fatalf("v1 chain after 0276: %+v (break %+v)", report, report.Break)
 	}
 
-	// The hash does not cover the new columns: a change to one of them is
-	// allowed by the append-only guard and leaves every link verifying. (So
-	// the columns are NOT tamper-evident until R1.4b, which the architecture
-	// page states.)
-	if _, err := pool.Exec(ctx, `
-UPDATE centry.audit_events
-   SET acting_roles = '{super_admin}', credential_kind = 'session', elevation_id = NULL,
-       central_override = false, reason_code = 'other', reason = 'changed', reason_missing = true,
-       elevation_flagged = false
- WHERE action LIKE 'PUT /after/%'`); err != nil {
-		t.Fatalf("UPDATE of the role-use columns: %v", err)
+	// New rows are hashed in v2; the chain verifies across the cut-over.
+	recordRoleUse(t, pool, "/after", 2)
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 6 || report.HeadSeq != 6 {
+		t.Fatalf("chain across the form change: %+v (break %+v)", report, report.Break)
 	}
-	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 5 {
-		t.Fatalf("chain after changing the role-use columns: %+v (break %+v)", report, report.Break)
+	if c := canonicalOf(t, pool, 4); !strings.HasPrefix(c, `["elitea.audit_events.v1"`) || strings.Contains(c, "llm_manager") {
+		t.Fatalf("position 4 must stay v1 without the role-use columns: %s", c)
+	}
+	if c := canonicalOf(t, pool, 5); !strings.HasPrefix(c, `["elitea.audit_events.v2"`) || !strings.Contains(c, `["admin","llm_manager"]`) ||
+		strings.Contains(c, "INC-42") {
+		t.Fatalf("position 5 must be v2 with the role-use columns and no reason text: %s", c)
+	}
+	// Paged across the cut-over too.
+	if first := verify(t, pool, 0, 4); first.Break != nil || first.NextFrom != 5 {
+		t.Fatalf("first page: %+v", first)
+	}
+	if rest := verify(t, pool, 5, 0); rest.Break != nil || rest.Checked != 2 {
+		t.Fatalf("from the cut-over: %+v (break %+v)", rest, rest.Break)
+	}
+
+	// A v1 row's role-use columns were never in its hash: the guard lets the
+	// change through and the chain still verifies.
+	if _, err := pool.Exec(ctx, `
+UPDATE centry.audit_events SET acting_roles = '{super_admin}'
+ WHERE id = (SELECT audit_id FROM elitea_runtime.audit_events_chain WHERE partition_key = '0' AND partition_seq = 3)`); err != nil {
+		t.Fatalf("UPDATE of a v1 row's acting_roles: %v", err)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 6 {
+		t.Fatalf("chain after changing a v1 row's acting_roles: %+v (break %+v)", report, report.Break)
+	}
+
+	// A v2 row's role-use columns are guarded; its reason text is not hashed.
+	v2Row := `(SELECT audit_id FROM elitea_runtime.audit_events_chain WHERE partition_key = '0' AND partition_seq = 6)`
+	for _, set := range []string{"acting_roles = '{super_admin}'", "credential_kind = 'session'", "elevation_id = NULL",
+		"central_override = false", "reason_code = 'other'", "reason_missing = true", "elevation_flagged = false"} {
+		if _, err := pool.Exec(ctx, `UPDATE centry.audit_events SET `+set+` WHERE id = `+v2Row); err == nil ||
+			!strings.Contains(err.Error(), "append-only") {
+			t.Fatalf("UPDATE %s of a v2 row: err = %v, want the append-only refusal", set, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE centry.audit_events SET reason = 'erased' WHERE id = `+v2Row); err != nil {
+		t.Fatalf("the reason text is outside the hash and stays erasable: %v", err)
+	}
+	if report := verify(t, pool, 0, 0); report.Break != nil || report.Checked != 6 {
+		t.Fatalf("chain after erasing a v2 reason text: %+v (break %+v)", report, report.Break)
+	}
+
+	// Past the guard (table owner rights), a change of acting_roles on a v2
+	// row breaks verification at that row.
+	if _, err := pool.Exec(ctx, `
+ALTER TABLE centry.audit_events DISABLE TRIGGER audit_events_append_only;
+UPDATE centry.audit_events SET acting_roles = '{super_admin}' WHERE id = `+v2Row+`;
+ALTER TABLE centry.audit_events ENABLE TRIGGER audit_events_append_only`); err != nil {
+		t.Fatal(err)
+	}
+	report := verify(t, pool, 0, 0)
+	if report.Break == nil || report.Break.PartitionSeq != 6 || !strings.Contains(report.Break.Reason, "hash does not match") ||
+		report.Checked != 5 {
+		t.Fatalf("tampered v2 row: report %+v, break %+v", report, report.Break)
+	}
+
+	// The cut-over itself is append-only: moving it would re-read rows in
+	// the wrong form.
+	for _, statement := range []string{
+		`UPDATE elitea_runtime.audit_events_chain_forms SET from_seq = 100`,
+		`DELETE FROM elitea_runtime.audit_events_chain_forms`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Fatalf("%s: err = %v, want the append-only refusal", statement, err)
+		}
 	}
 }

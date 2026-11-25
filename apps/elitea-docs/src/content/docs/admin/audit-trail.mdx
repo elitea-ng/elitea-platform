@@ -44,9 +44,7 @@ Every row of a request to the administration surface also records the capacity t
 
 A request that never checked administration permissions leaves these fields empty.
 
-<Warning>
-These fields are not covered by the audit trail's tamper-evident chain yet. The chain still verifies every other column of every row. A later release adds them to the chain and to the SIEM export.
-</Warning>
+Every row written since the chain's form `elitea.audit_events.v2` was introduced covers these fields in its tamper-evident chain: a change to one of them breaks the chain's verification. The reason text is the exception: it is never part of the chain and never exported, so it can be erased. Rows written before that release keep their older chain form, which does not cover these fields, and still verify. The [SIEM export](/reference/audit-event-schema#details-for-admin_audit) carries the same fields, without the reason text.
 
 ## Export to your SIEM
 

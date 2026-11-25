@@ -201,6 +201,12 @@ type AccessMembershipDetails struct {
 }
 
 // AdminAuditDetails is details for source admin_audit.
+//
+// The role-use fields after is_error (ADR-0059 decision 8, R1.4a, exported
+// by R1.4b) are appended, never reordered: field order is part of the
+// envelope. Each is omitted when its column is NULL (a row written before
+// shared 0268, or a request with no administration resolution). The reason
+// text is never exported: only reason_code leaves the row.
 type AdminAuditDetails struct {
 	RowID      int64    `json:"row_id"`
 	HTTPMethod string   `json:"http_method,omitempty"`
@@ -208,6 +214,15 @@ type AdminAuditDetails struct {
 	StatusCode *int32   `json:"status_code,omitempty"`
 	DurationMS *float64 `json:"duration_ms,omitempty"`
 	IsError    bool     `json:"is_error"`
+	// ActingRoles is nil for NULL and points to an empty slice for {} (a
+	// credential that acts with no administration role): the two differ.
+	ActingRoles      *[]string `json:"acting_roles,omitempty"`
+	ElevationID      string    `json:"elevation_id,omitempty"`
+	CredentialKind   string    `json:"credential_kind,omitempty"`
+	CentralOverride  *bool     `json:"central_override,omitempty"`
+	ReasonCode       string    `json:"reason_code,omitempty"`
+	ReasonMissing    *bool     `json:"reason_missing,omitempty"`
+	ElevationFlagged *bool     `json:"elevation_flagged,omitempty"`
 }
 
 // storedSecurityEvent is the stored CloudEvents form, decoded leniently: the
@@ -365,6 +380,15 @@ type AuditRow struct {
 	PartitionSeq *int64
 	PrevHash     []byte
 	Hash         []byte
+	// The role-use columns (shared 0268 and 0275); nil or "" when NULL. The
+	// reason text is not read: it is never exported.
+	ActingRoles      *[]string
+	ElevationID      string
+	CredentialKind   string
+	CentralOverride  *bool
+	ReasonCode       string
+	ReasonMissing    *bool
+	ElevationFlagged *bool
 }
 
 // auditNamespace derives event ids of audit_events rows. The id is a pure
@@ -437,6 +461,9 @@ func FromAuditRow(row AuditRow) Event {
 		Details: AdminAuditDetails{
 			RowID: row.ID, HTTPMethod: row.HTTPMethod, HTTPRoute: row.HTTPRoute,
 			StatusCode: row.StatusCode, DurationMS: row.DurationMS, IsError: row.IsError,
+			ActingRoles: row.ActingRoles, ElevationID: row.ElevationID, CredentialKind: row.CredentialKind,
+			CentralOverride: row.CentralOverride, ReasonCode: row.ReasonCode, ReasonMissing: row.ReasonMissing,
+			ElevationFlagged: row.ElevationFlagged,
 		},
 		ref: string(SourceAdminAudit) + ":" + strconv.FormatInt(row.ID, 10),
 	}

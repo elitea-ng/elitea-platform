@@ -1271,7 +1271,14 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// elevation_flagged column of centry.audit_events, the review mark of an
 	// action the action table flags under an elevation, outside the chain
 	// hash (issue 2522, ADR-0059 R2.8a). No permission.
-	require.EqualValues(t, 275, Head(shared))
+	//
+	// 276: shared/0276_audit_events_chain_form_v2.sql, the versioned canonical
+	// form of the centry.audit_events chain: the cut-over table
+	// elitea_runtime.audit_events_chain_forms, form v2 hashing the role-use
+	// columns and the elevation mark, the dispatcher by chain position and
+	// the append-only guard by the row's own form (issue 2576, ADR-0059
+	// R1.4b). No permission.
+	require.EqualValues(t, 276, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
