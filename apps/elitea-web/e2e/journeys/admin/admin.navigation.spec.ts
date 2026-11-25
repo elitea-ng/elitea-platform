@@ -159,7 +159,7 @@ adminTest('J37: the landing page offers a nav, and marks the page it is showing'
   // the item that must be marked — without the index alias the LANDING screen
   // would be the one screen with nothing active, which reads as a broken nav on
   // first contact.
-  await expect(page.getByRole('heading', { name: 'Users' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-nav-item-users')).toHaveAttribute('aria-current', 'page');
 
   // A landmark with a name, not an anonymous <div> of click handlers.
@@ -191,8 +191,9 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     // The URL moved…
     await page.waitForURL((url) => url.pathname === item.path, { timeout: 20_000 });
     // …the destination PAGE rendered — a link to a deleted route would satisfy
-    // the URL assertion and render nothing at all…
-    await expect(page.getByRole('heading', { name: item.heading, exact: true })).toBeVisible({
+    // the URL assertion and render nothing at all. Level 1: an area label
+    // ("Projects", "Security") is a heading of the navigation too…
+    await expect(page.getByRole('heading', { level: 1, name: item.heading, exact: true })).toBeVisible({
       timeout: 20_000,
     });
     // …and the nav says where you are.
@@ -216,7 +217,7 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
   await nav.getByTestId('admin-nav-item-schedules-tasks').click();
   await page.getByTestId('admin-schedules-tasks-tab-tasks').click();
   await page.waitForURL((url) => url.pathname === '/admin/app/tasks', { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(nav.getByTestId('admin-nav-item-schedules-tasks')).toHaveAttribute('aria-current', 'page');
   await checkA11y(page);
 });
@@ -252,7 +253,7 @@ adminTest('J37d: keyboard alone reaches a page, because the items are real links
   await page.keyboard.press('Enter');
 
   await page.waitForURL((url) => url.pathname === '/admin/app/projects', { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Projects', exact: true })).toBeVisible({ timeout: 20_000 });
 });
 
 adminTest('J37e: collapsing the nav survives a full reload', async ({ page }) => {
@@ -331,10 +332,10 @@ adminTest('J37g: with admin_console_areas off, the two unlabelled groups render 
   // Both groups' pages still open by clicking, Roles among them.
   await nav.getByTestId('admin-nav-item-roles').click();
   await page.waitForURL((url) => url.pathname === '/admin/app/roles', { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Roles', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Roles', exact: true })).toBeVisible({ timeout: 20_000 });
   await nav.getByTestId('admin-nav-item-tasks').click();
   await page.waitForURL((url) => url.pathname === '/admin/app/tasks', { timeout: 20_000 });
-  await expect(page.getByRole('heading', { name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Tasks', exact: true })).toBeVisible({ timeout: 20_000 });
   // The Tasks page shows no Schedules/Tasks strip with the switch off.
   await expect(page.getByTestId('admin-schedules-tasks-tabs')).toHaveCount(0);
 });
