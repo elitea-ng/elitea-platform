@@ -125,6 +125,8 @@ export interface ChatMessage {
   readonly continuationIndex?: number | undefined;
   /** Persisted `meta.step_limit_reached`: the answer stopped at its step limit in an unattended run. Live answers carry it in `responseMetadata`. */
   readonly stepLimitReached?: boolean | undefined;
+  /** Persisted `meta.local_work.ran_outside_sandbox` (ADR-0061): the answer's Local work turn ran a command outside the sandbox. */
+  readonly ranOutsideSandbox?: boolean | undefined;
   /** Persisted `meta.run_brief` (ADR-0045 decision 11): the chain's run brief, on the chain root's answer. */
   readonly runBrief?: RunBriefView | undefined;
   /** Persisted `meta.goal_check`: the goal check of this answer's run. */

@@ -6,6 +6,7 @@ import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/st
 
 import { storedDelegationNotices } from '@/features/chat/delegationNotices';
 import { storedSubAgents } from '@/features/chat/subAgentLanes';
+import { ranOutsideSandbox } from '@/features/localWork/model';
 
 /**
  * Persisted conversation history → what the thread renders.
@@ -67,6 +68,8 @@ export interface ChatMessage {
   subAgents?: CloudSubAgentLane[];
   /** Client contract 1.60: the refused or narrowed delegations of a cloud answer (`meta.delegation_notices_v1`). */
   delegationNotices?: DelegationNotice[];
+  /** ADR-0061 decision 5i: a Local work answer that ran commands outside the sandbox (`meta.local_work.ran_outside_sandbox`, #3060); absent otherwise. */
+  ranOutsideSandbox?: true;
 }
 
 /** One file of a message. */
@@ -300,6 +303,7 @@ export function toChatMessages(
       ),
       ...subAgentsOf(role, group),
       ...delegationNoticesOf(role, group),
+      ...(role === 'assistant' && ranOutsideSandbox(asRecord(group.meta) ?? asRecord(group.metadata)) ? { ranOutsideSandbox: true } : {}),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

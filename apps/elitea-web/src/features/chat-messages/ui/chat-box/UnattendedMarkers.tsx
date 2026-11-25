@@ -19,6 +19,18 @@ export function ContinuedAutomaticallyLabel({ index }: { readonly index?: number
   );
 }
 
+/**
+ * The answer's Local work turn ran a command outside the sandbox (ADR-0061 decision 5, #3069): Main stamps
+ * `meta.local_work.ran_outside_sandbox` from the commit's trust record. A still label, never a colour alone.
+ */
+export function RanOutsideSandboxMarker() {
+  return (
+    <Typography variant="labelSmall" color="warning.main" data-testid="chat-message-ran-outside-sandbox" sx={{ display: 'block', mt: 0.5 }}>
+      {t('features.chatMessages.ranOutsideSandbox', 'Ran outside the sandbox')}
+    </Typography>
+  );
+}
+
 /** The answer stopped at its step limit: under a grant that continues the run, a continuation follows. */
 export function StepLimitNotice() {
   return (

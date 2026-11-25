@@ -138,3 +138,23 @@ export function composerBlockedReason(thread: LocalWorkThread | null): string | 
     ? 'This thread runs on your laptop. Send it to the cloud from the desktop app to continue here.'
     : `This thread runs on ${thread.folderName} on your laptop. Send it to the cloud from the desktop app to continue here.`;
 }
+
+/**
+ * Where an agent of a team thread runs (ADR-0061 Parity): `cloud` when its mapping says so
+ * (`entity_settings.executor`), else `local` (the desktop's default: the laptop with the folder).
+ */
+export function agentExecutorOf(participant: { entity_settings?: unknown }): 'local' | 'cloud' {
+  const settings = participant.entity_settings;
+  return settings !== null && typeof settings === 'object' && (settings as { executor?: unknown }).executor === 'cloud' ? 'cloud' : 'local';
+}
+
+/**
+ * Whether a committed local answer ran commands outside the OS sandbox (ADR-0061 decision 5i):
+ * Main stamps `meta.local_work.ran_outside_sandbox: true` when the commit reports host commands
+ * (#3060). Anything else, the field absent included, is false.
+ */
+export function ranOutsideSandbox(meta: unknown): boolean {
+  if (meta === null || typeof meta !== 'object') return false;
+  const localWork = (meta as { local_work?: unknown }).local_work;
+  return localWork !== null && typeof localWork === 'object' && (localWork as { ran_outside_sandbox?: unknown }).ran_outside_sandbox === true;
+}
