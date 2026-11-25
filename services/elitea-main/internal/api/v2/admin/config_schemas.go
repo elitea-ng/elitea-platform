@@ -786,7 +786,7 @@ func analyticsSection() map[string]any {
 // the row on every GET /api/v2/admin/console and carries it as
 // `admin_console_areas`; the console renders the six areas when it is on and
 // the two unlabelled groups when it is off. Its code default is on. Shared
-// migration 0271 writes it off on a database that already held an
+// migration 0273 writes it off on a database that already held an
 // administration role assignment, so an upgrade keeps the old navigation for
 // one release; story R4.9 (issue 2623) removes the switch and the old
 // navigation. It changes what the console shows, never what the server

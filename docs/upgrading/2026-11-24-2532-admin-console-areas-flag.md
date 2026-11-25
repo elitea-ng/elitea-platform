@@ -16,7 +16,7 @@ The six areas are a platform setting, `admin_console.admin_console_areas`
 capability document carries it as `admin_console_areas`.
 
 - A new deployment has it on (the code default).
-- Shared migration `0271_admin_console_areas_default.sql` writes it **off**
+- Shared migration `0273_admin_console_areas_default.sql` writes it **off**
   when the database already has an assignment to an administration-mode
   role, so an upgraded deployment keeps the two unlabelled groups for one
   release. It never overwrites a stored value, and it does nothing on a

@@ -70,6 +70,12 @@ func (r *PostgresResolver) ResolvePermissions(
 	if mode == auth.PermissionModeAdministration {
 		return r.administrationResolution(ctx, principal, userID, true)
 	}
+	if principal.Credential().Kind == auth.CredentialKindSealed {
+		// A sealed session reaches the administration surface only
+		// (R2.7a): it holds nothing in the developer and default modes,
+		// whatever its person's memberships.
+		return auth.PermissionResolution{UserID: userID, Permissions: []string{}}, nil
+	}
 	var permissions []string
 	switch mode {
 	case auth.PermissionModeDeveloper:
@@ -120,6 +126,12 @@ func (r *PostgresResolver) ResolveMembershipPermissions(
 	if mode == auth.PermissionModeAdministration {
 		return r.administrationResolution(ctx, principal, userID, true)
 	}
+	if principal.Credential().Kind == auth.CredentialKindSealed {
+		// A sealed session reaches the administration surface only
+		// (R2.7a): it holds nothing in the developer and default modes,
+		// whatever its person's memberships.
+		return auth.PermissionResolution{UserID: userID, Permissions: []string{}}, nil
+	}
 	var permissions []string
 	switch mode {
 	case auth.PermissionModeDeveloper:
@@ -169,11 +181,12 @@ func (r *PostgresResolver) ResolveStandingAdministration(
 //     write;
 //   - native: the owner's set intersected with the registry permissions
 //     marked native_client;
-//   - run, system, sealed (its standing set; its elevation is R2.7a) and the
-//     zero kind: empty.
+//   - sealed: no standing set at all; with elevated set, its elevation only
+//     (R2.7a);
+//   - run, system and the zero kind: empty.
 //
-// With elevated set, a browser session (session, form) with a server-side
-// row also gains the elevation union (ADR-0059 decision 5, "Bound to one
+// With elevated set, a browser session (session, form, sealed) with a
+// server-side row also gains the elevation union (ADR-0059 decision 5, "Bound to one
 // session"; story R2.1b): the administration set of the level's role of
 // every ACTIVE elevation of the same person bound to the same session
 // reference (elevationGrants). Every other kind never matches: its
@@ -217,6 +230,21 @@ func (r *PostgresResolver) administrationResolution(
 	var access TokenAdminAccess
 	switch credential.Kind {
 	case auth.CredentialKindSession, auth.CredentialKindForm, auth.CredentialKindNative:
+	case auth.CredentialKindSealed:
+		// A sealed session holds its elevation and nothing else (ADR-0059
+		// decision 7): no standing role, no owner permission, so the
+		// standing-set call answers empty and the elevated call answers the
+		// elevation only (story R2.7a).
+		if !elevated || resolution.ElevationSessionRef <= 0 {
+			return resolution, nil
+		}
+		// Assigned to resolution, not returned directly: the deferred
+		// audit record reads it.
+		var err error
+		if resolution, err = r.withElevation(ctx, resolution, userID); err != nil {
+			return auth.PermissionResolution{}, err
+		}
+		return resolution, nil
 	case auth.CredentialKindToken:
 		var err error
 		access, err = r.tokenAdminAccess(ctx, credential.TokenID, userID)
@@ -228,7 +256,7 @@ func (r *PostgresResolver) administrationResolution(
 			return resolution, nil
 		}
 	default:
-		// run, system, sealed and the zero kind: no query, nothing held.
+		// run, system and the zero kind: no query, nothing held.
 		return resolution, nil
 	}
 	roles, owner, err := r.administrationRoles(ctx, userID)
@@ -245,6 +273,19 @@ func (r *PostgresResolver) administrationResolution(
 	default:
 		return resolution, nil
 	}
+	if resolution, err = r.withElevation(ctx, resolution, userID); err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	return resolution, nil
+}
+
+// withElevation adds to a resolution the union of the active elevations of
+// the person bound to its session reference (elevationGrants).
+func (r *PostgresResolver) withElevation(
+	ctx context.Context,
+	resolution auth.PermissionResolution,
+	userID int64,
+) (auth.PermissionResolution, error) {
 	ids, granted, err := r.elevationGrants(ctx, userID, resolution.ElevationSessionRef)
 	if err != nil {
 		return auth.PermissionResolution{}, err

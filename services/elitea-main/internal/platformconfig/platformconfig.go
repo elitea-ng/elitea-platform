@@ -121,7 +121,7 @@ const (
 
 	// KeyAdminConsoleAreas switches the administration console to the six
 	// labelled areas of ADR-0059 decision 6 (R3.2, issue 2532). Its code
-	// default is on; shared migration 0271 writes it off on a database that
+	// default is on; shared migration 0273 writes it off on a database that
 	// already held an administration role assignment (an upgrade), for one
 	// release. The capability document (GET /api/v2/admin/console) carries
 	// it as `admin_console_areas`.

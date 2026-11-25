@@ -1248,12 +1248,21 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// models.http_action_rules.list (admin, editor, viewer), including the
 	// per-project override rows. No foreign key to centry.project.
 	//
-	// 271: shared/0271_admin_console_areas_default.sql, the switch
+	// 271: shared/0271_sealed_credentials.sql, the sealed break-glass
+	// credentials (elitea_auth.sealed_credentials): selector and Argon2id
+	// digest of the verifier only, never deleted (issue 2520, ADR-0059
+	// R2.6a). No permission.
+	//
+	// 272: shared/0272_sealed_browser_sessions.sql, the provider CHECK of
+	// elitea_auth.browser_sessions widened by `sealed`, the session kind of a
+	// sealed break-glass sign-in (issue 2521, ADR-0059 R2.7a). No permission.
+	//
+	// 273: shared/0273_admin_console_areas_default.sql, the switch
 	// admin_console.admin_console_areas written off in centry.platform_config
 	// on a database that already holds an administration role assignment, so
 	// an upgrade keeps the two-group navigation for one release (issue 2532,
 	// ADR-0059 R3.2). No permission.
-	require.EqualValues(t, 271, Head(shared))
+	require.EqualValues(t, 273, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

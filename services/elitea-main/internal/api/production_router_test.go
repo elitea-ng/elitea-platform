@@ -1759,6 +1759,16 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := routeSet.Patterns()
+	// The break-glass operator commands (ADR-0059 R2.13, R2.6a: end, issue,
+	// list, revoke) run in the workload and are reachable over no route: the
+	// snapshot below is unchanged by them, and no pattern names them.
+	for _, pattern := range got {
+		lower := strings.ToLower(pattern)
+		if strings.Contains(lower, "break-glass") || strings.Contains(lower, "break_glass") ||
+			strings.Contains(lower, "sealed_credential") {
+			t.Errorf("%s exposes a break-glass operator command over HTTP", pattern)
+		}
+	}
 
 	want := []string{
 		"DELETE /api/v2/admin/branding/administration",

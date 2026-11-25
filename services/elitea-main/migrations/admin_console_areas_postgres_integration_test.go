@@ -1,6 +1,6 @@
 package migrations_test
 
-// Shared 0271 (issue 2532, ADR-0059 R3.2): the default of the console's
+// Shared 0273 (issue 2532, ADR-0059 R3.2): the default of the console's
 // six-area navigation switch. A new install resolves ON, the code default; a
 // database that already holds an administration role assignment (an upgrade)
 // resolves OFF for one release. Both are read through the production reader
@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	consoleAreasFile      = "0271_admin_console_areas_default.sql"
+	consoleAreasFile      = "0273_admin_console_areas_default.sql"
 	consoleAreasMigration = "shared/" + consoleAreasFile
 )
 
@@ -42,9 +42,9 @@ func consoleAreasRows(t *testing.T, pool *pgxpool.Pool) int {
 	return n
 }
 
-// newPoolBefore0271 is the bootstrap schema and the corpus up to 0270: a new
+// newPoolBefore0273 is the bootstrap schema and the corpus up to 0272: a new
 // install one release back, with no administration role assignment.
-func newPoolBefore0271(t *testing.T) *pgxpool.Pool {
+func newPoolBefore0273(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := newEmptyDatabase(t)
 	applyBootstrapSchema(t, pool)
@@ -76,10 +76,10 @@ func TestConsoleAreasAreOnForAFreshDatabase(t *testing.T) {
 }
 
 func TestConsoleAreasAreOffForADatabaseWithAnAdministrator(t *testing.T) {
-	pool := newPoolBefore0271(t)
+	pool := newPoolBefore0273(t)
 	assignAdministrator(t, pool)
 	if !consoleAreas(t, pool) {
-		t.Fatal("premise: before 0271 the switch is the code default, on")
+		t.Fatal("premise: before 0273 the switch is the code default, on")
 	}
 	execMigrationFile(t, pool, consoleAreasMigration)
 	if consoleAreas(t, pool) {
@@ -95,7 +95,7 @@ func TestConsoleAreasAreOffForADatabaseWithAnAdministrator(t *testing.T) {
 // A project role is not an administration role: a database whose people hold
 // only default-mode roles is still a new console.
 func TestConsoleAreasIgnoreDefaultModeAssignments(t *testing.T) {
-	pool := newPoolBefore0271(t)
+	pool := newPoolBefore0273(t)
 	execSQL(t, pool, `INSERT INTO public.auth_core__user_role (user_id, role_id)
 		SELECT 1, id FROM public.auth_core__role WHERE mode = 'default' AND name = 'admin'
 		ON CONFLICT (user_id, role_id) DO NOTHING`)
@@ -107,13 +107,13 @@ func TestConsoleAreasIgnoreDefaultModeAssignments(t *testing.T) {
 
 // A value the operator stored is theirs.
 func TestConsoleAreasKeepAStoredValue(t *testing.T) {
-	pool := newPoolBefore0271(t)
+	pool := newPoolBefore0273(t)
 	assignAdministrator(t, pool)
 	execSQL(t, pool, `INSERT INTO centry.platform_config (section, key, value)
 		VALUES ('admin_console', 'admin_console_areas', 'true'::jsonb)`)
 	execMigrationFile(t, pool, consoleAreasMigration)
 	if !consoleAreas(t, pool) {
-		t.Fatal("0271 overwrote the operator's stored on")
+		t.Fatal("0273 overwrote the operator's stored on")
 	}
 }
 
@@ -123,6 +123,6 @@ func TestConsoleAreasIsANoOpWithoutTheTables(t *testing.T) {
 	var present bool
 	queryRow(t, pool, `SELECT to_regclass('centry.platform_config') IS NOT NULL`, &present)
 	if present {
-		t.Fatal("0271 created centry.platform_config on an empty database")
+		t.Fatal("0273 created centry.platform_config on an empty database")
 	}
 }
