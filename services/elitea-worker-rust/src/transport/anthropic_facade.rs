@@ -1033,7 +1033,7 @@ enum ActiveBlock {
 
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "independent flags of one stream: started, stopped, tool turn, output emitted"
+    reason = "independent flags of one stream: started, stopped, tool turn, output emitted, text emitted"
 )]
 struct AnthropicStreamState {
     expected_model: String,
@@ -1050,6 +1050,8 @@ struct AnthropicStreamState {
     stopped: bool,
     /// Text or reasoning of this model call already left the facade.
     emitted: bool,
+    /// Answer text (not only reasoning) of this model call already left it.
+    text_emitted: bool,
     /// The first tool use dropped as outside the admitted toolset.
     dropped: Option<String>,
 }
@@ -1070,6 +1072,7 @@ impl AnthropicStreamState {
             terminal: None,
             stopped: false,
             emitted: false,
+            text_emitted: false,
             dropped: None,
         }
     }
@@ -1209,6 +1212,7 @@ impl AnthropicStreamState {
             (ActiveBlock::Text, ContentBlockDelta::TextDelta(delta)) => {
                 let partial = partial_text(delta.text);
                 self.emitted |= partial.is_some();
+                self.text_emitted |= partial.is_some();
                 Ok(partial)
             }
             (ActiveBlock::Thinking { .. }, ContentBlockDelta::ThinkingDelta(delta)) => {
@@ -1331,7 +1335,7 @@ impl AnthropicStreamState {
         let note = if tool_turn && self.tool_calls.is_empty() {
             self.dropped
                 .as_deref()
-                .map(super::model_facade::unadmitted_tool_note)
+                .map(|name| super::model_facade::unadmitted_tool_note(name, self.text_emitted))
         } else {
             None
         };

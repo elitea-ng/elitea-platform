@@ -162,15 +162,22 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err := request.Validate(); err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
-	if lead, err := service.adhocLead(ctx, request); err != nil {
-		return CurrentApplicationStartOutcome{}, err
-	} else if lead > 0 {
-		return service.StartCurrentApplication(ctx, request.leadStart(lead))
-	}
 	if service.adhocResolver == nil {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}
 	target, err := service.adhocResolver.ResolveCurrentAdhoc(ctx, request)
+	if errors.Is(err, ErrAgentTargetRequired) {
+		// Several agents and no target: under a lead the lead answers
+		// (issue 3049). Read only here, so a plain model chat pays no floor
+		// read and cannot fail on one.
+		lead, leadErr := service.adhocLead(ctx, request)
+		if leadErr != nil {
+			return CurrentApplicationStartOutcome{}, fmt.Errorf("read the conversation floor: %w", leadErr)
+		}
+		if lead > 0 {
+			return service.StartCurrentApplication(ctx, request.leadStart(lead))
+		}
+	}
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("resolve current ad-hoc target: %w", err)
 	}

@@ -50,9 +50,12 @@ pub(crate) fn noted_tool_name(name: &str) -> String {
 /// call is never emitted (no tool outside the request's declared set leaves
 /// the facade); the turn ends on the text the person already read, and the
 /// note says why the agent stopped instead of an INTERNAL failure card.
-pub(crate) fn unadmitted_tool_note(name: &str) -> String {
+/// `after_text`: answer text already streamed, so the note starts a new
+/// paragraph; after reasoning alone it is the whole answer.
+pub(crate) fn unadmitted_tool_note(name: &str, after_text: bool) -> String {
     format!(
-        "\n\n_The agent stopped here: it asked for a tool it does not have in this conversation (`{}`)._",
+        "{}_The agent stopped here: it asked for a tool it does not have (`{}`)._",
+        if after_text { "\n\n" } else { "" },
         noted_tool_name(name)
     )
 }
@@ -320,5 +323,19 @@ impl BoundOrdinaryAgentModel for BoundModelFacade {
             BoundProviderModel::OpenAiCompatible(model) => model.durable_completion(),
             BoundProviderModel::Anthropic(model) => model.durable_completion(),
         }
+    }
+}
+
+#[cfg(test)]
+mod noted_tool_name_tests {
+    use super::{noted_tool_name, unadmitted_tool_note};
+
+    #[test]
+    fn a_model_chosen_name_is_cut_to_safe_characters_and_bounded() {
+        assert_eq!(noted_tool_name("gh <pr list>"), "ghprlist");
+        assert_eq!(noted_tool_name("`;\n"), "unnamed");
+        assert_eq!(noted_tool_name(&"a".repeat(200)).len(), 64);
+        assert!(unadmitted_tool_note("gh", true).starts_with("\n\n_"));
+        assert!(unadmitted_tool_note("gh", false).starts_with('_'));
     }
 }

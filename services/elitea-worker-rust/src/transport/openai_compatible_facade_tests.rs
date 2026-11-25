@@ -3220,3 +3220,28 @@ async fn an_unadmitted_tool_call_before_any_output_stays_refused() {
     let error = responses.expect_err("refused before output");
     assert_eq!(error.code, super::model_facade::TOOL_NOT_ADMITTED_CODE);
 }
+
+/// After reasoning alone the repair cannot run either (the reasoning was
+/// shown), so the turn ends with the note as the whole answer, with no
+/// leading blank lines.
+#[tokio::test(flavor = "current_thread")]
+async fn an_unadmitted_tool_call_after_reasoning_alone_is_the_note() {
+    let (responses, completion) = unadmitted_turn(concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I should run gh.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"gh\",\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .await;
+    assert!(
+        responses
+            .expect("ends cleanly")
+            .last()
+            .expect("terminal")
+            .turn_complete
+    );
+    assert_eq!(
+        completion.expect("completion"),
+        "_The agent stopped here: it asked for a tool it does not have (`gh`)._"
+    );
+}

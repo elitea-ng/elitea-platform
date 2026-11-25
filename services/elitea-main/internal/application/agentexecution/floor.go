@@ -242,14 +242,15 @@ func soleAgentAddressee(agents []FloorAgent, request *CurrentApplicationStartReq
 // adhocLead is the lead a person's model-chat start goes to: a start that
 // names no participant, in a conversation with two or more agents whose floor
 // has a lead that is still one of them (turntaking.Route: under `lead` an
-// unaddressed message goes to the lead). 0 leaves the start a model chat,
-// which the repository refuses with ErrAgentTargetRequired when several
-// agents sit in the conversation (issue 1602).
+// unaddressed message goes to the lead). 0 keeps the repository's refusal,
+// ErrAgentTargetRequired (issue 1602). StartCurrentAdhoc asks only after the
+// repository refused the start for naming no agent among several, so a plain
+// model chat never reads the floor.
 //
 // A client that shows "To: <lead> (lead)" over a fresh team conversation and
-// sends no participant (the web composer before this fix, and any client that
-// cannot read the floor) is answered by the lead, as the chip says, instead of
-// "Pick the agent this message is for".
+// sends no participant (the web composer before issue 3049, and any client
+// that cannot read the floor) is answered by the lead, as the chip says,
+// instead of "Pick the agent this message is for".
 func (service *CurrentApplicationStartService) adhocLead(ctx context.Context, request CurrentAdhocStartRequest) (int64, error) {
 	if service.floor == nil || request.TargetParticipantID != 0 || !HumanOrigin(request.TriggerOrigin) ||
 		request.UnattendedContinuation != nil || request.HandoffCompletion != nil || request.ThreadRun != nil {
@@ -271,8 +272,11 @@ func (service *CurrentApplicationStartService) adhocLead(ctx context.Context, re
 }
 
 // leadStart is the agent start of a model-chat start that goes to the lead.
-// The model chat's llm_settings are not carried: the lead answers with its
-// own agent version, as any agent turn does.
+// The model chat's llm_settings are deliberately not carried: they are the
+// composer's model selector for the conversation's plain model, which this
+// message does not reach. The lead answers with its own agent version, as it
+// does for any message the floor routes to it (an agent start never takes
+// llm_settings: the route refuses them on agent.execute.application.v1).
 func (request CurrentAdhocStartRequest) leadStart(lead int64) CurrentApplicationStartRequest {
 	return CurrentApplicationStartRequest{
 		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,

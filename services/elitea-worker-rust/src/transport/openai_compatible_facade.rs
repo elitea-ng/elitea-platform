@@ -2040,7 +2040,10 @@ impl OpenAiStreamState {
                 // the answer already streamed. The turn ends on that answer
                 // and a note, not as a failure.
                 has_tool_calls = false;
-                let note = super::model_facade::unadmitted_tool_note(&name);
+                let note = super::model_facade::unadmitted_tool_note(
+                    &name,
+                    !self.accumulated_text.is_empty(),
+                );
                 self.add_semantic_bytes(note.len())?;
                 self.accumulated_text.push_str(&note);
                 parts.push(Part::Text { text: note });
