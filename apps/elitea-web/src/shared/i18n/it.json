@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "Nessun ruolo di questa installazione lo apre.",
   "pages.admin.itemDenied.rolesIntro": "Questi ruoli lo aprono:",
   "pages.admin.itemDenied.askSupport": "Per richiedere uno di questi ruoli, contatta il supporto IT:",
-  "pages.admin.itemDenied.askFallback": "Per richiedere uno di questi ruoli, contatta le persone che gestiscono questa installazione."
+  "pages.admin.itemDenied.askFallback": "Per richiedere uno di questi ruoli, contatta le persone che gestiscono questa installazione.",
+  "pages.admin.viewOnly.controlReason": "Sola lettura: i tuoi ruoli possono vedere questa pagina ma non modificarla.",
+  "pages.admin.viewOnly.noRole": "Puoi vedere questa pagina ma non modificarla. Nessun ruolo di questa installazione può modificarla.",
+  "pages.admin.viewOnly.roles": "Puoi vedere questa pagina ma non modificarla. Questi ruoli possono modificarla: {{roles}}.",
+  "pages.admin.viewOnly.title": "Sola lettura",
+  "pages.admin.viewOnly.unnamed": "Puoi vedere questa pagina ma non modificarla."
 }

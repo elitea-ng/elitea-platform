@@ -21,6 +21,10 @@
  *
  * ## Authorisation
  *
+ * The page is the first under the read-only wrapper (R3.4a, issue 2534): at
+ * the `read` level of its console item it shows the "View only" notice and
+ * every write control is disabled, and its writes go through the guard.
+ *
  * `window.admin_ui_config.permissions` is presentation state and never a gate
  * (see `./adminUiConfig`). Every read and write here is authorised server-side
  * on each request against `models.admin.project_budgets.{view,edit}`, resolved
@@ -40,9 +44,11 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 import { AdminBudgetDialog } from './AdminBudgetDialog';
 import { AdminBudgetMembersDrawer } from './AdminBudgetMembersDrawer';
 import { AdminBudgetsTable } from './AdminBudgetsTable';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { BudgetEnforcementWarning } from './BudgetEnforcementWarning';
 import {
   ADMIN_BUDGETS_PAGE_SIZE,
+  BUDGETS_ITEM_ID,
   useAdminBudgetsPage,
   type AdminBudgetsPageState,
 } from './useAdminBudgetsPage';
@@ -57,7 +63,16 @@ function savedText(kind: string): string {
     : t('pages.admin.budgets.saved.saved', 'The budget was saved.');
 }
 
+/** The page under the read-only wrapper (R3.4a, issue 2534). */
 export function AdminBudgets() {
+  return (
+    <AdminWritable itemId={BUDGETS_ITEM_ID}>
+      <BudgetsPage />
+    </AdminWritable>
+  );
+}
+
+function BudgetsPage() {
   const state = useAdminBudgetsPage();
   const activeTab = Math.max(0, TAB_FILTERS.indexOf(state.projectType));
 
@@ -89,6 +104,8 @@ export function AdminBudgets() {
           'A limit takes effect on the next LLM call, not at the next period.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Tabs
         value={activeTab}

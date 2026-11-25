@@ -35,6 +35,7 @@ import { DataGrid } from '@mui/x-data-grid';
 import { t } from '@/shared/i18n';
 import { formatSmallUsd } from '@/shared/lib/money';
 
+import { AdminWriteControl } from './AdminWritable';
 import type { ProjectBudgetRow } from './api/adminBudgetsApi';
 
 export interface AdminBudgetsTableProps {
@@ -171,15 +172,19 @@ export const AdminBudgetsTable = memo(function AdminBudgetsTable({
         sortable: false,
         renderCell: (params: GridRenderCellParams<ProjectBudgetRow>) => (
           <Box sx={{ display: 'flex', alignItems: 'center', height: '100%' }}>
-            <Tooltip title={t('pages.admin.budgets.action.edit', 'Edit budget')}>
-              <IconButton
-                size="small"
-                onClick={() => onEdit(params.row)}
-                data-testid={`admin-budgets-edit-${params.row.project_id}`}
-              >
-                <EditOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
+            <AdminWriteControl label={t('pages.admin.budgets.action.edit', 'Edit budget')}>
+              {(disabled) => (
+                <IconButton
+                  size="small"
+                  disabled={disabled}
+                  aria-label={t('pages.admin.budgets.action.edit', 'Edit budget')}
+                  onClick={() => onEdit(params.row)}
+                  data-testid={`admin-budgets-edit-${params.row.project_id}`}
+                >
+                  <EditOutlinedIcon fontSize="small" />
+                </IconButton>
+              )}
+            </AdminWriteControl>
             {/* elitea_issues: issue 6079, issue 6008 — a personal project has exactly
                 one member, its owner, so its project budget IS that
                 member's budget; a separate per-member limit here can only
@@ -199,15 +204,19 @@ export const AdminBudgetsTable = memo(function AdminBudgetsTable({
             {/* Clearing is offered only where there is something to clear: a
                 project with no authored row is already at the default. */}
             {hasAuthoredBudget(params.row) ? (
-              <Tooltip title={t('pages.admin.budgets.action.clear', 'Clear back to default')}>
-                <IconButton
-                  size="small"
-                  onClick={() => onClear(params.row)}
-                  data-testid={`admin-budgets-clear-${params.row.project_id}`}
-                >
-                  <DeleteOutlineIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+              <AdminWriteControl label={t('pages.admin.budgets.action.clear', 'Clear back to default')}>
+                {(disabled) => (
+                  <IconButton
+                    size="small"
+                    disabled={disabled}
+                    aria-label={t('pages.admin.budgets.action.clear', 'Clear back to default')}
+                    onClick={() => onClear(params.row)}
+                    data-testid={`admin-budgets-clear-${params.row.project_id}`}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                )}
+              </AdminWriteControl>
             ) : null}
           </Box>
         ),

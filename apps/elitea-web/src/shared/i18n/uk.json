@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "Жодна роль у цьому розгортанні його не відкриває.",
   "pages.admin.itemDenied.rolesIntro": "Його відкривають ці ролі:",
   "pages.admin.itemDenied.askSupport": "Щоб попросити одну з цих ролей, зверніться до ІТ-підтримки:",
-  "pages.admin.itemDenied.askFallback": "Щоб попросити одну з цих ролей, зверніться до тих, хто керує цим розгортанням."
+  "pages.admin.itemDenied.askFallback": "Щоб попросити одну з цих ролей, зверніться до тих, хто керує цим розгортанням.",
+  "pages.admin.viewOnly.controlReason": "Лише перегляд: ваші ролі дозволяють бачити цю сторінку, але не змінювати її.",
+  "pages.admin.viewOnly.noRole": "Ви можете бачити цю сторінку, але не змінювати її. Жодна роль у цьому розгортанні не може її змінити.",
+  "pages.admin.viewOnly.roles": "Ви можете бачити цю сторінку, але не змінювати її. Змінити її можуть ці ролі: {{roles}}.",
+  "pages.admin.viewOnly.title": "Лише перегляд",
+  "pages.admin.viewOnly.unnamed": "Ви можете бачити цю сторінку, але не змінювати її."
 }
