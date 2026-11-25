@@ -57,6 +57,14 @@ const maxAssignedRoles = 32
 // this is the same predicate and not a stricter one.
 const systemUserPredicate = `(u.email LIKE 'system_user_%@centry.user' OR u.email = 'system@centry.user')`
 
+// listedUserPredicate is the accounts the Users listing returns at all: every
+// account but the reserved break-glass account (ADR-0059 R2.6b). That account
+// is not a system user either: it must never be shown with suspend, delete
+// and role controls, on either tab, and the Access page (R2.17, R3.9) is the
+// one place that shows it. It is matched without regard to case, as every
+// reserved-account check is.
+const listedUserPredicate = `lower(u.email) IS DISTINCT FROM '` + adminaccess.ReservedBreakGlassEmail + `'`
+
 // sortableUserColumns mirrors `list_users_paginated`'s `allowed_sort`. The
 // value is interpolated into SQL, so this allow-list is also what keeps the
 // query injection-free — an unknown column falls back to `name`.
@@ -118,12 +126,14 @@ func (h *Handler) listUsers(ctx context.Context, params userListingParams) (map[
 	var totalUsers, systemUsers int
 	err := h.pool.QueryRow(ctx, `
 SELECT COUNT(*), COUNT(*) FILTER (WHERE `+systemUserPredicate+`)
-FROM public.auth_core__user u`).Scan(&totalUsers, &systemUsers)
+FROM public.auth_core__user u
+WHERE `+listedUserPredicate).Scan(&totalUsers, &systemUsers)
 	if err != nil {
 		return nil, fmt.Errorf("count users: %w", err)
 	}
 
-	conditions := make([]string, 0, 2)
+	conditions := make([]string, 0, 3)
+	conditions = append(conditions, listedUserPredicate)
 	args := make([]any, 0, 3)
 	switch params.userType {
 	case "system":
@@ -550,6 +560,10 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 			apierr.WriteStatus(w, http.StatusBadRequest, "administration role not found")
 			return
 		}
+		if errors.Is(err, rolegrants.ErrReservedAccount) {
+			adminaccess.Write(w, r, adminaccess.ReservedAccountRefusal())
+			return
+		}
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
@@ -839,6 +853,18 @@ func (h *Handler) checkCentralRoles(
 	caller, err := caller.Reload(ctx)
 	if err != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
+	}
+	// The reserved break-glass account holds no role (ADR-0059 R2.6b), for a
+	// global administrator too; rolegrants.Grant refuses it again at the
+	// write.
+	if len(change.given) > 0 {
+		reserved, err := adminaccess.IsReservedAccount(ctx, q, int64(change.targetID))
+		if err != nil {
+			return nil, err
+		}
+		if reserved {
+			return adminaccess.ReservedAccountRefusal(), nil
+		}
 	}
 	mode := change.mode
 	unassignable, err := h.seededRolesMarked(ctx, q, mode, change.given, adminaccess.MarkerUnassignable)

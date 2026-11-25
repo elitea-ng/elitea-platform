@@ -807,6 +807,9 @@ func (h *SAMLHandler) writeProvisioningFailure(w http.ResponseWriter, err error,
 	case errors.Is(err, errUserSuspended):
 		slog.Warn("SAML: suspended user attempted login", "email", email)
 		http.Error(w, "account suspended", http.StatusForbidden)
+	case errors.Is(err, errReservedAccount):
+		slog.Warn("SAML: refused a login as the reserved break-glass account")
+		http.Error(w, "this account cannot sign in through single sign-on", http.StatusForbidden)
 	case identityConflictCauseOf(err) == conflictProviderNotBound:
 		// The NameID is linked, but not to this provider and IdP entity id
 		// (issue 2558): usually an edit of the provider's entity id.

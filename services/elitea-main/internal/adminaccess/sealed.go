@@ -103,6 +103,11 @@ var (
 	ErrSealedCredentialInvalid = errors.New("sealed credential refused")
 	// ErrSealedCredentialPerson: the person is not an unsuspended account.
 	ErrSealedCredentialPerson = errors.New("sealed credential refused: the person is not an active account")
+	// ErrSealedCredentialReserved: a bound issue names the reserved
+	// break-glass account. Its credentials are unbound ones (SealedIssue.
+	// Unbound), with a ticket and a custodian label.
+	ErrSealedCredentialReserved = errors.New("sealed credential refused: the reserved break-glass account takes " +
+		"unbound credentials only")
 	// ErrSealedCredentialNotFound: no credential has this id.
 	ErrSealedCredentialNotFound = errors.New("sealed credential not found")
 	// ErrSealedCredentialRefused is the one answer of VerifySealedCredential
@@ -174,8 +179,19 @@ func (c SealedCredential) State(now time.Time) string {
 
 // SealedIssue is what issues a credential.
 type SealedIssue struct {
-	// UserID is the person the credential is bound to.
+	// UserID is the person the credential is bound to. 0 with Unbound: the
+	// issue binds it to the reserved account.
 	UserID int64
+	// Unbound issues the credential for the reserved break-glass account
+	// (ReservedBreakGlassEmail; story R2.6b), creating the account when it is
+	// absent: an envelope in a safe cannot name the person who will open it.
+	// It requires Ticket and Label, and UserID 0.
+	Unbound bool
+	// Ticket is the change or incident ticket the issue is made under, an
+	// identifier (SealedTicketPattern); required with Unbound, optional
+	// otherwise. The credential_issued event carries it as the reason code
+	// `ticket:<lower-cased ticket>`.
+	Ticket string
 	// Level is the level of the elevation the credential starts: admin
 	// (the default when empty) or super_admin.
 	Level string
@@ -200,6 +216,9 @@ type IssuedSealedCredential struct {
 	SealedCredential
 	// Verifier is the secret half of the credential, in hex.
 	Verifier string
+	// ReservedAccountCreated: the issue was unbound and created the reserved
+	// account (the first `issue --unbound`).
+	ReservedAccountCreated bool
 }
 
 // Credential is the whole credential, `bg_<selector>.<verifier>`.
@@ -240,10 +259,31 @@ func ParseSealedCredential(credential string) (selector, verifier string, err er
 	return selector, verifier, nil
 }
 
+// SealedTicketPattern is the shape of a ticket: an identifier such as
+// `INC-4711` or `CHG0012345`, never free text. It is recorded lower-cased in
+// the event, as a reason code.
+var SealedTicketPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)
+
+// The reason codes the credential_issued event of an unbound issue carries.
+const (
+	SealedReasonUnbound      = "credential_unbound"
+	SealedReasonTicketPrefix = "ticket:"
+)
+
 // Validate checks an issue without touching the database.
 func (s SealedIssue) Validate() error {
-	if s.UserID <= 0 {
+	switch {
+	case s.Unbound && s.UserID != 0:
+		return fmt.Errorf("%w: an unbound credential names no person", ErrSealedCredentialInvalid)
+	case s.Unbound && strings.TrimSpace(s.Ticket) == "":
+		return fmt.Errorf("%w: an unbound credential needs the ticket it is issued under", ErrSealedCredentialInvalid)
+	case s.Unbound && strings.TrimSpace(s.Label) == "":
+		return fmt.Errorf("%w: an unbound credential needs a label naming its custodian", ErrSealedCredentialInvalid)
+	case !s.Unbound && s.UserID <= 0:
 		return fmt.Errorf("%w: a credential is bound to a person", ErrSealedCredentialInvalid)
+	case s.Ticket != "" && !SealedTicketPattern.MatchString(s.Ticket):
+		return fmt.Errorf("%w: the ticket %q is not an identifier (letters, digits, '.', '_', ':' and '-', at most 64)",
+			ErrSealedCredentialInvalid, s.Ticket)
 	}
 	switch s.level() {
 	case ElevationLevelAdmin, ElevationLevelSuperAdmin:
@@ -328,13 +368,22 @@ func IssueSealedCredential(ctx context.Context, tx pgx.Tx, appender securityaudi
 	if tx == nil {
 		return IssuedSealedCredential{}, errors.New("issue sealed credential: no transaction")
 	}
-	var person bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1 AND suspended = false)`,
-		issue.UserID).Scan(&person); err != nil {
-		return IssuedSealedCredential{}, fmt.Errorf("issue sealed credential: read the person: %w", err)
-	}
-	if !person {
-		return IssuedSealedCredential{}, ErrSealedCredentialPerson
+	if !issue.Unbound {
+		var person, reserved bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1 AND suspended = false),
+       EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $1 AND lower(email) = $2)`,
+			issue.UserID, ReservedBreakGlassEmail).Scan(&person, &reserved); err != nil {
+			return IssuedSealedCredential{}, fmt.Errorf("issue sealed credential: read the person: %w", err)
+		}
+		if reserved {
+			// A credential of the reserved account is an unbound one, and
+			// needs its ticket and its custodian label.
+			return IssuedSealedCredential{}, ErrSealedCredentialReserved
+		}
+		if !person {
+			return IssuedSealedCredential{}, ErrSealedCredentialPerson
+		}
 	}
 	selector, err := randomHex(sealedSelectorBytes)
 	if err != nil {
@@ -355,37 +404,55 @@ func IssueSealedCredential(ctx context.Context, tx pgx.Tx, appender securityaudi
 	}
 	at := issue.At.UTC()
 	var credential SealedCredential
+	created := false
 	err = withSavepoint(ctx, tx, func(sp pgx.Tx) error {
+		userID := issue.UserID
+		if issue.Unbound {
+			// In the savepoint: an issue that fails creates no account.
+			var err error
+			if userID, created, err = EnsureReservedBreakGlassAccount(ctx, sp); err != nil {
+				return err
+			}
+		}
 		var err error
 		credential, err = scanSealed(sp.QueryRow(ctx, `
 INSERT INTO elitea_auth.sealed_credentials
     (selector, verifier_digest, label, level, user_id, split, issued_at, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING `+sealedColumns,
-			selector, digest, strings.TrimSpace(issue.Label), issue.level(), issue.UserID, issue.Split,
+			selector, digest, strings.TrimSpace(issue.Label), issue.level(), userID, issue.Split,
 			at, at.Add(issue.lifetime())))
 		if err != nil {
 			return fmt.Errorf("issue sealed credential: %w", err)
 		}
+		var reasons []string
+		if issue.Unbound {
+			reasons = append(reasons, SealedReasonUnbound)
+		}
+		if issue.Ticket != "" {
+			reasons = append(reasons, SealedReasonTicketPrefix+strings.ToLower(issue.Ticket))
+		}
 		return appendSealedEvent(ctx, sp, appender, securityaudit.ElevationCredentialIssued,
-			sourceOrOperator(issue.Source), issue.ActorUserID, credential)
+			sourceOrOperator(issue.Source), issue.ActorUserID, credential, reasons...)
 	})
 	if err != nil {
 		return IssuedSealedCredential{}, err
 	}
-	return IssuedSealedCredential{SealedCredential: credential, Verifier: verifier}, nil
+	return IssuedSealedCredential{SealedCredential: credential, Verifier: verifier, ReservedAccountCreated: created}, nil
 }
 
 // appendSealedEvent writes the admin.elevation event of a credential step:
 // its id, its person and its level, on the sealed path. Never the selector,
-// the verifier or the digest.
+// the verifier or the digest. extra are further reason codes (an unbound
+// issue's marker and ticket).
 func appendSealedEvent(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender,
-	action securityaudit.ElevationAction, source string, actor int64, credential SealedCredential,
+	action securityaudit.ElevationAction, source string, actor int64, credential SealedCredential, extra ...string,
 ) error {
 	reasons := []string{"credential_level:" + credential.Level}
 	if credential.Split {
 		reasons = append(reasons, "credential_split")
 	}
+	reasons = append(reasons, extra...)
 	return AppendElevationEvent(ctx, tx, appender, ElevationEvent{
 		Action:       action,
 		Source:       source,

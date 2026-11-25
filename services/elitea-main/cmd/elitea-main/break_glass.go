@@ -17,6 +17,10 @@ package main
 //	elitea-main break-glass end --all
 //	elitea-main break-glass issue --user USER [--level admin|super_admin]
 //	                              [--label TEXT] [--split] [--expires WHEN]
+//	                              [--ticket ID]
+//	elitea-main break-glass issue --unbound --ticket ID --label TEXT
+//	                              [--level admin|super_admin] [--split]
+//	                              [--expires WHEN]
 //	elitea-main break-glass list
 //	elitea-main break-glass revoke ID [ID...]
 //
@@ -39,6 +43,14 @@ package main
 // of the whole credential. --expires is a lifetime (`90d`, `720h`) or a date
 // (`2027-06-30`, RFC 3339); the default and the ceiling are 365 days. The
 // event is credential_issued with the source `operator` and the level.
+//
+// UNBOUND (R2.6b). `--unbound` binds the credential to the reserved
+// break-glass account, break-glass@centry.user, instead of a named person: an
+// envelope in a safe cannot name who will open it. It needs `--ticket` (the
+// change or incident it is issued under, recorded in the event) and `--label`
+// (the custodian), and takes no `--user`. The first unbound issue creates the
+// account, with no role; a second one reuses it. The account holds no role,
+// creates no token and signs in through no other plane.
 //
 // LIST. One line per credential, active or not, with its state; never the
 // verifier or its digest. The read is recorded as a decision event
@@ -102,6 +114,10 @@ type breakGlassRequest struct {
 	label    string
 	split    bool
 	lifetime time.Duration
+	// unbound binds the credential to the reserved account; ticket is the
+	// change or incident it is issued under (R2.6b).
+	unbound bool
+	ticket  string
 }
 
 func runBreakGlass(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
@@ -112,7 +128,8 @@ func breakGlassUsage(w io.Writer) {
 	_, _ = fmt.Fprintf(w, `usage:
   elitea-main %[1]s end ID [ID...]
   elitea-main %[1]s end --all
-  elitea-main %[1]s issue --user USER [--level admin|super_admin] [--label TEXT] [--split] [--expires WHEN]
+  elitea-main %[1]s issue --user USER [--level admin|super_admin] [--label TEXT] [--split] [--expires WHEN] [--ticket ID]
+  elitea-main %[1]s issue --unbound --ticket ID --label TEXT [--level admin|super_admin] [--split] [--expires WHEN]
   elitea-main %[1]s list
   elitea-main %[1]s revoke ID [ID...]
 end: ID is an elevation id. Ends the elevation with the end reason operator.
@@ -120,6 +137,8 @@ issue: creates a sealed credential bound to USER (an id or an e-mail address)
   and prints it once; only its digest is stored. --level defaults to admin.
   --split prints the verifier as two halves for two custodians. --expires is
   a lifetime (90d, 720h) or a date (2027-06-30); default and maximum 365 days.
+  --unbound binds it to the reserved account break-glass@centry.user instead
+  of a person, and needs --ticket and --label (the custodian).
 list: every sealed credential and its state; never a secret.
 revoke: ID is a sealed credential id; the row is kept.
 Every command records a security audit event. Reads DATABASE_URL. Exit codes:
@@ -153,9 +172,9 @@ func parseInterleaved(flags *flag.FlagSet, args []string) ([]string, bool) {
 
 // breakGlassFlags are the flags of one sub-command.
 type breakGlassFlags struct {
-	all                         *bool
-	user, level, label, expires *string
-	split                       *bool
+	all                                 *bool
+	user, level, label, expires, ticket *string
+	split, unbound                      *bool
 	// idKind names what a positional value is; "" for a sub-command that
 	// takes none.
 	idKind string
@@ -174,6 +193,9 @@ func newBreakGlassFlags(sub string, flags *flag.FlagSet) (breakGlassFlags, bool)
 		f.label = flags.String("label", "", "what the custodians call the credential")
 		f.split = flags.Bool("split", false, "print the verifier as two halves for two custodians")
 		f.expires = flags.String("expires", "", "a lifetime (90d, 720h) or a date (2027-06-30); at most 365 days")
+		f.unbound = flags.Bool("unbound", false,
+			"bind the credential to the reserved account "+adminaccess.ReservedBreakGlassEmail+" instead of a person")
+		f.ticket = flags.String("ticket", "", "the change or incident ticket the credential is issued under")
 	case breakGlassList:
 	case breakGlassRevoke:
 		f.idKind = "a sealed credential id"
@@ -243,8 +265,19 @@ func parseBreakGlassArgs(args []string, stderr io.Writer, now time.Time) (breakG
 // parseBreakGlassIssue checks the flags of an issue.
 func parseBreakGlassIssue(req breakGlassRequest, f breakGlassFlags, stderr io.Writer, now time.Time) (breakGlassRequest, bool) {
 	req.user, req.level, req.label, req.split = strings.TrimSpace(*f.user), strings.TrimSpace(*f.level), *f.label, *f.split
-	if req.user == "" {
-		_, _ = fmt.Fprintln(stderr, "issue needs --user: a credential is bound to a named person")
+	req.unbound, req.ticket = *f.unbound, strings.TrimSpace(*f.ticket)
+	switch {
+	case req.unbound && req.user != "":
+		_, _ = fmt.Fprintln(stderr, "issue takes either --user or --unbound, not both")
+		return breakGlassRequest{}, false
+	case req.unbound && req.ticket == "":
+		_, _ = fmt.Fprintln(stderr, "issue --unbound needs --ticket: the change or incident the credential is issued under")
+		return breakGlassRequest{}, false
+	case req.unbound && strings.TrimSpace(req.label) == "":
+		_, _ = fmt.Fprintln(stderr, "issue --unbound needs --label: the custodian of the envelope")
+		return breakGlassRequest{}, false
+	case !req.unbound && req.user == "":
+		_, _ = fmt.Fprintln(stderr, "issue needs --user (a credential is bound to a named person) or --unbound")
 		return breakGlassRequest{}, false
 	}
 	if req.level != adminaccess.ElevationLevelAdmin && req.level != adminaccess.ElevationLevelSuperAdmin {
@@ -258,7 +291,11 @@ func parseBreakGlassIssue(req breakGlassRequest, f breakGlassFlags, stderr io.Wr
 	}
 	req.lifetime = lifetime
 	// The store's own check, with a stand-in person: the label's rules.
-	probe := adminaccess.SealedIssue{UserID: 1, Level: req.level, Label: req.label, At: now, Lifetime: req.lifetime}
+	probe := adminaccess.SealedIssue{UserID: 1, Level: req.level, Label: req.label, Ticket: req.ticket,
+		At: now, Lifetime: req.lifetime}
+	if req.unbound {
+		probe.UserID, probe.Unbound = 0, true
+	}
 	if err := probe.Validate(); err != nil {
 		_, _ = fmt.Fprintf(stderr, "issue: %v\n", err)
 		return breakGlassRequest{}, false

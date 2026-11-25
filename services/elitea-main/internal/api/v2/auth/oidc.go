@@ -17,6 +17,7 @@ import (
 	"errors"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	browserapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth/browsersession"
@@ -559,6 +560,12 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "account suspended", http.StatusForbidden)
 			return
 		}
+		if errors.Is(err, errReservedAccount) {
+			slog.Warn("OIDC: refused a login as the reserved break-glass account", "sub", claims.Sub,
+				"provider", runtime.origin)
+			http.Error(w, "this account cannot sign in through single sign-on", http.StatusForbidden)
+			return
+		}
 		if errors.Is(err, errIdentityConflict) {
 			// The subject and the address name two different accounts, or the
 			// account the address names may not be adopted by this login.
@@ -616,6 +623,11 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 }
 
 var errUserSuspended = errors.New("user account is suspended")
+
+// errReservedAccount: the assertion names, or the subject is linked to, the
+// reserved break-glass account (ADR-0059 R2.6b), which no single sign-on
+// plane signs in.
+var errReservedAccount = errors.New("the reserved break-glass account signs in with a sealed credential only")
 
 // errIdentityConflict means the provider subject and the email claim name two
 // different accounts, or that the account the address names may not be
@@ -903,6 +915,12 @@ func resolveProvisionedUserFor(
 	// Applied here as well as at each handler, so no caller of the resolution
 	// can compare an address in a spelling the directory does not store.
 	email = normalizeAssertedEmail(email)
+	// The reserved break-glass account signs in with a sealed credential only
+	// (ADR-0059 R2.6b): an assertion of its address joins nothing, and a
+	// subject linked to it resolves nothing (below).
+	if adminaccess.IsReservedBreakGlassEmail(email) {
+		return 0, errReservedAccount
+	}
 
 	// Serializes two concurrent first logins for the same subject, so only one
 	// of them creates the link. Mirrors AcquireAuthProviderAdvisoryLock.
@@ -950,8 +968,11 @@ func reuseLinkedAccount(
 	providerRef, email, name string,
 ) (userID int, linked bool, err error) {
 	var suspended, bound, boundAnywhere bool
+	// A subject linked to the reserved break-glass account (ADR-0059 R2.6b)
+	// reads as suspended: nothing this plane does links it, and a link written
+	// any other way still signs nobody in as it.
 	err = tx.QueryRow(ctx,
-		`SELECT owner.id, owner.suspended,
+		`SELECT owner.id, (owner.suspended OR lower(owner.email) = '`+adminaccess.ReservedBreakGlassEmail+`'),
 		        EXISTS (SELECT 1 FROM elitea_auth.identity_bindings AS binding
 		                WHERE binding.provider_ref = provider.provider_ref
 		                  AND binding.user_id = provider.user_id

@@ -380,3 +380,70 @@ func TestSealedRevokeIsOnce(t *testing.T) {
 		t.Fatalf("%d credential events, want issued and one revoked", n)
 	}
 }
+
+// An unbound issue that fails creates no reserved account (the account is in
+// the issue's savepoint); one for a reserved account that holds a role, or is
+// suspended, is ErrReservedAccountUnusable and writes nothing; a bound issue
+// naming the account is ErrSealedCredentialReserved. Story R2.6b, issue 2599.
+func TestUnboundIssueRefusalsWriteNothing(t *testing.T) {
+	pool := newElevationDatabase(t)
+	unbound := adminaccess.SealedIssue{Unbound: true, Ticket: "INC-1", Label: "envelope A", At: sealedClock}
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, err := adminaccess.IssueSealedCredential(t.Context(), tx, securityaudit.FailingAppender{}, unbound)
+		if !errors.Is(err, securityaudit.ErrAppendFailed) {
+			t.Errorf("issue with a failing append = %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var accounts int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM public.auth_core__user WHERE lower(email) = $1`,
+		adminaccess.ReservedBreakGlassEmail).Scan(&accounts); err != nil || accounts != 0 {
+		t.Fatalf("a failed unbound issue left %d reserved accounts (%v)", accounts, err)
+	}
+
+	issued := issueSealed(t, pool, unbound)
+	reserved := issued.UserID
+	if !issued.ReservedAccountCreated {
+		t.Fatal("the first unbound issue did not report the account it created")
+	}
+	for name, setup := range map[string]string{
+		"holds a role": `INSERT INTO public.auth_core__user_role (user_id, role_id)
+SELECT $1, id FROM public.auth_core__role WHERE name = 'admin' AND mode = 'administration'`,
+		"is suspended": `UPDATE public.auth_core__user SET suspended = true WHERE id = $1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := pool.Exec(t.Context(), setup, reserved); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				_, _ = pool.Exec(t.Context(), `DELETE FROM public.auth_core__user_role WHERE user_id = $1`, reserved)
+				_, _ = pool.Exec(t.Context(), `UPDATE public.auth_core__user SET suspended = false WHERE id = $1`, reserved)
+			}()
+			if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+				_, err := adminaccess.IssueSealedCredential(t.Context(), tx, auditAppender(t), unbound)
+				if !errors.Is(err, adminaccess.ErrReservedAccountUnusable) {
+					t.Errorf("issue = %v, want ErrReservedAccountUnusable", err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if err := pgx.BeginFunc(t.Context(), pool, func(tx pgx.Tx) error {
+		_, err := adminaccess.IssueSealedCredential(t.Context(), tx, auditAppender(t),
+			adminaccess.SealedIssue{UserID: reserved, At: sealedClock})
+		if !errors.Is(err, adminaccess.ErrSealedCredentialReserved) {
+			t.Errorf("a bound issue for the reserved account = %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM elitea_auth.sealed_credentials`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d credentials (%v), want only the first", rows, err)
+	}
+}

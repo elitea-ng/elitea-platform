@@ -977,3 +977,30 @@ func TestAScopeRefusalNamesTheCredentialInTheMintVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// The reserved break-glass account creates no token (ADR-0059 R2.6b), by
+// account: a browser session of it is refused with its own code before the
+// repository is called, whatever the case of the address.
+func TestTokenCreateRefusesTheReservedAccount(t *testing.T) {
+	for _, email := range []string{"break-glass@centry.user", "Break-Glass@CENTRY.user"} {
+		created := false
+		handler := &Handler{
+			tokenSigningKey: []byte("test-secret"),
+			tokens: tokenRepositoryStub{createFunc: func(context.Context, tokenCreateInput) (tokenRecord, error) {
+				created = true
+				return tokenRecord{}, nil
+			}},
+		}
+		req := httptest.NewRequest(http.MethodPost, "/token/", bytes.NewBufferString(`{"name":"x"}`))
+		principal := identity.User{ID: "7", UserID: "7", Email: email, BrowserSessionRef: 3}
+		req = req.WithContext(identity.ContextWithAuthenticatedUser(
+			req.Context(), principal, identity.AuthenticationSourceSession))
+		rec := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden || created ||
+			!strings.Contains(rec.Body.String(), CodeMintReservedAccount) {
+			t.Fatalf("%s: status = %d, created = %v, body = %s; want 403 %s",
+				email, rec.Code, created, rec.Body.String(), CodeMintReservedAccount)
+		}
+	}
+}

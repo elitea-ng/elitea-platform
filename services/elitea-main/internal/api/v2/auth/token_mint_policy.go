@@ -83,6 +83,9 @@ const (
 	// credential's kind, or could not read a native caller's administration
 	// set. The rule fails closed.
 	CodeCallerUnresolved = "token_mint_caller_unresolved"
+	// CodeMintReservedAccount: the caller is the reserved break-glass account
+	// (ADR-0059 R2.6b), which never creates a token.
+	CodeMintReservedAccount = "token_mint_reserved_account"
 )
 
 // TokenMintRefusedAuditAction is the action the audit row of a refused mint

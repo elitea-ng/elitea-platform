@@ -384,6 +384,9 @@ func adminRoleGrantTx(ctx context.Context, tx pgx.Tx, req adminRoleRequest) ([]s
 		return nil, refusedError("%q is a locked built-in role that is never assigned", req.role)
 	}
 	granted, err := rolegrants.Grant(ctx, tx, user.id, adminaccess.ModeAdministration, req.role, operatorOrigin(req))
+	if errors.Is(err, rolegrants.ErrReservedAccount) {
+		return nil, refusedError("%s is the reserved break-glass account, which holds no role", user.label())
+	}
 	if err != nil {
 		return nil, err
 	}

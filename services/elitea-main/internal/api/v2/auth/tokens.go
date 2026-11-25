@@ -530,6 +530,18 @@ func (h *Handler) TokenCreate(w http.ResponseWriter, r *http.Request) {
 		writeTokenMintRefusal(w, r, refusal)
 		return
 	}
+	// The reserved break-glass account creates no token (ADR-0059 R2.6b), by
+	// ACCOUNT, whatever credential is calling. The token row's INSERT refuses
+	// it again (CreatePATForActiveUser), so a principal without its address
+	// cannot slip past this check.
+	if adminaccess.IsReservedBreakGlassEmail(user.Email) {
+		writeTokenMintRefusal(w, r, &tokenMintRefusal{
+			Code:           CodeMintReservedAccount,
+			Message:        "the reserved break-glass account cannot create a personal access token",
+			CredentialKind: credential,
+		})
+		return
+	}
 	if !h.tokenServiceAvailable(w) {
 		return
 	}
