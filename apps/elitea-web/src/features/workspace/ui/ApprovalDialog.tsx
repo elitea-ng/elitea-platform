@@ -47,6 +47,8 @@ export interface ApprovalDialogProps {
   queued: number;
   /** `feedback` comes only with `deny_with_feedback`. */
   onRespond: (requestId: string, decision: ApprovalDecision, feedback?: string) => void;
+  /** The agent whose turn asks, in a thread of several agents (ADR-0061 decision 2c); absent with one. */
+  agentName?: string | undefined;
 }
 
 const monoSx = (theme: Theme) => ({
@@ -148,16 +150,26 @@ export function ApprovalDialog(props: ApprovalDialogProps): React.JSX.Element | 
   return <ApprovalPrompt key={props.request?.request_id ?? ''} {...props} />;
 }
 
-function ApprovalPrompt({ request, queued, onRespond }: ApprovalDialogProps): React.JSX.Element | null {
+function ApprovalPrompt({ request, queued, onRespond, agentName }: ApprovalDialogProps): React.JSX.Element | null {
   if (request === undefined) return null;
   const respond = (decision: ApprovalDecision): void => onRespond(request.request_id, decision);
   if (request.kind === 'continue') return <ContinueCard request={request} respond={respond} />;
   if (request.kind === 'mcp_authorization') return <McpAuthorizationCard request={request} respond={respond} />;
-  return <ToolApproval request={request} queued={queued} onRespond={onRespond} />;
+  return <ToolApproval request={request} queued={queued} onRespond={onRespond} agentName={agentName} />;
+}
+
+/** The agent whose turn asks (a thread of several agents); nothing with one. */
+function AskingAgent({ name }: { name: string | undefined }): React.JSX.Element | null {
+  if (name === undefined || name === '') return null;
+  return (
+    <Typography variant="labelSmall" data-testid="approval-agent" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+      {t('workspace.approval.agent', '{{name}} asks', { name })}
+    </Typography>
+  );
 }
 
 /** A tool's approval: the modal dialog (mounted once per request). */
-function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { request: ApprovalRequestPayload }): React.JSX.Element {
+function ToolApproval({ request, queued, onRespond, agentName }: ApprovalDialogProps & { request: ApprovalRequestPayload }): React.JSX.Element {
   const denyRef = useRef<HTMLButtonElement>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   // Deny takes focus when the request is shown (focus-trap order would otherwise start at the first button).
@@ -191,6 +203,7 @@ function ToolApproval({ request, queued, onRespond }: ApprovalDialogProps & { re
     >
       <DialogTitle id="workspace-approval-title">{request.title}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <AskingAgent name={agentName} />
         <Typography id="workspace-approval-detail" variant="bodyMedium">
           {request.detail}
         </Typography>

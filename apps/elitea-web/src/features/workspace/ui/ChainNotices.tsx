@@ -80,6 +80,14 @@ function ChainEnded({ ended, onContinue }: { ended: ChainEndedPayload; onContinu
 /** The message's next agent did not answer (ADR-0050 decision 7f): a newer message took the floor, or its start failed. */
 function FloorStopped({ stopped }: { stopped: TurnView['floorStopped'] }): React.JSX.Element | null {
   if (stopped === undefined) return null;
+  // The person pressed Stop exchange or skipped the rest (ADR-0061 decision 2c): a system line, not a warning.
+  if (stopped.code === 'stopped_by_person') {
+    return (
+      <Typography variant="bodySmall" component="div" data-testid="turn-floor-stopped" data-code={stopped.code} sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+        {stopped.message === 'You skipped the remaining agents.' ? t('workspace.exchange.skippedRest', 'You skipped the remaining agents.') : t('workspace.exchange.stopped', 'You stopped the exchange.')}
+      </Typography>
+    );
+  }
   const superseded = stopped.code === 'floor_turn_superseded';
   return (
     <Alert severity={superseded ? 'info' : 'warning'} data-testid="turn-floor-stopped" data-code={stopped.code}>
