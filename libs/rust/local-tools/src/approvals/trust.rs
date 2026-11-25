@@ -110,10 +110,11 @@ impl RulesEngine {
     /// itself).
     #[must_use]
     pub fn untrusted_reads(&self) -> Arc<UntrustedReads> {
-        self.reads
-            .read()
-            .map(|reads| Arc::clone(&reads))
-            .unwrap_or_else(|_| UntrustedReads::new(true))
+        self.reads.read().map_or_else(
+            // A poisoned lock reads as tainted: the gate fails closed.
+            |_| UntrustedReads::new(true),
+            |reads| Arc::clone(&reads),
+        )
     }
 
     /// Whether `call` runs on the host here: it says so, it runs commands,
