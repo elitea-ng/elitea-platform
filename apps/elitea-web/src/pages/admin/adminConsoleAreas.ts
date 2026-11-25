@@ -20,8 +20,10 @@
  *    page, so Configuration `standsFor` them and shows for a caller the
  *    document opens any of them to;
  *  - Access (R3.6) is in the table with `available: false`, like the
- *    server's, so Roles is left out of the six areas and its typed URL keeps
- *    rendering the page.
+ *    server's, so the document never lists Roles and its typed URL keeps
+ *    rendering the page. Until R3.6, a TEMPORARY "Roles" link shows under
+ *    "People and access" for a caller whose roles open the item
+ *    (`./temporaryRolesLink.ts`); R3.6 removes it.
  *
  * The two-group navigation of `./adminNavGroups` renders while the
  * `admin_console_areas` switch is off; story R4.9 (issue 2623) removes it.
@@ -217,10 +219,19 @@ export function consoleItemOpen(entry: AdminConsoleNavItem, level: ConsoleItemLe
   return levels.some((answer) => answer === undefined) ? undefined : false;
 }
 
-/** The areas the document opens, each with the items it opens; an area with none is left out. */
-export function visibleConsoleNavAreas(level: ConsoleItemLevel): readonly AdminConsoleNavArea[] {
+/**
+ * The areas the document opens, each with the items it opens; an area with
+ * none is left out.
+ *
+ * TEMPORARY (remove in R3.6, issue 2537): `rolesLink` lists the unavailable
+ * Access item as the "Roles" link (`./temporaryRolesLink.ts`). R3.6 makes the
+ * item available and deletes the parameter.
+ */
+export function visibleConsoleNavAreas(level: ConsoleItemLevel, rolesLink = false): readonly AdminConsoleNavArea[] {
+  const shown = (entry: AdminConsoleNavItem): boolean =>
+    consoleItemOpen(entry, level) === true || (rolesLink && entry.id === 'access');
   return adminConsoleNavAreas()
-    .map((area) => ({ ...area, items: area.items.filter((entry) => consoleItemOpen(entry, level) === true) }))
+    .map((area) => ({ ...area, items: area.items.filter(shown) }))
     .filter((area) => area.items.length > 0);
 }
 

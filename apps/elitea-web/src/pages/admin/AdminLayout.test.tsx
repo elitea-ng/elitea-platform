@@ -134,6 +134,83 @@ describe('AdminLayout once the document answers', () => {
     expect(screen.getByTestId('admin-nav-item-users')).toBeInTheDocument();
   });
 
+  /*
+   * TEMPORARY (remove in R3.6, issue 2537): the Roles link. The document
+   * leaves the unavailable Access item out, so the link shows when one of the
+   * caller's roles is among the roles the server says open the item.
+   */
+  describe('the temporary Roles link', () => {
+    /** Counts the item reads the server answered, so a test can wait past the answer. */
+    let itemReads = 0;
+
+    async function settled(): Promise<void> {
+      await waitFor(() => expect(itemReads).toBeGreaterThan(0));
+      // One more turn for the answer to reach the navigation.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    function serveRolesCase(callerRole: string, itemStatus = 200): void {
+      itemReads = 0;
+      server.use(
+        getGetAdminConsoleDocumentMockHandler({
+          areas: [
+            {
+              id: 'people_access',
+              label_key: 'pages.admin.console.area.people_access',
+              items: [{ id: 'users', label_key: 'pages.admin.console.item.users', level: 'read' }],
+            },
+          ],
+          roles: [{ name: callerRole, built_in: true }],
+          elevation: null,
+          admin_console_areas: true,
+        }),
+        http.get('*/admin/console/items/access', () => {
+          itemReads += 1;
+          if (itemStatus !== 200) return new HttpResponse(null, { status: itemStatus });
+          return HttpResponse.json({
+            id: 'access',
+            area: 'people_access',
+            label_key: 'pages.admin.console.item.access',
+            area_label_key: 'pages.admin.console.area.people_access',
+            available: false,
+            granting_roles: [
+              { name: 'admin', built_in: true, level: 'write' },
+              { name: 'security_auditor', built_in: true, level: 'read' },
+            ],
+          });
+        }),
+      );
+    }
+
+    it('shows Roles under People and access for a caller whose role opens it', async () => {
+      serveRolesCase('security_auditor');
+      await mountLayout();
+
+      const link = await screen.findByTestId('admin-nav-item-access');
+      expect(link).toHaveTextContent('Roles');
+      expect(link).toHaveAttribute('href', '/roles');
+      expect(screen.getByTestId('admin-nav-area-people_access')).toContainElement(link);
+    });
+
+    it('leaves Roles out for a caller none of whose roles opens it', async () => {
+      serveRolesCase('llm_manager');
+      await mountLayout();
+
+      await screen.findByTestId('admin-nav-item-users');
+      await settled();
+      expect(screen.queryByTestId('admin-nav-item-access')).not.toBeInTheDocument();
+    });
+
+    it('leaves Roles out when the roles that open it cannot be read', async () => {
+      serveRolesCase('security_auditor', 500);
+      await mountLayout();
+
+      await screen.findByTestId('admin-nav-item-users');
+      await settled();
+      expect(screen.queryByTestId('admin-nav-item-access')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders the two unlabelled groups when the switch is off', async () => {
     server.use(getGetAdminConsoleDocumentMockHandler({ ...getGetAdminConsoleDocumentResponseMock(), admin_console_areas: false }));
     await mountLayout();

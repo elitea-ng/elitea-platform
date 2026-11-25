@@ -37,11 +37,14 @@ import { AdminConsoleStatus } from './AdminConsoleStatus';
 import { AdminNav } from './AdminNav';
 import { visibleConsoleNavAreas } from './adminConsoleAreas';
 import { useAdminConsole, useAdminConsoleRefresh } from './api/adminConsoleApi';
+import { useTemporaryRolesLink } from './temporaryRolesLink';
 
 export function AdminLayout(): ReactNode {
-  const { status, retry, areasEnabled, itemLevel } = useAdminConsole();
+  const { status, retry, areasEnabled, itemLevel, roles } = useAdminConsole();
   useAdminConsoleRefresh();
-  const areas = areasEnabled === true ? visibleConsoleNavAreas(itemLevel) : undefined;
+  // TEMPORARY (remove in R3.6, issue 2537): the Roles link under "People and access".
+  const rolesLink = useTemporaryRolesLink(roles, areasEnabled === true);
+  const areas = areasEnabled === true ? visibleConsoleNavAreas(itemLevel, rolesLink) : undefined;
   let navigation: ReactNode;
   if (status !== 'success') navigation = <AdminConsoleStatus status={status} onRetry={retry} />;
   else navigation = <AdminNav areas={areas} />;

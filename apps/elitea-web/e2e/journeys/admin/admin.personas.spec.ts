@@ -66,7 +66,8 @@ for (const persona of ADMIN_PERSONAS) {
 
 /** Every item the web table places, by area: what a global or platform administrator sees. */
 const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
-  people_access: ['users'],
+  // `access` is the TEMPORARY Roles link until R3.6 (issue 2537) ships the Access item.
+  people_access: ['users', 'access'],
   projects: ['projects', 'app-requests'],
   models_spend: ['llm-governance', 'budgets-alerts'],
   agents_governance: [
@@ -84,8 +85,9 @@ const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
 
 /**
  * Each persona's areas and items in the navigation. The gateway tabs and
- * SCIM are still tabs of Configuration, which stands for them; Access (Roles)
- * is placed when its item ships (R3.6).
+ * SCIM are still tabs of Configuration, which stands for them. Access shows as
+ * the TEMPORARY Roles link for the roles that open it (the administrators and
+ * the security auditor, through access.roles.view) until R3.6 ships its item.
  */
 const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, readonly string[]>>>> = {
   super_admin: EVERY_AREA,
@@ -96,7 +98,7 @@ const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, r
     models_spend: ['budgets-alerts'],
     platform: ['configuration'],
   },
-  security_auditor: { security: ['audit-trail'] },
+  security_auditor: { people_access: ['access'], security: ['audit-trail'] },
   emergency_access: {},
 };
 
