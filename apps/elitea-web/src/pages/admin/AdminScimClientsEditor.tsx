@@ -23,6 +23,7 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { AdminIdentityTrustNotice, useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
 import { AdminScimClientConfirmDialog } from "./AdminScimClientConfirmDialog";
 import type { AdminScimClientPendingAction } from "./AdminScimClientConfirmDialog";
 import { AdminScimClientCreateDialog } from "./AdminScimClientCreateDialog";
@@ -86,6 +87,7 @@ function connectionUrls(
 
 export function AdminScimClientsEditor() {
   const access = useAdminWritable(ADMIN_ITEM.scim);
+  const trustLocked = useIdentityTrustLocked();
   const listQuery = useAdminScimClients();
   const createMutation = access.guard(useCreateAdminScimClient());
   const rotateMutation = access.guard(useRotateAdminScimClient());
@@ -182,6 +184,8 @@ export function AdminScimClientsEditor() {
         />
       </Stack>
 
+      <AdminIdentityTrustNotice subject="scim" />
+
       {listQuery.isLoading ? <LinearProgress /> : null}
 
       {listQuery.error != null ? (
@@ -211,7 +215,8 @@ export function AdminScimClientsEditor() {
             setCreateError(undefined);
             setCreateOpen(true);
           }}
-          disabled={!access.writable}
+          // Creating a SCIM client is a trust action (ADR-0059 R0.4c).
+          disabled={!access.writable || trustLocked}
           sx={{ textTransform: "none" }}
           data-testid="admin-scim-clients-add"
         >

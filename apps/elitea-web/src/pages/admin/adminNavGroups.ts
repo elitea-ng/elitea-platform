@@ -14,11 +14,14 @@
  * presentation and never authorisation. Both still apply to every entry below.
  */
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import ContentCutOutlinedIcon from '@mui/icons-material/ContentCutOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
+import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
+import FingerprintOutlinedIcon from '@mui/icons-material/FingerprintOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
@@ -35,6 +38,7 @@ import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import SyncAltOutlinedIcon from '@mui/icons-material/SyncAltOutlined';
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
@@ -56,10 +60,7 @@ export interface AdminNavItem {
   readonly path: string;
   readonly label: string;
   readonly icon: ComponentType<SvgIconProps>;
-  /**
-   * Any ONE of these makes the item visible. Empty means always visible.
-   * Presentation only — see this module's header.
-   */
+  /** Any ONE of these shows the item; empty shows it always. Presentation only. */
   readonly anyPermission: readonly string[];
 }
 
@@ -67,9 +68,6 @@ export interface AdminNavGroup {
   readonly id: 'primary' | 'platform';
   readonly items: readonly AdminNavItem[];
 }
-
-
-
 
 /**
  * The reference's `SIDEBAR_PERMISSIONS`, with three corrections.
@@ -80,10 +78,8 @@ export interface AdminNavGroup {
  * platform now issues the whole `admin.moderation.*` family, so the nav asks for
  * the permission that actually governs the page.
  *
- * `service-descriptors` has no reference entry at all (no nav item to gate).
- * `configuration.service_descriptors` is the permission the reference's
- * Configuration SECTION for the same subsystem uses
- * (`CONFIG_SECTION_PERMISSIONS`).
+ * `service-descriptors` has no reference entry: it takes the permission of
+ * the reference's Configuration section for the same subsystem.
  *
  * ## Every item names a permission THIS platform issues, as well
  *
@@ -93,21 +89,11 @@ export interface AdminNavGroup {
  * registers none of them: `001_initial.sql` and `migrations/shared/*` seed
  * fully-qualified names only.
  *
- * The nav read that as "the operator lacks the permission" and hid the item.
- * `projects` and `service-descriptors` disappeared from every Go-native admin
- * console, silently, with nothing on screen to explain it. Both now name the
- * permission `internal/api/router.go` resolves for the page they open.
- * `roles`, `configuration` and `features` already did.
+ * An unissued name once hid `projects` and `service-descriptors` from every
+ * console, silently: add no gate whose permission no seed grants.
  *
- * The defect stayed invisible while `adminui/handler.go` HARDCODED a 37-string
- * permission list that echoed the reference's section names back to the browser.
- * That handler resolves the operator's real grants now, so an unissuable name
- * hides an item for good. Add no gate whose permission no seed grants.
- *
- * The section names no code checks are gone from every gate: shared migration
- * 0136 retires the bare `projects` and `configuration` nodes (#6874), and 0172
- * retires `projects.projects` and `configuration.roles`. The resolver matches
- * exact strings, so none of them stood in for a fully-qualified name.
+ * Shared migrations 0136 (#6874) and 0172 retire those section names; the
+ * resolver matches exact strings, and
  * `internal/api/router_permission_retired_gate_test.go` fails if a web gate
  * names a retired string again.
  */
@@ -129,6 +115,27 @@ export function navGroups(): readonly AdminNavGroup[] {
           label: t('pages.admin.nav.roles', 'Roles'),
           icon: SecurityOutlinedIcon,
           anyPermission: ['configuration.roles.permissions.view'],
+        },
+        {
+          id: 'access',
+          path: '/access',
+          label: t('pages.admin.nav.access', 'Access'),
+          icon: AdminPanelSettingsOutlinedIcon,
+          anyPermission: ['access.roles.view', 'admin.auth.users', 'modes.users'],
+        },
+        {
+          id: 'identity-providers',
+          path: '/identity-providers',
+          label: t('pages.admin.nav.identityProviders', 'Identity providers'),
+          icon: FingerprintOutlinedIcon,
+          anyPermission: ['identity.sso.view', 'identity.sso.settings.manage', 'identity.sso.trust.manage', 'runtime.plugins'],
+        },
+        {
+          id: 'scim',
+          path: '/scim',
+          label: t('pages.admin.nav.scim', 'SCIM'),
+          icon: SyncAltOutlinedIcon,
+          anyPermission: ['identity.sso.view', 'identity.sso.settings.manage', 'admin.auth.users'],
         },
         {
           id: 'projects',
@@ -196,6 +203,13 @@ export function navGroups(): readonly AdminNavGroup[] {
             'platform.maintenance.manage',
             'runtime.airun.serviceproviders',
           ],
+        },
+        {
+          id: 'client-applications',
+          path: '/client-applications',
+          label: t('pages.admin.nav.clientApplications', 'Client applications'),
+          icon: DevicesOutlinedIcon,
+          anyPermission: ['configuration.native_clients', 'configuration.microsoft_apps'],
         },
         {
           id: 'branding',

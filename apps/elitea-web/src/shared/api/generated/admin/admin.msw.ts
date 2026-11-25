@@ -48,6 +48,8 @@ import type { RequestHandlerOptions } from "msw";
 import { CredentialKind, PermissionTrimmingItemKind } from "../model";
 import type {
   AccessPosture,
+  AccessRoleComparison,
+  AccessRoleDefinitions,
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
   AdminConsoleDocument,
@@ -341,8 +343,18 @@ export const getGetAdminConsoleDocumentResponseMock =
             level: "write",
           },
           {
+            id: "access",
+            label_key: "pages.admin.console.item.access",
+            level: "write",
+          },
+          {
             id: "identity-providers",
             label_key: "pages.admin.console.item.identity-providers",
+            level: "write",
+          },
+          {
+            id: "identity-trust",
+            label_key: "pages.admin.console.item.identity-trust",
             level: "write",
           },
           {
@@ -730,6 +742,123 @@ export const getGetAccessPostureResponseMock = (): AccessPosture => ({
   notices: 1,
   checked_at: "2026-11-25T12:00:00Z",
 });
+
+export const getGetAccessRoleDefinitionsResponseMock =
+  (): AccessRoleDefinitions => ({
+    roles: [
+      {
+        name: "super_admin",
+        display_name: "Global administrator",
+        built_in: true,
+        status: "built_in",
+        locked: true,
+        permission_count: 79,
+        areas: [
+          {
+            id: "people_access",
+            label_key: "pages.admin.console.area.people_access",
+            items: [
+              {
+                id: "users",
+                label_key: "pages.admin.console.item.users",
+                level: "write",
+              },
+            ],
+          },
+        ],
+        held_by_caller: false,
+        assignable_by_caller: false,
+        refusal_code: "role_super_admin_required",
+        self_refusal_code: "role_super_admin_required",
+      },
+      {
+        name: "admin",
+        display_name: "Platform administrator",
+        built_in: true,
+        status: "built_in",
+        locked: true,
+        permission_count: 77,
+        areas: [
+          {
+            id: "people_access",
+            label_key: "pages.admin.console.area.people_access",
+            items: [
+              {
+                id: "users",
+                label_key: "pages.admin.console.item.users",
+                level: "write",
+              },
+            ],
+          },
+        ],
+        held_by_caller: true,
+        assignable_by_caller: true,
+        self_refusal_code: "role_self_assignment",
+      },
+      {
+        name: "release_auditors",
+        built_in: false,
+        status: "custom",
+        locked: false,
+        permission_count: 1,
+        areas: [
+          {
+            id: "security",
+            label_key: "pages.admin.console.area.security",
+            items: [
+              {
+                id: "audit-trail",
+                label_key: "pages.admin.console.item.audit-trail",
+                level: "read",
+              },
+            ],
+          },
+        ],
+        held_by_caller: false,
+        assignable_by_caller: true,
+        self_refusal_code: "role_self_assignment",
+      },
+    ],
+  });
+
+export const getCompareAccessRoleDefinitionsResponseMock =
+  (): AccessRoleComparison => ({
+    a: {
+      name: "admin",
+      display_name: "Platform administrator",
+      built_in: true,
+      status: "built_in",
+      permission_count: 77,
+    },
+    b: {
+      name: "llm_manager",
+      display_name: "LLM manager",
+      built_in: true,
+      status: "built_in",
+      permission_count: 9,
+    },
+    items: [
+      {
+        id: "users",
+        area: "people_access",
+        label_key: "pages.admin.console.item.users",
+        level_a: "write",
+        level_b: "",
+      },
+      {
+        id: "llm-governance",
+        area: "models_spend",
+        label_key: "pages.admin.console.item.llm-governance",
+        level_a: "write",
+        level_b: "write",
+      },
+    ],
+    permissions: {
+      both: ["llm.catalogue.view"],
+      only_a: ["admin.auth.users"],
+      only_b: [],
+    },
+  });
 
 export const getListSealedCredentialsResponseMock =
   (): SealedCredentialList => ({
@@ -5169,6 +5298,58 @@ export const getGetAccessPostureMockHandler = (
   );
 };
 
+export const getGetAccessRoleDefinitionsMockHandler = (
+  overrideResponse?:
+    | AccessRoleDefinitions
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AccessRoleDefinitions> | AccessRoleDefinitions),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/role-definitions",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAccessRoleDefinitionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getCompareAccessRoleDefinitionsMockHandler = (
+  overrideResponse?:
+    | AccessRoleComparison
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AccessRoleComparison> | AccessRoleComparison),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/role-definitions/compare",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getCompareAccessRoleDefinitionsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListSealedCredentialsMockHandler = (
   overrideResponse?:
     | SealedCredentialList
@@ -8154,6 +8335,8 @@ export const getAdminMock = () => [
   getListAdministrationRoleHistoryMockHandler(),
   getListAdministrationAccessTokensMockHandler(),
   getGetAccessPostureMockHandler(),
+  getGetAccessRoleDefinitionsMockHandler(),
+  getCompareAccessRoleDefinitionsMockHandler(),
   getListSealedCredentialsMockHandler(),
   getCreateElevationRequestMockHandler(),
   getListElevationsMockHandler(),

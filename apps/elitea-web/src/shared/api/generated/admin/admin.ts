@@ -55,6 +55,8 @@ import type {
 
 import type {
   AccessPosture,
+  AccessRoleComparison,
+  AccessRoleDefinitions,
   AdminAuthUsersActionRequest,
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
@@ -82,6 +84,7 @@ import type {
   BulkInviteRequest,
   BulkInviteSummary,
   CancelBackgroundJobParams,
+  CompareAccessRoleDefinitionsParams,
   CompleteCredentialConsentParams,
   ConnectorApprovalOutcome,
   ConnectorDecisionReason,
@@ -4969,6 +4972,469 @@ export function useGetAccessPosture<
   queryKey: DataTag<QueryKey, TData, TError>;
 } {
   const queryOptions = getGetAccessPostureQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAccessRoleDefinitionsResponse200 = {
+  data: AccessRoleDefinitions;
+  status: 200;
+};
+
+export type getAccessRoleDefinitionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAccessRoleDefinitionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAccessRoleDefinitionsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getAccessRoleDefinitionsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getAccessRoleDefinitionsResponseSuccess =
+  getAccessRoleDefinitionsResponse200 & {
+    headers: Headers;
+  };
+export type getAccessRoleDefinitionsResponseError = (
+  | getAccessRoleDefinitionsResponse401
+  | getAccessRoleDefinitionsResponse403
+  | getAccessRoleDefinitionsResponse500
+  | getAccessRoleDefinitionsResponse503
+) & {
+  headers: Headers;
+};
+
+export type getAccessRoleDefinitionsResponse =
+  | getAccessRoleDefinitionsResponseSuccess
+  | getAccessRoleDefinitionsResponseError;
+
+export const getGetAccessRoleDefinitionsUrl = () => {
+  return `/admin/access/role-definitions`;
+};
+
+/**
+ * What each administration role can do (ADR-0059 decision 8, R3.9a):
+ * its set as the console areas and items a holder of that set alone
+ * would open, each item at `read` or `write`, its seed status and its
+ * raw permission count. `assignable_by_caller` and `refusal_code` are
+ * the answer a write giving the role to another person would get from
+ * the role rules; `self_refusal_code` is the answer a write changing
+ * the caller's own holding of it would get. The page never re-implements
+ * the rules: a write still decides for itself.
+ *
+ * For a holder of `access.roles.view` (or `admin.auth.users` or
+ * `modes.users`, which it narrows). Role names only: no person.
+ * @summary Every administration role, as areas, and who may assign it
+ */
+export const getAccessRoleDefinitions = async (
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAccessRoleDefinitionsResponse> => {
+  return eliteaFetch<getAccessRoleDefinitionsResponse>(
+    getGetAccessRoleDefinitionsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAccessRoleDefinitionsQueryKey = () => {
+  return [`/admin/access/role-definitions`] as const;
+};
+
+export const getGetAccessRoleDefinitionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<
+      Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+      TError,
+      TData
+    >
+  >;
+  request?: SecondParameter<typeof eliteaFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetAccessRoleDefinitionsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAccessRoleDefinitions>>
+  > = ({ signal }) => getAccessRoleDefinitions({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAccessRoleDefinitionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAccessRoleDefinitions>>
+>;
+export type GetAccessRoleDefinitionsQueryError =
+  N401Response | N403Response | N500Response | ErrorResponse;
+
+export function useGetAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+          TError,
+          Awaited<ReturnType<typeof getAccessRoleDefinitions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+          TError,
+          Awaited<ReturnType<typeof getAccessRoleDefinitions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Every administration role, as areas, and who may assign it
+ */
+
+export function useGetAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+  TError = N401Response | N403Response | N500Response | ErrorResponse,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAccessRoleDefinitionsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type compareAccessRoleDefinitionsResponse200 = {
+  data: AccessRoleComparison;
+  status: 200;
+};
+
+export type compareAccessRoleDefinitionsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type compareAccessRoleDefinitionsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type compareAccessRoleDefinitionsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type compareAccessRoleDefinitionsResponse404 = {
+  data: ErrorResponse;
+  status: 404;
+};
+
+export type compareAccessRoleDefinitionsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type compareAccessRoleDefinitionsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type compareAccessRoleDefinitionsResponseSuccess =
+  compareAccessRoleDefinitionsResponse200 & {
+    headers: Headers;
+  };
+export type compareAccessRoleDefinitionsResponseError = (
+  | compareAccessRoleDefinitionsResponse400
+  | compareAccessRoleDefinitionsResponse401
+  | compareAccessRoleDefinitionsResponse403
+  | compareAccessRoleDefinitionsResponse404
+  | compareAccessRoleDefinitionsResponse500
+  | compareAccessRoleDefinitionsResponse503
+) & {
+  headers: Headers;
+};
+
+export type compareAccessRoleDefinitionsResponse =
+  | compareAccessRoleDefinitionsResponseSuccess
+  | compareAccessRoleDefinitionsResponseError;
+
+export const getCompareAccessRoleDefinitionsUrl = (
+  params: CompareAccessRoleDefinitionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/role-definitions/compare?${stringifiedParams}`
+    : `/admin/access/role-definitions/compare`;
+};
+
+/**
+ * Two administration roles by item and by permission (ADR-0059
+ * decision 8, R3.9a): every available console item either role opens,
+ * with each role's level (empty when it does not open the item), and
+ * the permissions both hold, only `a` holds and only `b` holds. Same
+ * gate as the role definitions. Role names only: no person.
+ * @summary Two administration roles side by side
+ */
+export const compareAccessRoleDefinitions = async (
+  params: CompareAccessRoleDefinitionsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<compareAccessRoleDefinitionsResponse> => {
+  return eliteaFetch<compareAccessRoleDefinitionsResponse>(
+    getCompareAccessRoleDefinitionsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getCompareAccessRoleDefinitionsQueryKey = (
+  params?: CompareAccessRoleDefinitionsParams,
+) => {
+  return [
+    `/admin/access/role-definitions/compare`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getCompareAccessRoleDefinitionsQueryOptions = <
+  TData = Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: CompareAccessRoleDefinitionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getCompareAccessRoleDefinitionsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof compareAccessRoleDefinitions>>
+  > = ({ signal }) =>
+    compareAccessRoleDefinitions(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CompareAccessRoleDefinitionsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof compareAccessRoleDefinitions>>
+>;
+export type CompareAccessRoleDefinitionsQueryError =
+  ErrorResponse | N401Response | N403Response | N500Response;
+
+export function useCompareAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: CompareAccessRoleDefinitionsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+          TError,
+          Awaited<ReturnType<typeof compareAccessRoleDefinitions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompareAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: CompareAccessRoleDefinitionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+          TError,
+          Awaited<ReturnType<typeof compareAccessRoleDefinitions>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCompareAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: CompareAccessRoleDefinitionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Two administration roles side by side
+ */
+
+export function useCompareAccessRoleDefinitions<
+  TData = Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+  TError = ErrorResponse | N401Response | N403Response | N500Response,
+>(
+  params: CompareAccessRoleDefinitionsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof compareAccessRoleDefinitions>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCompareAccessRoleDefinitionsQueryOptions(
+    params,
+    options,
+  );
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<
     TData,

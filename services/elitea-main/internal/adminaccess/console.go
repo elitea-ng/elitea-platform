@@ -19,19 +19,19 @@ package adminaccess
 //
 // # Items whose page ships later
 //
-// Access, Access history, Break-glass, Security signals and Project settings
-// are in the table from the start with Available false, and the document
+// Access history, Break-glass, Security signals and Project settings are in
+// the table from the start with Available false, and the document
 // leaves them out. The story that ships the page sets Available. The item
 // route (GET /api/v2/admin/console/items/{item_id}) answers for them already,
 // so the access-denied page can name the roles that will open them.
 //
 // # The Configuration page today
 //
-// The Configuration page still carries the gateway, identity and client
-// editors as tabs; story R3.2 makes them items. The table is the target of
-// decision 6: those names map to their own items (Providers and models,
-// Identity providers, Client applications, ...), and Configuration keeps the
-// platform sections. internal/api/v2/admin holds the table to every name the
+// The Configuration page still carries the gateway editors as tabs (R3.5a
+// moves them); the identity and client editors are pages of their own since
+// R3.6. The table is the target of decision 6: those names map to their own
+// items (Providers and models, Identity providers, Client applications, ...),
+// and Configuration keeps the platform sections. internal/api/v2/admin holds the table to every name the
 // Configuration routes admit, so no section is left without an item.
 
 import "slices"
@@ -103,12 +103,18 @@ func later(id string, area Area, permissions ...string) ConsoleItem {
 var consoleItems = []ConsoleItem{
 	// People and access.
 	consoleItem("users", AreaPeopleAccess, AdminAuthUsers, ModesUsers),
-	// Administrators, roles, tokens and the raw matrix as a tab (R3.6).
-	later("access", AreaPeopleAccess,
+	// Administrators, roles, tokens and the raw matrix as a tab (R3.6, R3.9).
+	consoleItem("access", AreaPeopleAccess,
 		AccessRolesView, ConfigurationRolesPermissionsView, ConfigurationRolesPermissionsEdit,
 		ConfigurationRolesRolesCreate, ConfigurationRolesRolesEdit, ConfigurationRolesRolesDelete),
 	consoleItem("identity-providers", AreaPeopleAccess,
 		IdentitySSOView, IdentitySSOSettingsManage, IdentitySSOTrustManage, RuntimePlugins),
+	// The trust half of identity setup (#2558, R0.4c): the trust fields of an
+	// identity provider and the SCIM client create, rotate and delete. Not a
+	// page: the Identity providers and SCIM pages read it to make those
+	// controls read-only for a holder of the settings half alone (R3.6). Its
+	// names are the two the trust handlers accept (identity_trust.go).
+	consoleItem("identity-trust", AreaPeopleAccess, IdentitySSOTrustManage, AdminAuthUsersSuperAdmin),
 	consoleItem("scim", AreaPeopleAccess,
 		IdentitySSOView, IdentitySSOSettingsManage, IdentitySSOTrustManage, AdminAuthUsers,
 		ConfigurationRolesUserProjectPermsView, ConfigurationRolesUserProjectPermsEdit),

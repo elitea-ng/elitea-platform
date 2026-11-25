@@ -26,7 +26,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@mui/material/styles';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -271,6 +270,11 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // administration mode, super_admin and admin.
   'entitlements.export',
   'entitlements.export.manage',
+  // migrations/shared/0261_narrow_admin_permissions.sql and 0263 (ADR-0059
+  // R0.16, R1.1): the Access and identity trust names, which the Access,
+  // Identity providers and SCIM pages of R3.6 ask for.
+  'access.roles.view',
+  'identity.sso.trust.manage',
   // The agent governance pair (ADR-0059 R0.15):
   // migrations/shared/0279_agent_governance_permissions.sql, administration
   // mode, super_admin and admin.
@@ -852,36 +856,12 @@ function goldenDocument(role: string): ConsoleDocument {
   return JSON.parse(readFileSync(join(GOLDEN_DIR, `${role}.golden.json`), 'utf8')) as ConsoleDocument;
 }
 
-/** The matrix permissions the TEMPORARY Roles link needs (issue 3042). */
-const MATRIX_PERMISSIONS = new Set(['configuration.roles.permissions.view', 'configuration.roles.permissions.edit']);
-
-/**
- * The injected permissions of a built-in role, as far as the Roles link reads
- * them: the security auditor holds no matrix permission; the other roles are
- * served every permission, as before.
- */
-function permissionsOf(role: string): readonly string[] {
-  return role === 'security_auditor'
-    ? ALL_PERMISSIONS.filter((permission) => !MATRIX_PERMISSIONS.has(permission))
-    : ALL_PERMISSIONS;
-}
-
 function serveDocument(document: ConsoleDocument): void {
   server.use(getGetAdminConsoleDocumentMockHandler(document));
 }
 
-/**
- * TEMPORARY (remove in R3.6, issue 2537): the roles that open the Access item,
- * from the server's golden, which the temporary Roles link reads.
- */
-function serveAccessItem(): void {
-  const item = JSON.parse(readFileSync(join(GOLDEN_DIR, 'item-access.golden.json'), 'utf8')) as Record<string, unknown>;
-  server.use(http.get('*/admin/console/items/access', () => HttpResponse.json(item)));
-}
-
 const EVERYTHING = {
-  // `access` is the TEMPORARY Roles link until R3.6 (issue 2537).
-  people_access: ['users', 'access'],
+  people_access: ['users', 'access', 'identity-providers', 'scim'],
   projects: ['projects', 'app-requests'],
   models_spend: ['llm-governance', 'budgets-alerts'],
   agents_governance: [
@@ -894,7 +874,16 @@ const EVERYTHING = {
     'kill-switch',
   ],
   security: ['audit-trail', 'data-retention'],
-  platform: ['configuration', 'features', 'branding', 'email', 'schedules-tasks', 'service-descriptors', 'secrets'],
+  platform: [
+    'configuration',
+    'features',
+    'branding',
+    'email',
+    'schedules-tasks',
+    'service-descriptors',
+    'secrets',
+    'client-applications',
+  ],
 };
 
 /** What each built-in role sees: its areas, in console order, and the items of each. */
@@ -903,15 +892,14 @@ const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>>
   admin: EVERYTHING,
   // The gateway tabs are still tabs of Configuration (R3.5a), which stands for them.
   llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
-  // SCIM is still a tab of Configuration (R3.6).
+  // SCIM is a page of its own since R3.6 (issue 2537).
   project_administrator: {
+    people_access: ['scim'],
     projects: ['projects', 'app-requests'],
     models_spend: ['budgets-alerts'],
-    platform: ['configuration'],
   },
-  // access.roles.view opens Access, but the TEMPORARY Roles link needs a
-  // matrix permission, which the auditor does not hold (issue 3042).
-  security_auditor: { security: ['audit-trail'] },
+  // access.roles.view opens Access, at read (R3.6, R3.9a).
+  security_auditor: { people_access: ['access'], security: ['audit-trail'] },
   // Its one name opens Break-glass, whose page has not shipped.
   emergency_access: {},
 };
@@ -938,7 +926,6 @@ function unroutedItems(items: readonly AdminConsoleNavItem[]): string[] {
 describe('the six labelled areas', () => {
   beforeEach(() => {
     serveDocument(goldenDocument('super_admin'));
-    serveAccessItem();
   });
 
   it('point only at paths the admin router declares, and the check catches one that does not', () => {
@@ -977,10 +964,8 @@ describe('the six labelled areas', () => {
 
   for (const role of Object.keys(EXPECTED_AREAS)) {
     it(`shows the ${role} persona exactly its areas, from its capability document`, async () => {
-      setPermissions(permissionsOf(role));
       serveDocument(goldenDocument(role));
       await mountAdmin('/projects');
-      // The TEMPORARY Roles link lands after the Access item read answers.
       await vi.waitFor(() => expect(renderedAreas()).toEqual(EXPECTED_AREAS[role]));
     }, testTimeout(30_000));
   }
@@ -1007,32 +992,26 @@ describe('the six labelled areas', () => {
     expect(within(denied).getByRole('heading', { level: 1 })).toHaveTextContent('Kill switch');
   }, testTimeout(30_000));
 
-  // The auditor has no Roles link (issue 3042), so it lands on Audit Trail.
+  // The auditor's first item is Access (R3.6), where it lands.
   it('lands a caller the document does not open Users to on its first item', async () => {
-    setPermissions(permissionsOf('security_auditor'));
-    serveDocument(goldenDocument('security_auditor'));
-    await mountAdmin('/');
-    await screen.findByTestId('admin-nav-item-audit-trail');
-    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/audit'));
-    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
-  }, testTimeout(30_000));
-
-  // A caller whose first item is the TEMPORARY Roles link (a role that opens
-  // Access and reads the matrix, but not Users): landing passes over the link
-  // to the first item the document itself lists.
-  it('passes over the temporary Roles link when it lands', async () => {
     serveDocument(goldenDocument('security_auditor'));
     await mountAdmin('/');
     await screen.findByTestId('admin-nav-item-access');
-    await screen.findByTestId('admin-nav-item-audit-trail');
-    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/audit'));
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/access'));
+    expect(screen.queryByTestId('admin-item-denied')).toBeNull();
   }, testTimeout(30_000));
 
-  it('still renders a page whose item the document cannot list yet (Roles, until R3.6)', async () => {
+  // The permission matrix is reached from Access, whose item it belongs to.
+  it('keeps Access active on the permission matrix page', async () => {
     await mountAdmin('/roles');
     expect(screen.queryByTestId('admin-item-denied')).toBeNull();
-    // The TEMPORARY Roles link stands for the item, and is active on its page.
     expect(await screen.findByTestId('admin-nav-item-access')).toHaveAttribute('aria-current', 'page');
+  }, testTimeout(30_000));
+
+  it('shows the access-denied page for a moved page the document does not open', async () => {
+    serveDocument(goldenDocument('llm_manager'));
+    await mountAdmin('/identity-providers');
+    expect(await screen.findByTestId('admin-item-denied')).toHaveAttribute('data-item-id', 'identity-providers');
   }, testTimeout(30_000));
 
   it('keeps the two unlabelled groups when the switch is off', async () => {

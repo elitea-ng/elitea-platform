@@ -62,6 +62,8 @@ allowed allowed refused refused refused refused restricted restricted approve PO
 allowed allowed refused refused refused refused restricted restricted approve POST /api/v2/admin/access/elevations/{elevationID}/deny browser_session
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/history -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/posture -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/role-definitions -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/role-definitions/compare -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/roles -
 allowed allowed refused refused refused refused restricted restricted read    GET /api/v2/admin/access/sealed_credentials -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/tokens -

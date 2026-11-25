@@ -219,6 +219,40 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     landmark: (page) => page.getByRole('table', { name: 'Permission matrix' }),
   },
   {
+    // @covers /admin/app/access
+    name: 'admin-access',
+    path: '/admin/app/access',
+    // A role row: the table mounts only once the role definitions resolved
+    // (the loading branch is a progress bar), and super_admin is always there.
+    landmark: (page) => page.getByTestId('admin-access-role-super_admin'),
+  },
+  {
+    // @covers /admin/app/identity-providers
+    name: 'admin-identity-providers',
+    path: '/admin/app/identity-providers',
+    // The empty state or the table: both render only after the provider read
+    // resolved (`!listQuery.isLoading`). This stack authors no provider.
+    landmark: (page) =>
+      page.getByTestId('admin-identity-providers-empty').or(page.getByTestId('admin-identity-providers-table')),
+  },
+  {
+    // @covers /admin/app/scim
+    name: 'admin-scim',
+    path: '/admin/app/scim',
+    // The bindings' empty state renders only after their read resolved, and
+    // this stack binds no group; the client list's progress bar is waited out
+    // by `noProgressBar`.
+    landmark: (page) => page.getByTestId('admin-scim-group-bindings-empty'),
+  },
+  {
+    // @covers /admin/app/client-applications
+    name: 'admin-client-applications',
+    path: '/admin/app/client-applications',
+    // The native registry's table or its empty state, both after the read.
+    landmark: (page) =>
+      page.getByTestId('admin-native-clients-table').or(page.getByTestId('admin-native-clients-empty')),
+  },
+  {
     // @covers /admin/app/projects
     name: 'admin-projects',
     path: '/admin/app/projects',

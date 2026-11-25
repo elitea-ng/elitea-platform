@@ -33,7 +33,9 @@
  *     never "the path looks like a plugin's": it is "does anything here read
  *     the values". Four things now do.
  *   - **Native clients** (ADR-0025) — a dedicated surface too, the registry
- *     editor in `./AdminNativeClientsEditor`. It keeps its `unavailable_reason`
+ *     editor in `./AdminNativeClientsEditor`, on the Client applications page
+ *     since R3.6 (issue 2537) with Microsoft apps; Authentication went to the
+ *     Identity providers page (`./ConfigurationMovedSection.tsx`). It keeps its `unavailable_reason`
  *     for the shape reason: a typed list with per-URI validation and a save
  *     that revokes devices is nothing a flat value form can express.
  *   - **MCP Servers** and **Authentication** — available through DEDICATED
@@ -140,18 +142,18 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 import { AdminEmailEditor } from './AdminEmailEditor';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { ADMIN_ITEM } from './adminItemIds';
-import { AdminIdentityProvidersEditor } from './AdminIdentityProvidersEditor';
 import { AdminLlmProxyEditor } from './AdminLlmProxyEditor';
 import { AdminMcpServersEditor } from './AdminMcpServersEditor';
-import { AdminMicrosoftAppsEditor } from './AdminMicrosoftAppsEditor';
-import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { BrandingSectionCard } from './BrandingSectionCard';
 import { EMAIL_MANAGED_SURFACE } from './api/adminEmailApi';
-import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProvidersApi';
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
-import { MICROSOFT_APPS_MANAGED_SURFACE } from './api/adminMicrosoftAppsApi';
-import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
+import {
+  ConfigurationMovedSection,
+  movedSectionPath,
+  movedSectionRow,
+  useMovedSectionReach,
+} from './ConfigurationMovedSection';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
 import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
@@ -174,14 +176,10 @@ import { useAdminConfigurationPage, type AdminConfigurationPageState } from './u
  */
 const MANAGED_SECTION_EDITORS: Readonly<Record<string, ComponentType>> = {
   [MCP_SERVERS_MANAGED_SURFACE]: AdminMcpServersEditor,
-  [IDENTITY_PROVIDERS_MANAGED_SURFACE]: AdminIdentityProvidersEditor,
   [LLM_PROXY_MANAGED_SURFACE]: AdminLlmProxyEditor,
   [EMAIL_MANAGED_SURFACE]: AdminEmailEditor,
-  [NATIVE_CLIENTS_MANAGED_SURFACE]: AdminNativeClientsEditor,
-  [MICROSOFT_APPS_MANAGED_SURFACE]: AdminMicrosoftAppsEditor,
 };
 
-/** The dedicated editor for a section, when this build has one. */
 /**
  * Sections whose dedicated page lives in THIS SPA, keyed on the section id.
  *
@@ -229,6 +227,9 @@ function SectionBody({ state }: { readonly state: AdminConfigurationPageState })
   // check. The section keeps its `unavailable_reason` — it is still true of the
   // plugin-config value endpoints, which cannot serve this data — so a build
   // that does not recognise the surface still explains itself.
+  // The identity and client editors have pages of their own (R3.6).
+  const moved = movedSectionPath(state.activeSection);
+  if (moved !== undefined) return <ConfigurationMovedSection path={moved} />;
   const ManagedEditor = managedEditorFor(state.activeSection);
   if (ManagedEditor !== undefined) {
     return <ManagedEditor />;
@@ -320,6 +321,7 @@ export function AdminConfiguration() {
 
 function ConfigurationPage() {
   const state = useAdminConfigurationPage();
+  const reaches = useMovedSectionReach();
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
@@ -362,25 +364,20 @@ function ConfigurationPage() {
           sx={{ width: '14rem', flex: '0 0 auto' }}
         >
           {state.sections.map((section) => (
+            // A moved section's row is the old anchor: it opens the page (R3.6).
             <ListItemButton
               key={section.id}
               selected={section.id === state.activeSection?.id}
-              onClick={() => {
-                state.onSelectSection(section.id);
-              }}
+              {...movedSectionRow(section, () => state.onSelectSection(section.id), reaches)}
             >
               <ListItemText
                 primary={section.title}
-                // The sidebar says which sections this deployment can serve
-                // BEFORE the operator clicks one. Discovering it only on arrival
-                // makes the page feel broken rather than scoped.
-                // A section with a dedicated editor is NOT "not available
-                // here": it is available, through its own surface. Labelling it
-                // otherwise would send an operator away from the one page that
-                // can edit it.
+                // Which sections this deployment serves, before a click. A
+                // section with its own editor or page is available, not marked.
                 secondary={
                   section.unavailable_reason === undefined ||
-                  managedEditorFor(section) !== undefined
+                  managedEditorFor(section) !== undefined ||
+                  movedSectionPath(section) !== undefined
                     ? undefined
                     : t('pages.admin.configuration.sectionUnavailable', 'Not available here')
                 }

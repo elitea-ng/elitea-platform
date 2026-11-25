@@ -13,17 +13,18 @@
  * The item ids are the server's, so `admin-nav-item-<id>` names the same
  * thing in the console, the document and the access-denied page.
  *
- * Until their stories ship, two kinds of document item have no page here:
+ * Some document items have no page of their own here:
  *
- *  - the gateway tabs and the identity and client editors (stories R3.5a,
- *    issue 2535, and R3.6, issue 2537) are still tabs of the Configuration
- *    page, so Configuration `standsFor` them and shows for a caller the
- *    document opens any of them to;
- *  - Access (R3.6) is in the table with `available: false`, like the
- *    server's, so the document never lists Roles and its typed URL keeps
- *    rendering the page. Until R3.6, a TEMPORARY "Roles" link shows under
- *    "People and access" for a caller whose roles open the item
- *    (`./temporaryRolesLink.ts`); R3.6 removes it.
+ *  - the gateway tabs (story R3.5a, issue 2535) are still tabs of the
+ *    Configuration page, so Configuration `standsFor` them and shows for a
+ *    caller the document opens any of them to;
+ *  - Identity trust (R3.6, issue 2537) is the trust half of the Identity
+ *    providers and SCIM pages, never a page: Identity providers `standsFor`
+ *    it, and the two pages read its level to lock the trust controls.
+ *
+ * Access (R3.6, R3.9) opens the role definitions; the permission matrix of
+ * `/roles` is its tab for a holder of the matrix permission, so Access is
+ * active on `/roles` too.
  *
  * The two-group navigation of `./adminNavGroups` renders while the
  * `admin_console_areas` switch is off; story R4.9 (issue 2623) removes it.
@@ -33,7 +34,9 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ContentCutOutlinedIcon from '@mui/icons-material/ContentCutOutlined';
+import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
+import FingerprintOutlinedIcon from '@mui/icons-material/FingerprintOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
@@ -48,6 +51,7 @@ import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined';
+import SyncAltOutlinedIcon from '@mui/icons-material/SyncAltOutlined';
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
 import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 
@@ -126,9 +130,18 @@ function item(
 export function adminConsoleNavItems(): readonly AdminConsoleNavItem[] {
   return [
     item('users', 'people_access', '/users', t('pages.admin.nav.users', 'Users'), PeopleOutlineIcon),
-    item('access', 'people_access', '/roles', t('pages.admin.nav.roles', 'Roles'), SecurityOutlinedIcon, {
-      available: false,
+    item('access', 'people_access', '/access', t('pages.admin.nav.access', 'Access'), SecurityOutlinedIcon, {
+      alsoOn: ['/roles'],
     }),
+    item(
+      'identity-providers',
+      'people_access',
+      '/identity-providers',
+      t('pages.admin.nav.identityProviders', 'Identity providers'),
+      FingerprintOutlinedIcon,
+      { standsFor: ['identity-trust'] },
+    ),
+    item('scim', 'people_access', '/scim', t('pages.admin.nav.scim', 'SCIM'), SyncAltOutlinedIcon),
     item('projects', 'projects', '/projects', t('pages.admin.nav.projects', 'Projects'), FolderOutlinedIcon),
     item('app-requests', 'projects', '/app-requests', t('pages.admin.nav.appRequests', 'App Requests'), AssignmentOutlinedIcon),
     item('llm-governance', 'models_spend', '/governance', t('pages.admin.nav.governance', 'LLM Governance'), PolicyOutlinedIcon),
@@ -173,9 +186,6 @@ export function adminConsoleNavItems(): readonly AdminConsoleNavItem[] {
         'tool-prices',
         'usage',
         'logs',
-        'identity-providers',
-        'scim',
-        'client-applications',
       ],
     }),
     item('features', 'platform', '/features', t('pages.admin.nav.features', 'Features'), TuneOutlinedIcon),
@@ -197,6 +207,13 @@ export function adminConsoleNavItems(): readonly AdminConsoleNavItem[] {
       HubOutlinedIcon,
     ),
     item('secrets', 'platform', '/secrets', t('pages.admin.nav.secrets', 'Secrets'), VpnKeyOutlinedIcon),
+    item(
+      'client-applications',
+      'platform',
+      '/client-applications',
+      t('pages.admin.nav.clientApplications', 'Client applications'),
+      DevicesOutlinedIcon,
+    ),
   ];
 }
 
@@ -222,14 +239,9 @@ export function consoleItemOpen(entry: AdminConsoleNavItem, level: ConsoleItemLe
 /**
  * The areas the document opens, each with the items it opens; an area with
  * none is left out.
- *
- * TEMPORARY (remove in R3.6, issue 2537): `rolesLink` lists the unavailable
- * Access item as the "Roles" link (`./temporaryRolesLink.ts`). R3.6 makes the
- * item available and deletes the parameter.
  */
-export function visibleConsoleNavAreas(level: ConsoleItemLevel, rolesLink = false): readonly AdminConsoleNavArea[] {
-  const shown = (entry: AdminConsoleNavItem): boolean =>
-    consoleItemOpen(entry, level) === true || (rolesLink && entry.id === 'access');
+export function visibleConsoleNavAreas(level: ConsoleItemLevel): readonly AdminConsoleNavArea[] {
+  const shown = (entry: AdminConsoleNavItem): boolean => consoleItemOpen(entry, level) === true;
   return adminConsoleNavAreas()
     .map((area) => ({ ...area, items: area.items.filter(shown) }))
     .filter((area) => area.items.length > 0);

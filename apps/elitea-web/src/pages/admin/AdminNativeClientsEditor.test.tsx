@@ -24,7 +24,7 @@ import { HttpResponse, http } from 'msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
-import { AdminConfiguration } from './Configuration';
+import { AdminClientApplications } from './ClientApplications';
 import { AdminNativeClientsEditor } from './AdminNativeClientsEditor';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
@@ -96,30 +96,15 @@ function rowOf(clientId: string): HTMLElement {
   return screen.getByTestId(`native-client-row-${clientId}`);
 }
 
-describe('AdminConfiguration → Native clients (composition)', () => {
-  it('renders this editor for the server-declared managed surface, not the refusal', async () => {
+describe('Client applications → Native clients (composition)', () => {
+  // The registry left the Configuration page for Platform › Client
+  // applications (ADR-0059 R3.6), where it is the first tab.
+  it('renders this editor as the first tab of Client applications', async () => {
     useHandlers();
-    server.use(
-      http.get('*/admin/plugin_config_schemas/administration', () =>
-        HttpResponse.json({
-          sections: [
-            {
-              id: 'native_clients',
-              title: 'Native clients',
-              managed_surface: 'native_clients',
-              unavailable_reason: 'native clients are registered on their own editor',
-              fields: [],
-            },
-          ],
-        }),
-      ),
-    );
-
-    renderAdminRoute(<AdminConfiguration />);
+    renderAdminRoute(<AdminClientApplications />);
 
     expect(await screen.findByTestId('admin-native-clients-editor')).toBeVisible();
     expect(await screen.findByText('Example Desktop')).toBeVisible();
-    expect(screen.queryByTestId('admin-configuration-unavailable')).not.toBeInTheDocument();
   });
 });
 

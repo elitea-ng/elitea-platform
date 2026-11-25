@@ -619,6 +619,46 @@
     },
     {
       "file": null,
+      "route": "/admin/app/access",
+      "targetComponent": "src/pages/admin/Access.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Access (ADR-0059 R3.6, R3.9a): every administration role with its status, permission count, the console items it opens at read or write, and whether the signed-in admin may assign it.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-access-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/identity-providers",
+      "targetComponent": "src/pages/admin/IdentityProviders.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Identity providers (ADR-0059 R3.6): the provider editor on a page of its own. This stack federates its logins through the environment, so the empty state is the reference.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-identity-providers-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/scim",
+      "targetComponent": "src/pages/admin/Scim.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "SCIM (ADR-0059 R3.6): the client credentials, the Tenant URL and token endpoint, and the group bindings. No group is bound on this stack.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-scim-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/client-applications",
+      "targetComponent": "src/pages/admin/ClientApplications.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Client applications (ADR-0059 R3.6): the native client registry tab, with Microsoft apps as the second tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-client-applications-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/projects",
       "targetComponent": "src/pages/admin/Projects.tsx",
       "theme": "dark",

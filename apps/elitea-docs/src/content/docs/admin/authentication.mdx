@@ -3,12 +3,12 @@ title: "Authentication"
 description: "Configure OIDC or SAML sign-in, connect an identity provider to SCIM with a dedicated client credential, and bind SCIM-provisioned groups to a project role."
 ---
 
-Authentication lives under **Configuration › Authentication** in the admin console. It covers how people sign in (OIDC or SAML) and how an identity provider's groups map onto project membership (SCIM).
+Authentication lives on two pages of **People and access** in the admin console: **Identity providers**, for how people sign in (OIDC or SAML), and **SCIM**, for how an identity provider's directory and groups map onto accounts and project membership. Both used to be the **Authentication** section of **Configuration**; that section now links to the Identity providers page.
 
 ## Configure an identity provider
 
 <Steps>
-  <Step title="Open Configuration › Authentication">
+  <Step title="Open People and access › Identity providers">
     The list shows any providers already configured, one live per protocol.
   </Step>
   <Step title="Add a provider">
@@ -35,7 +35,7 @@ Authentication lives under **Configuration › Authentication** in the admin con
   </Step>
 </Steps>
 
-<Screenshot id="admin-auth-provider" alt="Authentication section listing configured identity providers" mask={["client-secret-field", "certificate-field"]} />
+<Screenshot id="admin-auth-provider" alt="Identity providers page listing configured identity providers" mask={["client-secret-field", "certificate-field"]} />
 
 <Note>
 A stored secret is never shown in the clear — the field renders a mask, and there is no "reveal" control. To change it, enter a new value; leaving it blank keeps the existing one.
@@ -60,6 +60,8 @@ Only a super admin may make these changes. Another administrator gets `403` with
 | Create or delete an identity provider. Turn it on or off. Replace or clear its secret. Change its issuer, client ID, redirect URI or Entra settings (OIDC), or its entity ID, SSO URL, NameID format, e-mail attribute, service provider entity ID, ACS URL, request signing or service provider certificate (SAML). Add a certificate or an Entra tenant, raise the clock-skew tolerance, turn on **Users provisioned by SCIM may sign in through this provider**, or turn off e-mail verification. | `identity_provider_trust_super_admin_required` | `identity_provider.trust_change_refused` |
 | Re-bind accounts to a provider | `identity_binding_super_admin_required` | `identity_binding.rebind_refused` |
 | Create, rotate or delete a SCIM client | `scim_client_super_admin_required` | `scim_client.change_refused` |
+
+The console shows this before you try. On the **Identity providers** and **SCIM** pages, a caller who does not hold a trust permission (below) sees the trust fields and actions disabled, with a notice that only a global administrator can change them. That includes the platform administrator and a role that holds only `identity.sso.settings.manage`. The fields that stay open are the display name, the scopes and the login domains, and for SAML the name attribute and the logout URL; revoking a SCIM client and the group bindings stay open too. The server still checks every save.
 
 A provider refusal also lists the changed trust fields in `fields`. Other edits stay open to any administrator with the Authentication permission: the display name, the scopes, the login domains, the name attribute, and changes that only narrow trust (removing a certificate or a tenant, lowering the clock skew, turning on e-mail verification). A save made against a provider that changed after the form was opened gets `409`; reload the provider and save again. A change that a super admin makes is recorded as `identity_provider.trust_changed`, `scim_client.created`, `scim_client.rotated` or `scim_client.deleted`.
 
@@ -384,7 +386,7 @@ An identity provider authenticates to SCIM with a **SCIM client**. A SCIM client
 </Warning>
 
 <Steps>
-  <Step title="Open Configuration › Authentication › SCIM provisioning">
+  <Step title="Open People and access › SCIM">
     The panel shows the **Tenant URL** and the **Token endpoint** of this deployment, each with a copy button. You need `identity.sso.view` or `admin.auth.users` to see the SCIM clients, and `identity.sso.settings.manage` or `admin.auth.users` to revoke one (see [Who can change what](#who-can-change-what)). Only a super admin can create, rotate or delete a SCIM client, because a SCIM client can create and change accounts.
   </Step>
   <Step title="Create a SCIM client">

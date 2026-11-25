@@ -25,7 +25,7 @@ A redirect URI must be either a private-use scheme in reverse-domain form (`com.
 
 Use either of the two layers below. A client saved in the admin console overrides a file entry with the same `client_id`.
 
-- **In the admin console:** Admin › Features and configuration › **Native clients**. Add a client, enter its id, name and redirect URIs, and save. You need the `configuration.native_clients` permission.
+- **In the admin console:** Admin › Platform › Client applications › **Native clients**. Add a client, enter its id, name and redirect URIs, and save. You need the `configuration.native_clients` permission.
 - **In a file, at install time:** point `NATIVE_CLIENTS_PATH` at a JSON or YAML file. With Helm, set `main.env.NATIVE_CLIENTS_PATH` and mount the file into the `elitea-main` pod. Two brands look like this:
 
   ```yaml

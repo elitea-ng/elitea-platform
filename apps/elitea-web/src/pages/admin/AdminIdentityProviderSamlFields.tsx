@@ -25,13 +25,18 @@ import { t } from '@/shared/i18n';
 import { nameIdFormatOptions } from './adminIdentityProviderNameId';
 import type { FormUpdate, IdentityProviderForm } from './adminIdentityProviderForm';
 
-/** The SAML 2.0 fields. */
+/**
+ * `locked` (R3.6): the caller holds the settings half only, so every trust
+ * field is read-only; the logout URL and the name attribute stay editable.
+ */
 export function SamlFields({
   form,
   update,
+  locked,
 }: {
   readonly form: IdentityProviderForm;
   readonly update: FormUpdate;
+  readonly locked: boolean;
 }) {
   return (
     <>
@@ -41,6 +46,7 @@ export function SamlFields({
         onChange={(event) => {
           update('idpEntityId', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
       />
@@ -50,6 +56,7 @@ export function SamlFields({
         onChange={(event) => {
           update('idpSsoUrl', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
       />
@@ -74,6 +81,7 @@ export function SamlFields({
         onChange={(event) => {
           update('idpCertificates', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
         multiline
@@ -90,6 +98,7 @@ export function SamlFields({
         onChange={(event) => {
           update('spEntityId', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
         helperText={t(
@@ -103,6 +112,7 @@ export function SamlFields({
         onChange={(event) => {
           update('acsUrl', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         required
         // The path is fixed by the router, so naming it here saves the operator
@@ -121,6 +131,7 @@ export function SamlFields({
         onChange={(event) => {
           update('nameIdFormat', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         helperText={t(
           'pages.admin.identityProviders.dialog.nameIdFormatHelp',
@@ -146,6 +157,7 @@ export function SamlFields({
         onChange={(event) => {
           update('emailAttribute', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         helperText={t(
           'pages.admin.identityProviders.dialog.attributeHelp',
@@ -166,6 +178,7 @@ export function SamlFields({
         onChange={(event) => {
           update('clockSkewSeconds', event.target.value);
         }}
+        disabled={locked}
         fullWidth
         helperText={t(
           'pages.admin.identityProviders.dialog.clockSkewHelp',
@@ -176,6 +189,7 @@ export function SamlFields({
         control={
           <BaseCheckbox
             checked={form.signAuthnRequests}
+            disabled={locked}
             onChange={(event) => {
               update('signAuthnRequests', event.target.checked);
             }}
@@ -196,6 +210,7 @@ export function SamlFields({
           onChange={(event) => {
             update('spCertificate', event.target.value);
           }}
+          disabled={locked}
           fullWidth
           multiline
           minRows={3}

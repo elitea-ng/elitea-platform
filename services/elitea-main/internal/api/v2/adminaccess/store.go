@@ -119,6 +119,50 @@ ORDER BY 1`, registry.ModeAdministration, names)
 	})
 }
 
+// RoleDefinitions implements RoleDefinitionReader: every administration
+// role with all its grants (a role with none too), and whether the database
+// keeps the seed record.
+func (p *PostgresRoles) RoleDefinitions(ctx context.Context) ([]registry.StoredRole, bool, error) {
+	present, err := p.seedsPresent(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	marker, join, err := p.markerColumn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT role.name, `+marker+`,
+       COALESCE(array_agg(DISTINCT grant_row.permission ORDER BY grant_row.permission)
+                FILTER (WHERE grant_row.permission IS NOT NULL), '{}'::text[])
+FROM public.auth_core__role AS role
+LEFT JOIN public.auth_core__role_permission AS grant_row ON grant_row.role_id = role.id
+`+join+`
+WHERE role.mode = $1
+GROUP BY role.name, 2
+ORDER BY 1`, registry.ModeAdministration)
+	if err != nil {
+		return nil, false, fmt.Errorf("read role definitions: %w", err)
+	}
+	roles, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (registry.StoredRole, error) {
+		var name string
+		var seed *string
+		var permissions []string
+		if err := row.Scan(&name, &seed, &permissions); err != nil {
+			return registry.StoredRole{}, err
+		}
+		role := registry.StoredRole{Name: name, Permissions: permissions}
+		if seed != nil {
+			role.Marker = registry.SeedMarker(*seed)
+		}
+		return role, nil
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("read role definitions: %w", err)
+	}
+	return roles, present, nil
+}
+
 func newRole(name string, seed *string) Role {
 	if seed == nil {
 		return Role{Name: name}

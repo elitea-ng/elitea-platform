@@ -1,5 +1,7 @@
 /**
- * Admin › Configuration › Authentication — the identity provider editor.
+ * Admin › People and access › Identity providers — the identity provider
+ * editor, on its own page (`./IdentityProviders.tsx`) since R3.6 (issue
+ * 2537). The Configuration page's Authentication section links there.
  *
  * This is the section that used to render only a refusal about the Arbiter bus.
  * The refusal was accurate about the plugin-config VALUE endpoints, which still
@@ -7,8 +9,9 @@
  * being the whole truth when federation acquired a store and a reader
  * (`./api/adminIdentityProvidersApi`, `elitea_auth.identity_providers`).
  *
- * The page reaches this component through a server-declared `managed_surface`,
- * never through a hardcoded section id — see `./Configuration.tsx`.
+ * A holder of the settings half alone (`identity.sso.settings.manage`, or
+ * `admin`) sees the trust controls read-only, with the notice that a global
+ * administrator changes them (`./AdminIdentityTrustNotice.tsx`).
  *
  * ## What an operator can and cannot see
  *
@@ -40,15 +43,13 @@ import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
-import Divider from "@mui/material/Divider";
 import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
 import { AdminIdentityProviderDialog } from "./AdminIdentityProviderDialog";
-import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
-import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
+import { AdminIdentityTrustNotice, useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
 import { ProviderTable } from "./AdminIdentityProviderTable";
 import { AdminViewOnlyNotice, AdminWritable } from "./AdminWritable";
 import { ADMIN_ITEM } from "./adminItemIds";
@@ -147,7 +148,7 @@ function deleteWarning(name: string): string {
   );
 }
 
-/** The tab under the read-only wrapper of its own item (R3.4b, issue 2613). */
+/** The editor under the read-only wrapper of its own item (R3.4b, issue 2613). */
 export function AdminIdentityProvidersEditor() {
   return (
     <AdminWritable itemId={ADMIN_ITEM.identityProviders}>
@@ -158,6 +159,7 @@ export function AdminIdentityProvidersEditor() {
 
 function IdentityProvidersEditor() {
   const access = useAdminWritable(ADMIN_ITEM.identityProviders);
+  const trustLocked = useIdentityTrustLocked();
   const listQuery = useAdminIdentityProviders();
   const saveMutation = access.guard(useSaveAdminIdentityProvider());
   const deleteMutation = access.guard(useDeleteAdminIdentityProvider());
@@ -233,6 +235,7 @@ function IdentityProvidersEditor() {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
       <AdminViewOnlyNotice />
+      <AdminIdentityTrustNotice subject="providers" />
       <Typography variant="bodySmall" color="text.secondary">
         {t(
           "pages.admin.identityProviders.description",
@@ -274,7 +277,8 @@ function IdentityProvidersEditor() {
           size="small"
           variant="elitea" color="primary"
           onClick={openCreate}
-          disabled={!access.writable}
+          // Adding a provider is a trust action (ADR-0059 R0.4c).
+          disabled={!access.writable || trustLocked}
           sx={{ textTransform: "none" }}
           data-testid="admin-identity-providers-add"
         >
@@ -305,26 +309,12 @@ function IdentityProvidersEditor() {
         />
       ) : null}
 
-      {/* SCIM group provisioning renders in the SAME section, under a divider,
-          because it is the other half of one story: a provider federates the
-          login, and SCIM pushes the directory. A section of its own would put
-          two halves of the same configuration on two screens. */}
-      <Divider sx={{ mt: "0.5rem" }} />
-      {/* The SCIM credential comes first: an identity provider needs one
-          before any group it pushes can be bound. SCIM is its own console
-          item, so it has its own read-only wrapper. */}
-      <AdminWritable itemId={ADMIN_ITEM.scim}>
-        <AdminViewOnlyNotice />
-        <AdminScimClientsEditor />
-        <Divider sx={{ mt: "0.5rem" }} />
-        <AdminScimGroupBindingsEditor />
-      </AdminWritable>
-
       <AdminIdentityProviderDialog
         open={dialogOpen}
         editing={editing}
         existingKeys={existingKeys}
         isSaving={saveMutation.isPending}
+        trustLocked={trustLocked}
         serverError={
           saveError === "save"
             ? t(
@@ -373,7 +363,7 @@ function IdentityProvidersEditor() {
           <Button
             variant="elitea" color="alarm"
             onClick={handleDelete}
-            disabled={!access.writable || deleteMutation.isPending}
+            disabled={!access.writable || trustLocked || deleteMutation.isPending}
             sx={{ textTransform: "none" }}
             data-testid="admin-identity-provider-delete-confirm"
           >

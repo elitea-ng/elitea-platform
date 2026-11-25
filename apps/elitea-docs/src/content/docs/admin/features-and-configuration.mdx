@@ -72,8 +72,8 @@ Web push also needs these items. When one is missing, web push is off and the sw
 Main sends the notification ids and the outcome only, never a message text. Each send is encrypted for one browser (RFC 8291) and signed with the install's key (RFC 8292). A push service that answers 404 or 410 removes that subscription. A push service that refuses the key (401 or 403) drops that send; three refusals in a row remove the subscription. Main tries other failures again with a longer wait each time, for at most 24 hours. A person keeps at most 10 browsers.
 </Accordion>
 
-<Accordion title="Microsoft apps (editable here)">
-The Default app registry for Outlook, Teams, Microsoft Graph, Dataverse and SharePoint credentials: the Microsoft Entra apps people sign in with, each with a write-only client secret, the permissions it may ask for and the projects that may use it. The section also prints the Entra setup (the one redirect URI, the permissions, the admin consent URL) and holds the **Allow Custom app** switch. It needs the `configuration.microsoft_apps` permission. See [Microsoft apps](/admin/microsoft-apps).
+<Accordion title="Microsoft apps (on Client applications)">
+The section links to the **Microsoft apps** tab of **Platform › Client applications**, where the registry is edited. The Default app registry for Outlook, Teams, Microsoft Graph, Dataverse and SharePoint credentials: the Microsoft Entra apps people sign in with, each with a write-only client secret, the permissions it may ask for and the projects that may use it. The section also prints the Entra setup (the one redirect URI, the permissions, the admin consent URL) and holds the **Allow Custom app** switch. It needs the `configuration.microsoft_apps` permission. See [Microsoft apps](/admin/microsoft-apps).
 </Accordion>
 
 <Accordion title="Native client policy (editable here)">

@@ -1859,6 +1859,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/admin/access/elevations/pending",
 		"GET /api/v2/admin/access/history",
 		"GET /api/v2/admin/access/posture",
+		"GET /api/v2/admin/access/role-definitions",
+		"GET /api/v2/admin/access/role-definitions/compare",
 		"GET /api/v2/admin/access/roles",
 		"GET /api/v2/admin/access/sealed_credentials",
 		"GET /api/v2/admin/access/tokens",

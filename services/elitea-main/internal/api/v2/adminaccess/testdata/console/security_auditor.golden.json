@@ -1,6 +1,17 @@
 {
   "areas": [
     {
+      "id": "people_access",
+      "label_key": "pages.admin.console.area.people_access",
+      "items": [
+        {
+          "id": "access",
+          "label_key": "pages.admin.console.item.access",
+          "level": "read"
+        }
+      ]
+    },
+    {
       "id": "security",
       "label_key": "pages.admin.console.area.security",
       "items": [

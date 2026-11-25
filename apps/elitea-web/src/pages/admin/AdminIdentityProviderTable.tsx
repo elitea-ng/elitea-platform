@@ -17,6 +17,7 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { useIdentityTrustLocked } from './AdminIdentityTrustNotice';
 import { useAdminWriteControl } from './adminWriteAccess';
 import type { AdminIdentityProvider } from './api/adminIdentityProvidersApi';
 import { monoFontFamily } from '@/shared/brand/typeScale';
@@ -45,6 +46,8 @@ export function ProviderTable({
   readonly onRemove: (provider: AdminIdentityProvider) => void;
 }) {
   const viewOnly = useAdminWriteControl().disabled;
+  // Removing a provider is a trust action (ADR-0059 R0.4c, R3.6).
+  const trustLocked = useIdentityTrustLocked();
   return (
     <TableContainer>
       {/* Named, so the table has an accessible name for a screen reader and a
@@ -115,7 +118,7 @@ export function ProviderTable({
                 <Button
             variant="elitea" color="alarm"
                   size="small"
-                  disabled={viewOnly}
+                  disabled={viewOnly || trustLocked}
                   onClick={() => {
                     onRemove(provider);
                   }}

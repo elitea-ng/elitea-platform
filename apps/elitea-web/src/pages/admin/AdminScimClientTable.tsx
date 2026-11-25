@@ -20,6 +20,7 @@ import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
 import { ScimClientExpiryCell } from "./AdminScimClientExpiry";
 import type {
   AdminScimClient,
@@ -76,6 +77,9 @@ function ClientRow({
   readonly onAction: AdminScimClientTableProps["onAction"];
 }) {
   const active = client.status === "active";
+  // Rotating and deleting a SCIM client are trust actions (ADR-0059 R0.4c);
+  // revoking one is a settings action.
+  const trustLocked = useIdentityTrustLocked();
   return (
     <TableRow data-testid={`admin-scim-client-row-${client.id}`}>
       <TableCell>{client.name}</TableCell>
@@ -123,7 +127,7 @@ function ClientRow({
           {active ? (
             <Button
               size="small"
-              disabled={busy}
+              disabled={busy || trustLocked}
               onClick={() => {
                 onAction("rotate", client);
               }}
@@ -149,7 +153,7 @@ function ClientRow({
           <Button
             size="small"
             color="error"
-            disabled={busy}
+            disabled={busy || trustLocked}
             onClick={() => {
               onAction("delete", client);
             }}

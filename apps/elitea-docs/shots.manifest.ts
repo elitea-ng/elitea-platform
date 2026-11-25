@@ -878,8 +878,7 @@ export const shots: readonly Shot[] = [
     // it timed out) — Configuration.tsx's sections are a plain sidebar List of
     // ListItemButtons with no per-section testid; the section is reached by
     // clicking its title text (config_schemas.go's `"title": "MCP Servers"`),
-    // same fix as admin-auth-provider/admin-llm-proxy-models/
-    // admin-configuration-banner below.
+    // same fix as admin-llm-proxy-models/admin-configuration-banner below.
     actions: [{ type: "click", selector: "text=MCP Servers" }],
     mask: ["client secret cells"],
     persona: "admin",
@@ -942,19 +941,15 @@ export const shots: readonly Shot[] = [
   },
   {
     id: "admin-auth-provider",
-    route: "/admin/app/configuration",
+    // People and access › Identity providers, a page of its own since
+    // ADR-0059 R3.6 (issue 2537); it used to be a Configuration section.
+    route: "/admin/app/identity-providers",
     viewport: DEFAULT_VIEWPORT,
-    // No `[data-testid='configuration-section-*']` exists anywhere
-    // (confirmed live on three separate shots) — Configuration.tsx's sidebar
-    // is a plain List of ListItemButtons, selected by clicking the section's
-    // TITLE text (config_schemas.go's `"title": "Authentication"`).
-    actions: [{ type: "click", selector: "text=Authentication" }],
     mask: ["client-secret-field", "certificate-field"],
     persona: "admin",
     notes:
-      "Authentication section open (reached by clicking its sidebar entry — no " +
-      "dedicated container testid exists); add one oidc provider row (the " +
-      "oidc-mock) and one placeholder SAML row; mask secrets.",
+      "Identity providers page; add one oidc provider row (the oidc-mock) and " +
+      "one placeholder SAML row; mask secrets.",
   },
   {
     id: "admin-llm-proxy-models",

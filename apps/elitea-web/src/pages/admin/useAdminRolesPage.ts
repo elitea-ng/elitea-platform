@@ -29,7 +29,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { ADMIN_ACTION_PERMISSION } from './adminItemIds';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminWritable } from './adminWriteAccess';
 import { deprecatedGrants, type DeprecatedGrants } from './deprecatedGrants';
@@ -41,7 +41,6 @@ import {
   type PermissionMatrixRow,
   type PermissionMatrixTarget,
 } from './api/adminRolesApi';
-import { ROLES_ITEM_ID } from './temporaryRolesLink';
 import { useAdminRoleDefinitions, type AdminRoleDefinitionsState } from './useAdminRoleDefinitions';
 
 /** The four tabs, in render order, with the endpoint each addresses. */
@@ -165,7 +164,7 @@ export function useAdminRolesPage(): AdminRolesPageState {
   );
 
   const matrixQuery = usePermissionMatrix(target);
-  const access = useAdminWritable(ROLES_ITEM_ID);
+  const access = useAdminWritable(ADMIN_ITEM.access);
   const saveMatrix = access.guard(useSavePermissionMatrix());
   const syncMatrix = access.guard(useSyncPermissionMatrix());
 

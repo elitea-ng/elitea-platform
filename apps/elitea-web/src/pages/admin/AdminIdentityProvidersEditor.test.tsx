@@ -21,6 +21,9 @@
  *
  * No fixture value here is or resembles a real credential.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -407,90 +410,92 @@ describe('identity provider form rules', () => {
  * not hidden, and the listings stay.
  */
 describe('view only', () => {
-  function useScimHandlers(): void {
-    server.use(
-      http.get('*/admin/scim_clients/administration', () =>
-        HttpResponse.json({
-          clients: [{ id: 'c1', name: 'Entra production', auth_method: 'bearer', secret_hint: 'ab12', status: 'active' }],
-          total: 1,
-          scim_base_path: '/api/v2/scim/v2',
-          token_endpoint_path: '/api/v2/scim/oauth/token',
-          access_token_ttl_seconds: 3600,
-        }),
-      ),
-      http.get('*/admin/scim_group_bindings/administration', () =>
-        HttpResponse.json({
-          bindings: [
-            {
-              id: '7',
-              display_name: 'Platform Team',
-              external_id: 'grp-1',
-              project_id: 12,
-              project_name: 'Platform',
-              role_name: 'editor',
-              members: [],
-            },
-          ],
-          total: 1,
-        }),
-      ),
-    );
-  }
-
-  it('disables every write of both items at read and keeps the listings', async () => {
-    useScimHandlers();
-    serveConsoleLevel('read', 'identity-providers', 'scim');
+  it('disables every write at read and keeps the listing', async () => {
+    serveConsoleLevel('read', 'identity-providers');
     renderAdminRoute(<AdminIdentityProvidersEditor />);
 
     expect(await screen.findByText('Corporate SSO')).toBeInTheDocument();
-    expect(await screen.findByText('Entra production')).toBeInTheDocument();
-    expect(await screen.findByText('Platform Team')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByTestId('admin-view-only')).toHaveLength(2));
+    await findViewOnlyNotice();
     await waitFor(() => expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled());
-    expect(screen.getByTestId('admin-scim-clients-add')).toBeDisabled();
-    expect(screen.getByTestId('admin-scim-group-bindings-add')).toBeDisabled();
     expect(enabledWriteControls()).toEqual([]);
     expect(writes()).toEqual([]);
   });
+});
 
-  it('keeps the SCIM half writable when only its own item is at write', async () => {
-    useScimHandlers();
-    server.use(
-      http.get('*/admin/console', () =>
-        HttpResponse.json({
-          areas: [
-            {
-              id: 'people_access',
-              label_key: 'pages.admin.console.area.people_access',
-              items: [
-                { id: 'identity-providers', label_key: 'pages.admin.console.item.identity-providers', level: 'read' },
-                { id: 'scim', label_key: 'pages.admin.console.item.scim', level: 'write' },
-              ],
-            },
-          ],
-          roles: [{ name: 'admin', built_in: true }],
-          elevation: null,
-          admin_console_areas: true,
-        }),
+/**
+ * The trust split (ADR-0059 decision 6, R3.6): a holder of
+ * `identity.sso.settings.manage` alone, and the admin, edit a provider's
+ * settings but not its trust, which the `identity-trust` item at write opens.
+ * The document is the server's own golden for that holder.
+ */
+describe('the trust fields', () => {
+  function serveGolden(holder: string): void {
+    const document = JSON.parse(
+      readFileSync(
+        join(process.cwd(), `../../services/elitea-main/internal/api/v2/adminaccess/testdata/console/${holder}.golden.json`),
+        'utf8',
       ),
-    );
+    ) as Record<string, unknown>;
+    server.use(http.get('*/admin/console', () => HttpResponse.json(document)));
+  }
+
+  function serveSettingsHalf(): void {
+    serveGolden('identity_settings');
+  }
+
+  it('locks the trust fields of the platform administrator too, with the notice', async () => {
+    serveGolden('admin');
     renderAdminRoute(<AdminIdentityProvidersEditor />);
 
-    await waitFor(() => expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled());
-    expect(screen.getByTestId('admin-scim-clients-add')).toBeEnabled();
-    expect(screen.getByTestId('admin-scim-group-bindings-add')).toBeEnabled();
+    expect(await screen.findByTestId('admin-identity-trust-notice')).toHaveTextContent(/global administrator/i);
+    expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled();
+    await openEditFor('Corporate SSO');
+    expect(await screen.findByLabelText(/Issuer/)).toBeDisabled();
+    expect(screen.getByLabelText(/Display name/)).toBeEnabled();
   });
 
-  // SCIM not open to the caller at all: its controls are disabled, and its own
-  // notice says why, under a writable Identity providers half.
-  it('explains a disabled SCIM half when the caller has no SCIM level', async () => {
-    useScimHandlers();
-    serveConsoleLevel('write', 'identity-providers');
+  it('locks the trust fields and actions of a settings-only holder, with the notice', async () => {
+    serveSettingsHalf();
     renderAdminRoute(<AdminIdentityProvidersEditor />);
 
-    const notice = await findViewOnlyNotice();
-    expect(notice).toHaveAttribute('data-item-id', 'scim');
-    await waitFor(() => expect(screen.getByTestId('admin-scim-clients-add')).toBeDisabled());
-    expect(screen.getByTestId('admin-identity-providers-add')).toBeEnabled();
+    expect(await screen.findByTestId('admin-identity-trust-notice')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
+    expect(screen.getByTestId('admin-identity-providers-add')).toBeDisabled();
+    await openEditFor('Corporate SSO');
+
+    expect(await screen.findByLabelText(/Issuer/)).toBeDisabled();
+    expect(screen.getByLabelText(/Client ID/)).toBeDisabled();
+    expect(screen.getByLabelText(/Redirect URI/)).toBeDisabled();
+    // Settings stay editable, and so does the save that carries them.
+    expect(screen.getByLabelText(/Display name/)).toBeEnabled();
+    expect(screen.getByTestId('identity-provider-save')).toBeEnabled();
+  });
+
+  it('keeps every field open to a holder of the trust item', async () => {
+    serveConsoleLevel('write', 'identity-providers', 'identity-trust');
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    expect(await screen.findByLabelText(/Issuer/)).toBeEnabled();
+    expect(screen.queryByTestId('admin-identity-trust-notice')).toBeNull();
+  });
+
+  it('still explains the server refusal when a trust change reaches it', async () => {
+    serveSettingsHalf();
+    useProviderHandlers({
+      saveStatus: 403,
+      saveBody: {
+        error: 'only a super admin can change the trust of an identity provider',
+        code: 'identity_provider_trust_super_admin_required',
+        fields: ['enabled'],
+      },
+    });
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminIdentityProvidersEditor />);
+    await openEditFor('Corporate SSO');
+
+    await user.click(await screen.findByTestId('identity-provider-save'));
+
+    expect(await screen.findByText(/Only a super admin can create or delete an identity provider/)).toBeInTheDocument();
   });
 });
