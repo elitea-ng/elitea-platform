@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/platformconfig"
 )
@@ -282,6 +283,10 @@ type Answer struct {
 	// Flagged: the admin audit row of the request was marked for the
 	// elevation review (ADR-0059 R2.8a).
 	Flagged bool
+	// Audited are the admin audit rows the request wrote, through the
+	// router's AuditRecorder (ComposedRouter keeps them per request). The
+	// coverage test of ADR-0059 R1.7 reads them.
+	Audited []audit.Event
 }
 
 // Maintenance reports whether the answer is the maintenance gate's refusal:
@@ -304,7 +309,7 @@ func Send(handler http.Handler, route Route, variant Variant, opts Options, gran
 	}
 	d := driver{handler: handler, opts: opts}
 	out := d.run(route, variant, func(int) []string { return grant })
-	return Answer{Status: out.status, Body: out.body, Calls: out.calls, Flagged: out.flagged}
+	return Answer{Status: out.status, Body: out.body, Calls: out.calls, Flagged: out.flagged, Audited: out.audited}
 }
 
 func defaultBody(method string) string {
@@ -327,6 +332,7 @@ type outcome struct {
 	body    string
 	calls   []Call
 	flagged bool
+	audited []audit.Event
 }
 
 // The statuses of a request that did not answer normally.
@@ -530,7 +536,8 @@ func (d driver) run(route Route, variant Variant, grant func(int) []string) outc
 	if ctx.Err() != nil {
 		return outcome{status: statusTimedOut, calls: rec.snapshot()}
 	}
-	out := outcome{status: w.Code, body: w.Body.String(), calls: rec.snapshot(), flagged: rec.isFlagged()}
+	out := outcome{status: w.Code, body: w.Body.String(), calls: rec.snapshot(), flagged: rec.isFlagged(),
+		audited: rec.auditedEvents()}
 	if panicked != "" {
 		// A panic the router did not recover is an answer like any other:
 		// the stability check in drive catches one that is not repeatable.

@@ -228,7 +228,14 @@
         "http_route": { "type": "string", "maxLength": 512, "description": "The matched route pattern, never the raw target." },
         "status_code": { "type": "integer", "minimum": 100, "maximum": 599 },
         "duration_ms": { "type": "number", "minimum": 0 },
-        "is_error": { "type": "boolean" }
+        "is_error": { "type": "boolean" },
+        "acting_roles": { "type": "array", "items": { "type": "string" }, "description": "ADR-0059 decision 8: the caller's standing administration roles at request time, by name. An empty array is a credential that acts with no administration role (a none token, a run token, a system token). Absent when not recorded (a row written before the field existed, or a request with no administration resolution). In the row hash of a row chained in canonical form elitea.audit_events.v2." },
+        "elevation_id": { "type": "string", "format": "uuid", "description": "The break-glass elevation the request was made under. Absent when none." },
+        "credential_kind": { "type": "string", "enum": ["session", "form", "sealed", "token", "native", "run", "system", "scim"], "description": "The kind of credential the request came with (ADR-0059 decision 7). Absent when unknown, never a guess." },
+        "central_override": { "type": "boolean", "description": "The write went through the central override: an administration-mode permission reached a project the caller is not a member of." },
+        "reason_code": { "type": "string", "maxLength": 128, "description": "The reason code the caller gave. The reason text is never exported." },
+        "reason_missing": { "type": "boolean", "description": "A reason was required and not given." },
+        "elevation_flagged": { "type": "boolean", "description": "The action was done under an elevation and the action table flags it for the elevation review." }
       }
     },
     "runStepDetails": {

@@ -92,6 +92,20 @@ Reading the sealed credential list (`break-glass list`) is recorded too, as a `d
 
 `row_id` (`centry.audit_events.id`), `is_error`, and, when recorded: `http_method`, `http_route` (the matched route pattern, never the raw URL), `status_code`, `duration_ms`.
 
+A request that checked administration permissions also says in which capacity it was made. These fields follow `is_error`, each omitted when it was not recorded (rows from before the fields existed, and requests with no administration check):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `acting_roles` | array of strings | The caller's standing administration roles at request time, by name. An empty array is a credential that acts with no administration role (a `none` token, a run token, a system token): it is a value, not an absence. |
+| `elevation_id` | UUID string | The break-glass elevation the request was made under. |
+| `credential_kind` | enum | `session`, `form`, `sealed`, `token`, `native`, `run`, `system` or `scim`. Omitted when unknown, never guessed. |
+| `central_override` | boolean | The write went through the central override: an administration permission reached a project the caller is not a member of. |
+| `reason_code` | string | The reason code the caller gave. The reason **text** is never exported. |
+| `reason_missing` | boolean | A reason was required and not given. |
+| `elevation_flagged` | boolean | The action was done under an elevation and is marked for the elevation review. |
+
+On a row chained in the trail's canonical form `elitea.audit_events.v2` (every row written since that form was introduced), these fields are covered by the row's `chain.hash`, so a change to one of them breaks the chain's verification. A row chained before it keeps its older form (`elitea.audit_events.v1`): its hash still verifies and does not cover these fields. The chain verification route picks the form by the row's chain position, so a chain that spans the change verifies end to end.
+
 ### `details` for `run_step`
 
 `row_id`, `run_id`, `step_id`, `seq`, `generation`, `kind` (`model_call`, `tool_call`, `retrieval`, `approval`, `delegation`, `cap`, `error`, `output`), `started_at`, `ended_at`, `summary` (small fields per kind), `cited_step_ids`, `cited_document_ids`, `inputs` and `outputs` (each `digest`, `size`, `original_size`, `truncated`, `filtered`, `media_type` and `ref`, the object-store reference), and, when known: `application_id`, `release_id`, `definition_digest`, `node_id`, `name`, `toolkit_id`, `retrieval` (`index_name`, `query`, `filters_json`, `top_k`, `documents` with `document_id`, `source`, `score`, `rank`). The event carries digests and references, never the content.
@@ -141,7 +155,7 @@ A security audit decision, as a webhook batch carries it:
 }
 ```
 
-An Audit Trail event is the same envelope without `chain`:
+An Audit Trail event is the same envelope with its own `details` (shown without `chain`; an administration write also carries the role-use fields above, for example `"acting_roles": ["admin"], "credential_kind": "session"`):
 
 ```json
 {

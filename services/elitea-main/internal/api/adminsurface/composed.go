@@ -188,7 +188,7 @@ func ComposedRouter() (Composed, error) {
 		// a bearer credential never reads it.
 		Auth: api.AuthDeps{FormSessions: elevatedFormSessions{}},
 
-		AuditRecorder:              discardAudit{},
+		AuditRecorder:              requestAudit{},
 		AuthValidator:              tokenValidator{},
 		PrincipalValidator:         principalValidator{},
 		ProjectAccessQuerier:       memberOfEveryProject{},
@@ -451,6 +451,15 @@ func AuthenticateElevatedSession(r *http.Request) {
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
 }
 
+// AuthenticateFormSession adds the same Form session cookie as a standing
+// browser session: a request whose variant sets no Elevation resolves the
+// grant it is sent with as the standing set, with credential kind form. The
+// audit coverage test (ADR-0059 R1.7) drives with it, since the bearer
+// credential of Token carries no credential kind (production's validator
+// classes a personal token as `token`, which the critical-action gate then
+// refuses).
+func AuthenticateFormSession(r *http.Request) { AuthenticateElevatedSession(r) }
+
 // elevatedFormSessions authenticates the cookie of an elevated variant as the
 // synthetic principal in a Form session, and no other.
 type elevatedFormSessions struct{}
@@ -505,13 +514,31 @@ type unreachableGateway struct{}
 
 func (unreachableGateway) Status(context.Context) (json.RawMessage, error) { return nil, errNoService }
 
-type discardAudit struct{}
+// requestAudit is the AuditRecorder of the composed router. It writes
+// nothing: it keeps each row on the recorder of the request Drive sent
+// (Answer.Audited, Answer.Flagged). A row of a request Drive did not send is
+// dropped.
+type requestAudit struct{}
 
-// Record keeps nothing but the elevation review mark, on the recorder of the
-// request Drive sent (Answer.Flagged).
-func (discardAudit) Record(ctx context.Context, event audit.Event) {
-	if rec, ok := ctx.Value(recorderKey{}).(*recorder); ok && event.ElevationFlagged {
-		rec.flag()
+// RequestAudit answers the AuditRecorder of the composed router, for a
+// fixture router of a test: it keeps each row on the request Drive or Send
+// sent (Answer.Audited).
+func RequestAudit() audit.Recorder { return requestAudit{} }
+
+// DetachedContext answers a context that still answers the recording
+// resolver of the request ctx belongs to, but carries nothing else of it:
+// not the audit slot below the audit middleware. A fixture uses it for a
+// check that resolves without the request's context.
+func DetachedContext(ctx context.Context) context.Context {
+	if rec, ok := ctx.Value(recorderKey{}).(*recorder); ok {
+		return context.WithValue(context.Background(), recorderKey{}, rec)
+	}
+	return context.Background()
+}
+
+func (requestAudit) Record(ctx context.Context, event audit.Event) {
+	if rec, ok := ctx.Value(recorderKey{}).(*recorder); ok {
+		rec.keep(event)
 	}
 }
 

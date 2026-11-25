@@ -1,0 +1,37 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "ffcb8b19-9fef-57c6-998d-78ed3115e760",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "admin_audit",
+  "event_type": "api",
+  "ocsf": {
+    "class_uid": 6003,
+    "category_uid": 6
+  },
+  "tenant": {
+    "project_id": null
+  },
+  "actor": {
+    "type": "unknown",
+    "id": "unknown"
+  },
+  "action": "POST /api/v2/admin/tasks",
+  "outcome": "success",
+  "chain": {
+    "partition": "0",
+    "sequence": 43,
+    "prev_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "details": {
+    "row_id": 43,
+    "http_method": "POST",
+    "http_route": "/api/v2/admin/tasks",
+    "status_code": 202,
+    "is_error": false,
+    "acting_roles": [],
+    "credential_kind": "system",
+    "central_override": false,
+    "elevation_flagged": false
+  }
+}

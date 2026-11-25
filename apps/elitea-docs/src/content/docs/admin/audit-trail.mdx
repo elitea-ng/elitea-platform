@@ -29,6 +29,12 @@ A second view mode, alongside events, shows execution traces and their individua
 
 From the Users page's row menu, the activity drawer filters this same audit data to one account — useful when investigating a specific person's actions rather than browsing the whole trail. See [Users and roles](/admin/users-and-roles).
 
+## What is recorded
+
+A row is written for every change made on the audited areas of the platform: the administration pages, personal access tokens, SCIM, secrets, configurations, projects, budgets, the agent governance routes, and the Marketplace featuring and delisting of a listing. A request on these areas refused for lack of permission writes a row too, a read included. A change whose request fails on an unexpected error still writes its row, with status 500. A successful read writes none.
+
+A platform test drives every administration change it can list (the routes that check an administration permission, the central project-settings override, and the write paths of the role separation matrix) as an administrator, and fails when one writes no row. A new administration change mounted outside the audited areas therefore fails the build instead of going unrecorded.
+
 ## Role use on administration rows
 
 Every row of a request to the administration surface also records the capacity the person acted in. The page does not show these fields yet; the break-glass review, the reason prompt and the access export will. They are in the `centry.audit_events` table today:
@@ -44,9 +50,7 @@ Every row of a request to the administration surface also records the capacity t
 
 A request that never checked administration permissions leaves these fields empty.
 
-<Warning>
-These fields are not covered by the audit trail's tamper-evident chain yet. The chain still verifies every other column of every row. A later release adds them to the chain and to the SIEM export.
-</Warning>
+Every row written since the chain's form `elitea.audit_events.v2` was introduced covers these fields in its tamper-evident chain: a change to one of them breaks the chain's verification. The reason text is the exception: it is never part of the chain and never exported, so it can be erased. Rows written before that release keep their older chain form, which does not cover these fields, and still verify. The [SIEM export](/reference/audit-event-schema#details-for-admin_audit) carries the same fields, without the reason text.
 
 ## Export to your SIEM
 
