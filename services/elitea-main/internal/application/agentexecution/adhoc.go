@@ -162,6 +162,11 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	if err := request.Validate(); err != nil {
 		return CurrentApplicationStartOutcome{}, err
 	}
+	if lead, err := service.adhocLead(ctx, request); err != nil {
+		return CurrentApplicationStartOutcome{}, err
+	} else if lead > 0 {
+		return service.StartCurrentApplication(ctx, request.leadStart(lead))
+	}
 	if service.adhocResolver == nil {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
 	}

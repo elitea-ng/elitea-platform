@@ -5,7 +5,7 @@
  *
  * Split out of `useChatBoxSend.helpers.ts`, which is at its §3.5 length budget.
  */
-import { MAX_ADDRESSED, isPeopleOnly } from '@elitea/client-core/conversation';
+import { FLOOR_POLICY, MAX_ADDRESSED, floorOf, isPeopleOnly } from '@elitea/client-core/conversation';
 
 /** A positive integer participant id, from a number or its decimal string; `undefined` otherwise. */
 export function positiveParticipantId(raw: unknown): number | undefined {
@@ -37,6 +37,23 @@ export function resolvedTarget(participant: unknown): ResolvedTarget {
   if (participant === undefined) return NO_TARGET;
   const id = typeof participant === 'object' && participant !== null && 'id' in participant ? participant.id : undefined;
   return { participant, participantId: positiveId(id) };
+}
+
+/**
+ * The lead's participant row when the conversation's floor is `lead` and the lead is still one of its agents
+ * (`floorOf(meta)`); `undefined` otherwise. Main routes a message that addresses no one to the lead whatever
+ * `participant_id` says (`turntaking.Route`), and "To: <lead> (lead)" says so, so with nothing picked the send names
+ * the lead too: an agent turn (`agent.execute.application.v1`) whose answer streams under the lead's identity. Without
+ * it a fresh team conversation had no target at all, went out as a model chat with no participant, and Main answered
+ * `agent_target_required` under a composer that named the lead.
+ */
+export function leadParticipantOf(meta: unknown, participants: readonly unknown[] | undefined): unknown {
+  const floor = floorOf(meta);
+  if (floor.policy !== FLOOR_POLICY.Lead) return undefined;
+  return (participants ?? []).find((row) => {
+    const name = (row as { readonly entity_name?: unknown } | null | undefined)?.entity_name;
+    return (name === 'application' || name === 'pipeline') && resolvedTarget(row).participantId === floor.leadParticipantId;
+  });
 }
 
 /**

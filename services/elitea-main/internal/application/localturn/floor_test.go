@@ -172,6 +172,9 @@ func TestStartRoutesByTheFloor(t *testing.T) {
 		"no address goes to the lead": {
 			settings: lead, agents: agents(11, 12), participant: 11, wantFirst: 12, wantTargets: []int64{12},
 		},
+		"no address and no target goes to the lead": {
+			settings: lead, agents: agents(11, 12), wantFirst: 12, wantTargets: []int64{12},
+		},
 		"no address and no lead goes to the composer's target": {
 			settings: turntaking.Default, agents: agents(11, 12), participant: 11, wantFirst: 11, wantTargets: []int64{11},
 		},

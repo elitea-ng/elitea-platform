@@ -239,6 +239,55 @@ func soleAgentAddressee(agents []FloorAgent, request *CurrentApplicationStartReq
 	return nil
 }
 
+// adhocLead is the lead a person's model-chat start goes to: a start that
+// names no participant, in a conversation with two or more agents whose floor
+// has a lead that is still one of them (turntaking.Route: under `lead` an
+// unaddressed message goes to the lead). 0 leaves the start a model chat,
+// which the repository refuses with ErrAgentTargetRequired when several
+// agents sit in the conversation (issue 1602).
+//
+// A client that shows "To: <lead> (lead)" over a fresh team conversation and
+// sends no participant (the web composer before this fix, and any client that
+// cannot read the floor) is answered by the lead, as the chip says, instead of
+// "Pick the agent this message is for".
+func (service *CurrentApplicationStartService) adhocLead(ctx context.Context, request CurrentAdhocStartRequest) (int64, error) {
+	if service.floor == nil || request.TargetParticipantID != 0 || !HumanOrigin(request.TriggerOrigin) ||
+		request.UnattendedContinuation != nil || request.HandoffCompletion != nil || request.ThreadRun != nil {
+		return 0, nil
+	}
+	conversation, err := service.floor.ConversationFloor(ctx, request.ProjectID, request.ConversationUUID)
+	if err != nil {
+		return 0, err
+	}
+	if len(conversation.Agents) < 2 || conversation.Settings.Policy != turntaking.PolicyLead {
+		return 0, nil
+	}
+	for _, agent := range conversation.Agents {
+		if agent.ParticipantID == conversation.Settings.Lead {
+			return agent.ParticipantID, nil
+		}
+	}
+	return 0, nil
+}
+
+// leadStart is the agent start of a model-chat start that goes to the lead.
+// The model chat's llm_settings are not carried: the lead answers with its
+// own agent version, as any agent turn does.
+func (request CurrentAdhocStartRequest) leadStart(lead int64) CurrentApplicationStartRequest {
+	return CurrentApplicationStartRequest{
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ConversationUUID: request.ConversationUUID, TargetParticipantID: lead,
+		QuestionID: request.QuestionID, UserInput: request.UserInput,
+		InteractionUUID:  request.InteractionUUID,
+		MCPTokens:        request.MCPTokens,
+		Attachments:      request.Attachments,
+		MentionedUserIDs: request.MentionedUserIDs, MentionsEveryone: request.MentionsEveryone,
+		TriggerOrigin:   request.TriggerOrigin,
+		ProjectSkillIDs: request.ProjectSkillIDs,
+		Unattended:      request.Unattended,
+	}
+}
+
 // input is the turn's AgentFloorV1 for the agent that answers.
 func (plan *floorPlan) input(self int64) *runtimev1.AgentFloorV1 {
 	if plan == nil {
