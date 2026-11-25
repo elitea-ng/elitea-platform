@@ -84,7 +84,9 @@ Each step of a break-glass elevation is one `security_audit` event of type `ai.e
 | `note_id`, `note_length` | On `note_added`: the note's id and its length in characters, never its text. |
 | `credential_id` | On the credential actions: the sealed credential. |
 
-The actions are `requested`, `approved`, `denied`, `request_expired`, `started`, `ended`, `expired`, `critical_change`, `reviewed`, `unreviewed`, `note_added`, `credential_issued`, `credential_used`, `credential_revoked` and `local_admin_signin`. In this release the ledger writes `started`, `ended` and `expired`. The other actions are written by the request, review, sealed-credential and local sign-in features as they arrive. An end that changes nothing (the elevation had already ended) appends no event.
+The actions are `requested`, `approved`, `denied`, `request_expired`, `started`, `ended`, `expired`, `critical_change`, `reviewed`, `unreviewed`, `note_added`, `credential_issued`, `credential_used`, `credential_revoked` and `local_admin_signin`. In this release the ledger writes `started`, `ended` and `expired`, and the operator commands `break-glass issue` and `break-glass revoke` write `credential_issued` and `credential_revoked` with the source `operator` and the credential's `level` (see the [break-glass runbook](/deployment/break-glass-runbook#sealed-credentials)). The other actions are written by the request, review, sealed sign-in and local sign-in features as they arrive.
+
+Reading the sealed credential list (`break-glass list`) is recorded too, as a `decision` event (`ai.elitea.security.v1.decision`) with the action `admin.elevation.credential_list`, the effect `allow`, the target type `sealed_credential` and the reasons `source:<source>` and `credentials:<number listed>`. No event ever carries a credential, its selector or its digest. An end that changes nothing (the elevation had already ended) appends no event.
 
 ### `details` for `admin_audit`
 

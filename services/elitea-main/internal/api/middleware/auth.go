@@ -101,10 +101,11 @@ type AuthConfig struct {
 	RunTokens *RunTokenScope
 }
 
-// Auth authenticates every request against exactly four credential sources:
-// the Form session cookie, API key, bearer token, and the `elitea_session`
-// cookie. There is no fifth source and no configuration that yields a
-// principal without a credential.
+// Auth authenticates every request against exactly five credential sources:
+// the sealed break-glass session cookie (on the administration surface only,
+// auth_sealed.go), the Form session cookie, API key, bearer token, and the
+// `elitea_session` cookie. There is no sixth source and no configuration that
+// yields a principal without a credential.
 //
 // No request HEADER is an identity. The X-Auth-* projection an authenticating
 // edge used to copy from /internal/auth/main was the last one, and it is gone
@@ -142,6 +143,15 @@ func Auth(cfg AuthConfig) func(http.Handler) http.Handler {
 			// The recent-authentication limit of the composed session
 			// manager, for RecentAuthentication on the routes behind this.
 			r = withReauthenticationLimit(r, cfg.SessionStore)
+			// The sealed break-glass session (ADR-0059 R2.7a) comes before
+			// every cookie, and like them only when the request names no
+			// explicit credential. It is read on the administration surface
+			// only; anywhere else its cookie is no credential at all.
+			if r.Header.Get("X-API-Key") == "" && r.Header.Get("Authorization") == "" {
+				if serveSealedSession(next, w, r, cfg) {
+					return
+				}
+			}
 			// The Form session holds the slot the forwarded identity held:
 			// first. It runs only when the request names no explicit
 			// credential, which is the order the forward-auth kernel applied
@@ -421,6 +431,7 @@ const (
 	sourceFormSession = "form_session_cookie"
 	sourceAPIKey      = "api_key"
 	sourceSession     = "session_cookie"
+	sourceSealed      = "sealed_session_cookie"
 	sourceToken       = "bearer_token"
 )
 
