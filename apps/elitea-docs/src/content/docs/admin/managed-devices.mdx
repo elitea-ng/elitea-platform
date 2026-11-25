@@ -1,6 +1,6 @@
 ---
 title: "Managed devices (MDM)"
-description: "Configure the mobile app on managed iPhones and Android devices from Intune, Workspace ONE or another MDM, and deploy the desktop app to managed Macs and Windows PCs."
+description: "Configure the mobile app on managed iPhones and Android devices from Intune, Workspace ONE or another MDM, deploy the desktop app to managed Macs and Windows PCs, and install it on Linux."
 ---
 
 ## Mobile app
@@ -69,8 +69,10 @@ Every Elitea release, and every nightly pre-release, carries the desktop package
 | macOS 12 or later, Apple silicon only | `Elitea-<version>-macos-arm64.pkg`: the installer package, for the MDM | Yes. The package with Developer ID Installer, the app inside with Developer ID Application. Both notarised and stapled. |
 | Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msi`: for Intune, SCCM or `msiexec /i <file> /qn` | **No**, until a Windows code-signing certificate is set up |
 | Windows 10 2004 or later, x64 | `Elitea-<version>-windows-x64-unsigned.msix` | **No**: see below |
+| Linux, x86_64, glibc 2.39 or later (Ubuntu 24.04, Debian 13, Fedora 40 and later) | `Elitea-<version>-linux-x86_64.AppImage`: one file that runs on most distributions | **No**: Linux packages carry no code signature. Check the file against `SHA256SUMS`. |
+| Debian 13, Ubuntu 24.04 and later, x86_64 | `Elitea-<version>-linux-x86_64.deb` | **No**, as above |
 
-`SHA256SUMS` lists the SHA-256 of each file. Check a download before you deploy it: `shasum -a 256 -c SHA256SUMS` on macOS (files you did not download show as missing), or compare `Get-FileHash <file>` in PowerShell with its line. The release notes' **Desktop downloads** section says the same per release.
+`SHA256SUMS` lists the SHA-256 of each file. Check a download before you deploy it: `shasum -a 256 -c SHA256SUMS` on macOS (files you did not download show as missing), `sha256sum -c --ignore-missing SHA256SUMS` on Linux, or compare `Get-FileHash <file>` in PowerShell with its line. The release notes' **Desktop downloads** section says the same per release.
 
 Intel Macs are not supported. The macOS app is built for Apple silicon only, and the installer package refuses to install on an Intel Mac. Scope the MDM assignment to Apple silicon computers: in Jamf, a smart group on **Architecture Type** `arm64`; in Intune, a filter on the device's processor architecture.
 
@@ -94,6 +96,32 @@ The Windows packages carry no code signature until a Windows signer (Azure Artif
 - **The MSIX** does not install by double-click. It installs only on a recent Windows 11 with Developer Mode on (Settings › System › For developers), from PowerShell: `Add-AppxPackage -Path <file> -AllowUnsigned`. The Microsoft Store and Intune do not take it. Use the MSI unless you are testing the MSIX.
 
 The desktop host builds and passes its tests on Windows. On Windows, local commands that need a sandbox are refused: see **Local work on Windows** in [Features and configuration](/admin/features-and-configuration).
+
+### Install on Linux
+
+The Linux files have no `-unsigned` in their names because Linux has no code signature for them to wait for. Check the download against `SHA256SUMS` instead.
+
+**The AppImage** runs without installing anything:
+
+1. Download `Elitea-<version>-linux-x86_64.AppImage` and `SHA256SUMS` from the release, and check the file: `sha256sum -c --ignore-missing SHA256SUMS`.
+2. Make it executable: `chmod +x Elitea-<version>-linux-x86_64.AppImage`. In a file manager, this is **Properties › Permissions › Allow executing file as program**.
+3. Run it: `./Elitea-<version>-linux-x86_64.AppImage`, or double-click it.
+
+An AppImage mounts itself with FUSE 2. If it says `dlopen(): error loading libfuse.so.2` or `AppImages require FUSE to run`, either install FUSE 2 (`sudo apt install libfuse2t64` on Ubuntu 24.04, `libfuse2` on older Debian and Ubuntu, `fuse-libs` on Fedora), or run it without FUSE: `./Elitea-<version>-linux-x86_64.AppImage --appimage-extract-and-run`. Without FUSE, the file unpacks into a temporary folder on each start, so start-up takes a few seconds longer. In a container, `APPIMAGE_EXTRACT_AND_RUN=1` in the environment does the same.
+
+An AppImage adds no menu entry by itself. To get one, with the app's icon, use AppImageLauncher or Gear Lever, which move the file into a folder of your choice and register it. Or unpack it once with `./Elitea-<version>-linux-x86_64.AppImage --appimage-extract`, then copy `squashfs-root/*.desktop` to `~/.local/share/applications/` with its `Exec=` line pointing at the AppImage. To update, replace the file with the next release's. The app does not update itself on any platform.
+
+**The `.deb`** installs the app with a menu entry and pulls in the libraries it needs (WebKitGTK 4.1, GTK 3): `sudo apt install ./Elitea-<version>-linux-x86_64.deb`. The package recommends `bubblewrap`, which apt installs unless you turn recommends off. A newer `.deb` upgrades the app in place.
+
+**What the Linux app needs, and what it does not do yet:**
+
+- **bubblewrap (`bwrap`) for local work.** The app confines each command the agent runs with bubblewrap (`/usr/bin/bwrap`, `/usr/local/bin/bwrap` or `/bin/bwrap`), which the app does not include. Install it with `sudo apt install bubblewrap` or `sudo dnf install bubblewrap`. Without it, the app falls back to Landlock, which cannot hide credentials or keep `.git` read-only, so it refuses commands that a sandbox must confine. Some distributions block unprivileged user namespaces, which bubblewrap needs. Ubuntu 24.04 does this through AppArmor (`kernel.apparmor_restrict_unprivileged_userns`). Where commands fail to start under bubblewrap, ask your administrator to allow it. See **Local work** in [Features and configuration](/admin/features-and-configuration).
+- **No system keyring.** The sign-in is stored in an owner-only file under `$XDG_CONFIG_HOME/ai.elitea.desktop/`, as on the other systems. The app needs no Secret Service or libsecret.
+- **The GitHub CLI login in approval rules does not work yet.** An Allow rule's `credential` and `hosts` grant nothing on Linux, so network commands are asked as before ([#3012](https://github.com/elitea-ng/elitea-platform/issues/3012)).
+- **No managed configuration.** The app reads no device-management settings on Linux, such as `lock_server` or `support_contact`. The organization's **Native client policy** still applies after sign-in.
+- **x86_64 only.** There is no arm64 build yet.
+- **No tray icon on some desktops.** GNOME without the AppIndicator extension shows none. That is why, while a turn runs, closing the window minimizes the app on Linux instead of hiding it.
+- **Commands inherit the AppImage's environment.** A command the agent runs from the AppImage starts with the variables the AppImage sets for its own GTK libraries, such as `APPDIR` and `GDK_PIXBUF_MODULE_FILE`. A GUI program started from such a command can pick up the AppImage's libraries. The `.deb` has no such variables.
 
 ### A package of your own brand
 

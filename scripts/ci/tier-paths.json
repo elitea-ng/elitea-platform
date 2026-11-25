@@ -633,6 +633,7 @@
         ".github/workflows/desktop-package.yml",
         ".github/actions/desktop-macos-package/**",
         ".github/actions/desktop-windows-package/**",
+        ".github/actions/desktop-linux-package/**",
         "brand/**",
         "scripts/brand/**",
         "scripts/ci/brand-output-scan.mjs"

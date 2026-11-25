@@ -5,7 +5,8 @@ name: Desktop — package for device management
 # in a signed `.pkg` that installs silently and refuses an Intel Mac (Intel is not
 # supported, owner decision 2026-11-20) and in a styled, signed `.dmg` (the direct
 # download, owner decision 2026-11-22); and an x64 MSI (Intune, SCCM, msiexec) and
-# MSIX (the Store, Intune) for Windows.
+# MSIX (the Store, Intune) for Windows; and an x86_64 AppImage and .deb for Linux
+# (#3034, on the self-hosted pool, with no code signature).
 #
 # THE DMG. Opening it shows one fixed window: the brand's background
 # (brand/<id>/assets/macos/dmg-background{,@2x}.png, or one drawn from the brand's
@@ -29,6 +30,8 @@ name: Desktop — package for device management
 #             is false), named `-unsigned`. Once a signer's full set is set, the same
 #             run signs. The unsigned MSIX installs only on a recent Windows 11
 #             (Developer Mode, `Add-AppxPackage -AllowUnsigned`); the MSI shows a SmartScreen warning.
+#   Linux     the AppImage and the .deb, with no code signature and no `-unsigned` in
+#             their names (no Linux signer exists or is planned); SHA256SUMS.
 #
 # SECRETS BY FIXED NAME (scripts/desktop-package.mjs `SECRETS`, the list W5
 # publishes). All of a platform's secrets: sign and verify. None: an unsigned build
@@ -51,6 +54,9 @@ name: Desktop — package for device management
 #                       styled .dmg is built and its layout checked. The Windows job builds the ELITEA brand in full
 #                       (release profile, unsigned): `tauri build`, the sidecar,
 #                       the MSI and makeappx, and stages the release asset names.
+#                       The Linux job does the same for the AppImage and the .deb
+#                       (ELITEA, release profile), smoke-tests the AppImage under
+#                       xvfb, and keeps both as the `desktop-linux` artifact.
 #                       Main and releases build the ELITEA brand.
 #   workflow_call       publish.yml, on main: the nightly pre-release (its schedule)
 #                       and every release. The full release build, macOS signed and
@@ -386,6 +392,116 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: desktop-release-windows
+          path: ${{ steps.assets.outputs.dir }}/*
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+
+  # LINUX, x86_64 (#3034): an AppImage (the download for any distribution with
+  # glibc 2.39 or later) and a .deb, from one `tauri build` of the ELITEA brand in
+  # the release profile, on every call like the other two (no `if:`). No code
+  # signature: the files carry no `-unsigned` (Linux never signs,
+  # desktop-package.mjs ASSET_KINDS) and are checked against SHA256SUMS.
+  #
+  # ON THE POOL, not a hosted runner (owner rule: hosted only where needed). Its
+  # image carries the Tauri build libraries and xvfb (deploy/ci-runners/image/);
+  # the job installs nothing with apt there. No FUSE in the pods: linuxdeploy and
+  # the AppImage run extracted (the action sets APPIMAGE_EXTRACT_AND_RUN). Not
+  # arm64: the pool is amd64 only, and a hosted arm64 job would hold one of the
+  # 20 hosted slots on every desktop pull request.
+  #
+  # The smoke test (in the action): the AppImage answers `--version` with the
+  # stamped version, starts under xvfb and is still up after 30 s; its .desktop
+  # entry names the product; the .deb depends on WebKitGTK and recommends
+  # bubblewrap.
+  #
+  # A pull request KEEPS the packages (7 days, `desktop-linux`): nothing signs
+  # them, so the dry run's files are what a release ships, and they can be tried.
+  linux:
+    name: Linux x86_64 (.AppImage, .deb)
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    # A cold release build (fat LTO, one codegen unit) of the host and the
+    # sidecar on the pod's 4 CPUs, like the Windows job's cold build.
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # eng-runner: caches and TMPDIR on the work volume, and rustup (none in
+      # its image). Does nothing on a hosted runner.
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          rust: "true"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - name: Restore the npm cache (pull requests read, main writes)
+        uses: ./.github/actions/npm-cache
+        with:
+          cache-dependency-path: apps/elitea-web/package-lock.json
+
+      # A hosted fallback (ENG_RUNNER off) has none of the pool image's
+      # libraries; the pool needs no install and cannot run one (no root).
+      - name: Tauri build libraries and xvfb (hosted runners only)
+        if: runner.environment == 'github-hosted'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev pkg-config xvfb
+
+      - name: Build and smoke test
+        id: package
+        uses: ./.github/actions/desktop-linux-package
+        with:
+          version: ${{ inputs.version }}
+
+      - name: Stage the release assets
+        id: assets
+        env:
+          VERSION: ${{ inputs.version }}
+          SIGNED: ${{ steps.package.outputs.signed }}
+          PACKAGE_DIR: ${{ steps.package.outputs.package-dir }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          script=apps/elitea-desktop/scripts/desktop-package.mjs
+          brand="$(node -p 'require("./apps/elitea-desktop/src-tauri/tauri.brand.json").productName')"
+          version="${VERSION:-$DESKTOP_VERSION}"
+          out="$RUNNER_TEMP/release-assets"
+          rm -rf "${out:?}" && mkdir -p "$out"
+          for ext in AppImage deb; do
+            files=("$PACKAGE_DIR"/*."$ext")
+            if [ "${#files[@]}" -ne 1 ]; then echo "::error::want one .$ext in $PACKAGE_DIR, found ${#files[@]}"; exit 1; fi
+            cp "${files[0]}" "$out/$(node "$script" asset-name linux "$ext" "$brand" "$version" "$SIGNED")"
+          done
+          ls -l "$out"
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the packages (pull requests, and by hand)
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.keep_artifacts)
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-linux
+          path: ${{ steps.assets.outputs.dir }}/*
+          retention-days: 7
+          if-no-files-found: error
+          # An AppImage (squashfs) and a .deb are compressed already.
+          compression-level: 0
+
+      - name: Upload the release assets (publish.yml attaches them)
+        if: inputs.upload_release_assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-release-linux
           path: ${{ steps.assets.outputs.dir }}/*
           retention-days: 1
           if-no-files-found: error

@@ -1,0 +1,244 @@
+name: Desktop Linux package
+description: >-
+  The desktop app for Linux on x86_64: an AppImage (the download: one file,
+  `chmod +x` and run, on any distribution with glibc 2.39 or later) and a
+  `.deb` (Debian, Ubuntu and their derivatives), both from one `tauri build`,
+  then a smoke test of the AppImage under a virtual display. No code signature:
+  Linux has none for these formats here, and a download is checked against the
+  release's SHA256SUMS. Used by this repository's desktop-package.yml; a brand
+  repository can call it too (ADR-0052 W5). Runs on Linux x86_64 with the Tauri
+  build libraries installed (the eng-runner image has them,
+  deploy/ci-runners/image/), node, rustup and xvfb-run; the caller checks out
+  the tree and sets up Node; ELITEA_BRAND selects the brand. Needs no FUSE and
+  no root: linuxdeploy and the AppImage run extracted
+  (APPIMAGE_EXTRACT_AND_RUN).
+
+inputs:
+  root:
+    description: The ELITEA source tree (`.` here; `elitea` in a brand repository).
+    default: "."
+  version:
+    description: The release version to stamp (X.Y.Z or X.Y.Z-pre); empty keeps the tree's.
+    default: ""
+  glibc:
+    description: >-
+      The build host's glibc, exactly: the oldest glibc the AppImage runs on,
+      which the docs and the release notes name (Ubuntu 24.04's).
+    default: "2.39"
+
+outputs:
+  signed:
+    description: Always `false`; the asset names carry no `-unsigned` on Linux (desktop-package.mjs ASSET_KINDS).
+    value: ${{ steps.plan.outputs.sign }}
+  package-dir:
+    description: The folder holding the .AppImage and the .deb.
+    value: ${{ steps.paths.outputs.out }}
+
+runs:
+  using: composite
+  steps:
+    - name: Paths
+      id: paths
+      shell: bash
+      env:
+        ROOT: ${{ inputs.root }}
+        GLIBC_FLOOR: ${{ inputs.glibc }}
+      run: |
+        set -euo pipefail
+        root="$(cd "$ROOT" && pwd)"
+        echo "ELITEA_ROOT=$root" >> "$GITHUB_ENV"
+        echo "out=$RUNNER_TEMP/out" >> "$GITHUB_OUTPUT"
+        # Before a 40-minute build: the tools the build and the smoke test need.
+        missing=""
+        # dpkg-architecture, glib-compile-schemas and find: Tauri's linuxdeploy GTK plugin.
+        for tool in pkg-config xvfb-run xauth dpkg-deb timeout dpkg-architecture glib-compile-schemas find; do
+          command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+        done
+        for lib in webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0; do
+          pkg-config --exists "$lib" 2>/dev/null || missing="$missing $lib(dev)"
+        done
+        if [ -n "$missing" ]; then
+          echo "::error::desktop-linux-package: this runner lacks:$missing (the eng-runner image has them; on Ubuntu: libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth)"
+          exit 1
+        fi
+        # The AppImage needs the build host's glibc or newer, and the docs and the
+        # release notes promise GLIBC_FLOOR. A runner on a newer system (a bumped
+        # ubuntu-latest, a new pool image) fails here, not on people's machines.
+        have="$(getconf GNU_LIBC_VERSION | awk '{ print $2 }')"
+        if [ "$have" != "$GLIBC_FLOOR" ]; then
+          echo "::error::desktop-linux-package: this runner has glibc $have; the AppImage would need it, and the docs promise $GLIBC_FLOOR. Build on a system with glibc $GLIBC_FLOOR (Ubuntu 24.04), or change the input and the docs together."
+          exit 1
+        fi
+
+    # appimagetool (linuxdeploy's AppImage plugin) refuses to run without
+    # file(1), and the pool image has none (its pods have no root, so no apt).
+    # Ubuntu noble's own packages, each pinned by the SHA-256 that noble's
+    # main/binary-amd64 Packages index lists, unpacked into RUNNER_TEMP and
+    # reached through a wrapper on PATH. A runner that has `file` skips this.
+    - name: file(1) for appimagetool, when the runner has none
+      shell: bash
+      env:
+        FILE_DEBS: >-
+          file_5.45-3build1_amd64.deb:17dae1d6e803d0304e318f451c8abf62cbd5bb2a0068300cdeea77c62075b895
+          libmagic1t64_5.45-3build1_amd64.deb:fc2319f342c437e044ccf854e0c95bd472a7eb0b9363e1f76ad1524ab04df68e
+          libmagic-mgc_5.45-3build1_amd64.deb:f0ed0e314a63ae1b7e5403d7e43a26c6e0c0ee69e9a305babcf9c6775607377a
+      run: |
+        set -euo pipefail
+        if command -v file >/dev/null 2>&1; then echo "file: $(command -v file)"; exit 0; fi
+        . /etc/os-release
+        [ "$VERSION_CODENAME" = noble ] || { echo "::error::no file(1) here, and the pinned packages are Ubuntu noble's (this is $VERSION_CODENAME)"; exit 1; }
+        root="$RUNNER_TEMP/file-cmd"
+        rm -rf "${root:?}" && mkdir -p "$root/debs" "$root/bin"
+        for entry in $FILE_DEBS; do
+          deb="${entry%%:*}" sum="${entry##*:}"
+          curl -fsSL --retry 5 --retry-all-errors -o "$root/debs/$deb" "http://archive.ubuntu.com/ubuntu/pool/main/f/file/$deb"
+          echo "$sum  $root/debs/$deb" | sha256sum -c -
+          dpkg-deb -x "$root/debs/$deb" "$root/tree"
+        done
+        printf '#!/bin/sh\nLD_LIBRARY_PATH="%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" MAGIC="%s" exec "%s" "$@"\n' \
+          "$root/tree/usr/lib/x86_64-linux-gnu" "$root/tree/usr/lib/file/magic.mgc" "$root/tree/usr/bin/file" > "$root/bin/file"
+        chmod +x "$root/bin/file"
+        "$root/bin/file" --version
+        "$root/bin/file" -b /bin/sh
+        echo "$root/bin" >> "$GITHUB_PATH"
+
+    - name: Plan (Linux packages carry no code signature)
+      id: plan
+      shell: bash
+      run: node "$ELITEA_ROOT/apps/elitea-desktop/scripts/desktop-package.mjs" linux --github-output
+
+    - name: Stamp the version
+      if: inputs.version != ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: node "$ELITEA_ROOT/apps/elitea-desktop/scripts/stamp-version.mjs" "$VERSION"
+
+    - name: Install web and desktop (locked)
+      shell: bash
+      run: |
+        npm ci --prefix "$ELITEA_ROOT/apps/elitea-web"
+        npm ci --prefix "$ELITEA_ROOT/apps/elitea-desktop"
+
+    - name: Assert the pinned toolchain
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop/src-tauri
+      run: bash "$ELITEA_ROOT/scripts/ci/assert-rust-toolchain.sh"
+
+    - name: Build the document sidecar
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop/doc-extract-sidecar
+      run: |
+        set -euo pipefail
+        cargo build --release --locked --target x86_64-unknown-linux-gnu
+        mkdir -p ../src-tauri/binaries
+        cp target/x86_64-unknown-linux-gnu/release/elitea-doc-extract-sidecar \
+          ../src-tauri/binaries/elitea-doc-extract-sidecar-x86_64-unknown-linux-gnu
+
+    # One build, two bundles. linuxdeploy (which Tauri downloads to make the
+    # AppImage) is itself an AppImage: with no FUSE (the pool's pods, many
+    # containers) it runs extracted. NO_STRIP: linuxdeploy's own strip is older
+    # than the system's binutils and can fail on the libraries it copies in; the
+    # host binary is stripped by the release profile already.
+    - name: Build the AppImage and the .deb
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop
+      env:
+        APPIMAGE_EXTRACT_AND_RUN: "1"
+        NO_STRIP: "true"
+      run: |
+        set -euo pipefail
+        node scripts/tauri-brand.mjs
+        # --verbose: without it the CLI swallows linuxdeploy's output and says
+        # only "failed to run linuxdeploy".
+        npx tauri build --verbose --bundles appimage,deb \
+          --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
+        echo "DESKTOP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
+        shopt -s nullglob
+        out="$RUNNER_TEMP/out"
+        mkdir -p "$out"
+        for ext in AppImage deb; do
+          files=(src-tauri/target/release/bundle/*/*."$ext")
+          if [ "${#files[@]}" -ne 1 ]; then echo "::error::want one .$ext from tauri build, found ${#files[@]}"; exit 1; fi
+          cp "${files[0]}" "$out/"
+        done
+        ls -l "$out"
+
+    # The AppImage runs, on a runner with no FUSE, as a person's would with
+    # `--appimage-extract-and-run`: `--version` answers the stamped version
+    # (it loads every library the binary links), and the app itself starts and
+    # is still up after 30 s under a virtual display, in a fresh home.
+    - name: Smoke test the AppImage (--version, and 30 s up under xvfb)
+      shell: bash
+      working-directory: ${{ inputs.root }}/apps/elitea-desktop
+      env:
+        APPIMAGE_EXTRACT_AND_RUN: "1"
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=("$RUNNER_TEMP"/out/*.AppImage)
+        appimage="${files[0]}"
+        chmod +x "$appimage"
+        want="elitea-desktop $(sed -nE 's/^version = "(.*)"$/\1/p' src-tauri/Cargo.toml | head -n 1)"
+        got="$("$appimage" --version)"
+        if [ "$got" != "$want" ]; then echo "::error::--version printed '$got', want '$want'"; exit 1; fi
+        echo "--version: $got"
+
+        home="$RUNNER_TEMP/smoke-home"
+        rm -rf "${home:?}" && mkdir -p "$home/run" && chmod 0700 "$home/run"
+        log="$RUNNER_TEMP/smoke.log"
+        # `timeout` is the command xvfb-run runs, and xvfb-run returns its
+        # command's status: 124 is timeout's own "I stopped it", never the
+        # app's. No session bus: the same path on every runner, and the app
+        # must start without one (a minimal desktop or a container has none).
+        set +e
+        HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
+          XDG_CACHE_HOME="$home/.cache" XDG_RUNTIME_DIR="$home/run" \
+          xvfb-run -a timeout -k 10 30 "$appimage" > "$log" 2>&1
+        status=$?
+        set -e
+        echo "--- the app's output"; cat "$log"; echo "---"
+        if [ "$status" -ne 124 ]; then
+          echo "::error::the AppImage exited with status $status within 30 s (want 124: still running when timeout stopped it)"
+          exit 1
+        fi
+        if grep -q -E "panicked at|Segmentation fault|core dumped" "$log"; then
+          echo "::error::the AppImage's output shows a crash"; exit 1
+        fi
+        echo "the AppImage started and was up after 30 s"
+
+    # Desktop integration: the AppImage carries the .desktop entry that
+    # AppImageLauncher, Gear Lever and `--appimage-extract` read, and the .deb
+    # installs it with the libraries it needs. No URL scheme: the desktop app
+    # registers none on any system (elitea:// is the mobile app's).
+    - name: The .desktop entry and the .deb's metadata
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        product="$(node -p "require('$ELITEA_ROOT/apps/elitea-desktop/src-tauri/tauri.brand.json').productName")"
+        appimage=("$RUNNER_TEMP"/out/*.AppImage)
+        work="$RUNNER_TEMP/appimage-root"
+        rm -rf "${work:?}" && mkdir -p "$work"
+        # The whole tree: the root .desktop entry may be a link into usr/share/applications.
+        (cd "$work" && "${appimage[0]}" --appimage-extract >/dev/null)
+        entries=("$work"/squashfs-root/*.desktop)
+        if [ "${#entries[@]}" -ne 1 ]; then echo "::error::want one .desktop entry at the AppImage's root, found ${#entries[@]}"; exit 1; fi
+        cat "${entries[0]}"
+        grep -qx "Type=Application" "${entries[0]}" || { echo "::error::the .desktop entry is not Type=Application"; exit 1; }
+        grep -qxF -- "Name=$product" "${entries[0]}" || { echo "::error::the .desktop entry's Name is not $product"; exit 1; }
+        grep -q "^Exec=" "${entries[0]}" || { echo "::error::the .desktop entry has no Exec"; exit 1; }
+        grep -q "^Icon=" "${entries[0]}" || { echo "::error::the .desktop entry has no Icon"; exit 1; }
+
+        # Read whole, then matched: `cmd | grep -q` under pipefail fails when
+        # grep's early exit gives the writer SIGPIPE.
+        deb=("$RUNNER_TEMP"/out/*.deb)
+        dpkg-deb --field "${deb[0]}" Package Version Architecture Depends Recommends
+        arch="$(dpkg-deb --field "${deb[0]}" Architecture)"
+        depends="$(dpkg-deb --field "${deb[0]}" Depends)"
+        recommends="$(dpkg-deb --field "${deb[0]}" Recommends)"
+        contents="$(dpkg-deb --contents "${deb[0]}")"
+        [ "$arch" = amd64 ] || { echo "::error::the .deb is $arch, not amd64"; exit 1; }
+        grep -qF "libwebkit2gtk-4.1" <<<"$depends" || { echo "::error::the .deb does not depend on libwebkit2gtk-4.1"; exit 1; }
+        grep -qF "bubblewrap" <<<"$recommends" || { echo "::error::the .deb does not recommend bubblewrap (the sandbox)"; exit 1; }
+        grep -q "usr/share/applications/.*\.desktop$" <<<"$contents" || { echo "::error::the .deb installs no .desktop entry"; exit 1; }

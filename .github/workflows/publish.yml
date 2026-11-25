@@ -1289,7 +1289,8 @@ jobs:
   # off the release). desktop-package.yml builds the Apple silicon macOS app, its
   # styled `.dmg` (the direct download) and its silent `.pkg` (device management),
   # signs, notarises, staples and verifies them (`spctl -a`, `stapler validate`),
-  # and builds the Windows MSI and MSIX. Each job
+  # builds the Windows MSI and MSIX, and the Linux AppImage and .deb (#3034,
+  # on the pool, no code signature; smoke-tested under xvfb). Each job
   # uploads its packages, under their release names, as a one-day workflow
   # artifact; `desktop-assets` below attaches them to the release.
   #
@@ -1341,7 +1342,7 @@ jobs:
   # ── Job 5b: Desktop assets — attach the packages to the release ─────────────
   #
   # Attaches what `desktop` built: the macOS `.dmg` and `.pkg`, the Windows
-  # `.msi` and `.msix`, and SHA256SUMS over them. desktop-package.mjs
+  # `.msi` and `.msix`, the Linux `.AppImage` and `.deb`, and SHA256SUMS over them. desktop-package.mjs
   # `release-assets` checks every name (`<Brand>-<version>-<os>-<arch>[-unsigned]
   # .<ext>`, one version, never an unsigned macOS file) and writes the release
   # notes' "Desktop downloads" section, which replaces the one a run before added.

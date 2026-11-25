@@ -430,6 +430,20 @@ release and for device management:
   (`scripts/windows-package.mjs` `msixPublisher`), so it installs with Developer
   Mode on through `Add-AppxPackage -AllowUnsigned` (a recent Windows 11). A pull request that changes the
   app builds both in full, unsigned.
+- **Linux (#3034):** an x86_64 AppImage and a `.deb`, from one `tauri build
+  --bundles appimage,deb` (`.github/actions/desktop-linux-package`), on the
+  self-hosted pool, whose image has the Tauri build libraries and xvfb. No FUSE
+  there: linuxdeploy runs with `APPIMAGE_EXTRACT_AND_RUN=1`. appimagetool needs
+  `file(1)`, which the pool image lacks: the action unpacks Ubuntu noble's
+  `file` and `libmagic` packages, pinned by SHA-256, when the runner has none. The action then runs
+  the AppImage: `--version` must print the stamped version, and the app must
+  still be up after 30 s under `xvfb-run`; it checks the AppImage's `.desktop`
+  entry and the `.deb`'s `Depends` (WebKitGTK) and `Recommends` (bubblewrap,
+  the sandbox). No code signature, and so no `-unsigned` in the names: a
+  download is checked against `SHA256SUMS`. Built on Ubuntu 24.04, so the
+  AppImage needs glibc 2.39 or later. Not arm64 (the pool is amd64 only). A pull
+  request that changes the app builds both in full and keeps them as the
+  `desktop-linux` artifact for 7 days.
 
 `scripts/desktop-package.mjs` decides, for each platform, whether the workflow signs:
 
@@ -453,6 +467,8 @@ decision 10). The stable release and the nightly pre-release carry, named
 | `Elitea-<version>-macos-arm64.pkg` | the signed, notarised installer package (device management) |
 | `Elitea-<version>-windows-x64-unsigned.msi` | the MSI (SmartScreen warns: **More info** › **Run anyway**) |
 | `Elitea-<version>-windows-x64-unsigned.msix` | the MSIX (testing only: a recent Windows 11, Developer Mode and `Add-AppxPackage -AllowUnsigned`) |
+| `Elitea-<version>-linux-x86_64.AppImage` | the Linux download: `chmod +x`, run (`--appimage-extract-and-run` without FUSE) |
+| `Elitea-<version>-linux-x86_64.deb` | the Debian and Ubuntu package (`sudo apt install ./<file>`; recommends `bubblewrap`) |
 | `SHA256SUMS` | the SHA-256 of each file above |
 
 `publish.yml`'s `desktop-assets` job attaches them with `gh release upload --clobber`

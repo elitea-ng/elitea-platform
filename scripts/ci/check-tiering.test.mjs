@@ -171,6 +171,7 @@ function packageModel() {
           jobs: {
             macos: { steps: [{ uses: "./.github/actions/desktop-macos-package", with: { "dry-run": pr, debug: pr } }] },
             windows: { steps: [{ uses: "./.github/actions/desktop-windows-package", with: { "dry-run": pr } }] },
+            linux: { steps: [{ uses: "./.github/actions/desktop-linux-package", with: {} }] },
           },
         },
         text: "",
@@ -236,6 +237,13 @@ test("the Windows package gate: on in every call, a dry run on a pull request, i
   const gone = packageModel();
   delete gone.workflows["desktop-package.yml"].parsed.jobs.windows;
   has(checkDesktopPackage(gone), "the `windows` job does not use ./.github/actions/desktop-windows-package");
+  // The Linux job (#3034) is held the same way: there, on every call.
+  const noLinux = packageModel();
+  delete noLinux.workflows["desktop-package.yml"].parsed.jobs.linux;
+  has(checkDesktopPackage(noLinux), "the `linux` job does not use ./.github/actions/desktop-linux-package");
+  const gatedLinux = packageModel();
+  gatedLinux.workflows["desktop-package.yml"].parsed.jobs.linux.if = "vars.DESKTOP_LINUX == 'on'";
+  has(checkDesktopPackage(gatedLinux), "the `linux` job has an `if:`");
 });
 
 test("one web unit suite: the plain shards stand down only where coverage runs", () => {
