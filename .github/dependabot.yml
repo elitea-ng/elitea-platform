@@ -105,6 +105,7 @@ updates:
       - /.github/actions/desktop-host-checks
       - /.github/actions/desktop-macos-package
       - /.github/actions/desktop-windows-package
+      - /.github/actions/desktop-linux-package
       - /.github/actions/go-cache
       - /.github/actions/main-write-cache
       - /.github/actions/npm-cache
