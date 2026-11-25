@@ -15,6 +15,7 @@ import { server } from '@/test/setup';
 
 import { AdminToolkitTypes } from './ToolkitTypes';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const LIST_PATTERN = '*/admin/toolkit_types/administration';
 const TYPE_PATTERN = '*/admin/toolkit_types/administration/:type';
@@ -423,5 +424,20 @@ describe('AdminToolkitTypes bulk apply', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
 
     expect(await screen.findByTestId('admin-toolkit-types-bulk-error')).toBeInTheDocument();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `toolkits` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'toolkits');
+    serveDefaultListing();
+    renderAdminRoute(<AdminToolkitTypes />);
+    await screen.findByText('GitHub');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Decide' })[0]).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Apply to listed' })).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

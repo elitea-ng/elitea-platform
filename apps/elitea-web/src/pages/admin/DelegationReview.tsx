@@ -32,6 +32,9 @@ import type { DelegationReview, DelegationReviewProject } from '@/shared/api/gen
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { useDelegationReview, useScanDelegations } from './api/adminDelegationReviewApi';
 
 /** The calling agent's page in the main app: the Tools panel carries the banner and the review. */
@@ -123,8 +126,17 @@ function Summary({ review }: { readonly review: DelegationReview }): ReactNode {
 }
 
 export function AdminDelegationReview(): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.delegationReview}>
+      <DelegationReviewPage />
+    </AdminWritable>
+  );
+}
+
+function DelegationReviewPage(): ReactNode {
   const review = useDelegationReview();
-  const scan = useScanDelegations();
+  const access = useAdminWritable(ADMIN_ITEM.delegationReview);
+  const scan = access.guard(useScanDelegations());
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem' }}>
@@ -138,6 +150,8 @@ export function AdminDelegationReview(): ReactNode {
         )}
       </Typography>
 
+      <AdminViewOnlyNotice />
+
       {review.isFetching && <LinearProgress data-testid="delegation-review-loading" />}
       {review.isError && (
         <Alert severity="error">{t('pages.admin.delegationReview.loadError', 'Could not read the delegations awaiting review.')}</Alert>
@@ -148,7 +162,7 @@ export function AdminDelegationReview(): ReactNode {
         <Button
           size="small"
           variant="outlined"
-          disabled={scan.isPending}
+          disabled={!access.writable || scan.isPending}
           onClick={() => scan.mutate()}
           data-testid="delegation-review-scan"
         >

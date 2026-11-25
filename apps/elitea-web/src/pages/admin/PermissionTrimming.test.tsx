@@ -14,6 +14,7 @@ import { server } from '@/test/setup';
 
 import { AdminPermissionTrimming } from './PermissionTrimming';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const REPORT: PermissionTrimmingReport = {
   window_days: 30,
@@ -97,5 +98,17 @@ describe('AdminPermissionTrimming', () => {
     await waitFor(() =>
       expect(removals).toEqual([{ project_id: 12, application_id: 31, kind: 'toolkit', key: '11/51' }]),
     );
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `permission-trimming` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'permission-trimming');
+    renderAdminRoute(<AdminPermissionTrimming />);
+    const remove = await screen.findByTestId('permission-trimming-remove-toolkit-11/51');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(remove).toBeDisabled());
   });
 });

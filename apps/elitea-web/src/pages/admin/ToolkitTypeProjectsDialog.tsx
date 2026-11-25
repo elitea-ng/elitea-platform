@@ -28,6 +28,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import {
   toolkitTypeFailureReason,
   useRevokeToolkitTypeGrant,
@@ -43,8 +45,10 @@ export interface ToolkitTypeProjectsDialogProps {
 }
 
 export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeProjectsDialogProps) {
-  const saveGrant = useSaveToolkitTypeGrant();
-  const revokeGrant = useRevokeToolkitTypeGrant();
+  // The exceptions are listed at read too; adding and revoking are disabled.
+  const access = useAdminWritable(ADMIN_ITEM.toolkits);
+  const saveGrant = access.guard(useSaveToolkitTypeGrant());
+  const revokeGrant = access.guard(useRevokeToolkitTypeGrant());
 
   const [projectId, setProjectId] = useState('');
   const [availability, setAvailability] = useState<ToolkitTypeGrantAvailability>('enabled');
@@ -151,7 +155,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
                 <Button
                   size="small"
                   color="warning"
-                  disabled={submitting}
+                  disabled={!access.writable || submitting}
                   onClick={() => {
                     void revoke(grant.project_id);
                   }}
@@ -208,7 +212,7 @@ export function ToolkitTypeProjectsDialog({ toolkitType, onClose }: ToolkitTypeP
         </Button>
         <Button
           variant="contained"
-          disabled={!submittable}
+          disabled={!access.writable || !submittable}
           onClick={() => {
             void submit();
           }}

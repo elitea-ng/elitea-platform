@@ -24,6 +24,9 @@ import { t } from '@/shared/i18n';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import {
   EMPTY_TRIMMING_FILTERS,
   useAdminPermissionTrimming,
@@ -37,10 +40,19 @@ function agentHref(item: PermissionTrimmingItem): string | undefined {
 }
 
 export function AdminPermissionTrimming(): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.permissionTrimming}>
+      <PermissionTrimmingPage />
+    </AdminWritable>
+  );
+}
+
+function PermissionTrimmingPage(): ReactNode {
   const [filters, setFilters] = useState<AdminTrimmingFilters>(EMPTY_TRIMMING_FILTERS);
   const [removingKey, setRemovingKey] = useState<string>();
   const report = useAdminPermissionTrimming(filters);
-  const remove = useRemoveAdminTrimmingItem();
+  const access = useAdminWritable(ADMIN_ITEM.permissionTrimming);
+  const remove = access.guard(useRemoveAdminTrimmingItem());
 
   const onRemove = (item: PermissionTrimmingItem): void => {
     setRemovingKey(trimmingItemKey(item));
@@ -66,6 +78,8 @@ export function AdminPermissionTrimming(): ReactNode {
           'Granted tools, toolkits, credential grants and egress hosts that agents did not use in the window. Removing one is audited.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Box sx={toolbarSx} data-testid="permission-trimming-filters">
         <TextField
@@ -125,6 +139,7 @@ export function AdminPermissionTrimming(): ReactNode {
           showAgent
           removingKey={removingKey}
           onRemove={onRemove}
+          removeDisabled={!access.writable}
           agentHref={agentHref}
         />
       )}

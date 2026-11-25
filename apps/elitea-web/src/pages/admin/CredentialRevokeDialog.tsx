@@ -20,6 +20,8 @@ import { credentialReviewErrorMessage } from '@/features/agent-lifecycle';
 import type { CredentialInventoryCredential } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { useRevokeCredential } from './api/adminCredentialReviewApi';
 
 export interface CredentialRevokeDialogProps {
@@ -29,7 +31,8 @@ export interface CredentialRevokeDialogProps {
 
 export function CredentialRevokeDialog({ row, onClose }: CredentialRevokeDialogProps): ReactNode {
   const [reason, setReason] = useState('');
-  const revoke = useRevokeCredential();
+  const access = useAdminWritable(ADMIN_ITEM.credentialInventory);
+  const revoke = access.guard(useRevokeCredential());
   const close = (): void => {
     setReason('');
     revoke.reset();
@@ -78,7 +81,7 @@ export function CredentialRevokeDialog({ row, onClose }: CredentialRevokeDialogP
         <Button
           color="error"
           variant="contained"
-          disabled={revoke.isPending}
+          disabled={!access.writable || revoke.isPending}
           onClick={submit}
           data-testid="credential-revoke-confirm"
         >

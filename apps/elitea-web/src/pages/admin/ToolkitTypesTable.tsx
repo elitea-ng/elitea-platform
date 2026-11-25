@@ -31,6 +31,7 @@ import { DataGrid } from '@mui/x-data-grid';
 
 import { t } from '@/shared/i18n';
 
+import { useAdminWriteControl } from './adminWriteAccess';
 import type { AdminToolkitType } from './api/adminToolkitTypesApi';
 
 export interface AdminToolkitTypesTableProps {
@@ -90,6 +91,9 @@ export const AdminToolkitTypesTable = memo(function AdminToolkitTypesTable({
   onDecide,
   onProjects,
 }: AdminToolkitTypesTableProps) {
+  // View-only mode (R3.4b, issue 2613): Decide is disabled; Projects stays,
+  // because its dialog lists the exceptions (a read) and disables its writes.
+  const viewOnly = useAdminWriteControl().disabled;
   const rows = useMemo<ToolkitTypeGridRow[]>(
     () => types.map((toolkitType) => ({ ...toolkitType, id: toolkitType.type })),
     [types],
@@ -183,7 +187,7 @@ export const AdminToolkitTypesTable = memo(function AdminToolkitTypesTable({
               filterable: false,
               renderCell: (params: GridRenderCellParams<ToolkitTypeGridRow>) => (
                 <Stack direction="row" sx={{ alignItems: 'center', height: '100%' }}>
-                  <Button size="small" onClick={() => onDecide(params.row)}>
+                  <Button size="small" disabled={viewOnly} onClick={() => onDecide(params.row)}>
                     {t('pages.admin.toolkitTypes.action.decide', 'Decide')}
                   </Button>
                   {/* Exceptions hang off a decision, so a type at its default
@@ -201,7 +205,7 @@ export const AdminToolkitTypesTable = memo(function AdminToolkitTypesTable({
           ]
         : []),
     ],
-    [onDecide, onProjects],
+    [onDecide, onProjects, viewOnly],
   );
 
   return (

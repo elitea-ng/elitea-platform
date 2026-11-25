@@ -37,6 +37,9 @@ import type { ConnectorRequest, ConnectorRequestState } from '@/shared/api/gener
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
 import {
   describeDecisionError,
   useAdminConnectorRequests,
@@ -70,6 +73,14 @@ interface Pending {
 }
 
 export function AdminConnectorRequests(): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.connectorRequests}>
+      <ConnectorRequestsPage />
+    </AdminWritable>
+  );
+}
+
+function ConnectorRequestsPage(): ReactNode {
   const [state, setState] = useState<ConnectorRequestState | ''>('submitted');
   const [pending, setPending] = useState<Pending>();
   const list = useAdminConnectorRequests(state);
@@ -86,6 +97,8 @@ export function AdminConnectorRequests(): ReactNode {
           'With the connector catalogue set to approved only, a toolkit type or MCP server is usable once a request for it is approved here. Approving grants the type and adds the egress hosts.',
         )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <InventoryAction />
 
@@ -145,7 +158,8 @@ export function AdminConnectorRequests(): ReactNode {
  */
 function InventoryAction(): ReactNode {
   const inventory = useConnectorInventory();
-  const create = useCreateInventoryRequests();
+  const access = useAdminWritable(ADMIN_ITEM.connectorRequests);
+  const create = access.guard(useCreateInventoryRequests());
   const missing = inventory.data?.without_approval;
 
   return (
@@ -154,7 +168,7 @@ function InventoryAction(): ReactNode {
         <Button
           size="small"
           variant="contained"
-          disabled={create.isPending || missing === 0}
+          disabled={!access.writable || create.isPending || missing === 0}
           onClick={() => create.mutate()}
           data-testid="connector-inventory-create"
         >
@@ -203,7 +217,8 @@ function InventoryAction(): ReactNode {
 /** Approve (reason optional) or reject (reason required) one request. */
 function DecisionDialog({ pending, onClose }: { readonly pending: Pending; readonly onClose: () => void }): ReactNode {
   const [reason, setReason] = useState('');
-  const decide = useDecideConnectorRequest();
+  const access = useAdminWritable(ADMIN_ITEM.connectorRequests);
+  const decide = access.guard(useDecideConnectorRequest());
   const { row, approve } = pending;
   const confirm = (): void =>
     decide.mutate({ id: row.id, approve, reason: reason.trim() }, { onSuccess: onClose });
@@ -234,7 +249,7 @@ function DecisionDialog({ pending, onClose }: { readonly pending: Pending; reado
         <Button
           variant="contained"
           color={approve ? 'primary' : 'error'}
-          disabled={decide.isPending || (!approve && reason.trim() === '')}
+          disabled={!access.writable || decide.isPending || (!approve && reason.trim() === '')}
           onClick={confirm}
           data-testid="connector-request-confirm"
         >
@@ -246,6 +261,7 @@ function DecisionDialog({ pending, onClose }: { readonly pending: Pending; reado
 }
 
 function RequestRow({ row, onDecide }: { readonly row: ConnectorRequest; readonly onDecide: (approve: boolean) => void }): ReactNode {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableRow data-testid={`connector-request-row-${row.id}`} sx={rowSx}>
       <TableCell>
@@ -277,10 +293,10 @@ function RequestRow({ row, onDecide }: { readonly row: ConnectorRequest; readonl
       <TableCell>
         {row.state === 'submitted' && (
           <Box sx={actionsSx}>
-            <Button size="small" variant="contained" onClick={() => onDecide(true)} data-testid={`connector-request-approve-${row.id}`}>
+            <Button size="small" variant="contained" disabled={viewOnly} onClick={() => onDecide(true)} data-testid={`connector-request-approve-${row.id}`}>
               {t('pages.admin.connectorRequests.approve', 'Approve')}
             </Button>
-            <Button size="small" color="error" onClick={() => onDecide(false)} data-testid={`connector-request-reject-${row.id}`}>
+            <Button size="small" color="error" disabled={viewOnly} onClick={() => onDecide(false)} data-testid={`connector-request-reject-${row.id}`}>
               {t('pages.admin.connectorRequests.reject', 'Reject')}
             </Button>
           </Box>

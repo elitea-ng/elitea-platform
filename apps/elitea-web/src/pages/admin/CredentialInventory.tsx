@@ -36,6 +36,9 @@ import {
   useCredentialInventory,
   type InventoryFilters,
 } from './api/adminCredentialReviewApi';
+import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWriteControl } from './adminWriteAccess';
 import { CredentialRevokeDialog } from './CredentialRevokeDialog';
 
 const KINDS: readonly CredentialKind[] = [
@@ -74,6 +77,14 @@ function agentHref(projectId: number, applicationId: number): string {
 }
 
 export function AdminCredentialInventory(): ReactNode {
+  return (
+    <AdminWritable itemId={ADMIN_ITEM.credentialInventory}>
+      <CredentialInventoryPage />
+    </AdminWritable>
+  );
+}
+
+function CredentialInventoryPage(): ReactNode {
   const [filters, setFilters] = useState<InventoryFilters>(EMPTY_INVENTORY_FILTERS);
   const [offset, setOffset] = useState(0);
   const [revoking, setRevoking] = useState<CredentialInventoryCredential>();
@@ -106,6 +117,8 @@ export function AdminCredentialInventory(): ReactNode {
               },
             )}
       </Typography>
+
+      <AdminViewOnlyNotice />
 
       <Box sx={toolbarSx} data-testid="credential-inventory-filters">
         <TextField
@@ -237,6 +250,7 @@ function InventoryRow({
   readonly row: CredentialInventoryCredential;
   readonly onRevoke: (row: CredentialInventoryCredential) => void;
 }): ReactNode {
+  const viewOnly = useAdminWriteControl().disabled;
   return (
     <TableRow data-testid={`credential-inventory-row-${row.kind}-${row.credential_id}`}>
       <TableCell>{credentialKindLabel(row.kind)}</TableCell>
@@ -278,6 +292,7 @@ function InventoryRow({
           <Button
             size="small"
             color="error"
+            disabled={viewOnly}
             onClick={() => onRevoke(row)}
             data-testid={`credential-inventory-revoke-${row.kind}-${row.credential_id}`}
           >

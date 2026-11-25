@@ -15,6 +15,7 @@ import { server } from '@/test/setup';
 import { AdminDelegationReview } from './DelegationReview';
 import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const REVIEW: DelegationReview = {
   pending: 3,
@@ -123,5 +124,18 @@ describe('ConfigurationDelegationStatus', () => {
     expect(screen.getByTestId('admin-delegation-pending')).toHaveTextContent('No delegation awaits review.');
     rerender(<ConfigurationDelegationStatus status={undefined} />);
     expect(screen.queryByTestId('admin-delegation-status')).not.toBeInTheDocument();
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `delegation-review` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'delegation-review');
+    renderAdminRoute(<AdminDelegationReview />);
+    await screen.findByTestId('delegation-review-project-7');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(screen.getByTestId('delegation-review-scan')).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
   });
 });

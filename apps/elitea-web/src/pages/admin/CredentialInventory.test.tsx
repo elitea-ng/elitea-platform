@@ -15,6 +15,7 @@ import { server } from '@/test/setup';
 
 import { AdminCredentialInventory } from './CredentialInventory';
 import { renderAdminRoute } from './__tests__/testRouter';
+import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
 const PAT: CredentialInventoryCredential = {
   kind: 'pat',
@@ -122,5 +123,18 @@ describe('AdminCredentialInventory', () => {
     await user.click(screen.getByTestId('credential-revoke-confirm'));
     await waitFor(() => expect(revokes).toEqual([{ kind: 'pat', credential_id: '501', reason: 'left the team' }]));
     await waitFor(() => expect(screen.queryByTestId('credential-revoke-dialog')).not.toBeInTheDocument());
+  });
+});
+
+// Read-only mode (R3.4b, issue 2613): at the read level of `credential-inventory` the
+// notice shows and every write is disabled, not hidden.
+describe('view only', () => {
+  it('disables the writes at the read level and keeps the listing', async () => {
+    serveConsoleLevel('read', 'credential-inventory');
+    renderAdminRoute(<AdminCredentialInventory />);
+    const revoke = await screen.findByTestId('credential-inventory-revoke-pat-501');
+    await findViewOnlyNotice();
+    await waitFor(() => expect(revoke).toBeDisabled());
+    expect(enabledWriteControls()).toEqual([]);
   });
 });
