@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "الوصول",
   "pages.admin.nav.clientApplications": "تطبيقات العملاء",
   "pages.admin.nav.identityProviders": "مزوّدو الهوية",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "أدوارك لا تتضمن قراءة تعريفات الأدوار. مصفوفة الأذونات أعلاه.",
+  "pages.admin.configuration.moved.closed": "أدوارك لا تفتح {{page}}."
 }

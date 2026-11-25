@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Accesso",
   "pages.admin.nav.clientApplications": "Applicazioni client",
   "pages.admin.nav.identityProviders": "Identity provider",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "I tuoi ruoli non includono la lettura delle definizioni dei ruoli. La matrice delle autorizzazioni è sopra.",
+  "pages.admin.configuration.moved.closed": "I tuoi ruoli non aprono {{page}}."
 }

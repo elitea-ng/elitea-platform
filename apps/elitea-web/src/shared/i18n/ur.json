@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "رسائی",
   "pages.admin.nav.clientApplications": "کلائنٹ ایپلیکیشنز",
   "pages.admin.nav.identityProviders": "شناختی فراہم کنندگان",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "آپ کے کرداروں میں کرداروں کی تعریفیں پڑھنا شامل نہیں۔ اجازتوں کا میٹرکس اوپر ہے۔",
+  "pages.admin.configuration.moved.closed": "آپ کے کردار {{page}} نہیں کھولتے۔"
 }

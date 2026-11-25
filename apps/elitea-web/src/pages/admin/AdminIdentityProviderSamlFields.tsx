@@ -25,7 +25,6 @@ import { t } from '@/shared/i18n';
 import { nameIdFormatOptions } from './adminIdentityProviderNameId';
 import type { FormUpdate, IdentityProviderForm } from './adminIdentityProviderForm';
 
-/** The SAML 2.0 fields. */
 /**
  * `locked` (R3.6): the caller holds the settings half only, so every trust
  * field is read-only; the logout URL and the name attribute stay editable.

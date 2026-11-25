@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "アクセス",
   "pages.admin.nav.clientApplications": "クライアントアプリケーション",
   "pages.admin.nav.identityProviders": "ID プロバイダー",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "あなたのロールにはロール定義の閲覧が含まれていません。権限マトリックスは上にあります。",
+  "pages.admin.configuration.moved.closed": "あなたのロールでは {{page}} を開けません。"
 }

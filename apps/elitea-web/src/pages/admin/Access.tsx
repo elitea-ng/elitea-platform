@@ -32,6 +32,7 @@ import TableRow from '@mui/material/TableRow';
 import Typography from '@mui/material/Typography';
 
 import { useGetAccessRoleDefinitions } from '@/shared/api/generated/admin/admin';
+import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { AccessRoleDefinition } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
@@ -137,11 +138,28 @@ function RolesTable({ roles }: { readonly roles: readonly AccessRoleDefinition[]
   );
 }
 
+function isRefusal(error: unknown): boolean {
+  return error instanceof EliteaApiError && error.failure.kind === 'http' && error.failure.status === 403;
+}
+
 function RoleDefinitions(): ReactNode {
   const query = useGetAccessRoleDefinitions({
     query: { select: (response) => (response.status === 200 ? response.data.roles : undefined) },
   });
   if (query.isPending) return <LinearProgress />;
+  if (isRefusal(query.error)) {
+    // The Access item opens for the matrix names too, while the definitions
+    // read needs access.roles.view (or the names it narrows): the page then
+    // offers the matrix alone (issue 2540).
+    return (
+      <Alert severity="info" data-testid="admin-access-definitions-refused">
+        {t(
+          'pages.admin.access.refused',
+          'Your roles do not include reading the role definitions. The permission matrix is above.',
+        )}
+      </Alert>
+    );
+  }
   if (query.data === undefined) {
     return (
       <Alert severity="warning" data-testid="admin-access-error">

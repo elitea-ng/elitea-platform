@@ -20,6 +20,8 @@ import { t } from '@/shared/i18n';
 import { IDENTITY_PROVIDERS_MANAGED_SURFACE } from './api/adminIdentityProvidersApi';
 import { MICROSOFT_APPS_MANAGED_SURFACE } from './api/adminMicrosoftAppsApi';
 import { NATIVE_CLIENTS_MANAGED_SURFACE } from './api/adminNativeClientsApi';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminItemAccess } from './adminWriteAccess';
 
 type MovedPath = '/identity-providers' | '/client-applications';
 
@@ -37,6 +39,17 @@ export function movedSectionPath(
   return surface === undefined ? undefined : MOVED_SURFACES[surface];
 }
 
+/**
+ * Whether the caller's document opens the page a section moved to. Unknown
+ * (still loading, or the document failed) reads as open: the page itself
+ * then answers, and a failure never reads as no access.
+ */
+export function useMovedSectionReach(): (path: MovedPath | undefined) => boolean {
+  const identity = useAdminItemAccess(ADMIN_ITEM.identityProviders);
+  const clients = useAdminItemAccess(ADMIN_ITEM.clientApplications);
+  return (path) => (path === '/identity-providers' ? identity : clients) !== 'none';
+}
+
 function pageName(path: MovedPath): string {
   return path === '/identity-providers'
     ? t('pages.admin.nav.identityProviders', 'Identity providers')
@@ -46,6 +59,7 @@ function pageName(path: MovedPath): string {
 /** The card a moved section shows in place of its editor. */
 export function ConfigurationMovedSection({ path }: { readonly path: MovedPath }) {
   const page = pageName(path);
+  const reaches = useMovedSectionReach();
   return (
     <Box
       data-testid="admin-configuration-moved"
@@ -54,7 +68,12 @@ export function ConfigurationMovedSection({ path }: { readonly path: MovedPath }
       <Typography variant="bodyMedium" color="text.secondary">
         {t('pages.admin.configuration.moved.body', 'These settings have a page of their own: {{page}}.', { page })}
       </Typography>
-      <Box>
+      {reaches(path) ? null : (
+        <Typography variant="bodySmall" color="text.secondary" data-testid="admin-configuration-moved-closed">
+          {t('pages.admin.configuration.moved.closed', 'Your roles do not open {{page}}.', { page })}
+        </Typography>
+      )}
+      <Box hidden={!reaches(path)}>
         <Button
           component={Link}
           to={path}
@@ -70,15 +89,16 @@ export function ConfigurationMovedSection({ path }: { readonly path: MovedPath }
   );
 }
 
-
 /**
  * The props of a section's row in the Configuration list: a link to the page
- * a moved section went to, otherwise the row's own selection.
+ * a moved section went to when the caller's roles open it, otherwise the
+ * row's own selection (which shows the card).
  */
 export function movedSectionRow(
   section: { readonly managed_surface?: string },
   onSelect: () => void,
+  reaches: (path: MovedPath | undefined) => boolean,
 ): { readonly component: typeof Link; readonly to: string } | { readonly onClick: () => void } {
   const path = movedSectionPath(section);
-  return path === undefined ? { onClick: onSelect } : { component: Link, to: path };
+  return path === undefined || !reaches(path) ? { onClick: onSelect } : { component: Link, to: path };
 }

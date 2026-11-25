@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "دسترسی",
   "pages.admin.nav.clientApplications": "برنامه‌های کلاینت",
   "pages.admin.nav.identityProviders": "ارائه‌دهندگان هویت",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "نقش‌های شما شامل خواندن تعریف نقش‌ها نیست. ماتریس مجوزها در بالا است.",
+  "pages.admin.configuration.moved.closed": "نقش‌های شما {{page}} را باز نمی‌کنند."
 }

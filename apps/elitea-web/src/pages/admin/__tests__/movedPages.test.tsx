@@ -169,6 +169,20 @@ describe('the Configuration sections whose editors moved', () => {
     await user.click(await within(sections).findByText('Native clients'));
     await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/client-applications'));
   }, testTimeout(30_000));
+
+  // The LLM manager opens Configuration (its gateway tabs) but not Identity
+  // providers: the row stays a plain row, and the card says why.
+  it('does not link a caller to a page its roles do not open', async () => {
+    serveSections();
+    server.use(http.get('*/admin/console', () => HttpResponse.json(golden('console/llm_manager.golden.json'))));
+    await mountAdmin('/configuration');
+
+    expect(await screen.findByTestId('admin-configuration-moved-closed')).toHaveTextContent('Identity providers');
+    expect(screen.getByTestId('admin-configuration-moved-link')).not.toBeVisible();
+    const sections = screen.getByRole('navigation', { name: 'Configuration sections' });
+    expect(within(sections).queryByRole('link', { name: /Authentication/ })).toBeNull();
+    expect(within(sections).getByRole('button', { name: /Authentication/ })).toBeInTheDocument();
+  }, testTimeout(30_000));
 });
 
 describe('Access', () => {
@@ -206,6 +220,19 @@ describe('Access', () => {
     await mountAdmin('/access');
     expect(await screen.findByTestId('admin-view-only')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('admin-access-role-admin')).toBeInTheDocument());
+  }, testTimeout(30_000));
+
+  // The Access item opens for the matrix names too; the definitions route is
+  // gated on access.roles.view or the names it narrows (issue 2540).
+  it('offers a matrix-only holder the matrix, and says the definitions are not its to read', async () => {
+    setPermissions(['configuration.roles.permissions.view']);
+    server.use(
+      http.get('*/admin/access/role-definitions', () => HttpResponse.json({ error: 'forbidden' }, { status: 403 })),
+    );
+    await mountAdmin('/access');
+    expect(await screen.findByTestId('admin-access-definitions-refused')).toBeInTheDocument();
+    expect(screen.getByTestId('admin-access-matrix-link')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-access-error')).toBeNull();
   }, testTimeout(30_000));
 
   it('says so when the role definitions cannot be read', async () => {

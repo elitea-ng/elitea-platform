@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "액세스",
   "pages.admin.nav.clientApplications": "클라이언트 애플리케이션",
   "pages.admin.nav.identityProviders": "ID 공급자",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "역할에 역할 정의 읽기가 포함되어 있지 않습니다. 권한 매트릭스는 위에 있습니다.",
+  "pages.admin.configuration.moved.closed": "역할로 {{page}}을(를) 열 수 없습니다."
 }

@@ -148,7 +148,12 @@ import { BrandingSectionCard } from './BrandingSectionCard';
 import { EMAIL_MANAGED_SURFACE } from './api/adminEmailApi';
 import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
-import { ConfigurationMovedSection, movedSectionPath, movedSectionRow } from './ConfigurationMovedSection';
+import {
+  ConfigurationMovedSection,
+  movedSectionPath,
+  movedSectionRow,
+  useMovedSectionReach,
+} from './ConfigurationMovedSection';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
 import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
@@ -316,6 +321,7 @@ export function AdminConfiguration() {
 
 function ConfigurationPage() {
   const state = useAdminConfigurationPage();
+  const reaches = useMovedSectionReach();
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
@@ -362,19 +368,12 @@ function ConfigurationPage() {
             <ListItemButton
               key={section.id}
               selected={section.id === state.activeSection?.id}
-              {...movedSectionRow(section, () => {
-                state.onSelectSection(section.id);
-              })}
+              {...movedSectionRow(section, () => state.onSelectSection(section.id), reaches)}
             >
               <ListItemText
                 primary={section.title}
-                // The sidebar says which sections this deployment can serve
-                // BEFORE the operator clicks one. Discovering it only on arrival
-                // makes the page feel broken rather than scoped.
-                // A section with a dedicated editor is NOT "not available
-                // here": it is available, through its own surface. Labelling it
-                // otherwise would send an operator away from the one page that
-                // can edit it.
+                // Which sections this deployment serves, before a click. A
+                // section with its own editor or page is available, not marked.
                 secondary={
                   section.unavailable_reason === undefined ||
                   managedEditorFor(section) !== undefined ||

@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Доступ",
   "pages.admin.nav.clientApplications": "Клієнтські застосунки",
   "pages.admin.nav.identityProviders": "Провайдери ідентифікації",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Ваші ролі не дозволяють читати визначення ролей. Матриця дозволів розташована вище.",
+  "pages.admin.configuration.moved.closed": "Ваші ролі не відкривають {{page}}."
 }

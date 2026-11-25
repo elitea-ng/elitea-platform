@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Toegang",
   "pages.admin.nav.clientApplications": "Clienttoepassingen",
   "pages.admin.nav.identityProviders": "Identity providers",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Uw rollen omvatten het lezen van de roldefinities niet. De machtigingsmatrix staat hierboven.",
+  "pages.admin.configuration.moved.closed": "Uw rollen openen {{page}} niet."
 }

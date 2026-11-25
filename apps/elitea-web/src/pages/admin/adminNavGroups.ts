@@ -14,6 +14,7 @@
  * presentation and never authorisation. Both still apply to every entry below.
  */
 import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalanceWalletOutlined';
+import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
@@ -125,8 +126,8 @@ export function navGroups(): readonly AdminNavGroup[] {
           id: 'access',
           path: '/access',
           label: t('pages.admin.nav.access', 'Access'),
-          icon: SecurityOutlinedIcon,
-          anyPermission: ['access.roles.view', 'configuration.roles.permissions.view'],
+          icon: AdminPanelSettingsOutlinedIcon,
+          anyPermission: ['access.roles.view', 'admin.auth.users', 'modes.users'],
         },
         {
           id: 'identity-providers',

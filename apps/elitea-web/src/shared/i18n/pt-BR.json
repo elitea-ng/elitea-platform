@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Acesso",
   "pages.admin.nav.clientApplications": "Aplicativos cliente",
   "pages.admin.nav.identityProviders": "Provedores de identidade",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Suas funções não incluem ler as definições de funções. A matriz de permissões está acima.",
+  "pages.admin.configuration.moved.closed": "Suas funções não abrem {{page}}."
 }

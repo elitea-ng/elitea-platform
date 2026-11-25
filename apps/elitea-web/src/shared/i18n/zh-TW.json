@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "存取",
   "pages.admin.nav.clientApplications": "用戶端應用程式",
   "pages.admin.nav.identityProviders": "身份提供方",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "您的角色不包含讀取角色定義。權限矩陣在上方。",
+  "pages.admin.configuration.moved.closed": "您的角色無法開啟 {{page}}。"
 }

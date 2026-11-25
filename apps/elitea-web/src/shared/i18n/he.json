@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "גישה",
   "pages.admin.nav.clientApplications": "יישומי לקוח",
   "pages.admin.nav.identityProviders": "ספקי זהויות",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "התפקידים שלך אינם כוללים קריאה של הגדרות התפקידים. מטריצת ההרשאות למעלה.",
+  "pages.admin.configuration.moved.closed": "התפקידים שלך אינם פותחים את {{page}}."
 }

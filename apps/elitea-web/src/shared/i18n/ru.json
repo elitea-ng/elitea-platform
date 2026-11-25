@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Доступ",
   "pages.admin.nav.clientApplications": "Клиентские приложения",
   "pages.admin.nav.identityProviders": "Провайдеры идентификации",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Ваши роли не позволяют читать определения ролей. Матрица разрешений находится выше.",
+  "pages.admin.configuration.moved.closed": "Ваши роли не открывают {{page}}."
 }

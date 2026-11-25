@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Accès",
   "pages.admin.nav.clientApplications": "Applications clientes",
   "pages.admin.nav.identityProviders": "Fournisseurs d’identité",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Vos rôles ne permettent pas de lire les définitions des rôles. La matrice des autorisations se trouve ci-dessus.",
+  "pages.admin.configuration.moved.closed": "Vos rôles n’ouvrent pas {{page}}."
 }

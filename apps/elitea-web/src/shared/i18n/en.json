@@ -7495,5 +7495,7 @@
   "pages.admin.nav.access": "Access",
   "pages.admin.nav.clientApplications": "Client applications",
   "pages.admin.nav.identityProviders": "Identity providers",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Your roles do not include reading the role definitions. The permission matrix is above.",
+  "pages.admin.configuration.moved.closed": "Your roles do not open {{page}}."
 }

@@ -5045,5 +5045,7 @@
   "pages.admin.nav.access": "Dostęp",
   "pages.admin.nav.clientApplications": "Aplikacje klienckie",
   "pages.admin.nav.identityProviders": "Dostawcy tożsamości",
-  "pages.admin.nav.scim": "SCIM"
+  "pages.admin.nav.scim": "SCIM",
+  "pages.admin.access.refused": "Twoje role nie obejmują odczytu definicji ról. Macierz uprawnień znajduje się powyżej.",
+  "pages.admin.configuration.moved.closed": "Twoje role nie otwierają strony {{page}}."
 }
