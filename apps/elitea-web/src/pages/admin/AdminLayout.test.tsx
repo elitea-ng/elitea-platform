@@ -137,7 +137,9 @@ describe('AdminLayout once the document answers', () => {
   /*
    * TEMPORARY (remove in R3.6, issue 2537): the Roles link. The document
    * leaves the unavailable Access item out, so the link shows when one of the
-   * caller's roles is among the roles the server says open the item.
+   * caller's roles is among the roles the server says open the item AND the
+   * caller holds a matrix permission: today's Roles page is the matrix, which
+   * access.roles.view does not read (issue 3042).
    */
   describe('the temporary Roles link', () => {
     /** Counts the item reads the server answered, so a test can wait past the answer. */
@@ -149,8 +151,11 @@ describe('AdminLayout once the document answers', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
-    function serveRolesCase(callerRole: string, itemStatus = 200, builtIn = true): void {
+    function serveRolesCase(callerRole: string, itemStatus = 200, builtIn = true, holdsMatrix = true): void {
       itemReads = 0;
+      (window as unknown as AdminUiConfigWindow).admin_ui_config = {
+        permissions: holdsMatrix ? ['admin.auth.users', 'configuration.roles.permissions.view'] : ['admin.auth.users'],
+      };
       server.use(
         getGetAdminConsoleDocumentMockHandler({
           areas: [
@@ -182,14 +187,23 @@ describe('AdminLayout once the document answers', () => {
       );
     }
 
-    it('shows Roles under People and access for a caller whose role opens it', async () => {
-      serveRolesCase('security_auditor');
+    it('shows Roles under People and access for a caller whose role opens it and who reads the matrix', async () => {
+      serveRolesCase('admin');
       await mountLayout();
 
       const link = await screen.findByTestId('admin-nav-item-access');
       expect(link).toHaveTextContent('Roles');
       expect(link).toHaveAttribute('href', '/roles');
       expect(screen.getByTestId('admin-nav-area-people_access')).toContainElement(link);
+    });
+
+    it('leaves Roles out for the security auditor, whose access.roles.view does not read the matrix', async () => {
+      serveRolesCase('security_auditor', 200, true, false);
+      await mountLayout();
+
+      await screen.findByTestId('admin-nav-item-users');
+      await settled();
+      expect(screen.queryByTestId('admin-nav-item-access')).not.toBeInTheDocument();
     });
 
     it('leaves Roles out for a caller none of whose roles opens it', async () => {
@@ -202,7 +216,7 @@ describe('AdminLayout once the document answers', () => {
     });
 
     it('leaves Roles out for a custom role that only shares a built-in role name', async () => {
-      serveRolesCase('security_auditor', 200, false);
+      serveRolesCase('admin', 200, false);
       await mountLayout();
 
       await screen.findByTestId('admin-nav-item-users');
@@ -211,7 +225,7 @@ describe('AdminLayout once the document answers', () => {
     });
 
     it('leaves Roles out when the roles that open it cannot be read', async () => {
-      serveRolesCase('security_auditor', 500);
+      serveRolesCase('admin', 500);
       await mountLayout();
 
       await screen.findByTestId('admin-nav-item-users');

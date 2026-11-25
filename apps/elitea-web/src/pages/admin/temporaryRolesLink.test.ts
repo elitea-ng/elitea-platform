@@ -4,7 +4,8 @@
  * from the caller's roles and the roles that open `access`. Fed by the
  * server's own golden (`item-access.golden.json`), so the derivation cannot
  * silently make every caller view-only: super_admin and admin write,
- * security_auditor reads.
+ * security_auditor, whose access.roles.view does not read the matrix, gets no
+ * link and `none` (issue 3042).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,27 +28,38 @@ function builtIn(...names: string[]) {
   return names.map((name) => ({ name, built_in: true }));
 }
 
+/**
+ * Whether each built-in role holds a matrix permission
+ * (`configuration.roles.permissions.view` or `.edit`), per
+ * `internal/adminaccess/builtin_roles.go`: the administrators do, the security
+ * auditor holds `access.roles.view` and not the matrix (issue 3042).
+ */
+const HOLDS_MATRIX = true;
+const NO_MATRIX = false;
+
 describe('the temporary Roles level', () => {
   it('reads the access item from the golden', () => {
     expect(granting.length).toBeGreaterThan(0);
   });
 
   it('is write for super_admin and admin', () => {
-    expect(temporaryRolesLevel(builtIn('super_admin'), granting)).toBe('write');
-    expect(temporaryRolesLevel(builtIn('admin'), granting)).toBe('write');
+    expect(temporaryRolesLevel(builtIn('super_admin'), granting, HOLDS_MATRIX)).toBe('write');
+    expect(temporaryRolesLevel(builtIn('admin'), granting, HOLDS_MATRIX)).toBe('write');
   });
 
-  it('is read for security_auditor', () => {
-    expect(temporaryRolesLevel(builtIn('security_auditor'), granting)).toBe('read');
+  it('is none for security_auditor, whose access.roles.view does not read the matrix', () => {
+    // The golden still lists the auditor at read on `access` (R3.9's view).
+    expect(granting.find((role) => role.name === 'security_auditor')?.level).toBe('read');
+    expect(temporaryRolesLevel(builtIn('security_auditor'), granting, NO_MATRIX)).toBe('none');
   });
 
   it('takes the highest level of the caller’s roles', () => {
-    expect(temporaryRolesLevel(builtIn('security_auditor', 'admin'), granting)).toBe('write');
+    expect(temporaryRolesLevel(builtIn('security_auditor', 'admin'), granting, HOLDS_MATRIX)).toBe('write');
   });
 
   it('gives no level to a caller none of whose roles opens the item, so the server decides', () => {
-    expect(temporaryRolesLevel(builtIn('llm_manager'), granting)).toBeUndefined();
+    expect(temporaryRolesLevel(builtIn('llm_manager'), granting, NO_MATRIX)).toBeUndefined();
     // A custom role named like a built-in one does not open what it opens.
-    expect(temporaryRolesLevel([{ name: 'admin', built_in: false }], granting)).toBeUndefined();
+    expect(temporaryRolesLevel([{ name: 'admin', built_in: false }], granting, HOLDS_MATRIX)).toBeUndefined();
   });
 });

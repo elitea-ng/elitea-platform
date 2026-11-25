@@ -26,7 +26,7 @@ The sidebar lists the console's pages in six labelled areas, in this order. Each
 
 **Schedules and tasks** is one item for two pages: the recurring schedules and the background tasks. A strip of two tabs at the top of either page links the other, and the item is marked on both. The old addresses `/admin/app/schedules` and `/admin/app/tasks` keep working.
 
-**Roles** is listed under **People and access** for a caller whose roles open it: the global and platform administrators, the security auditor, and any custom role that holds a role-management permission. Its address is `/admin/app/roles`. The link is temporary: when the page is rebuilt for the new roles, the **Access** item replaces it. The provider, pricing, usage and log tabs, and the identity, SCIM and client-application editors, are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
+**Roles** is listed under **People and access** for a caller whose roles open it and who can read the permission matrix (`configuration.roles.permissions.view` or `.edit`): the global and platform administrators, and any custom role that holds a matrix permission. The security auditor does not see it. Today's Roles page is the matrix, and the auditor's `access.roles.view` is for who holds which role, a view the **Access** item brings. Its address is `/admin/app/roles`. The link is temporary: when the page is rebuilt for the new roles, the **Access** item replaces it. The provider, pricing, usage and log tabs, and the identity, SCIM and client-application editors, are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
 
 ## What a narrow role sees
 
@@ -37,7 +37,7 @@ The areas and items in the sidebar come from the [capability document](#what-the
 | Global administrator, Platform administrator | All six areas and all their items |
 | LLM manager | Projects (Projects), Models and spend (LLM Governance, Budgets), Platform (Configuration) |
 | Project administrator (all projects) | Projects (Projects, App Requests), Models and spend (Budgets), Platform (Configuration) |
-| Security auditor | People and access (Roles), Security (Audit Trail) |
+| Security auditor | Security (Audit Trail) |
 | Emergency access | None: its one item, Break-glass, has no page yet |
 
 The console's landing page is Users. If your roles do not open Users, the console opens the first item they do open, passing over the temporary Roles link while there is another.
