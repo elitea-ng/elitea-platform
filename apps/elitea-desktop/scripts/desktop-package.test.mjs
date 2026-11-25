@@ -93,7 +93,7 @@ test('the Linux job: the pool, the shared action, the release names and the smok
   assert.match(linux, /name: desktop-release-linux/);
   // No FUSE on the pool: linuxdeploy and the AppImage run extracted.
   assert.match(action, /APPIMAGE_EXTRACT_AND_RUN: "1"/);
-  assert.match(action, /npx tauri build --bundles appimage,deb/);
+  assert.match(action, /npx tauri build --verbose --bundles appimage,deb/);
   assert.match(action, /--config src-tauri\/tauri\.brand\.json --config src-tauri\/tauri\.sidecar\.conf\.json/);
   assert.match(action, /elitea-doc-extract-sidecar-x86_64-unknown-linux-gnu/);
   // The smoke test: --version is the stamped version, and the app is still up after 30 s.

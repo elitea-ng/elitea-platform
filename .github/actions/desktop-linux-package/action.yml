@@ -50,7 +50,8 @@ runs:
         echo "out=$RUNNER_TEMP/out" >> "$GITHUB_OUTPUT"
         # Before a 40-minute build: the tools the build and the smoke test need.
         missing=""
-        for tool in pkg-config xvfb-run xauth dpkg-deb timeout; do
+        # dpkg-architecture, glib-compile-schemas and find: Tauri's linuxdeploy GTK plugin.
+        for tool in pkg-config xvfb-run xauth dpkg-deb timeout dpkg-architecture glib-compile-schemas find; do
           command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
         done
         for lib in webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0; do
@@ -116,7 +117,9 @@ runs:
       run: |
         set -euo pipefail
         node scripts/tauri-brand.mjs
-        npx tauri build --bundles appimage,deb \
+        # --verbose: without it the CLI swallows linuxdeploy's output and says
+        # only "failed to run linuxdeploy".
+        npx tauri build --verbose --bundles appimage,deb \
           --config src-tauri/tauri.brand.json --config src-tauri/tauri.sidecar.conf.json
         echo "DESKTOP_VERSION=$(node -p 'require("./src-tauri/tauri.conf.json").version')" >> "$GITHUB_ENV"
         shopt -s nullglob
