@@ -3,7 +3,9 @@
 //! into layer 3 of the approvals engine.
 //!
 //! * **User rules**: `<app config>/rules.json`, for every workspace.
-//! * **Workspace rules**: `<app data>/workspaces/<id>/rules.json`.
+//! * **Workspace rules**: `<app data>/workspaces/<id>/rules.json`. A task
+//!   worktree's are its folder's file (#3015): what the person allows in
+//!   the folder holds in its worktrees, and the other way round.
 //!
 //! Layer 3 reads the workspace's rules, then the person's; a deny beats an
 //! ask beats an allow across both. Both files live in the host's own data,
@@ -43,9 +45,8 @@ use std::time::SystemTime;
 use elitea_local_tools::approvals::{CommandRules, RememberedChoice, RuleSink, choice_as_rule};
 use elitea_local_tools::error::{ErrorCode, ToolError, ToolResult};
 use elitea_local_tools::execpolicy::{
-    LoadError, PrefixRule, RuleDecision, RuleFile, RuleOrigin, RuleScope, RuleSet,
+    LoadError, PrefixRule, RuleDecision, RuleFile, RuleOrigin, RuleSandbox, RuleScope, RuleSet,
 };
-use elitea_local_tools::policy::SandboxMode;
 use elitea_local_tools::workspace::{Intent, Workspace};
 use elitea_workspace_store::digest::sha256_hex;
 use serde::Serialize;
@@ -187,9 +188,21 @@ pub fn sanitize_proposal(file: RuleFile) -> (RuleFile, Vec<String>) {
         let index = position + 1;
         let shown = rule.display_pattern();
         if rule.decision == RuleDecision::Allow {
+            if rule.sandbox.is_some_and(RuleSandbox::is_host) {
+                warnings.push(format!(
+                    "Rule {index} (`{shown}`) asks to run on the host; a repository's rule never runs a command outside the sandbox, so it is imported for the workspace-write sandbox only."
+                ));
+                rule.sandbox = None;
+            }
+            if rule.requires_trust {
+                warnings.push(format!(
+                    "Rule {index} (`{shown}`) asks for a trusted folder; a repository's rule cannot grant trust, so that is dropped."
+                ));
+                rule.requires_trust = false;
+            }
             if rule
                 .sandbox
-                .is_some_and(|mode| mode > SandboxMode::WorkspaceWrite)
+                .is_some_and(|mode| mode > RuleSandbox::WorkspaceWrite)
             {
                 warnings.push(format!(
                     "Rule {index} (`{shown}`) asks to allow the full-access sandbox; it is imported for the workspace-write sandbox only."
@@ -243,7 +256,7 @@ pub fn sanitize_proposal(file: RuleFile) -> (RuleFile, Vec<String>) {
 
 /// Read a private file: `None` when absent; refused (with why) when it is a
 /// symlink, not a regular file, another user's, or open to group/others.
-fn read_private(path: &Path) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn read_private(path: &Path) -> Result<Option<Vec<u8>>, String> {
     use elitea_local_tools::sys::os::MetadataExt as _;
     use std::io::Read as _;
     let file = match crate::credentials_file::open_no_follow(path) {
@@ -282,7 +295,7 @@ fn read_private(path: &Path) -> Result<Option<Vec<u8>>, String> {
 
 /// Write `bytes` to `path` atomically: a `0600` temporary file created
 /// beside it (in a `0700` directory), then renamed over it.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), HostError> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), HostError> {
     use std::io::Write as _;
     let dir = path
         .parent()
@@ -330,10 +343,31 @@ impl RuleFiles {
     fn path(&self, scope: RuleScope, workspace_id: &str) -> Option<PathBuf> {
         match scope {
             RuleScope::User => self.user_dir.as_ref().map(|dir| dir.join(RULES_FILE)),
-            RuleScope::Workspace => Some(self.workspaces.data_dir(workspace_id).join(RULES_FILE)),
+            RuleScope::Workspace => Some(
+                self.workspaces
+                    .data_dir(&self.rules_owner(workspace_id))
+                    .join(RULES_FILE),
+            ),
             // Migrated workspace settings: no file of their own.
             RuleScope::Legacy => None,
         }
+    }
+
+    /// Whose workspace rules `workspace_id` runs with: a task worktree's
+    /// are its folder's (#3015, ADR-0061 decision 5h), so a rule the person
+    /// wrote, or an "Always allow" made in the worktree, holds in both.
+    fn rules_owner(&self, workspace_id: &str) -> String {
+        let mut current = workspace_id.to_owned();
+        for _ in 0..8 {
+            match self.workspaces.get(&current) {
+                Ok(Some(crate::workspaces::Workspace {
+                    parent_id: Some(parent),
+                    ..
+                })) => current = parent,
+                _ => break,
+            }
+        }
+        current
     }
 
     fn guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, HostError> {
@@ -728,6 +762,54 @@ mod tests {
     }
 
     const CARGO: &str = r#"{"version":1,"rules":[{"pattern":["cargo",["test","check"]]}]}"#;
+
+    /// A repository's rule can never grant trust (ADR-0061 decision 5d):
+    /// `sandbox: host` and `requires_trust` are dropped on import.
+    #[test]
+    fn a_proposal_cannot_run_on_the_host() {
+        let file: RuleFile = serde_json::from_value(serde_json::json!({"version":1,"rules":[
+            {"pattern":["make"],"sandbox":"host"},
+            {"pattern":["deploy"],"requires_trust":true}
+        ]}))
+        .unwrap();
+        let (file, warnings) = sanitize_proposal(file);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            file.rules
+                .iter()
+                .all(|rule| rule.sandbox.is_none() && !rule.requires_trust)
+        );
+    }
+
+    /// A task worktree runs with its folder's rules, and "Always allow"
+    /// made in it lands in the folder's file (#3015).
+    #[test]
+    fn a_worktree_inherits_its_folders_rules() {
+        let (app, workspaces, id, files) = store();
+        let tree = app.path().join("trees").join("t1");
+        fs::create_dir_all(&tree).unwrap();
+        let child = workspaces
+            .add_worktree(&id, &tree, "thread-1", "task/t1")
+            .unwrap()
+            .id;
+        files
+            .put(
+                RuleScope::Workspace,
+                &id,
+                &serde_json::json!({"version":1,"rules":[{"pattern":["npm","publish"],"decision":"forbidden"}]}),
+                "absent",
+            )
+            .unwrap();
+        assert_eq!(files.load(&child).rules.workspace.file().rules.len(), 1);
+        let sink =
+            WorkspaceRuleSink::new(Arc::new(RuleFiles::new(None, workspaces.clone())), &child);
+        let mut rule =
+            PrefixRule::from_command_pattern(vec!["cargo".to_owned(), "build".to_owned()]);
+        rule.justification = Some("Allowed".to_owned());
+        sink.append(rule).unwrap();
+        assert_eq!(files.load(&id).rules.workspace.file().rules.len(), 2);
+        assert_eq!(files.stamp(&id), files.stamp(&child));
+    }
 
     #[test]
     fn both_files_load_and_are_written_owner_only() {
