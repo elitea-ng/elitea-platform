@@ -26,7 +26,7 @@ test.use({ storageState: STORAGE_STATE.personas.security_auditor });
  * "Apply to …" is a write. Matches `src/pages/admin/__tests__/viewOnly.ts`.
  */
 const WRITE_CONTROL =
-  /\b(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|bind|apply to)\b/i;
+  /\b(save|create|new|add|edit|delete|remove|clear|revoke|approve|reject|deny|invite|import|upload|reset|enable|disable|suspend|resume|rotate|grant|sync|adopt|publish|rename|bind|manage|apply to)\b/i;
 
 /** Write controls the auditor may use: the review outcome form, once R3.11 ships. */
 const ALLOWED_WRITES: readonly RegExp[] = [];

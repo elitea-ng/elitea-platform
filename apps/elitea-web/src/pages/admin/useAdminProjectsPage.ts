@@ -15,7 +15,8 @@ import { useCallback, useMemo, useState } from 'react';
 
 import { t } from '@/shared/i18n';
 
-import { adminUiShowsControlFor } from './adminUiConfig';
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminProjectsCsv } from './adminProjectsCsv';
 import {
@@ -35,14 +36,6 @@ import {
 const PROJECT_TYPES: readonly ProjectType[] = ['team', 'personal'];
 export const ADMIN_PROJECTS_PAGE_SIZE = 20;
 
-/**
- * The permission the admin-panel config advertises for the project WRITE
- * surface — the same string `router.go` gates the suspend route on.
- *
- * Presentation only. The server resolves it from `auth_core__user_role` on every
- * request and answers 403 regardless of what this says; see `./adminUiConfig`.
- */
-const PERMISSION_PROJECTS_EDIT = 'projects.projects.projects.edit';
 
 export interface AdminProjectsPageState {
   readonly activeTab: number;
@@ -125,7 +118,9 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
   const [isExporting, setIsExporting] = useState(false);
 
   const projectType = PROJECT_TYPES[activeTab] ?? 'team';
-  const showsProjectWrites = adminUiShowsControlFor(PERMISSION_PROJECTS_EDIT);
+  // At the `read` level of the projects item the writes are disabled, not
+  // hidden, and go through the read-only guard (R3.4b, issue 2613).
+  const access = useAdminWritable(ADMIN_ITEM.projects);
 
   const listQuery = useAdminProjects({
     limit: ADMIN_PROJECTS_PAGE_SIZE,
@@ -136,7 +131,7 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
     sortOrder: sortDirection,
   });
 
-  const suspendProject = useSuspendAdminProject();
+  const suspendProject = access.guard(useSuspendAdminProject());
 
   const listing = useMemo(() => readListing(listQuery.data), [listQuery.data]);
 
@@ -286,7 +281,7 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
     memberProject,
     activityProject,
     cloudExecutorProject,
-    canEditProjects: showsProjectWrites,
+    canEditProjects: access.writable,
 
     onTabChange,
     onSearchChange,
@@ -307,8 +302,8 @@ export function useAdminProjectsPage(): AdminProjectsPageState {
     onCloseCloudExecutor: useCallback(() => setCloudExecutorProject(null), []),
     onExport,
 
-    onToggleSuspended: showsProjectWrites ? handleToggleSuspended : undefined,
-    onOpenMembers: showsProjectWrites ? setMemberProject : undefined,
+    onToggleSuspended: handleToggleSuspended,
+    onOpenMembers: setMemberProject,
 
     provisioning,
   };
