@@ -73,6 +73,7 @@ import type {
   PersonalAccessTokenAdminScopesRequest,
   PersonalAccessTokenCreateRequest,
   PersonalAccessTokenScopeOffer,
+  PersonalTokenRefusal,
 } from "../model";
 
 import { eliteaFetch } from ".././mutator";
@@ -1958,7 +1959,7 @@ export type createPersonalTokenResponse401 = {
 };
 
 export type createPersonalTokenResponse403 = {
-  data: ErrorResponse;
+  data: PersonalTokenRefusal;
   status: 403;
 };
 
@@ -2070,7 +2071,7 @@ export const getCreatePersonalTokenQueryKey = (
 
 export const getCreatePersonalTokenQueryOptions = <
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | PersonalTokenRefusal,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2108,11 +2109,12 @@ export const getCreatePersonalTokenQueryOptions = <
 export type CreatePersonalTokenQueryResult = NonNullable<
   Awaited<ReturnType<typeof createPersonalToken>>
 >;
-export type CreatePersonalTokenQueryError = ErrorResponse;
+export type CreatePersonalTokenQueryError =
+  ErrorResponse | PersonalTokenRefusal;
 
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | PersonalTokenRefusal,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options: {
@@ -2139,7 +2141,7 @@ export function useCreatePersonalToken<
 };
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | PersonalTokenRefusal,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2166,7 +2168,7 @@ export function useCreatePersonalToken<
 };
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | PersonalTokenRefusal,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {
@@ -2189,7 +2191,7 @@ export function useCreatePersonalToken<
 
 export function useCreatePersonalToken<
   TData = Awaited<ReturnType<typeof createPersonalToken>>,
-  TError = ErrorResponse,
+  TError = ErrorResponse | PersonalTokenRefusal,
 >(
   personalAccessTokenCreateRequest: PersonalAccessTokenCreateRequest,
   options?: {

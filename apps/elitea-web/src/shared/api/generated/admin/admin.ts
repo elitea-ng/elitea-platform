@@ -61,6 +61,7 @@ import type {
   AdminConsoleItem,
   AdminRoleRefusal,
   AdministrationAccessTokens,
+  AdministrationForbiddenResponse,
   AdministrationRoleHistory,
   AdministrationRoleHolders,
   AdministrationUserDeleteParams,
@@ -120,6 +121,7 @@ import type {
   ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
   GetUserProjectPermissionsParams,
+  GlobalUserInviteRefusal,
   GlobalUserInviteRequest,
   GlobalUserInviteResult,
   ImportBrandingPackageBody,
@@ -5494,7 +5496,7 @@ export type inviteUserGloballyResponse200 = {
 };
 
 export type inviteUserGloballyResponse400 = {
-  data: N400Response;
+  data: GlobalUserInviteRefusal;
   status: 400;
 };
 
@@ -5600,7 +5602,7 @@ export const getInviteUserGloballyQueryKey = (
 
 export const getInviteUserGloballyQueryOptions = <
   TData = Awaited<ReturnType<typeof inviteUserGlobally>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = GlobalUserInviteRefusal | N401Response | N403Response | N500Response,
 >(
   globalUserInviteRequest: GlobalUserInviteRequest,
   options?: {
@@ -5636,11 +5638,11 @@ export type InviteUserGloballyQueryResult = NonNullable<
   Awaited<ReturnType<typeof inviteUserGlobally>>
 >;
 export type InviteUserGloballyQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  GlobalUserInviteRefusal | N401Response | N403Response | N500Response;
 
 export function useInviteUserGlobally<
   TData = Awaited<ReturnType<typeof inviteUserGlobally>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = GlobalUserInviteRefusal | N401Response | N403Response | N500Response,
 >(
   globalUserInviteRequest: GlobalUserInviteRequest,
   options: {
@@ -5667,7 +5669,7 @@ export function useInviteUserGlobally<
 };
 export function useInviteUserGlobally<
   TData = Awaited<ReturnType<typeof inviteUserGlobally>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = GlobalUserInviteRefusal | N401Response | N403Response | N500Response,
 >(
   globalUserInviteRequest: GlobalUserInviteRequest,
   options?: {
@@ -5694,7 +5696,7 @@ export function useInviteUserGlobally<
 };
 export function useInviteUserGlobally<
   TData = Awaited<ReturnType<typeof inviteUserGlobally>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = GlobalUserInviteRefusal | N401Response | N403Response | N500Response,
 >(
   globalUserInviteRequest: GlobalUserInviteRequest,
   options?: {
@@ -5717,7 +5719,7 @@ export function useInviteUserGlobally<
 
 export function useInviteUserGlobally<
   TData = Awaited<ReturnType<typeof inviteUserGlobally>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError = GlobalUserInviteRefusal | N401Response | N403Response | N500Response,
 >(
   globalUserInviteRequest: GlobalUserInviteRequest,
   options?: {
@@ -12759,7 +12761,7 @@ export type setPlatformRetentionPolicyResponse401 = {
 };
 
 export type setPlatformRetentionPolicyResponse403 = {
-  data: N403Response;
+  data: AdministrationForbiddenResponse;
   status: 403;
 };
 
@@ -12846,7 +12848,7 @@ export const getSetPlatformRetentionPolicyQueryKey = (
 
 export const getSetPlatformRetentionPolicyQueryOptions = <
   TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   retentionPolicyUpdate: RetentionPolicyUpdate,
@@ -12891,11 +12893,11 @@ export type SetPlatformRetentionPolicyQueryResult = NonNullable<
   Awaited<ReturnType<typeof setPlatformRetentionPolicy>>
 >;
 export type SetPlatformRetentionPolicyQueryError =
-  ErrorResponse | N401Response | N403Response;
+  ErrorResponse | N401Response | AdministrationForbiddenResponse;
 
 export function useSetPlatformRetentionPolicy<
   TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   retentionPolicyUpdate: RetentionPolicyUpdate,
@@ -12923,7 +12925,7 @@ export function useSetPlatformRetentionPolicy<
 };
 export function useSetPlatformRetentionPolicy<
   TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   retentionPolicyUpdate: RetentionPolicyUpdate,
@@ -12951,7 +12953,7 @@ export function useSetPlatformRetentionPolicy<
 };
 export function useSetPlatformRetentionPolicy<
   TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   retentionPolicyUpdate: RetentionPolicyUpdate,
@@ -12975,7 +12977,7 @@ export function useSetPlatformRetentionPolicy<
 
 export function useSetPlatformRetentionPolicy<
   TData = Awaited<ReturnType<typeof setPlatformRetentionPolicy>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   retentionPolicyUpdate: RetentionPolicyUpdate,
@@ -13023,7 +13025,7 @@ export type setProjectRetentionOverrideResponse401 = {
 };
 
 export type setProjectRetentionOverrideResponse403 = {
-  data: N403Response;
+  data: AdministrationForbiddenResponse;
   status: 403;
 };
 
@@ -13121,7 +13123,7 @@ export const getSetProjectRetentionOverrideQueryKey = (
 
 export const getSetProjectRetentionOverrideQueryOptions = <
   TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13175,11 +13177,11 @@ export type SetProjectRetentionOverrideQueryResult = NonNullable<
   Awaited<ReturnType<typeof setProjectRetentionOverride>>
 >;
 export type SetProjectRetentionOverrideQueryError =
-  ErrorResponse | N401Response | N403Response;
+  ErrorResponse | N401Response | AdministrationForbiddenResponse;
 
 export function useSetProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13208,7 +13210,7 @@ export function useSetProjectRetentionOverride<
 };
 export function useSetProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13237,7 +13239,7 @@ export function useSetProjectRetentionOverride<
 };
 export function useSetProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13262,7 +13264,7 @@ export function useSetProjectRetentionOverride<
 
 export function useSetProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof setProjectRetentionOverride>>,
-  TError = ErrorResponse | N401Response | N403Response,
+  TError = ErrorResponse | N401Response | AdministrationForbiddenResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13307,7 +13309,7 @@ export type deleteProjectRetentionOverrideResponse401 = {
 };
 
 export type deleteProjectRetentionOverrideResponse403 = {
-  data: N403Response;
+  data: AdministrationForbiddenResponse;
   status: 403;
 };
 
@@ -13375,7 +13377,7 @@ export const getDeleteProjectRetentionOverrideQueryKey = (
 
 export const getDeleteProjectRetentionOverrideQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13424,11 +13426,11 @@ export type DeleteProjectRetentionOverrideQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteProjectRetentionOverride>>
 >;
 export type DeleteProjectRetentionOverrideQueryError =
-  N401Response | N403Response | ErrorResponse;
+  N401Response | AdministrationForbiddenResponse | ErrorResponse;
 
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13456,7 +13458,7 @@ export function useDeleteProjectRetentionOverride<
 };
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13484,7 +13486,7 @@ export function useDeleteProjectRetentionOverride<
 };
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -13508,7 +13510,7 @@ export function useDeleteProjectRetentionOverride<
 
 export function useDeleteProjectRetentionOverride<
   TData = Awaited<ReturnType<typeof deleteProjectRetentionOverride>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   dataClass: string,
   projectId: number,
@@ -14209,7 +14211,7 @@ export type releaseLegalHoldResponse401 = {
 };
 
 export type releaseLegalHoldResponse403 = {
-  data: N403Response;
+  data: AdministrationForbiddenResponse;
   status: 403;
 };
 
@@ -14302,7 +14304,7 @@ export const getReleaseLegalHoldQueryKey = (
 
 export const getReleaseLegalHoldQueryOptions = <
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14343,11 +14345,11 @@ export type ReleaseLegalHoldQueryResult = NonNullable<
   Awaited<ReturnType<typeof releaseLegalHold>>
 >;
 export type ReleaseLegalHoldQueryError =
-  N401Response | N403Response | ErrorResponse;
+  N401Response | AdministrationForbiddenResponse | ErrorResponse;
 
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   id: number,
   legalHoldRelease: undefined | LegalHoldRelease,
@@ -14375,7 +14377,7 @@ export function useReleaseLegalHold<
 };
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14403,7 +14405,7 @@ export function useReleaseLegalHold<
 };
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -14427,7 +14429,7 @@ export function useReleaseLegalHold<
 
 export function useReleaseLegalHold<
   TData = Awaited<ReturnType<typeof releaseLegalHold>>,
-  TError = N401Response | N403Response | ErrorResponse,
+  TError = N401Response | AdministrationForbiddenResponse | ErrorResponse,
 >(
   id: number,
   legalHoldRelease?: LegalHoldRelease,
@@ -25374,7 +25376,7 @@ export type updateUserProjectPermissionsResponse401 = {
 };
 
 export type updateUserProjectPermissionsResponse403 = {
-  data: N403Response;
+  data: AdministrationForbiddenResponse;
   status: 403;
 };
 
@@ -25503,7 +25505,11 @@ export const getUpdateUserProjectPermissionsQueryKey = (
 
 export const getUpdateUserProjectPermissionsQueryOptions = <
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
+  TError =
+    | AdminRoleRefusal
+    | N401Response
+    | AdministrationForbiddenResponse
+    | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -25546,11 +25552,18 @@ export type UpdateUserProjectPermissionsQueryResult = NonNullable<
   Awaited<ReturnType<typeof updateUserProjectPermissions>>
 >;
 export type UpdateUserProjectPermissionsQueryError =
-  AdminRoleRefusal | N401Response | N403Response | N500Response;
+  | AdminRoleRefusal
+  | N401Response
+  | AdministrationForbiddenResponse
+  | N500Response;
 
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
+  TError =
+    | AdminRoleRefusal
+    | N401Response
+    | AdministrationForbiddenResponse
+    | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params: undefined | UpdateUserProjectPermissionsParams,
@@ -25578,7 +25591,11 @@ export function useUpdateUserProjectPermissions<
 };
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
+  TError =
+    | AdminRoleRefusal
+    | N401Response
+    | AdministrationForbiddenResponse
+    | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -25606,7 +25623,11 @@ export function useUpdateUserProjectPermissions<
 };
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
+  TError =
+    | AdminRoleRefusal
+    | N401Response
+    | AdministrationForbiddenResponse
+    | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,
@@ -25630,7 +25651,11 @@ export function useUpdateUserProjectPermissions<
 
 export function useUpdateUserProjectPermissions<
   TData = Awaited<ReturnType<typeof updateUserProjectPermissions>>,
-  TError = AdminRoleRefusal | N401Response | N403Response | N500Response,
+  TError =
+    | AdminRoleRefusal
+    | N401Response
+    | AdministrationForbiddenResponse
+    | N500Response,
 >(
   userProjectPermissionsUpdate: UserProjectPermissionsUpdate,
   params?: UpdateUserProjectPermissionsParams,

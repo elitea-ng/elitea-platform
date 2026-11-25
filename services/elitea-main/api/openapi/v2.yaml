@@ -21366,8 +21366,14 @@ components:
             `role_self_assignment` or `role_set_locked` (403), or
             `permission_deprecated` (400: the save adds a legacy permission,
             `runtime.plugins` or `configuration.governance`, to a role that
-            does not hold it; ADR-0059 R0.14a). Absent on a 403 of the route
-            gate.
+            does not hold it; ADR-0059 R0.14a). `reserved_account` (403,
+            ADR-0059 R2.6b): the target is the reserved break-glass account
+            `break-glass@centry.user`, which holds no role, belongs to no
+            project and creates no token. `elevation_restricted` (403,
+            ADR-0059 R2.8a): the caller's active elevation may not do the
+            action, which needs the permission by a standing role, or only a
+            sealed break-glass elevation at the super_admin level. Absent on a
+            403 of the route gate.
         role:
           type: string
           description: The role the refusal is about, when there is one.
@@ -21395,6 +21401,56 @@ components:
           description: >
             The operator command named by `ways_in` (`elitea-main
             admin-role`), when `operator_command` is one of them.
+
+    GlobalUserInviteRefusal:
+      type: object
+      required: [error]
+      description: >
+        The 400 of POST /admin/user_invite/administration
+        (internal/api/v2/admin/user_invite.go).
+      properties:
+        ok:
+          type: boolean
+          description: Always false.
+        code:
+          type: string
+          description: >
+            `reserved_account`: the address is in the reserved
+            system-identity domain `@centry.user`. Absent on every other 400.
+        error: { type: string }
+
+    PersonalTokenRefusal:
+      type: object
+      required: [error]
+      description: >
+        A refused personal access token request (403): the nested envelope of
+        internal/api/v2/auth/token_mint_policy.go (writeTokenMintJSON) and
+        token_admin_scopes.go (writeTokenScopeRefusal).
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type:
+              type: string
+              description: Always `permission_error`.
+            code:
+              type: string
+              description: >
+                Why the token was refused; the 403 of the operation lists the
+                codes.
+            project_id:
+              type: integer
+              description: >
+                `token_mint_wider_than_caller` only: the project the calling
+                credential is bound to.
+            scopes:
+              type: array
+              items: { type: string }
+              description: >
+                `token_scope_not_allowed` and `token_scope_not_held` only: the
+                administration scopes refused.
 
     # ---- Access reads (ADR-0059 R0.10b, issue 2588) ------------------------
 
@@ -24690,6 +24746,29 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
 
+    AdministrationForbidden:
+      description: >
+        Forbidden. The route gate refused the caller (`error` only), or the
+        caller's active elevation may not do this action (`code` is
+        `elevation_restricted`, ADR-0059 R2.8a): it needs the permission by a
+        standing role, or a sealed break-glass elevation at the super_admin
+        level. The same code answers when the server could not read the
+        session's permissions to decide.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AdminRoleRefusal'
+          examples:
+            elevation_restricted:
+              summary: An elevation may not do this action
+              value:
+                error: 'an elevation cannot do this administration action: it needs the permission by a standing role'
+                code: elevation_restricted
+            route_gate:
+              summary: The caller lacks the route's permission
+              value:
+                error: insufficient permissions
+
     404:
       description: Not found
       content:
@@ -25751,16 +25830,28 @@ paths:
         '403':
           description: >
             The caller lacks `admin.auth.users`, or a role rule refused one
-            role of the request.
+            role of the request. `reserved_account`: a `delete` or a
+            `set_admin_role` that gives a role names the reserved break-glass
+            account (ADR-0059 R2.6b).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminRoleRefusal'
-              example:
-                error: you can assign or remove only a role whose permissions you all hold
-                code: role_permission_not_held
-                role: admin
-                permissions: [configuration.roles.permissions.edit]
+              examples:
+                role_permission_not_held:
+                  summary: A role rule refused a role of the request
+                  value:
+                    error: you can assign or remove only a role whose permissions you all hold
+                    code: role_permission_not_held
+                    role: admin
+                    permissions: [configuration.roles.permissions.edit]
+                reserved_account:
+                  summary: The target is the reserved break-glass account
+                  value:
+                    error: >-
+                      break-glass@centry.user is the reserved break-glass account: it holds no role,
+                      belongs to no project and creates no token
+                    code: reserved_account
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
@@ -26125,15 +26216,27 @@ paths:
         '403':
           description: >
             The caller lacks `modes.users`, or a role rule refused the role.
+            `reserved_account`: the user is the reserved break-glass account,
+            which holds no role (ADR-0059 R2.6b).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/AdminRoleRefusal'
-              example:
-                error: you can assign or remove only a role whose permissions you all hold
-                code: role_permission_not_held
-                role: admin
-                permissions: [configuration.roles.permissions.edit]
+              examples:
+                role_permission_not_held:
+                  summary: A role rule refused the role
+                  value:
+                    error: you can assign or remove only a role whose permissions you all hold
+                    code: role_permission_not_held
+                    role: admin
+                    permissions: [configuration.roles.permissions.edit]
+                reserved_account:
+                  summary: The user is the reserved break-glass account
+                  value:
+                    error: >-
+                      break-glass@centry.user is the reserved break-glass account: it holds no role,
+                      belongs to no project and creates no token
+                    code: reserved_account
         '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
@@ -26205,7 +26308,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GlobalUserInviteResult'
-        '400': { $ref: '#/components/responses/400' }
+        '400':
+          description: >
+            The address is not a valid e-mail address, or it is in the
+            reserved system-identity domain `@centry.user` (`code` is
+            `reserved_account`, ADR-0059 R2.6b): the reserved break-glass
+            account is created by the operator command only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalUserInviteRefusal'
+              examples:
+                invalid_email:
+                  summary: Not an e-mail address
+                  value:
+                    ok: false
+                    error: 'Invalid email: not-an-address'
+                reserved_account:
+                  summary: An address in the reserved domain
+                  value:
+                    ok: false
+                    code: reserved_account
+                    error: addresses in the reserved @centry.user domain cannot be invited
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
@@ -27697,7 +27821,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '503':
           description: This deployment has no retention policy store
           content:
@@ -27741,7 +27865,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
           description: No such project or data class
           content:
@@ -27763,7 +27887,7 @@ paths:
         '204':
           description: Removed
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
           description: No override for this project and data class
           content:
@@ -27919,7 +28043,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/LegalHold'
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '404':
           description: No such hold
           content:
@@ -30103,7 +30227,7 @@ paths:
                 roles: [editor]
                 permissions: [runtime.plugins]
         '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
+        '403': { $ref: '#/components/responses/AdministrationForbidden' }
         '500': { $ref: '#/components/responses/500' }
 
   /admin/roles/default/{project_id}:
@@ -47775,10 +47899,40 @@ paths:
             `token: never` permission; `error.scopes` names it) or
             `token_scope_not_held` (outside the caller's own set;
             `error.scopes` names them).
+            The reserved break-glass account creates no token, whatever
+            credential is calling: `token_mint_reserved_account` (ADR-0059
+            R2.6b). A sealed break-glass session, or a browser session whose
+            administration permissions an active elevation took part in, is
+            refused with `elevation_restricted` (ADR-0059 R2.8a): end the
+            elevation and use the standing sign-in.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                $ref: '#/components/schemas/PersonalTokenRefusal'
+              examples:
+                project_forbidden:
+                  summary: The owner is not a member of the project
+                  value:
+                    error:
+                      message: token owner is not a member of project 7
+                      type: permission_error
+                      code: project_forbidden
+                token_mint_reserved_account:
+                  summary: The reserved break-glass account is calling
+                  value:
+                    error:
+                      message: the reserved break-glass account cannot create a personal access token
+                      type: permission_error
+                      code: token_mint_reserved_account
+                elevation_restricted:
+                  summary: An elevation took part in the session's permissions
+                  value:
+                    error:
+                      message: >-
+                        a personal access token cannot be created under an elevation; end it and use
+                        your standing sign-in
+                      type: permission_error
+                      code: elevation_restricted
         '503':
           description: The token service is not configured on this deployment.
           content:
