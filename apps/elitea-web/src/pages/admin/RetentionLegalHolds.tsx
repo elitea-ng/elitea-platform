@@ -30,6 +30,8 @@ import Typography from '@mui/material/Typography';
 import type { LegalHold, LegalHoldCreate } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
 import {
   retentionFailureReason,
   useCreateLegalHold,
@@ -65,7 +67,8 @@ function positiveId(value: string): number | undefined {
 }
 
 function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }) {
-  const create = useCreateLegalHold();
+  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const create = access.guard(useCreateLegalHold());
   const [scope, setScope] = useState<HoldScope>('project');
   const [projectId, setProjectId] = useState('');
   const [agentId, setAgentId] = useState('');
@@ -176,7 +179,7 @@ function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly 
       </DialogContent>
       <DialogActions>
         <Button onClick={close}>{t('pages.admin.retention.cancel', 'Cancel')}</Button>
-        <Button variant="contained" disabled={create.isPending} onClick={onSubmit}>
+        <Button variant="contained" disabled={!access.writable || create.isPending} onClick={onSubmit}>
           {t('pages.admin.retention.holds.place', 'Place hold')}
         </Button>
       </DialogActions>
@@ -185,7 +188,8 @@ function CreateHoldDialog({ open, onClose }: { readonly open: boolean; readonly 
 }
 
 function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null; readonly onClose: () => void }) {
-  const release = useReleaseLegalHold();
+  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const release = access.guard(useReleaseLegalHold());
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
 
@@ -218,7 +222,7 @@ function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null;
         <Button
           variant="contained"
           color="error"
-          disabled={release.isPending || hold === null}
+          disabled={!access.writable || release.isPending || hold === null}
           onClick={() => {
             if (hold === null) return;
             release.mutate(
@@ -246,6 +250,7 @@ export function RetentionLegalHolds() {
   const [creating, setCreating] = useState(false);
   const [releasing, setReleasing] = useState<LegalHold | null>(null);
   const holds = useLegalHolds(activeOnly);
+  const viewOnly = useAdminWriteControl().disabled;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -254,7 +259,7 @@ export function RetentionLegalHolds() {
           control={<Switch checked={activeOnly} onChange={(event) => setActiveOnly(event.target.checked)} />}
           label={t('pages.admin.retention.holds.activeOnly', 'Active holds only')}
         />
-        <Button variant="contained" onClick={() => setCreating(true)}>
+        <Button variant="contained" disabled={viewOnly} onClick={() => setCreating(true)}>
           {t('pages.admin.retention.holds.create', 'Place a legal hold')}
         </Button>
       </Box>
@@ -294,7 +299,7 @@ export function RetentionLegalHolds() {
                 </TableCell>
                 <TableCell>
                   {hold.active ? (
-                    <Button size="small" onClick={() => setReleasing(hold)}>
+                    <Button size="small" disabled={viewOnly} onClick={() => setReleasing(hold)}>
                       {t('pages.admin.retention.holds.release', 'Release')}
                     </Button>
                   ) : null}

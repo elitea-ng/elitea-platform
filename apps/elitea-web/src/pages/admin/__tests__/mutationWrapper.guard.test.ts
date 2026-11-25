@@ -38,8 +38,6 @@ const NOT_CONVERTED: readonly string[] = [
   'AdminMcpServersEditor.tsx',
   'AdminMicrosoftAppsEditor.tsx',
   'AdminNativeClientsEditor.tsx',
-  'RetentionLegalHolds.tsx',
-  'RetentionPolicies.tsx',
   'ServiceDescriptorDecisionDialog.tsx',
   'useAdminBrandingPage.ts',
   'useAdminConfigurationPage.ts',

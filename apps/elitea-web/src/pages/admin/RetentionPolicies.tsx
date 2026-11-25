@@ -23,6 +23,8 @@ import Typography from '@mui/material/Typography';
 import type { RetentionPolicy } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { ADMIN_ITEM } from './adminItemIds';
+import { useAdminWritable } from './adminWriteAccess';
 import {
   retentionFailureReason,
   useDeleteProjectOverride,
@@ -99,7 +101,9 @@ function PlatformRow({
   readonly onError: (message: string) => void;
   readonly onSaved: () => void;
 }) {
-  const save = useSetPlatformPolicy();
+  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const save = access.guard(useSetPlatformPolicy());
+  const locked = !access.writable;
   const [minDays, setMinDays] = useState(String(policy.min_age_days));
   const [maxDays, setMaxDays] = useState(policy.max_age_days === null ? '' : String(policy.max_age_days));
   const [allowOverride, setAllowOverride] = useState(policy.allow_project_override);
@@ -141,6 +145,7 @@ function PlatformRow({
         <TextField
           size="small"
           value={minDays}
+          disabled={locked}
           onChange={(event) => setMinDays(event.target.value)}
           slotProps={{ htmlInput: { 'aria-label': `${t('pages.admin.retention.column.min', 'Minimum (days)')}: ${label}` } }}
           sx={{ width: '7rem' }}
@@ -150,6 +155,7 @@ function PlatformRow({
         <TextField
           size="small"
           value={maxDays}
+          disabled={locked}
           placeholder={t('pages.admin.retention.forever', 'Forever')}
           onChange={(event) => setMaxDays(event.target.value)}
           slotProps={{ htmlInput: { 'aria-label': `${t('pages.admin.retention.column.max', 'Maximum (days)')}: ${label}` } }}
@@ -163,6 +169,7 @@ function PlatformRow({
         {policy.overrides_supported ? (
           <Switch
             checked={allowOverride}
+            disabled={locked}
             onChange={(event) => setAllowOverride(event.target.checked)}
             slotProps={{ input: { 'aria-label': `${t('pages.admin.retention.column.override', 'Project overrides')}: ${label}` } }}
           />
@@ -173,7 +180,7 @@ function PlatformRow({
         )}
       </TableCell>
       <TableCell>
-        <Button variant="outlined" size="small" disabled={save.isPending} onClick={onSave}>
+        <Button variant="outlined" size="small" disabled={locked || save.isPending} onClick={onSave}>
           {t('pages.admin.retention.save', 'Save')}
         </Button>
       </TableCell>
@@ -190,7 +197,9 @@ function OverrideForm({
   readonly onError: (message: string) => void;
   readonly onSaved: () => void;
 }) {
-  const setOverride = useSetProjectOverride();
+  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const setOverride = access.guard(useSetProjectOverride());
+  const locked = !access.writable;
   const [dataClass, setDataClass] = useState(classes[0] ?? '');
   const [projectId, setProjectId] = useState('');
   const [maxDays, setMaxDays] = useState('');
@@ -233,6 +242,7 @@ function OverrideForm({
         size="small"
         label={t('pages.admin.retention.override.class', 'Data class')}
         value={dataClass}
+        disabled={locked}
         onChange={(event) => setDataClass(event.target.value)}
         sx={{ minWidth: '12rem' }}
       >
@@ -246,6 +256,7 @@ function OverrideForm({
         size="small"
         label={t('pages.admin.retention.override.project', 'Project id')}
         value={projectId}
+        disabled={locked}
         onChange={(event) => setProjectId(event.target.value)}
       />
       <TextField
@@ -253,9 +264,10 @@ function OverrideForm({
         label={t('pages.admin.retention.column.max', 'Maximum (days)')}
         placeholder={t('pages.admin.retention.forever', 'Forever')}
         value={maxDays}
+        disabled={locked}
         onChange={(event) => setMaxDays(event.target.value)}
       />
-      <Button variant="outlined" size="small" disabled={setOverride.isPending} onClick={onSubmit}>
+      <Button variant="outlined" size="small" disabled={locked || setOverride.isPending} onClick={onSubmit}>
         {t('pages.admin.retention.override.set', 'Set override')}
       </Button>
     </Box>
@@ -263,7 +275,8 @@ function OverrideForm({
 }
 
 export function RetentionPolicies({ policies }: { readonly policies: readonly RetentionPolicy[] }) {
-  const removeOverride = useDeleteProjectOverride();
+  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
+  const removeOverride = access.guard(useDeleteProjectOverride());
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -347,7 +360,7 @@ export function RetentionPolicies({ policies }: { readonly policies: readonly Re
                 <TableCell>
                   <Button
                     size="small"
-                    disabled={removeOverride.isPending}
+                    disabled={!access.writable || removeOverride.isPending}
                     onClick={() =>
                       removeOverride.mutate(
                         { dataClass: policy.data_class, projectId: policy.project_id ?? 0 },
