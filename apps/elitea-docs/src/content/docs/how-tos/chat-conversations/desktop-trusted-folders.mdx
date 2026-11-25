@@ -1,0 +1,67 @@
+---
+title: "Run a folder's commands without a sandbox (desktop)"
+description: "How a trusted folder in the Elitea desktop app runs a Local work agent's commands as your own processes, what that exposes, how each platform behaves, and how to revoke trust."
+---
+
+In a **Local work** thread of the Elitea desktop app, the agent's commands normally run under the operating system's sandbox: no network, none of your logins, writes only inside the folder. Some work needs more: a build that pulls packages, a deploy that uses your cloud login, `podman` or `kubectl`. A **trusted folder** runs its commands as your own processes instead. You mark one folder at a time, and you can take it back at any moment.
+
+## What changes in a trusted folder
+
+- Commands run **without the OS sandbox**, with your login shell's environment and your real `PATH`, your keychain and command-line logins (`gh`, `gcloud`, `kubectl`, `podman` and others), and the network.
+- **File tools keep their rules.** Reading, writing and editing files still stay inside the folder: writes outside it, to `.git` and to your organization's denied paths are refused. Trust changes how commands run, not what file tools may touch.
+- **Approvals still apply.** Your organization's policy, plan mode, hooks and your **Forbidden** and **Ask** rules come first, as everywhere. An **Allow** rule that *you* wrote may run a command without a question; a repository's rule never can. Without a rule, only routine commands that start no network program run without a question; everything else is asked.
+- **Outside content closes the gate.** After the agent reads something from outside the folder in a turn (a web page, an MCP server's or a remote tool's result, the browser pane, another app, or the answers before a later agent's turn), every command that no rule of yours allows is asked, with the reason "after reading content from outside this folder". **Bypass** mode does not answer these questions: you do.
+
+## What trust exposes
+
+The dialog says it, and it is worth reading slowly:
+
+- Commands will be able to read and change any file your user account can, including keys, cloud logins and the app's own data.
+- They can reach any network host.
+- Content in this folder, and anything an agent reads, can steer what the agent asks to run.
+- Trust only folders whose content you trust, and keep approvals on for anything you would not run yourself.
+
+## Trust a folder
+
+<Steps>
+1. In the sidebar, open the folder's **⋯** menu (or right-click the folder) and select **Trust this folder…**.
+2. Read the statements, then tick the confirmation that names the folder.
+3. Optionally, open **Advanced options** and turn on **Ask for every command**: commands still run without a sandbox, but each one waits for your answer first.
+4. Select **Trust this folder**.
+</Steps>
+
+The folder now shows a **No sandbox** badge in the sidebar, in the thread's title bar and beside the run-location chip in the composer. A task worktree follows the folder it was made from: it shows the same badge, and it is never trusted on its own.
+
+If the dialog offers no confirmation, your organization's policy does not allow trusted folders, and the dialog says why (for example, the ceiling keeps every command in the sandbox, or trusted folders are turned off).
+
+## Badges
+
+| Badge | Meaning |
+| --- | --- |
+| **No sandbox** | The folder's commands run as you. |
+| **Trust paused** | Your organization's policy stopped allowing trust, or a file the app keeps for trust (the folder's or your `rules.json`, the trust record, its ledger) changed outside the app. The badge names the reason. Commands run sandboxed until you confirm again from the badge. |
+| **Environment fallback** | Your login shell's environment could not be read, so commands get a reduced one with your `PATH`. |
+
+## Revoke trust
+
+Revoking takes effect at once: the folder's running commands are stopped, and the next one runs sandboxed. Revoke from any of:
+
+- the badge: select it, then **Revoke trust**;
+- the folder's **⋯** menu: **Revoke trust**;
+- **Settings ▸ Trusted folders**, which lists every trusted folder with when it was trusted, the platform, its state and the last command it ran without a sandbox.
+
+A rule that **Always allow** remembered in a trusted folder applies only while the folder is trusted. After a revoke, **Settings ▸ Approval rules** shows it as **Needs trust**, and it does nothing; it never turns into a sandboxed allow. In a rule you write yourself, **Without a sandbox, in a trusted folder** (`sandbox: host`) does the same.
+
+## Platforms
+
+| Platform | Without trust | With trust |
+| --- | --- | --- |
+| macOS | Commands run in the Seatbelt sandbox; login grants work. | Commands run as you; a rule's login grant still runs sandboxed with only that login. |
+| Linux | Commands run in bubblewrap. | Commands run as you. |
+| Windows | There is no sandbox: a confined command is refused with `sandbox_unavailable`, and full access is asked. | Commands run as you, under the same rules. The refused command's card offers **Trust this folder…**. |
+
+On a computer with no sandbox, a folder never becomes trusted by itself. Trust is always your act.
+
+## For administrators
+
+Trust is possible only while the native client policy allows it: **Local work** on, `local_work_shell` and `local_work_network` on, `local_work_max_sandbox_mode` at `full-access`, and `local_work_folder_trust` on (its default). The default ceiling is `workspace-write`, so a default deployment has no trusted folders. Turning any of these off pauses every trusted folder at the device's next policy refresh. See [Features and configuration](/admin/features-and-configuration).

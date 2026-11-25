@@ -34,7 +34,7 @@ import { endsRetry, withoutRetry, type RetryingView } from './modelRetry';
 import { NO_RESUMES, resumedHere, watchResumes, withResume, type ResumeState } from './resumeEvents';
 import { applySubAgentEvent, isSubAgentEvent, type SubAgentLane } from './subAgentEvents';
 import type { SteerView } from './steeringEvents';
-import { toolResult, type TranscriptItem } from './transcriptItem';
+import { toolResult, withCode, type TranscriptItem } from './transcriptItem';
 import { applySideEvent, isSideEvent } from './turnSideEvents';
 import type { TurnUsage } from './turnUsage';
 
@@ -192,8 +192,8 @@ function onToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
 }
 
 function withToolResult(view: TurnView, event: EventOf<'tool_result'>): TurnView {
-  const { call_id: callId, ok, summary, truncated, thumbnail } = event.payload;
-  const result = toolResult(ok, summary, truncated, thumbnail);
+  const { call_id: callId, ok, summary, truncated, thumbnail, code } = event.payload;
+  const result = withCode(toolResult(ok, summary, truncated, thumbnail), code);
   const index = view.items.findIndex((item) => item.type === 'tool' && item.callId === callId);
   if (index === -1) {
     // A result with no call (the call was lost): still show it, honestly unnamed.

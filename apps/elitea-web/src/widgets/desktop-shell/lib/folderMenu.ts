@@ -31,6 +31,8 @@ export interface FolderMenuInput {
   primary: { label: string; enabled?: boolean; run: () => void };
   /** A git folder's "New thread in a worktree". */
   worktree?: () => void;
+  /** "Trust this folder…" or "Revoke trust" (ADR-0061 decision 5i); absent outside the desktop host. */
+  trust?: { label: string; run: () => void };
   bind: (projectId: number) => void;
   remove: () => void;
   /** Open the picker sheet (every project). */
@@ -42,7 +44,7 @@ const clip = (text: string): string => (text.length <= LABEL_CHARS ? text : `${t
 /** The projects a folder may be bound to: not suspended. */
 export const bindable = <P extends ProjectLike>(projects: readonly P[]): P[] => projects.filter((project) => project.suspended !== true);
 
-export function folderContextActions({ workspace, projects, appIpc, primary, worktree, bind, remove, choosePicker }: FolderMenuInput): ContextAction[] {
+export function folderContextActions({ workspace, projects, appIpc, primary, worktree, trust, bind, remove, choosePicker }: FolderMenuInput): ContextAction[] {
   const choices = bindable(projects);
   const shown = choices.slice(0, SUBMENU_PROJECTS).map((project) => ({
     id: `project:${String(project.id)}`,
@@ -60,6 +62,7 @@ export function folderContextActions({ workspace, projects, appIpc, primary, wor
     { separator: true },
     { label: t('workspace.project', 'Project'), enabled: choices.length > 0, submenu: [...shown, ...more] },
     { separator: true },
+    ...(trust === undefined ? [] : [{ id: 'trust', label: trust.label, run: trust.run }]),
     { id: 'remove', label: t('desktop.shell.removeFolder', 'Remove from sidebar'), run: remove },
   ];
 }

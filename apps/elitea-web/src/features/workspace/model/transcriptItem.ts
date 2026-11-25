@@ -24,7 +24,8 @@ export type TranscriptItem =
       argsSummary: string;
       remote: boolean;
       /** `thumbnail`: a computer screenshot's `data:image/jpeg` URL (ADR-0047 decision 9). */
-      result?: { ok: boolean; summary: string; truncated: boolean; thumbnail?: string };
+      /** `code`: a failed call's error code (`sandbox_unavailable`), when the host sent one. */
+      result?: { ok: boolean; summary: string; truncated: boolean; thumbnail?: string; code?: string };
       /** A page the step produced (a pushed branch, a pull request): an `https:` link the row shows. */
       link?: { href: string; label: string };
       process?: ToolProcess;
@@ -36,4 +37,9 @@ export type TranscriptItem =
 export function toolResult(ok: boolean, summary: string, truncated: boolean, thumbnail?: unknown): NonNullable<Extract<TranscriptItem, { type: 'tool' }>['result']> {
   const shown = typeof thumbnail === 'string' && thumbnail.startsWith('data:image/jpeg;base64,') && thumbnail.length <= 16 * 1024;
   return shown ? { ok, summary, truncated, thumbnail } : { ok, summary, truncated };
+}
+
+/** The result with a failed call's error code, when the host sent one. */
+export function withCode<R extends { ok: boolean }>(result: R, code: unknown): R & { code?: string } {
+  return !result.ok && typeof code === 'string' && code !== '' ? { ...result, code } : result;
 }

@@ -22,12 +22,15 @@ import type { GrantDraft } from '../model/grantText';
 import { EMPTY_GRANT, grantDraftOf, withGrant } from '../model/grantText';
 import { formatExample, formatPattern, parseExamples, parsePattern, PatternSyntaxError } from '../model/patternText';
 import { GrantFields } from './GrantFields';
+import { HostSandboxField } from './HostSandboxField';
 import { ProposalReview } from './ProposalReview';
-import { decisionLabel, LoadErrorAlert, RuleSummary } from './ruleParts';
+import { decisionLabel, FolderTrustedContext, LoadErrorAlert, RuleSummary } from './ruleParts';
 
 export interface RulesPanelProps {
   ipc: RulesIpc;
   workspaceId: string;
+  /** The folder is trusted now (ADR-0061): `requires_trust` rules show "Needs trust" otherwise. */
+  trusted?: boolean | undefined;
 }
 
 const DECISIONS: readonly RuleDecision[] = ['allow', 'prompt', 'forbidden'];
@@ -39,9 +42,11 @@ interface Draft {
   match: string;
   notMatch: string;
   grant: GrantDraft;
+  /** `sandbox: host` (ADR-0061 decision 5d): the person's own Allow only. */
+  host: boolean;
 }
 
-const EMPTY_DRAFT: Draft = { pattern: '', decision: 'allow', justification: '', match: '', notMatch: '', grant: EMPTY_GRANT };
+const EMPTY_DRAFT: Draft = { pattern: '', decision: 'allow', justification: '', match: '', notMatch: '', grant: EMPTY_GRANT, host: false };
 
 const draftOf = (rule: PrefixRule): Draft => ({
   pattern: formatPattern(rule.pattern),
@@ -50,7 +55,18 @@ const draftOf = (rule: PrefixRule): Draft => ({
   match: (rule.match ?? []).map(formatExample).join('\n'),
   notMatch: (rule.not_match ?? []).map(formatExample).join('\n'),
   grant: grantDraftOf(rule),
+  host: rule.sandbox === 'host',
 });
+
+/** `sandbox: host` on the person's own Allow; unticked, the rule goes back to the sandbox (and loses `requires_trust`). */
+function withHost(rule: PrefixRule, host: boolean): PrefixRule {
+  if (host) return rule.decision === 'allow' && rule.origin === undefined ? { ...rule, sandbox: 'host' } : rule;
+  if (rule.sandbox !== 'host') return rule;
+  const sandboxed = { ...rule };
+  delete sandboxed.sandbox;
+  delete sandboxed.requires_trust;
+  return sandboxed;
+}
 
 /** The draft as a rule; the fields a draft cannot edit (sandbox, network) are kept from `base` (a grant drops the network). */
 const ruleOf = (draft: Draft, base: PrefixRule | undefined): PrefixRule => {
@@ -64,7 +80,7 @@ const ruleOf = (draft: Draft, base: PrefixRule | undefined): PrefixRule => {
   else delete rule.match;
   if (notMatch.length > 0) rule.not_match = notMatch;
   else delete rule.not_match;
-  return withGrant(rule, draft.grant);
+  return withHost(withGrant(rule, draft.grant), draft.host);
 };
 
 /** Why the pattern's text does not parse, or `null`. */
@@ -90,7 +106,7 @@ interface RuleFormProps {
 
 function RuleForm({ initial, fromRepository, busy, error, onSave, onCancel }: RuleFormProps): React.JSX.Element {
   const [draft, setDraft] = useState(initial);
-  const field = (key: Exclude<keyof Draft, 'grant'>) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
+  const field = (key: Exclude<keyof Draft, 'grant' | 'host'>) => (event: React.ChangeEvent<HTMLInputElement>) => setDraft((current) => ({ ...current, [key]: event.target.value }));
   const syntax = patternError(draft.pattern);
   return (
     <Stack spacing={1.5} component="form" data-testid="rule-form" onSubmit={(event) => (event.preventDefault(), syntax === null && onSave(draft))}>
@@ -114,6 +130,7 @@ function RuleForm({ initial, fromRepository, busy, error, onSave, onCancel }: Ru
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.match', 'Examples it must match (one per line)')} value={draft.match} onChange={field('match')} />
       <TextField size="small" multiline minRows={2} label={t('workspace.rules.notMatch', 'Examples it must not match (one per line)')} value={draft.notMatch} onChange={field('notMatch')} />
       {draft.decision === 'allow' && <GrantFields value={draft.grant} fromRepository={fromRepository} onChange={(grant) => setDraft((current) => ({ ...current, grant }))} />}
+      <HostSandboxField decision={draft.decision} fromRepository={fromRepository} checked={draft.host} onChange={(host) => setDraft((current) => ({ ...current, host }))} />
       {error !== null && <LoadErrorAlert error={error} />}
       <Stack direction="row" spacing={1}>
         <Button type="submit" variant="contained" disabled={busy || draft.pattern.trim() === '' || syntax !== null}>
@@ -249,7 +266,7 @@ function ScopeSection({ state, editing, busy, formError, onEdit, onDelete, onSav
   );
 }
 
-export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Element {
+export function RulesPanel({ ipc, workspaceId, trusted = false }: RulesPanelProps): React.JSX.Element {
   const [view, setView] = useState<RulesView | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
@@ -340,6 +357,7 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
   }
 
   return (
+    <FolderTrustedContext.Provider value={trusted}>
     <Stack spacing={3}>
       <Typography variant="bodySmall" color="text.secondary">
         {t(
@@ -369,5 +387,6 @@ export function RulesPanel({ ipc, workspaceId }: RulesPanelProps): React.JSX.Ele
       ))}
       <Explain ipc={ipc} workspaceId={workspaceId} />
     </Stack>
+    </FolderTrustedContext.Provider>
   );
 }

@@ -24,6 +24,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { TrustBadge } from '@/features/folder-trust';
 import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -154,6 +155,8 @@ function ThreadTitle(props: ThreadToolbarProps & RenameProps): React.JSX.Element
           {title}
         </Typography>
       </ButtonBase>
+      {/* A worktree's state is its parent's (`inherited_from`): the host answers for the root folder. */}
+      <TrustBadge workspaceId={workspace.id} workspaceName={workspace.name} />
       <Popover
         open={open}
         anchorEl={anchor}

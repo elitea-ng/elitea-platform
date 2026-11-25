@@ -3,7 +3,8 @@
  * decision, pattern, bounds (sandbox and network an Allow covers), origin,
  * justification and examples; and why a file loads no rules.
  */
-import { Alert, Box, Chip, Stack, Typography } from '@mui/material';
+import { Alert, Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
+import { createContext, useContext } from 'react';
 
 import type { PrefixRule, RuleDecision, RuleLoadError } from '@/shared/desktop/rulesIpc';
 import { t } from '@/shared/i18n';
@@ -23,9 +24,13 @@ const decisionColor = (decision: RuleDecision | undefined): 'error' | 'warning' 
   return 'success';
 };
 
+/** Whether the folder whose rules are shown is trusted now (ADR-0061): `requires_trust` rules match only then. */
+export const FolderTrustedContext = createContext(false);
+
 /** What an Allow covers ("the workspace-write sandbox, no network"); `null` for rules that tighten. */
 function boundsOf(rule: PrefixRule): string | null {
   if ((rule.decision ?? 'allow') !== 'allow') return null;
+  if (rule.sandbox === 'host') return t('workspace.rules.boundsHost', 'Runs without a sandbox, only while this folder is trusted');
   const sandbox = rule.sandbox ?? 'workspace-write';
   if (rule.credential !== undefined || rule.hosts !== undefined) return grantOf(rule, sandbox);
   return rule.network === true ? t('workspace.rules.boundsNetwork', 'Covers the {{sandbox}} sandbox, with network access', { sandbox }) : t('workspace.rules.bounds', 'Covers the {{sandbox}} sandbox, without network access', { sandbox });
@@ -73,6 +78,17 @@ export function LoadErrorAlert({ error }: { error: RuleLoadError }): React.JSX.E
   );
 }
 
+/** A rule that matches only in a trusted folder, shown while this one is not: it is inert, never a sandboxed allow. */
+function NeedsTrust({ rule }: { rule: PrefixRule }): React.JSX.Element | null {
+  const trusted = useContext(FolderTrustedContext);
+  if (rule.requires_trust !== true || trusted) return null;
+  return (
+    <Tooltip title={t('workspace.rules.needsTrustHelp', 'This rule was remembered in a trusted folder. It applies only while the folder is trusted, and does nothing until then.')}>
+      <Chip size="small" color="warning" variant="outlined" data-testid="rule-needs-trust" label={t('workspace.rules.needsTrust', 'Needs trust')} />
+    </Tooltip>
+  );
+}
+
 /** One rule as a line of the list: everything it decides and why. */
 export function RuleSummary({ rule }: { rule: PrefixRule }): React.JSX.Element {
   const examples = exampleCount(rule);
@@ -83,6 +99,7 @@ export function RuleSummary({ rule }: { rule: PrefixRule }): React.JSX.Element {
       <Stack direction="row" spacing={0.5} sx={{ flexShrink: 0 }}>
         <Chip size="small" color={decisionColor(rule.decision)} label={decisionLabel(rule.decision)} />
         {rule.origin === 'repository' && <Chip size="small" variant="outlined" label={t('workspace.rules.fromRepository', 'From the repository')} />}
+        <NeedsTrust rule={rule} />
       </Stack>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Typography variant="bodyMedium" sx={{ fontFamily: (theme) => theme.typography.fontFamilyMono, overflowWrap: 'anywhere' }}>

@@ -319,7 +319,7 @@ export function EarlierTurns({
 }
 
 /** Each turn started here, under the prompt that started it; the last one is live. ("Open in chat" is in the header.) */
-export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
+export function Exchanges({ turn, prompts, promptImages, onFork, live, toolOffer }: {
   turn: WorkspaceTurn;
   prompts: readonly string[];
   /** The thumbnails of each prompt's images, by the same index. */
@@ -328,6 +328,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
   onFork?: OnFork;
   /** The live turn's "Retry" (its error) and "Continue" (its tool-call stop). */
   live?: { onRetryTurn: () => void; onContinue: () => void };
+  /** A failed tool call's offer by error code ("Trust this folder…" on `sandbox_unavailable`). */ toolOffer?: (code: string) => React.ReactNode;
 }): React.JSX.Element {
   const copyMenu = useCopyMenu();
   const turns = [...turn.earlier, ...(turn.turnId === null ? [] : [{ turnId: turn.turnId, view: turn.view }])];
@@ -355,7 +356,7 @@ export function Exchanges({ turn, prompts, promptImages, onFork, live }: {
             continuation={exchange.continuation}
             onRetryCommit={(executionId) => turn.retryCommit(exchange.key, executionId)}
             onTextContextMenu={(text, event) => copyMenu(text, event, fork)}
-            subAgentAvatar={ProfileAvatar}
+            subAgentAvatar={ProfileAvatar} toolOffer={toolOffer}
             {...(exchange.live ? live : {})}
           />
         </Box>

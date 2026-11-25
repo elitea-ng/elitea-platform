@@ -24,6 +24,7 @@ const RulesPage = /* @__PURE__ */ lazy(() => import('./RulesPage'));
 const McpPage = /* @__PURE__ */ lazy(() => import('./McpPage'));
 const HooksPage = /* @__PURE__ */ lazy(() => import('./HooksPage'));
 const ComputerUsePage = /* @__PURE__ */ lazy(() => import('./ComputerUsePage'));
+const TrustedFoldersPage = /* @__PURE__ */ lazy(() => import('./TrustedFoldersPage'));
 
 function NotAvailable(): React.JSX.Element {
   return <Navigate to="/chat" replace />;
@@ -93,6 +94,16 @@ export function ComputerUseEntry(): React.JSX.Element | null {
   return (
     <Suspense fallback={null}>
       <ComputerUsePage />
+    </Suspense>
+  );
+}
+
+/** Settings › Trusted folders (ADR-0061 decision 5i, #3062); nothing outside `desktop`. */
+export function TrustedFoldersEntry(): React.JSX.Element | null {
+  if (import.meta.env.MODE !== 'desktop') return null;
+  return (
+    <Suspense fallback={null}>
+      <TrustedFoldersPage />
     </Suspense>
   );
 }

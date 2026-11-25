@@ -26,8 +26,11 @@ export interface PrefixRule {
   justification?: string;
   match?: RuleExample[];
   not_match?: RuleExample[];
-  sandbox?: 'read-only' | 'workspace-write' | 'full-access';
+  /** `host`: the person's own allow rule may run the command without a sandbox, in a trusted folder only (ADR-0061 decision 5d). A repository's rule never has it. */
+  sandbox?: 'read-only' | 'workspace-write' | 'full-access' | 'host';
   network?: boolean;
+  /** Written by "Always allow" in a trusted folder (ADR-0061 decision 5e): the rule matches only while the folder is trusted. */
+  requires_trust?: boolean;
   /**
    * Allow rules only, the person's own (#3006): hand the program its stored
    * login (a credential profile id, `gh`) inside the sandbox.

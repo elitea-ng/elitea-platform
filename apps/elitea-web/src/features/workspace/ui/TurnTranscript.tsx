@@ -215,6 +215,14 @@ export interface TurnTranscriptProps {
   continuation?: number | undefined;
   /** Each sub-agent lane's avatar (the cloud transcript's temporary participants); absent: none. */
   subAgentAvatar?: SubAgentAvatar | undefined;
+  /** What a failed tool call offers under its row, by error code (a trusted-folder offer on `sandbox_unavailable`); `null`: nothing. */
+  toolOffer?: ((code: string) => React.ReactNode) | undefined;
+}
+
+/** A failed call's offer, when the row has an error code and the page offers something for it. */
+function ToolOffer({ item, offer }: { item: ToolItem; offer: TurnTranscriptProps['toolOffer'] }): React.ReactNode {
+  const code = item.result?.code;
+  return code === undefined || offer === undefined ? null : offer(code);
 }
 
 /**
@@ -291,7 +299,7 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation, subAgentAvatar }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation, subAgentAvatar, toolOffer }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -313,6 +321,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
         ) : (
           <Box key={item.key}>
             <ToolRow item={item} />
+            <ToolOffer item={item} offer={toolOffer} />
             <SubAgentLanes lanes={lanesOf(view.subAgents, item.callId)} ToolRow={ToolRow} Avatar={subAgentAvatar} />
           </Box>
         ),

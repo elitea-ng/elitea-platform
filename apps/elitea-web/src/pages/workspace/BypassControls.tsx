@@ -11,11 +11,17 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 
+import { useFolderTrusted } from '@/features/folder-trust';
 import { t } from '@/shared/i18n';
 
 import type { BypassMode } from './useBypassMode';
 
-export function BypassControls({ bypass, active }: { bypass: BypassMode; active: boolean }): React.JSX.Element {
+/** In a trusted folder (ADR-0061 decision 5g): the one kind of question Bypass leaves to the person. */
+const trustedLine = (): string => t('workspace.bypass.trusted', 'Bypass does not answer questions raised after reading outside content.');
+
+export function BypassControls({ bypass, active, workspaceId }: { bypass: BypassMode; active: boolean; workspaceId: string }): React.JSX.Element {
+  const trusted = useFolderTrusted(workspaceId);
+  const extra = trusted ? ` ${trustedLine()}` : '';
   return (
     <>
       {active && (
@@ -29,6 +35,7 @@ export function BypassControls({ bypass, active }: { bypass: BypassMode; active:
           }
         >
           {t('workspace.bypass.notice', 'Bypass mode: the agent runs commands and edits files without asking you.')}
+          {extra}
         </Alert>
       )}
       <Dialog open={bypass.confirming} onClose={bypass.cancel} aria-labelledby="workspace-bypass-title">
@@ -39,6 +46,7 @@ export function BypassControls({ bypass, active }: { bypass: BypassMode; active:
               'workspace.bypass.body',
               'In bypass mode the agent does not ask before it runs a command, changes a file or calls an MCP tool. This includes commands that run outside the sandbox. Your organization’s policy, your forbidden rules and your hooks still apply. Use it only in a folder that you can restore.',
             )}
+            {extra}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
