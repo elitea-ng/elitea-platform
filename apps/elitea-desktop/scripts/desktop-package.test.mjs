@@ -98,10 +98,13 @@ test('the Linux job: the pool, the shared action, the release names and the smok
   assert.match(action, /elitea-doc-extract-sidecar-x86_64-unknown-linux-gnu/);
   // The smoke test: --version is the stamped version, and the app is still up after 30 s.
   assert.match(action, /got="\$\("\$appimage" --version\)"/);
-  assert.match(action, /xvfb-run -a "\$\{run\[@\]\}"/);
+  assert.match(action, /xvfb-run -a timeout -k 10 30 "\$appimage"/);
+  // The glibc floor the docs and the notes promise is the build host's, checked.
+  assert.match(action, /default: "2\.39"/);
+  assert.match(action, /getconf GNU_LIBC_VERSION/);
   assert.match(action, /if \[ "\$status" -ne 124 \]/);
   assert.match(action, /"\$\{appimage\[0\]\}" --appimage-extract >\/dev\/null/);
-  assert.match(action, /Recommends \| grep -q "bubblewrap"/);
+  assert.match(action, /grep -qF "bubblewrap" <<<"\$recommends"/);
   // No brand literal in the shared action.
   assert.doesNotMatch(action, /Elitea [0-9]|brand\/elitea|ai\.elitea/);
   // The .deb recommends the sandbox the host runs commands in.

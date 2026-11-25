@@ -20,6 +20,11 @@ inputs:
   version:
     description: The release version to stamp (X.Y.Z or X.Y.Z-pre); empty keeps the tree's.
     default: ""
+  glibc:
+    description: >-
+      The build host's glibc, exactly: the oldest glibc the AppImage runs on,
+      which the docs and the release notes name (Ubuntu 24.04's).
+    default: "2.39"
 
 outputs:
   signed:
@@ -37,6 +42,7 @@ runs:
       shell: bash
       env:
         ROOT: ${{ inputs.root }}
+        GLIBC_FLOOR: ${{ inputs.glibc }}
       run: |
         set -euo pipefail
         root="$(cd "$ROOT" && pwd)"
@@ -44,14 +50,22 @@ runs:
         echo "out=$RUNNER_TEMP/out" >> "$GITHUB_OUTPUT"
         # Before a 40-minute build: the tools the build and the smoke test need.
         missing=""
-        for tool in pkg-config xvfb-run dpkg-deb timeout; do
+        for tool in pkg-config xvfb-run xauth dpkg-deb timeout; do
           command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
         done
         for lib in webkit2gtk-4.1 gtk+-3.0 libsoup-3.0 ayatana-appindicator3-0.1 librsvg-2.0; do
           pkg-config --exists "$lib" 2>/dev/null || missing="$missing $lib(dev)"
         done
         if [ -n "$missing" ]; then
-          echo "::error::desktop-linux-package: this runner lacks:$missing (the eng-runner image has them; on Ubuntu: libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev xvfb)"
+          echo "::error::desktop-linux-package: this runner lacks:$missing (the eng-runner image has them; on Ubuntu: libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev xvfb xauth)"
+          exit 1
+        fi
+        # The AppImage needs the build host's glibc or newer, and the docs and the
+        # release notes promise GLIBC_FLOOR. A runner on a newer system (a bumped
+        # ubuntu-latest, a new pool image) fails here, not on people's machines.
+        have="$(getconf GNU_LIBC_VERSION | awk '{ print $2 }')"
+        if [ "$have" != "$GLIBC_FLOOR" ]; then
+          echo "::error::desktop-linux-package: this runner has glibc $have; the AppImage would need it, and the docs promise $GLIBC_FLOOR. Build on a system with glibc $GLIBC_FLOOR (Ubuntu 24.04), or change the input and the docs together."
           exit 1
         fi
 
@@ -138,14 +152,14 @@ runs:
         home="$RUNNER_TEMP/smoke-home"
         rm -rf "${home:?}" && mkdir -p "$home/run" && chmod 0700 "$home/run"
         log="$RUNNER_TEMP/smoke.log"
-        run=(timeout -k 10 30 "$appimage")
-        # A session bus when the runner has one to start (the single-instance
-        # lock and notifications use it on a desktop); the app starts without.
-        if command -v dbus-run-session >/dev/null 2>&1; then run=(dbus-run-session -- "${run[@]}"); fi
+        # `timeout` is the command xvfb-run runs, and xvfb-run returns its
+        # command's status: 124 is timeout's own "I stopped it", never the
+        # app's. No session bus: the same path on every runner, and the app
+        # must start without one (a minimal desktop or a container has none).
         set +e
         HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
           XDG_CACHE_HOME="$home/.cache" XDG_RUNTIME_DIR="$home/run" \
-          xvfb-run -a "${run[@]}" > "$log" 2>&1
+          xvfb-run -a timeout -k 10 30 "$appimage" > "$log" 2>&1
         status=$?
         set -e
         echo "--- the app's output"; cat "$log"; echo "---"
@@ -177,13 +191,19 @@ runs:
         if [ "${#entries[@]}" -ne 1 ]; then echo "::error::want one .desktop entry at the AppImage's root, found ${#entries[@]}"; exit 1; fi
         cat "${entries[0]}"
         grep -qx "Type=Application" "${entries[0]}" || { echo "::error::the .desktop entry is not Type=Application"; exit 1; }
-        grep -qx "Name=$product" "${entries[0]}" || { echo "::error::the .desktop entry's Name is not $product"; exit 1; }
+        grep -qxF -- "Name=$product" "${entries[0]}" || { echo "::error::the .desktop entry's Name is not $product"; exit 1; }
         grep -q "^Exec=" "${entries[0]}" || { echo "::error::the .desktop entry has no Exec"; exit 1; }
         grep -q "^Icon=" "${entries[0]}" || { echo "::error::the .desktop entry has no Icon"; exit 1; }
 
+        # Read whole, then matched: `cmd | grep -q` under pipefail fails when
+        # grep's early exit gives the writer SIGPIPE.
         deb=("$RUNNER_TEMP"/out/*.deb)
         dpkg-deb --field "${deb[0]}" Package Version Architecture Depends Recommends
-        [ "$(dpkg-deb --field "${deb[0]}" Architecture)" = amd64 ] || { echo "::error::the .deb is not amd64"; exit 1; }
-        dpkg-deb --field "${deb[0]}" Depends | grep -q "libwebkit2gtk-4.1" || { echo "::error::the .deb does not depend on libwebkit2gtk-4.1"; exit 1; }
-        dpkg-deb --field "${deb[0]}" Recommends | grep -q "bubblewrap" || { echo "::error::the .deb does not recommend bubblewrap (the sandbox)"; exit 1; }
-        dpkg-deb --contents "${deb[0]}" | grep -q "usr/share/applications/.*\.desktop$" || { echo "::error::the .deb installs no .desktop entry"; exit 1; }
+        arch="$(dpkg-deb --field "${deb[0]}" Architecture)"
+        depends="$(dpkg-deb --field "${deb[0]}" Depends)"
+        recommends="$(dpkg-deb --field "${deb[0]}" Recommends)"
+        contents="$(dpkg-deb --contents "${deb[0]}")"
+        [ "$arch" = amd64 ] || { echo "::error::the .deb is $arch, not amd64"; exit 1; }
+        grep -qF "libwebkit2gtk-4.1" <<<"$depends" || { echo "::error::the .deb does not depend on libwebkit2gtk-4.1"; exit 1; }
+        grep -qF "bubblewrap" <<<"$recommends" || { echo "::error::the .deb does not recommend bubblewrap (the sandbox)"; exit 1; }
+        grep -q "usr/share/applications/.*\.desktop$" <<<"$contents" || { echo "::error::the .deb installs no .desktop entry"; exit 1; }
