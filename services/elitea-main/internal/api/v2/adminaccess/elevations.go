@@ -107,7 +107,9 @@ type ElevationStore interface {
 	// recorded expiry is committed.
 	Answer(ctx context.Context, answer registry.ElevationAnswer) (registry.ElevationRecord, error)
 	LatestRequest(ctx context.Context, userID int64) (registry.ElevationRecord, bool, error)
-	Pending(ctx context.Context, now time.Time, lifetime time.Duration, limit int) ([]registry.ElevationRecord, error)
+	// Pending reads the queue of the approver exclude (never their own
+	// requests), at most limit rows, and the size of the whole queue.
+	Pending(ctx context.Context, now time.Time, lifetime time.Duration, exclude int64, limit int) ([]registry.ElevationRecord, int, error)
 	History(ctx context.Context, limit, offset int) ([]registry.ElevationRecord, int, error)
 	People(ctx context.Context, ids []int64) (map[int64]Person, error)
 	// HoldsStanding reports whether the person holds permission through a
@@ -166,8 +168,8 @@ func (p *PostgresElevations) LatestRequest(ctx context.Context, userID int64) (r
 }
 
 // Pending implements ElevationStore.
-func (p *PostgresElevations) Pending(ctx context.Context, now time.Time, lifetime time.Duration, limit int) ([]registry.ElevationRecord, error) {
-	return registry.PendingElevationRequests(ctx, p.pool, now, lifetime, limit)
+func (p *PostgresElevations) Pending(ctx context.Context, now time.Time, lifetime time.Duration, exclude int64, limit int) ([]registry.ElevationRecord, int, error) {
+	return registry.PendingElevationRequests(ctx, p.pool, now, lifetime, exclude, limit)
 }
 
 // History implements ElevationStore.
@@ -524,11 +526,13 @@ func (h *ElevationsHandler) Pending(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := h.now().UTC()
-	pending, err := h.store.Pending(r.Context(), now, settings.RequestLifetime, maxPendingRows)
+	pending, total, err := h.store.Pending(r.Context(), now, settings.RequestLifetime, actor, maxPendingRows)
 	if err != nil {
 		h.writeReadError(w, r, err)
 		return
 	}
+	// The store leaves the caller's own requests out; this is the closed
+	// failure of a store that does not.
 	pending = slices.DeleteFunc(pending, func(e registry.ElevationRecord) bool {
 		return e.RequesterUserID == actor || e.UserID == actor
 	})
@@ -537,7 +541,7 @@ func (h *ElevationsHandler) Pending(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeElevationJSON(w, http.StatusOK, elevationListBody{Total: len(views), Rows: views})
+	writeElevationJSON(w, http.StatusOK, elevationListBody{Total: max(total, len(views)), Rows: views})
 }
 
 // History answers the ledger newest first, paged by limit and offset.
@@ -642,7 +646,6 @@ func elevationViewOf(e registry.ElevationRecord, now time.Time, lifetime time.Du
 		Path:             e.Path,
 		Level:            optionalString(e.Level),
 		ReasonCode:       e.ReasonCode,
-		Ticket:           optionalString(e.Ticket),
 		Person:           personBody{ID: e.UserID, Name: person.Name, Email: person.Email},
 		DenialReasonCode: optionalString(e.DenialReasonCode),
 		RequestedAt:      e.RequestedAt.UTC(),
@@ -655,6 +658,7 @@ func elevationViewOf(e registry.ElevationRecord, now time.Time, lifetime time.Du
 	}
 	if withReason {
 		view.Reason = optionalString(e.Reason)
+		view.Ticket = optionalString(e.Ticket)
 	}
 	if e.Duration > 0 {
 		minutes := int64(e.Duration / time.Minute)
@@ -713,10 +717,21 @@ func pageOf(w http.ResponseWriter, r *http.Request) (int, int, bool) {
 }
 
 func decodeElevationBody(w http.ResponseWriter, r *http.Request, into any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRequestBodyBytes))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(into); err != nil {
-		writeElevationRefusal(w, http.StatusBadRequest, CodeElevationRequestInvalid, "the body is not a valid request")
+	err := decoder.Decode(into)
+	if err == nil {
+		// One JSON value and nothing after it.
+		if trailing := decoder.Decode(&struct{}{}); !errors.Is(trailing, io.EOF) {
+			err = errors.New("data after the request")
+		}
+	}
+	if err != nil {
+		message := "the body is not a valid request"
+		if tooLarge := (*http.MaxBytesError)(nil); errors.As(err, &tooLarge) {
+			message = fmt.Sprintf("the body is larger than %d bytes", maxRequestBodyBytes)
+		}
+		writeElevationRefusal(w, http.StatusBadRequest, CodeElevationRequestInvalid, message)
 		return false
 	}
 	return true
@@ -737,7 +752,7 @@ func (h *ElevationsHandler) writeLedgerError(w http.ResponseWriter, r *http.Requ
 		{registry.ErrElevationRequester, http.StatusForbidden, CodeElevationRequesterNotEligible,
 			"a request needs access.breakglass.request through a standing role"},
 		{registry.ErrElevationRequestPending, http.StatusConflict, CodeElevationRequestPending,
-			"a request of yours is waiting for an answer"},
+			"a request of yours is waiting for an answer or for its start"},
 		{registry.ErrElevationNotFound, http.StatusNotFound, CodeElevationNotFound, "no such elevation request"},
 		{registry.ErrElevationRequestExpired, http.StatusGone, CodeElevationRequestExpired,
 			"the request expired unanswered; the requester can make a new one"},
@@ -745,6 +760,8 @@ func (h *ElevationsHandler) writeLedgerError(w http.ResponseWriter, r *http.Requ
 		{registry.ErrElevationOwnRequest, http.StatusForbidden, CodeElevationOwnRequest, "nobody answers their own request"},
 		{registry.ErrElevationApproverElevated, http.StatusForbidden, CodeElevationApproverElevated,
 			"a person under an elevation cannot answer an elevation request"},
+		{registry.ErrElevationPersonNotEligible, http.StatusForbidden, CodeElevationRequesterNotEligible,
+			"the person of the request can no longer hold an elevation"},
 		{registry.ErrElevationApproverNotEligible, http.StatusForbidden, CodeElevationApproverNotEligible,
 			"an answer needs access.breakglass.approve through a standing role"},
 		{registry.ErrElevationInvalid, http.StatusBadRequest, CodeElevationRequestInvalid, ""},

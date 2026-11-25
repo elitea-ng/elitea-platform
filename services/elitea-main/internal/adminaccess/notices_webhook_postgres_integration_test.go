@@ -273,6 +273,12 @@ func TestFailingWebhookLeavesTheRowAndNeverBlocksTheEmail(t *testing.T) {
 	if strings.Contains(rows[0].lastError, "T0KEN") || strings.Contains(rows[0].lastError, "127.0.0.1") {
 		t.Fatalf("the stored error names the URL: %q", rows[0].lastError)
 	}
+	// A sender whose webhook was taken away still counts the row, so the
+	// routine can say it waits, and sends nothing.
+	unconfigured := newNoticeSender(t, pool, &noticeMailer{}, func() time.Time { return clock })
+	if result := sendPass(t, unconfigured); result.WebhookConfigured || result.WebhookPending != 1 || result.WebhookSent != 0 {
+		t.Fatalf("pass with no webhook = %+v", result)
+	}
 
 	receiver.answer(http.StatusOK)
 	clock = start.At.Add(adminaccess.NoticeRetryDelay(1) + time.Second)

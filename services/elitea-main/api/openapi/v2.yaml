@@ -19673,7 +19673,7 @@ components:
       type: object
       required: [reason_code, reason]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:295-300
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:297-302
         (elevationRequestBody). An unknown field is refused.
       properties:
         reason_code:
@@ -19703,7 +19703,7 @@ components:
       type: object
       required: [reason_code]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:302-304
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:304-306
         (elevationDenyBody). Never free text.
       properties:
         reason_code:
@@ -19716,7 +19716,7 @@ components:
       type: object
       required: [id, name, email]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:306-310
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:308-312
         (personBody). Empty name and e-mail when the account row no longer
         exists.
       properties:
@@ -19730,7 +19730,7 @@ components:
                  denial_reason_code, requested_at, request_expires_at, decided_at, started_at, expires_at,
                  ended_at, end_reason, review_state, time_left_seconds]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:312-333
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:314-335
         (elevationView). One row of the elevation ledger: a request, its
         decision and, once started, the elevation.
       properties:
@@ -19760,7 +19760,10 @@ components:
             The reason text; null on a history row for a caller who is
             neither a standing holder of `access.breakglass.review`, the
             requester, the person nor the approver.
-        ticket: { type: string, nullable: true }
+        ticket:
+          type: string
+          nullable: true
+          description: The ticket; withheld exactly as `reason` is.
         duration_minutes:
           type: integer
           nullable: true
@@ -19799,7 +19802,7 @@ components:
       type: object
       required: [request, approving_roles]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:335-338
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:337-340
         (ownElevationBody).
       properties:
         request:
@@ -19818,12 +19821,14 @@ components:
       type: object
       required: [total, rows]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:340-343
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:342-345
         (elevationListBody).
       properties:
         total:
           type: integer
-          description: Every row of the list (the history counts all pages; the queue is one page).
+          description: >-
+            Every row of the list, not only this page: the whole history, or
+            the whole queue of the caller (whose page holds at most 200 rows).
         rows:
           type: array
           items:
@@ -19833,7 +19838,7 @@ components:
       type: object
       required: [error]
       description: >
-        NOTE(W2): internal/api/v2/adminaccess/elevations.go:772-777
+        NOTE(W2): internal/api/v2/adminaccess/elevations.go:789-794
         (writeElevationRefusal). A refusal of an elevation request route.
         `error` is the message; a client keys a translated message on
         `code`, which a route gate's plain refusal does not carry.
@@ -25059,8 +25064,12 @@ components:
         standing role or is suspended (`elevation_approver_not_eligible`),
         the request is the caller's own (`elevation_own_request`), the
         caller holds an active elevation in any session
-        (`elevation_approver_elevated`), or the caller's active elevation
-        took part in the session's permissions (`elevation_restricted`).
+        (`elevation_approver_elevated`), the person of the request can no
+        longer hold an elevation (an approval only: suspended, without a
+        standing `access.breakglass.request`, or with the request's session
+        ended; `elevation_requester_not_eligible`), or the caller's active
+        elevation took part in the session's permissions
+        (`elevation_restricted`).
       content:
         application/json:
           schema:
@@ -26847,11 +26856,14 @@ paths:
                     error: a request needs access.breakglass.request through a standing role
                     code: elevation_requester_not_eligible
         '409':
-          description: A request of the caller waits for an answer (`elevation_request_pending`).
+          description: >-
+            The caller has an open request (`elevation_request_pending`): one
+            waiting for an answer within the request lifetime, or an approval
+            not started within the request lifetime from its decision.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ElevationRefusal' }
-              example: { error: a request of yours is waiting for an answer, code: elevation_request_pending }
+              example: { error: a request of yours is waiting for an answer or for its start, code: elevation_request_pending }
         '500': { $ref: '#/components/responses/500' }
         '503':
           description: The elevation requests are not configured on this deployment.

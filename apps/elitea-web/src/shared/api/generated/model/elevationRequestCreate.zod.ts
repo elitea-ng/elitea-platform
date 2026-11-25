@@ -71,7 +71,7 @@ export const ElevationRequestCreate = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:295-300 (elevationRequestBody). An unknown field is refused.\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:297-302 (elevationRequestBody). An unknown field is refused.\n",
   );
 
 export type ElevationRequestCreate = zod.input<typeof ElevationRequestCreate>;

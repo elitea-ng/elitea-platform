@@ -55,7 +55,7 @@ export const OwnElevationRequest = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:335-338 (ownElevationBody).\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:337-340 (ownElevationBody).\n",
   );
 
 export type OwnElevationRequest = zod.input<typeof OwnElevationRequest>;

@@ -53,7 +53,7 @@ An elevation starts as a request, and a second person answers it. Both are calls
 - `reason_code` is `incident`, `identity_outage`, `recovery` or `other`, and `reason` is required.
 - `ticket` is optional.
 - `duration_minutes` is how long the elevation lasts once it starts. Without it, the request takes the **online default duration** of the settings. Above the **online maximum duration** it is refused with `400 elevation_duration_over_cap`.
-- One request waits at a time: a second one while the first waits for an answer is refused with `409 elevation_request_pending`. There is no extension: more time is a new request after the elevation ends.
+- One request is open at a time: a second one is refused with `409 elevation_request_pending` while the first waits for an answer, and while an approval of it has not started, for one request lifetime from the approval. With approval off, that is what keeps a person to one request per lifetime. There is no extension: more time is a new request after the elevation ends.
 
 Every holder of `access.breakglass.approve` except the person who asked gets an e-mail with a link to the approval page (see [Who is told](#who-is-told)). The request waits for the **request lifetime** (30 minutes by default).
 
@@ -61,6 +61,7 @@ Every holder of `access.breakglass.approve` except the person who asked gets an 
 
 - **The level is the approver's.** An approver who holds `super_admin` through a standing role approves at the `super_admin` level, anyone else at the `admin` level. Nobody can approve `super_admin` without being one.
 - **Nobody answers their own request** (`403 elevation_own_request`).
+- **The person must still be able to hold it.** An approval is refused with `403 elevation_requester_not_eligible` when, since the request, the person's account was suspended, the person lost `access.breakglass.request`, or the session the request was made in ended. A denial is still accepted.
 - **Nobody under an elevation answers** (`403 elevation_approver_elevated`), in whichever session the elevation runs. The action table also refuses the request and both answers to an elevation (`elevation_restricted`).
 - **A late answer is refused.** After the request lifetime an answer gets `410 elevation_request_expired`, and the request is recorded as `request_expired` at that moment. A request that was answered already gets `409 elevation_request_decided`.
 
@@ -71,8 +72,8 @@ Each step writes its ledger row, its security audit event (`admin.elevation` wit
 **What the console reads.**
 
 - `GET /api/v2/admin/access/elevations/mine`: the caller's latest request with its state (`requested`, `approved`, `denied` with its reason code, `request_expired`, and later the states of the elevation), the time left, and the roles that can approve it. For a holder of `access.breakglass.request`.
-- `GET /api/v2/admin/access/elevations/pending`: the requests that wait for an answer, oldest first, with their count and their reason text. The caller's own requests are left out. For a holder of `access.breakglass.approve`.
-- `GET /api/v2/admin/access/elevations?limit=50&offset=0`: the history of requests and elevations, newest first. For a holder of `access.roles.view`. The reason text is shown only to a holder of `access.breakglass.review`, to the person and to the approver; everyone else sees the reason code.
+- `GET /api/v2/admin/access/elevations/pending`: the requests that wait for an answer, oldest first (at most 200), with their reason text and the count of the whole queue. The caller's own requests are left out. For a holder of `access.breakglass.approve`.
+- `GET /api/v2/admin/access/elevations?limit=50&offset=0`: the history of requests and elevations, newest first. For a holder of `access.roles.view`. The reason text and the ticket are shown only to a holder of `access.breakglass.review`, to the person and to the approver; everyone else sees the reason code.
 
 ## When an elevation or a request runs out
 

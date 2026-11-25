@@ -53,7 +53,7 @@ export const ElevationRefusal = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:772-777 (writeElevationRefusal). A refusal of an elevation request route. `error` is the message; a client keys a translated message on `code`, which a route gate's plain refusal does not carry.\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:789-794 (writeElevationRefusal). A refusal of an elevation request route. `error` is the message; a client keys a translated message on `code`, which a route gate's plain refusal does not carry.\n",
   );
 
 export type ElevationRefusal = zod.input<typeof ElevationRefusal>;

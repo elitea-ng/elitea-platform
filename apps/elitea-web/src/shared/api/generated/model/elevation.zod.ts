@@ -67,7 +67,10 @@ export const Elevation = zod
       .describe(
         "The reason text; null on a history row for a caller who is neither a standing holder of `access.breakglass.review`, the requester, the person nor the approver.\n",
       ),
-    ticket: zod.string().nullable(),
+    ticket: zod
+      .string()
+      .nullable()
+      .describe("The ticket; withheld exactly as `reason` is."),
     duration_minutes: zod
       .int()
       .nullable()
@@ -102,7 +105,7 @@ export const Elevation = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:312-333 (elevationView). One row of the elevation ledger: a request, its decision and, once started, the elevation.\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:314-335 (elevationView). One row of the elevation ledger: a request, its decision and, once started, the elevation.\n",
   );
 
 export type Elevation = zod.input<typeof Elevation>;

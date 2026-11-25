@@ -93,7 +93,7 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 	done := make(chan struct{})
 	// The "no mailer" warning is logged when the waiting starts and then at
 	// most every accessNoticeWaitWarnEvery, not on every 30-second pass.
-	var lastWaitWarn time.Time
+	var lastWaitWarn, lastWebhookWarn time.Time
 	go func() {
 		defer close(done)
 		loop.Run(ctx, func(ctx context.Context) (string, error) {
@@ -112,6 +112,15 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 			case result.Sent > 0 || result.Failed > 0:
 				logger.Info("access notice sender pass",
 					"sent", result.Sent, "failed", result.Failed, "pending", result.Pending)
+			}
+			if !result.WebhookConfigured && result.WebhookPending > 0 {
+				if lastWebhookWarn.IsZero() || time.Since(lastWebhookWarn) >= accessNoticeWaitWarnEvery {
+					lastWebhookWarn = time.Now()
+					logger.Warn("break-glass webhook notices wait for a webhook: the notice webhook is no longer configured",
+						"pending", result.WebhookPending)
+				}
+			} else {
+				lastWebhookWarn = time.Time{}
 			}
 			if result.WebhookSent > 0 || result.WebhookFailed > 0 {
 				logger.Info("access notice webhook pass", "sent", result.WebhookSent,

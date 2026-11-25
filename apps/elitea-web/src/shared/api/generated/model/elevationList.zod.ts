@@ -48,12 +48,12 @@ export const ElevationList = zod
     total: zod
       .int()
       .describe(
-        "Every row of the list (the history counts all pages; the queue is one page).",
+        "Every row of the list, not only this page: the whole history, or the whole queue of the caller (whose page holds at most 200 rows).",
       ),
     rows: zod.array(Elevation),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:340-343 (elevationListBody).\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:342-345 (elevationListBody).\n",
   );
 
 export type ElevationList = zod.input<typeof ElevationList>;

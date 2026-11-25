@@ -51,14 +51,18 @@ func requestDirectory() *directory {
 // fakeElevations is the ledger: it records what it was asked and answers
 // what the test scripted.
 type fakeElevations struct {
-	requests  []registry.ElevationRequest
-	answers   []registry.ElevationAnswer
-	record    registry.ElevationRecord
-	err       error
-	latest    *registry.ElevationRecord
-	pending   []registry.ElevationRecord
-	history   []registry.ElevationRecord
-	reviewers map[int64]bool
+	requests []registry.ElevationRequest
+	answers  []registry.ElevationAnswer
+	record   registry.ElevationRecord
+	err      error
+	latest   *registry.ElevationRecord
+	pending  []registry.ElevationRecord
+	// pendingTotal is the queue size the store reports; pendingExclude is
+	// the approver it was asked for.
+	pendingTotal   int
+	pendingExclude int64
+	history        []registry.ElevationRecord
+	reviewers      map[int64]bool
 }
 
 func (f *fakeElevations) Request(_ context.Context, r registry.ElevationRequest) (registry.ElevationRequested, error) {
@@ -85,8 +89,9 @@ func (f *fakeElevations) LatestRequest(context.Context, int64) (registry.Elevati
 	return *f.latest, true, nil
 }
 
-func (f *fakeElevations) Pending(context.Context, time.Time, time.Duration, int) ([]registry.ElevationRecord, error) {
-	return f.pending, nil
+func (f *fakeElevations) Pending(_ context.Context, _ time.Time, _ time.Duration, exclude int64, _ int) ([]registry.ElevationRecord, int, error) {
+	f.pendingExclude = exclude
+	return f.pending, f.pendingTotal, nil
 }
 
 func (f *fakeElevations) History(_ context.Context, limit, offset int) ([]registry.ElevationRecord, int, error) {
@@ -166,6 +171,8 @@ func TestARequestWithoutAReasonIsRefused(t *testing.T) {
 		"unknown field": `{"reason_code":"incident","reason":"r","level":"super_admin"}`,
 		"zero duration": `{"reason_code":"incident","reason":"r","duration_minutes":0}`,
 		"not json":      `reason`,
+		"trailing data": `{"reason_code":"incident","reason":"r"}{"level":"super_admin"}`,
+		"too large":     `{"reason_code":"incident","reason":"` + strings.Repeat("r", 20<<10) + `"}`,
 	} {
 		rec := call(t, h, browser(requester), http.MethodPost, "/access/elevations", body)
 		if rec.Code != http.StatusBadRequest || refusalCode(t, rec) != console.CodeElevationRequestInvalid {
@@ -308,6 +315,7 @@ func TestTheLedgersRefusalsOfAnAnswer(t *testing.T) {
 		registry.ErrElevationOwnRequest:          {http.StatusForbidden, console.CodeElevationOwnRequest},
 		registry.ErrElevationApproverElevated:    {http.StatusForbidden, console.CodeElevationApproverElevated},
 		registry.ErrElevationApproverNotEligible: {http.StatusForbidden, console.CodeElevationApproverNotEligible},
+		registry.ErrElevationPersonNotEligible:   {http.StatusForbidden, console.CodeElevationRequesterNotEligible},
 		registry.ErrElevationRequestDecided:      {http.StatusConflict, console.CodeElevationRequestDecided},
 		registry.ErrElevationRequestExpired:      {http.StatusGone, console.CodeElevationRequestExpired},
 		registry.ErrElevationNotFound:            {http.StatusNotFound, console.CodeElevationNotFound},
@@ -425,8 +433,15 @@ func TestTheQueueLeavesOutTheCallersOwnRequest(t *testing.T) {
 		Path: registry.ElevationPathApproved, RequestedAt: requestClock.Add(-time.Minute)}
 	other := registry.ElevationRecord{ID: uuid.New(), UserID: requester, RequesterUserID: requester,
 		Path: registry.ElevationPathApproved, Reason: "the reason", RequestedAt: requestClock.Add(-2 * time.Minute)}
-	h := requestRouter(&fakeElevations{pending: []registry.ElevationRecord{own, other}}, requestDirectory(), requestClock)
+	// A store that leaves the own request in (the closed failure) and reports
+	// a queue larger than the page: the handler drops the row and keeps the
+	// store's count.
+	store := &fakeElevations{pending: []registry.ElevationRecord{own, other}, pendingTotal: 250}
+	h := requestRouter(store, requestDirectory(), requestClock)
 	rec := call(t, h, browser(approver), http.MethodGet, "/access/elevations/pending", ``)
+	if store.pendingExclude != approver {
+		t.Fatalf("the store was asked for the queue of %d, not of the caller %d", store.pendingExclude, approver)
+	}
 	var body struct {
 		Total int `json:"total"`
 		Rows  []struct {
@@ -437,19 +452,19 @@ func TestTheQueueLeavesOutTheCallersOwnRequest(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Total != 1 || len(body.Rows) != 1 || body.Rows[0].ID != other.ID.String() || body.Rows[0].Reason != "the reason" {
+	if body.Total != 250 || len(body.Rows) != 1 || body.Rows[0].ID != other.ID.String() || body.Rows[0].Reason != "the reason" {
 		t.Fatalf("queue = %s", rec.Body)
 	}
 }
 
-// The history shows the reason text only to a holder of
+// The history shows the reason text and the ticket only to a holder of
 // access.breakglass.review (standing), the requester, the person and the
 // approver; the reason code to everyone it answers.
 func TestTheHistoryHidesTheReasonText(t *testing.T) {
 	t.Parallel()
 	row := registry.ElevationRecord{ID: uuid.New(), UserID: requester, RequesterUserID: requester, ApproverUserID: approver,
 		Path: registry.ElevationPathApproved, ReasonCode: registry.ElevationReasonIncident, Reason: "secret reason",
-		Decision: registry.ElevationDecisionApproved, Level: registry.ElevationLevelAdmin,
+		Ticket: "INC-SECRET-1", Decision: registry.ElevationDecisionApproved, Level: registry.ElevationLevelAdmin,
 		RequestedAt: requestClock.Add(-time.Hour), DecidedAt: requestClock.Add(-50 * time.Minute)}
 	d := requestDirectory()
 	d.roles["viewer_role"] = []string{registry.AccessRolesView}
@@ -464,6 +479,9 @@ func TestTheHistoryHidesTheReasonText(t *testing.T) {
 		}
 		if got := strings.Contains(rec.Body.String(), "secret reason"); got != wantReason {
 			t.Errorf("history for %d shows the reason text: %v, want %v (%s)", user, got, wantReason, rec.Body)
+		}
+		if got := strings.Contains(rec.Body.String(), "INC-SECRET-1"); got != wantReason {
+			t.Errorf("history for %d shows the ticket: %v, want %v (%s)", user, got, wantReason, rec.Body)
 		}
 	}
 	if rec := call(t, h, browser(auditor), http.MethodGet, "/access/elevations?limit=500", ``); rec.Code != http.StatusBadRequest {

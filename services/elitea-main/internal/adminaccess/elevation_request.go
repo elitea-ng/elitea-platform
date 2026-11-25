@@ -104,6 +104,10 @@ var (
 	ErrElevationApproverElevated = errors.New("a person under an elevation cannot answer an elevation request")
 	// ErrElevationApproverNotEligible: the approver does not hold
 	// access.breakglass.approve through a standing role, or is suspended.
+	// ErrElevationPersonNotEligible refuses an approval of a person who can
+	// no longer hold it: suspended, without a standing
+	// access.breakglass.request, or with the request's session ended.
+	ErrElevationPersonNotEligible   = errors.New("the person of the request can no longer hold an elevation")
 	ErrElevationApproverNotEligible = errors.New("the approver does not hold access.breakglass.approve through a standing role")
 	// ErrElevationDenialReasonCode: a denial without a known reason code.
 	ErrElevationDenialReasonCode = fmt.Errorf("%w: unknown denial reason code", ErrElevationInvalid)
@@ -201,9 +205,10 @@ type ElevationRequested struct {
 // is not an unsuspended account (ErrElevationPerson); a session reference
 // that is not a live session of the person (ErrElevationSession); a person
 // who does not hold access.breakglass.request through a standing role
-// (ErrElevationRequester); a person with an undecided request within the
-// lifetime (ErrElevationRequestPending), under a transaction lock on the
-// person.
+// (ErrElevationRequester); a person with an open request
+// (ErrElevationRequestPending): an undecided one within the lifetime, or an
+// approval not started within the lifetime from its decision, under a
+// transaction lock on the person.
 func RequestElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, request ElevationRequest) (ElevationRequested, error) {
 	if err := request.Validate(); err != nil {
 		return ElevationRequested{}, err
@@ -223,28 +228,24 @@ func RequestElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.App
 		request.UserID); err != nil {
 		return ElevationRequested{}, fmt.Errorf("request elevation: lock the person: %w", err)
 	}
-	var person, session, requester, pending bool
-	if err := tx.QueryRow(ctx, `
-SELECT
-    EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $2 AND suspended = false),
-    `+liveSessionPredicate+`,
-    EXISTS (SELECT 1 FROM public.auth_core__user account WHERE account.id = $2 AND `+standingHolder("$4")+`),
-    EXISTS (
-        SELECT 1 FROM elitea_auth.admin_elevations
-        WHERE requester_user_id = $2 AND decision IS NULL AND started_at IS NULL
-          AND requested_at > $3::timestamptz - make_interval(secs => $5))`,
-		request.BrowserSessionRef, request.UserID, at, AccessBreakglassRequest,
-		request.RequestLifetime.Seconds()).Scan(&person, &session, &requester, &pending); err != nil {
-		return ElevationRequested{}, fmt.Errorf("request elevation: read the person and the session: %w", err)
+	if err := requesterEligible(ctx, tx, request.UserID, request.BrowserSessionRef, at); err != nil {
+		return ElevationRequested{}, err
 	}
-	switch {
-	case !person:
-		return ElevationRequested{}, ErrElevationPerson
-	case !session:
-		return ElevationRequested{}, ErrElevationSession
-	case !requester:
-		return ElevationRequested{}, ErrElevationRequester
-	case pending:
+	// One open request at a time: an undecided request within its lifetime,
+	// or an approval that has not started within the lifetime from its
+	// decision. The second half bounds a person to one request per lifetime
+	// with approval off, where every request is decided at insert.
+	var pending bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM elitea_auth.admin_elevations
+    WHERE requester_user_id = $1 AND started_at IS NULL
+      AND (   (decision IS NULL AND requested_at > $2::timestamptz - make_interval(secs => $3))
+           OR (decision = 'approved' AND decided_at > $2::timestamptz - make_interval(secs => $3))))`,
+		request.UserID, at, request.RequestLifetime.Seconds()).Scan(&pending); err != nil {
+		return ElevationRequested{}, fmt.Errorf("request elevation: read the open requests: %w", err)
+	}
+	if pending {
 		return ElevationRequested{}, ErrElevationRequestPending
 	}
 	path := ElevationPathApproved
@@ -358,7 +359,9 @@ func (a ElevationAnswer) validate() error {
 // (ErrElevationOwnRequest); an approver under an active elevation
 // (ErrElevationApproverElevated); an approver who does not hold
 // access.breakglass.approve through a standing role or is suspended
-// (ErrElevationApproverNotEligible). The returned record is the row as it
+// (ErrElevationApproverNotEligible); and, for an approval only, a person who
+// can no longer hold it (ErrElevationPersonNotEligible: suspended, session
+// ended, request role removed). The returned record is the row as it
 // stands after the call, also on a refusal of a row that exists.
 func AnswerElevationRequest(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, answer ElevationAnswer) (ElevationRecord, error) {
 	if err := answer.validate(); err != nil {
@@ -401,6 +404,17 @@ SELECT `+elevationColumns+` FROM elitea_auth.admin_elevations WHERE id = $1 FOR 
 	}
 	if answer.ApproverUserID == request.RequesterUserID || answer.ApproverUserID == request.UserID {
 		return request, ErrElevationOwnRequest
+	}
+	// The person must still be able to hold what is approved: an account
+	// suspended, a request role removed or a session ended since the request
+	// refuses the approval. A denial needs none of it.
+	if answer.Approve {
+		if err := requesterEligible(ctx, tx, request.UserID, request.BrowserSessionRef, at); err != nil {
+			if errors.Is(err, ErrElevationPerson) || errors.Is(err, ErrElevationSession) || errors.Is(err, ErrElevationRequester) {
+				return request, fmt.Errorf("%w (%s)", ErrElevationPersonNotEligible, err.Error())
+			}
+			return request, fmt.Errorf("answer elevation request: %w", err)
+		}
 	}
 	var elevated, eligible, superAdmin bool
 	if err := tx.QueryRow(ctx, `
@@ -464,19 +478,49 @@ RETURNING `+elevationColumns, request.ID, at, answer.ApproverUserID, answer.Deni
 	return decided, nil
 }
 
+// requesterEligible refuses, in this order, a person who is not an
+// unsuspended account (ErrElevationPerson), a session reference that is not a
+// live session of the person (ErrElevationSession) and a person who does not
+// hold access.breakglass.request through a standing role
+// (ErrElevationRequester).
+func requesterEligible(ctx context.Context, q Querier, userID, sessionRef int64, at time.Time) error {
+	var person, session, requester bool
+	if err := q.QueryRow(ctx, `
+SELECT
+    EXISTS (SELECT 1 FROM public.auth_core__user WHERE id = $2 AND suspended = false),
+    `+liveSessionPredicate+`,
+    EXISTS (SELECT 1 FROM public.auth_core__user account WHERE account.id = $2 AND `+standingHolder("$4")+`)`,
+		sessionRef, userID, at, AccessBreakglassRequest).Scan(&person, &session, &requester); err != nil {
+		return fmt.Errorf("read the person and the session: %w", err)
+	}
+	switch {
+	case !person:
+		return ErrElevationPerson
+	case !session:
+		return ErrElevationSession
+	case !requester:
+		return ErrElevationRequester
+	}
+	return nil
+}
+
 // liveSessionPredicate is "$1 names a live session of the person $2 at $3":
 // a browser_sessions row of the person that is not revoked, ended or expired,
 // or a form_sessions row of the person that has not expired. The ledger has
 // no foreign key to either table, so this is the check that a request is
-// never bound to another person's session.
+// never bound to another person's session. OFFSET 0 keeps the form_sessions
+// row selection a fence the planner does not flatten, so the record of no
+// other session is ever cast.
 const liveSessionPredicate = `(EXISTS (
         SELECT 1 FROM elitea_auth.browser_sessions
         WHERE ref = $1 AND user_id = $2
           AND revoked_at IS NULL AND ended_at IS NULL AND expires_at > $3)
     OR EXISTS (
-        SELECT 1 FROM elitea_auth.form_sessions
-        WHERE ref = $1 AND expires_at > $3
-          AND convert_from(record, 'UTF8')::jsonb ->> 'user_id' = $2::bigint::text))`
+        SELECT 1 FROM (
+            SELECT record FROM elitea_auth.form_sessions
+            WHERE ref = $1 AND expires_at > $3
+            OFFSET 0) session
+        WHERE convert_from(session.record, 'UTF8')::jsonb ->> 'user_id' = $2::bigint::text))`
 
 /* ── reads ─────────────────────────────────────────────────────────────── */
 
@@ -513,18 +557,34 @@ ORDER BY requested_at DESC, id DESC LIMIT 1`, userID))
 	return request, true, nil
 }
 
-// PendingElevationRequests reads the undecided requests within their
-// lifetime at now, oldest first, at most limit.
-func PendingElevationRequests(ctx context.Context, q Querier, now time.Time, lifetime time.Duration, limit int) ([]ElevationRecord, error) {
-	rows, err := q.Query(ctx, `
-SELECT `+elevationColumns+` FROM elitea_auth.admin_elevations
+// pendingRequestsWhere is the queue of the approver $3 at $1 with the
+// request lifetime $2: undecided requests within their lifetime that are not
+// the approver's own.
+const pendingRequestsWhere = `
 WHERE decision IS NULL AND started_at IS NULL AND path = 'approved'
   AND requested_at > $1::timestamptz - make_interval(secs => $2)
-ORDER BY requested_at, id LIMIT $3`, now.UTC(), lifetime.Seconds(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("read the pending elevation requests: %w", err)
+  AND requester_user_id <> $3 AND user_id <> $3`
+
+// PendingElevationRequests reads the queue of the approver excludeUserID:
+// the undecided requests within their lifetime at now that are not theirs,
+// oldest first, at most limit, and the size of the whole queue.
+func PendingElevationRequests(ctx context.Context, q Querier, now time.Time, lifetime time.Duration, excludeUserID int64, limit int) ([]ElevationRecord, int, error) {
+	var total int
+	if err := q.QueryRow(ctx, `SELECT count(*) FROM elitea_auth.admin_elevations`+pendingRequestsWhere,
+		now.UTC(), lifetime.Seconds(), excludeUserID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count the pending elevation requests: %w", err)
 	}
-	return collectElevations(rows)
+	rows, err := q.Query(ctx, `
+SELECT `+elevationColumns+` FROM elitea_auth.admin_elevations`+pendingRequestsWhere+`
+ORDER BY requested_at, id LIMIT $4`, now.UTC(), lifetime.Seconds(), excludeUserID, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read the pending elevation requests: %w", err)
+	}
+	pending, err := collectElevations(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return pending, total, nil
 }
 
 // ElevationHistory reads the ledger newest first: requests and elevations of

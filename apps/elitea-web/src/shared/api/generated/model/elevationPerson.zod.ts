@@ -49,7 +49,7 @@ export const ElevationPerson = zod
     email: zod.string(),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:306-310 (personBody). Empty name and e-mail when the account row no longer exists.\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:308-312 (personBody). Empty name and e-mail when the account row no longer exists.\n",
   );
 
 export type ElevationPerson = zod.input<typeof ElevationPerson>;

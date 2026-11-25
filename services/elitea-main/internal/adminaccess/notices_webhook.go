@@ -208,12 +208,14 @@ func NewNoticeWebhook(config NoticeWebhookConfig, logger *slog.Logger) (*NoticeW
 	}
 	transport := egress.New(allowlist, egress.RequireHTTPS()).Transport()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: config.RootCAs}
+	// The path and the query are redacted when they are long enough to hold
+	// a token: replacing a short one ("/a") everywhere would garble the
+	// error text and hide nothing.
 	redact := []string{config.URL, parsed.Host, parsed.Hostname()}
-	if len(parsed.EscapedPath()) > 1 {
-		redact = append(redact, parsed.EscapedPath(), parsed.Path)
-	}
-	if parsed.RawQuery != "" {
-		redact = append(redact, parsed.RawQuery)
+	for _, part := range []string{parsed.EscapedPath(), parsed.Path, parsed.RawQuery} {
+		if len(part) >= minRedactedURLPart {
+			redact = append(redact, part)
+		}
 	}
 	// The longest first, so a part never leaves a piece of a longer one.
 	slices.SortFunc(redact, func(a, b string) int { return len(b) - len(a) })
@@ -308,6 +310,9 @@ func (w *NoticeWebhook) scrubbed(step string, err error) error {
 	}
 	return fmt.Errorf("notice webhook: %s: %s", step, text)
 }
+
+// minRedactedURLPart is the shortest path or query redacted from an error.
+const minRedactedURLPart = 8
 
 /* ── the sender's webhook loop ─────────────────────────────────────────── */
 

@@ -29,8 +29,10 @@
 -- Two indexes serve the console reads: the pending queue (undecided,
 -- unstarted rows by request time) and the requester's own latest request.
 --
--- IDEMPOTENT. Tolerates a database where 0269 has not run (it then does
--- nothing). No BEGIN/COMMIT: the ledgered runner wraps the file.
+-- IDEMPOTENT. Needs 0269, which the runner always applies first: only the
+-- column block below is guarded on the table; the two indexes and the
+-- function replacement assume it. No BEGIN/COMMIT: the ledgered runner wraps
+-- the file.
 
 DO $$
 BEGIN

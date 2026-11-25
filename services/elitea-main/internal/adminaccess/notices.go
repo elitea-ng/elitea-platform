@@ -524,11 +524,13 @@ func (s *NoticeSender) Pass(ctx context.Context) (NoticeSendResult, error) {
 	if s.webhook != nil {
 		result.WebhookConfigured = true
 		errs = append(errs, s.sendWebhooks(ctx, &result)...)
-		pending, err := s.webhookPending(ctx)
-		result.WebhookPending = pending
-		if err != nil {
-			errs = append(errs, err)
-		}
+	}
+	// Counted with no webhook too: rows written while one was configured
+	// wait for it, and the caller reports them.
+	webhookPending, err := s.webhookPending(ctx)
+	result.WebhookPending = webhookPending
+	if err != nil {
+		errs = append(errs, err)
 	}
 	return result, errors.Join(errs...)
 }

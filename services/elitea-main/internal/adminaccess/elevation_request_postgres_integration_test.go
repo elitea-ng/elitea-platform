@@ -275,6 +275,66 @@ func TestWithApprovalOffTheSystemApproves(t *testing.T) {
 	if _, err := answerRequest(t, pool, approval(e.ID, admin, request.At.Add(time.Minute))); !errors.Is(err, adminaccess.ErrElevationRequestDecided) {
 		t.Fatalf("an answer to an approval-off request: %v", err)
 	}
+	// An approval that has not started is an open request: a loop of
+	// requests with approval off gets one row per request lifetime, not one
+	// per call.
+	again := request
+	again.At = request.At.Add(time.Minute)
+	if _, err := requestElevation(t, pool, again); !errors.Is(err, adminaccess.ErrElevationRequestPending) {
+		t.Fatalf("a second request beside an unstarted approval: %v", err)
+	}
+	if n := countElevationsOf(t, pool, request.UserID); n != 1 {
+		t.Fatalf("%d rows of the person, want 1", n)
+	}
+	again.At = request.At.Add(requestLifetime + time.Minute)
+	mustRequest(t, pool, again)
+}
+
+// An approval is refused, and writes nothing, when the person can no longer
+// hold it: the account suspended, the request role removed or the session
+// ended since the request. A denial of the same request still goes through.
+func TestAnApprovalNeedsAPersonWhoCanStillHoldIt(t *testing.T) {
+	pool := newNoticeDatabase(t)
+	admin := seedPerson(t, pool, adminaccess.RoleAdmin)
+	for name, tc := range map[string]struct {
+		change func(t *testing.T, r adminaccess.ElevationRequest)
+		cause  error
+	}{
+		"suspended": {func(t *testing.T, r adminaccess.ElevationRequest) {
+			if _, err := pool.Exec(t.Context(), `UPDATE public.auth_core__user SET suspended = true WHERE id = $1`, r.UserID); err != nil {
+				t.Fatal(err)
+			}
+		}, adminaccess.ErrElevationPerson},
+		"role removed": {func(t *testing.T, r adminaccess.ElevationRequest) {
+			if _, err := pool.Exec(t.Context(), `DELETE FROM public.auth_core__user_role WHERE user_id = $1`, r.UserID); err != nil {
+				t.Fatal(err)
+			}
+		}, adminaccess.ErrElevationRequester},
+		"session ended": {func(t *testing.T, r adminaccess.ElevationRequest) {
+			if _, err := pool.Exec(t.Context(), `UPDATE elitea_auth.browser_sessions SET revoked_at = $2 WHERE ref = $1`,
+				r.BrowserSessionRef, r.At); err != nil {
+				t.Fatal(err)
+			}
+		}, adminaccess.ErrElevationSession},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := seededRequest(t, pool)
+			e := mustRequest(t, pool, request).Elevation
+			tc.change(t, request)
+			_, err := answerRequest(t, pool, approval(e.ID, admin, request.At.Add(time.Minute)))
+			if !errors.Is(err, adminaccess.ErrElevationPersonNotEligible) || !strings.Contains(err.Error(), tc.cause.Error()) {
+				t.Fatalf("approval: %v, want %v (%v)", err, adminaccess.ErrElevationPersonNotEligible, tc.cause)
+			}
+			if stored := readElevation(t, pool, e.ID); stored.Decision != "" {
+				t.Fatalf("a refused approval wrote %+v", stored)
+			}
+			denial := approval(e.ID, admin, request.At.Add(time.Minute))
+			denial.Approve, denial.DenialReasonCode = false, adminaccess.ElevationDenialNotJustified
+			if _, err := answerRequest(t, pool, denial); err != nil {
+				t.Fatalf("a denial: %v", err)
+			}
+		})
+	}
 }
 
 // An answer after the request lifetime is refused, and the expiry is
@@ -304,7 +364,7 @@ func TestALateAnswerRecordsTheExpiry(t *testing.T) {
 		t.Fatalf("an answer to a recorded expiry: %v", err)
 	}
 	// The reads leave it out of the queue and show it as expired.
-	pending, err := adminaccess.PendingElevationRequests(t.Context(), pool, late, requestLifetime, 50)
+	pending, _, err := adminaccess.PendingElevationRequests(t.Context(), pool, late, requestLifetime, admin, 50)
 	if err != nil || slices.ContainsFunc(pending, func(e adminaccess.ElevationRecord) bool { return e.ID == request.ID }) {
 		t.Fatalf("the queue holds the expired request (%v)", err)
 	}

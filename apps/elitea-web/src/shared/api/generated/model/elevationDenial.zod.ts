@@ -51,7 +51,7 @@ export const ElevationDenial = zod
       ),
   })
   .describe(
-    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:302-304 (elevationDenyBody). Never free text.\n",
+    "NOTE(W2): internal/api/v2/adminaccess/elevations.go:304-306 (elevationDenyBody). Never free text.\n",
   );
 
 export type ElevationDenial = zod.input<typeof ElevationDenial>;
