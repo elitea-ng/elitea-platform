@@ -23,8 +23,9 @@ describe('the default pack', () => {
     // tokens, and both new asymmetric ones carry a symmetry fill (tokens/README.md), which
     // is why the light/dark equality above still holds. 407 with #6687's
     // `border.artifactDivider` (an addition, see tokens/README.md). 408 with
-    // brand guide v3's `focus.ring` (the one keyboard focus colour).
-    expect(light.length).toBe(408);
+    // brand guide v3's `focus.ring` (the one keyboard focus colour). 435 with
+    // the 27 brand-guide roles `role.*` (ADR-0062 decision 1, additive).
+    expect(light.length).toBe(435);
   });
 
   it('states the mandatory §4.2 roles in both schemes', () => {
