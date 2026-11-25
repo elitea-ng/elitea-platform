@@ -61,6 +61,8 @@ describe('the read-only team view on the web (issue 3069)', () => {
     expect(screen.getByTestId('chat-lead-menu')).toBeInTheDocument();
     expect(screen.getByTestId('participant-state')).toHaveTextContent('Thinking');
     expect(screen.queryByTestId('participant-executor')).toBeNull();
+    // A long agent name must not squeeze the lead menu under the row's hover actions (the webkit journey, issue 3067).
+    expect(screen.getByTestId('participant-presence-lead')).toHaveStyle({ flexShrink: '0' });
   });
 });
 
