@@ -179,17 +179,21 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	// but inside the composed handler, where the router's walk of the route
 	// middlewares cannot see it; this mark is the one the walk reads.
 	configurationRoutes := r.With(apimw.MarkAdministrationRoute)
+	// The read by id and the three writes also apply the compatibility
+	// routes' tracing rule in their handlers (#3032); the mark says so to the
+	// same walk.
+	tracingRoutes := configurationRoutes.With(configurationapi.MarkTracingRule)
 	if cfg.CurrentConfigurationRead != nil {
 		configurationRoutes.Method(http.MethodGet, configurationapi.CurrentConfigurationListPath, cfg.CurrentConfigurationRead)
-		configurationRoutes.Method(http.MethodGet, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationRead)
+		tracingRoutes.Method(http.MethodGet, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationRead)
 	}
 	if cfg.CurrentConfigurationTypes != nil {
 		r.Method(http.MethodGet, configurationapi.CurrentConfigurationTypesPath, cfg.CurrentConfigurationTypes)
 	}
 	if cfg.CurrentConfigurationMutation != nil {
-		configurationRoutes.Method(http.MethodPost, configurationapi.CurrentConfigurationListPath, cfg.CurrentConfigurationMutation)
-		configurationRoutes.Method(http.MethodPut, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationMutation)
-		configurationRoutes.Method(http.MethodDelete, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationMutation)
+		tracingRoutes.Method(http.MethodPost, configurationapi.CurrentConfigurationListPath, cfg.CurrentConfigurationMutation)
+		tracingRoutes.Method(http.MethodPut, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationMutation)
+		tracingRoutes.Method(http.MethodDelete, configurationapi.CurrentConfigurationDetailsPath, cfg.CurrentConfigurationMutation)
 	}
 	if cfg.ProductionRuntime != nil {
 		r.Method(http.MethodPost, "/api/v2"+runtimeValidationPath, cfg.ProductionRuntime.validation)

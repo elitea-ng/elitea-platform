@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
+	configurationapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 )
 
 // reviewedShadowedRoutes are the (method, pattern) pairs a reviewed runtime
@@ -116,17 +117,20 @@ func withEveryReviewedRoute(t *testing.T, fields []string) RouterConfig {
 // route that has an administration-mode check (a route gate of
 // internal/api/middleware built for the administration mode, or the central
 // branch's MarkAdministrationRoute) while the reviewed registration carries
-// none. The compatibility route is what the administration surface tests
+// none, or one that applies the configuration tracing rule
+// (configurationapi.MarkTracingRule) while the reviewed one does not. The
+// compatibility route is what the administration surface tests
 // drive; a reviewed route without its check would serve production a
 // decision those tests never see.
 func TestReviewedRoutesShadowOnlyThePinnedCompatibilityRoutes(t *testing.T) {
 	router := NewRouter(withEveryReviewedRoute(t, reviewedRouteFields(t)))
-	type registration struct{ administration bool }
+	type registration struct{ administration, tracing bool }
 	registrations := map[string][]registration{}
 	if err := chi.Walk(router, func(method, route string, _ http.Handler, mws ...func(http.Handler) http.Handler) error {
 		key := gatedRouteKey(method, route)
 		registrations[key] = append(registrations[key], registration{
 			administration: slices.ContainsFunc(mws, apimw.IsAdministrationGate),
+			tracing:        slices.ContainsFunc(mws, configurationapi.IsTracingRuleMark),
 		})
 		return nil
 	}); err != nil {
@@ -144,6 +148,14 @@ func TestReviewedRoutesShadowOnlyThePinnedCompatibilityRoutes(t *testing.T) {
 		if gated && !every {
 			t.Errorf("%s: a reviewed route shadows a compatibility route with an administration-mode check "+
 				"and carries no such check; give it the compatibility route's gate (#3024)", key)
+		}
+		// The tracing rule of the configuration row routes is in their
+		// handlers, so the routes carry a mark the walk reads (#3032).
+		traced := slices.ContainsFunc(regs, func(r registration) bool { return r.tracing })
+		everyTraced := !slices.ContainsFunc(regs, func(r registration) bool { return !r.tracing })
+		if traced && !everyTraced {
+			t.Errorf("%s: a reviewed route shadows a compatibility route that applies the configuration "+
+				"tracing rule and carries no such rule; give it the compatibility route's TracingRule (#3032)", key)
 		}
 	}
 	sort.Strings(shadowed)

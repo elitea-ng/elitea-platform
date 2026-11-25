@@ -278,14 +278,25 @@ func (h *Handler) Routes() chi.Router {
 	)
 	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationListPermission)).Get(listPath, h.List)
 	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationListPermission)).Get(listModePath, h.List)
-	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationCreatePermission)).Post(listPath, h.Create)
-	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationCreatePermission)).Post(listModePath, h.Create)
-	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationGetPermission)).Get(rowPath, h.Get)
-	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationGetPermission)).Get(rowModePath, h.Get)
-	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationUpdatePermission)).Put(rowPath, h.Update)
-	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationUpdatePermission)).Put(rowModePath, h.Update)
-	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationDeletePermission)).Delete(rowPath, h.Delete)
-	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationDeletePermission)).Delete(rowModePath, h.Delete)
+	// The create, the read by id, the update and the delete also apply the
+	// tracing rule in the handler (tracing_access.go); MarkTracingRule says
+	// so to a walk of the router, which the reviewed routes are held to.
+	r.With(h.requireOrSettingsOverride(listPath, CurrentConfigurationCreatePermission), MarkTracingRule).
+		Post(listPath, h.Create)
+	r.With(h.requireOrSettingsOverride(listModePath, CurrentConfigurationCreatePermission), MarkTracingRule).
+		Post(listModePath, h.Create)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationGetPermission), MarkTracingRule).
+		Get(rowPath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationGetPermission), MarkTracingRule).
+		Get(rowModePath, h.Get)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationUpdatePermission), MarkTracingRule).
+		Put(rowPath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationUpdatePermission), MarkTracingRule).
+		Put(rowModePath, h.Update)
+	r.With(h.requireOrSettingsOverride(rowPath, CurrentConfigurationDeletePermission), MarkTracingRule).
+		Delete(rowPath, h.Delete)
+	r.With(h.requireOrSettingsOverride(rowModePath, CurrentConfigurationDeletePermission), MarkTracingRule).
+		Delete(rowModePath, h.Delete)
 	// The connection checks take the CREATE string. The reference declares no
 	// permission on either route, so this is a proposal, and it is the narrowest
 	// one that costs no caller a control: the button they serve sits on the
@@ -1254,7 +1265,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.tracingWriteForbidden(ctx, projectIDNumber, configType) {
-		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		apierr.WriteStatus(w, http.StatusForbidden, tracingConfigurationsForbiddenMessage)
 		return
 	}
 	if h.projectSettingsWriteForbidden(ctx, projectID, configType) {
@@ -1491,7 +1502,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.tracingWriteForbidden(ctx, int64(pID), storedType) ||
 		h.tracingWriteForbidden(ctx, int64(pID), requestedType) {
-		apierr.WriteStatus(w, http.StatusForbidden, "tracing configurations are managed by project admins")
+		apierr.WriteStatus(w, http.StatusForbidden, tracingConfigurationsForbiddenMessage)
 		return
 	}
 	if h.projectSettingsWriteForbidden(ctx, projectID, storedType, requestedType) {
@@ -1811,14 +1822,19 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if h.projectSettingsWriteForbidden(ctx, projectID, storedType) {
-		apierr.WriteStatus(w, http.StatusForbidden, projectSettingsPermissionMessage)
-		return
-	}
-
 	projectNumber, parseErr := strconv.ParseInt(projectID, 10, 64)
 	if parseErr != nil {
 		apierr.WriteStatus(w, http.StatusBadRequest, "invalid project")
+		return
+	}
+	// A tracing row is deleted only by a caller who manages tracing, as it is
+	// created and changed (#3032): the delete was the one write without it.
+	if h.tracingWriteForbidden(ctx, projectNumber, storedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, tracingConfigurationsForbiddenMessage)
+		return
+	}
+	if h.projectSettingsWriteForbidden(ctx, projectID, storedType) {
+		apierr.WriteStatus(w, http.StatusForbidden, projectSettingsPermissionMessage)
 		return
 	}
 

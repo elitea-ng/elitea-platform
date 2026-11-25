@@ -81,6 +81,7 @@ func TestCurrentConfigurationReadRouteBindsExactCurrentPathsAndPermissions(t *te
 		publicProjectID int32
 		authConfig      apimw.AuthConfig
 		permissions     auth.PermissionResolver
+		noTracing       bool
 	}{
 		"missing reader":         {publicProjectID: 1, authConfig: authConfig, permissions: permissions},
 		"missing public project": {reader: reader, authConfig: authConfig, permissions: permissions},
@@ -93,13 +94,21 @@ func TestCurrentConfigurationReadRouteBindsExactCurrentPathsAndPermissions(t *te
 			authConfig: apimw.AuthConfig{PrincipalValidator: principal}, permissions: permissions,
 		},
 		"missing permissions": {reader: reader, publicProjectID: 1, authConfig: authConfig},
+		"missing tracing rule": {
+			reader: reader, publicProjectID: 1, authConfig: authConfig, permissions: permissions, noTracing: true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			tracing := testTracingRule(t, true)
+			if test.noTracing {
+				tracing = handler.TracingRule{}
+			}
 			if _, err := handler.NewCurrentConfigurationReadRoute(
 				test.reader,
 				test.publicProjectID,
 				test.authConfig,
 				test.permissions,
+				tracing,
 			); !errors.Is(err, handler.ErrInvalidCurrentConfigurationReadRoute) {
 				t.Fatalf("error = %v, want %v", err, handler.ErrInvalidCurrentConfigurationReadRoute)
 			}
@@ -291,6 +300,7 @@ func newCurrentConfigurationReadRoute(
 		1,
 		apimw.AuthConfig{PrincipalValidator: principal, FormSessions: authtest.FormSessions{}},
 		permissions,
+		testTracingRule(t, true),
 	)
 	if err != nil {
 		t.Fatal(err)
