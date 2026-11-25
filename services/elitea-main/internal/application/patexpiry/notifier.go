@@ -1,5 +1,7 @@
 // Package patexpiry produces the in-app notice a personal access token's
-// owner gets shortly before the key stops working (issue #940 A3).
+// owner gets shortly before the key stops working (issue #940 A3), and the
+// notice to the owners of `inherit` tokens that their administration access
+// ends (ADR-0059 decision 2; story R3.15b, issue 2619).
 //
 // ONE PASS, TWO CALLERS. The pass is a plain method rather than a scheduler
 // handler because two callers run it: the platform scheduler on its cadence
@@ -14,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -52,6 +55,42 @@ type Result struct {
 	Examined int
 	Produced int
 	Skipped  int
+	// InheritOwners is the owners of `inherit` tokens whose notice is not
+	// delivered yet; InheritQueued the notices this pass queued for them
+	// (one per owner; 0 for an owner whose notice already waits to be sent).
+	InheritOwners int
+	InheritQueued int
+	// InheritUnreachable is the owners among InheritOwners with no e-mail
+	// address: no notice can reach them, so their tokens end at the sunset
+	// date. An administrator gives them an address to start their 30 days.
+	InheritUnreachable int
+}
+
+// InheritStore is the persistence of the `inherit` token notice (R3.15b).
+// repos.PATExpiryNotificationRepository satisfies it.
+type InheritStore interface {
+	// ListInheritTokenOwners answers the owners of `inherit` tokens whose
+	// notice was not delivered yet, each with those tokens.
+	ListInheritTokenOwners(ctx context.Context, now time.Time, limit int32) ([]InheritOwner, error)
+	// QueueInheritTokenNotice queues the owner's one notice for the sunset
+	// date and reports whether it queued one. The access notice sender
+	// delivers it and stores the delivery time on each listed token
+	// (token_lifecycle.inherit_notice_delivered_at).
+	QueueInheritTokenNotice(ctx context.Context, owner InheritOwner, sunsetAfter string, now time.Time) (bool, error)
+}
+
+// InheritOwner is one owner of `inherit` tokens due a notice.
+type InheritOwner struct {
+	UserID int64
+	Email  string
+	Name   string
+	Tokens []InheritToken
+}
+
+// InheritToken is one `inherit` token of an owner.
+type InheritToken struct {
+	ID   int64
+	Name string
 }
 
 // Notifier runs the pass.
@@ -59,6 +98,23 @@ type Notifier struct {
 	store  Store
 	window time.Duration
 	limit  int32
+	// inherit and sunsetAfter are the `inherit` token notice's; nil leaves
+	// that half of the pass out.
+	inherit     InheritStore
+	sunsetAfter func() string
+}
+
+// WithInheritNotices adds the `inherit` token notice to every pass: once
+// sunsetAfter answers a date (adminaccess.InheritEndsOn), each owner of an
+// `inherit` token whose notice was not delivered gets one queued. While it
+// answers "" the half does nothing, so a deployment that upgrades later sends
+// the notice when it first runs with the date set.
+func (n *Notifier) WithInheritNotices(store InheritStore, sunsetAfter func() string) error {
+	if n == nil || store == nil || sunsetAfter == nil {
+		return errors.New("the inherit token notice needs a notifier, a store and the sunset date")
+	}
+	n.inherit, n.sunsetAfter = store, sunsetAfter
+	return nil
 }
 
 // New builds a Notifier over `store`, with the production window.
@@ -79,6 +135,14 @@ func (n *Notifier) Run(ctx context.Context, now time.Time, within time.Duration)
 	if within <= 0 {
 		within = n.window
 	}
+	result, expiryErr := n.expiryPass(ctx, now, within)
+	// The two halves are independent: a failing expiry half does not hold
+	// back the `inherit` notices (whose 30 days start only at delivery).
+	result, inheritErr := n.inheritPass(ctx, now, result)
+	return result, errors.Join(expiryErr, inheritErr)
+}
+
+func (n *Notifier) expiryPass(ctx context.Context, now time.Time, within time.Duration) (Result, error) {
 	candidates, err := n.store.ListPATsNeedingExpiryNotice(ctx, now, within, n.limit)
 	if err != nil {
 		return Result{}, fmt.Errorf("list expiring personal access tokens: %w", err)
@@ -101,4 +165,42 @@ func (n *Notifier) Run(ctx context.Context, now time.Time, within time.Duration)
 		result.Skipped++
 	}
 	return result, nil
+}
+
+// inheritPass queues the `inherit` token notices. It does nothing while the
+// sunset date is not set. A queue failure of one owner is reported and the
+// pass carries on with the others (a queued row is deduped per owner and
+// date, so carrying on cannot duplicate one); the next pass retries it:
+// nothing is stored as delivered until the mailer accepted the message, so an
+// owner whose notice failed is listed again. An owner with no address is
+// counted as unreachable and queued nothing.
+func (n *Notifier) inheritPass(ctx context.Context, now time.Time, result Result) (Result, error) {
+	if n.inherit == nil {
+		return result, nil
+	}
+	sunsetAfter := n.sunsetAfter()
+	if sunsetAfter == "" {
+		return result, nil
+	}
+	owners, err := n.inherit.ListInheritTokenOwners(ctx, now, n.limit)
+	if err != nil {
+		return result, fmt.Errorf("list owners of inherit tokens: %w", err)
+	}
+	result.InheritOwners = len(owners)
+	var errs []error
+	for _, owner := range owners {
+		if strings.TrimSpace(owner.Email) == "" {
+			result.InheritUnreachable++
+			continue
+		}
+		queued, err := n.inherit.QueueInheritTokenNotice(ctx, owner, sunsetAfter, now)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("queue the inherit token notice of user %d: %w", owner.UserID, err))
+			continue
+		}
+		if queued {
+			result.InheritQueued++
+		}
+	}
+	return result, errors.Join(errs...)
 }

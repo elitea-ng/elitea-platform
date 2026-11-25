@@ -58,9 +58,10 @@ type Token struct {
 	// sorted; empty for none and inherit. A scope the owner no longer holds
 	// stays listed here and resolves nothing.
 	AdminScopes []string `json:"admin_scopes"`
-	// InheritEndsOn is the date an `inherit` token ends (the registry's
-	// sunset date, decision 2), absent while the date is not set and for
-	// every other access.
+	// InheritEndsOn is the date an `inherit` token ends: the later of the
+	// registry's sunset date and 30 days after its owner's notice was
+	// delivered (decision 2, R3.15b); the sunset date before the delivery.
+	// Absent while the date is not set and for every other access.
 	InheritEndsOn string `json:"inherit_ends_on,omitempty"`
 }
 
@@ -734,7 +735,7 @@ func (h *Handler) presentToken(record tokenRecord, reveal bool) (Token, error) {
 		AdminScopes: admin.Scopes,
 	}
 	if admin.Access == adminAccessInherit {
-		token.InheritEndsOn = adminaccess.InheritEndsOn()
+		token.InheritEndsOn = admin.inheritEndsOn()
 	}
 	return token, nil
 }

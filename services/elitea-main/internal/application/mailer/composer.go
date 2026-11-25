@@ -46,6 +46,7 @@ import (
 	"strings"
 	texttemplate "text/template"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	v2branding "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/branding"
 	transport "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/mailer"
 )
@@ -294,7 +295,9 @@ type View struct {
 	ActionLabel  string
 	Invitation   Invitation
 	Moderation   ModerationDecision
-	senderName   string
+	// Notice is the access notice of an access_* message (access_notice.go).
+	Notice     adminaccess.Notice
+	senderName string
 }
 
 // Colors is the derived set an e-mail inlines. Mail clients have no CSS

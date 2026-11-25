@@ -1,0 +1,11 @@
+The administration access of your tokens ends - {{.ProductName}}
+
+These personal access tokens use all of your administration permissions. That access ends on {{.Notice.EndsOn}}.
+
+{{range .Notice.Tokens}}- {{if .Name}}{{.Name}}{{else}}(unnamed){{end}}
+{{end}}
+Before then, create a new token with only the administration permissions it needs, update what uses the old token, and delete the old one.
+
+{{.ActionURL}}
+{{if .SupportEmail}}
+Need help? {{.SupportEmail}}{{end}}

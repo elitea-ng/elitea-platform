@@ -18,6 +18,7 @@ package runtimecomposition
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/patexpiry"
@@ -73,7 +74,14 @@ func (s *patExpirySweep) Execute(
 	// The production window, always. `within` is an operator control on the
 	// run-now route; a scheduled tick has no one to have asked for anything
 	// else.
-	if _, err := s.notifier.Run(ctx, time.Now().UTC(), patexpiry.DefaultWindow); err != nil {
+	result, err := s.notifier.Run(ctx, time.Now().UTC(), patexpiry.DefaultWindow)
+	if result.InheritUnreachable > 0 {
+		// No notice can reach these owners, so their inherit tokens end at
+		// the sunset date (ADR-0059 R3.15b); an address starts their 30 days.
+		slog.WarnContext(ctx, "owners of inherit tokens have no e-mail address and get no notice",
+			"owners", result.InheritUnreachable)
+	}
+	if err != nil {
 		return "", err
 	}
 	return schedulingapp.OutcomeLocalCompleted, nil
