@@ -27,6 +27,18 @@ Your organization's policy comes first, then plan mode, then the rules. A **Forb
 
 An Allow rule covers one plain command. A command line with pipes, `&&` or `;` is never allowed by a rule; a Forbidden or Ask rule still matches any part of it.
 
+## Rules in a trusted folder
+
+In a [trusted folder](/how-tos/chat-conversations/desktop-trusted-folders), commands run without a sandbox, and the rules work like this:
+
+- Your organization's denied commands, a **Forbidden** rule and an **Ask** rule still win, whoever wrote them.
+- An **Allow** rule that you wrote (in **Your rules**, or in **This workspace** but not imported from a repository) runs its command without a question. A rule with a login grant keeps running sandboxed with only that login.
+- An imported repository rule never runs a command without a sandbox: it can only forbid or ask.
+- **Always allow** writes a rule marked **Needs trust**: it applies only while the folder is trusted.
+- After the agent reads outside content in a turn, only a rule you wrote answers; everything else is asked, Bypass mode included.
+
+A task worktree uses its folder's rules: a rule you add in either holds in both.
+
 ## Let a CLI run with its login (macOS)
 
 A command normally runs with the network off and none of your logins: the sandbox hides your credential files. An **Allow** rule that you write can give one program its stored login and let it reach a few named hosts, still inside the sandbox. A command that matches such a rule runs without a question, even in **Act** mode.

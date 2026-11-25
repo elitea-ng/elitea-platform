@@ -272,9 +272,11 @@ pub struct PrefixRule {
     pub matches: Vec<Example>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_match: Vec<Example>,
-    /// The widest sandbox an `allow` covers (absent: `workspace-write`).
+    /// The widest sandbox an `allow` covers (absent: `workspace-write`);
+    /// `host`: the command may also run on the host in a trusted folder
+    /// (ADR-0061 decision 5d, layer 4). The person's own rules only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sandbox: Option<SandboxMode>,
+    pub sandbox: Option<RuleSandbox>,
     /// Whether an `allow` covers a call that asks for the network.
     #[serde(default, skip_serializing_if = "is_false")]
     pub network: bool,
@@ -299,6 +301,62 @@ pub struct PrefixRule {
     /// ([`crate::conditions`]).
     #[serde(default, skip_serializing_if = "Conditions::is_empty")]
     pub conditions: Conditions,
+    /// `allow` only: made with "Always allow" in a trusted folder
+    /// (ADR-0061 decision 5e). It allows its command on the host, and only
+    /// while the folder is trusted; it allows nothing anywhere else (the
+    /// rules panel shows it as "needs trust"). Never a repository's.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_trust: bool,
+}
+
+/// What an `allow` rule's `sandbox` names: a sandbox mode, or `host`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuleSandbox {
+    ReadOnly,
+    WorkspaceWrite,
+    FullAccess,
+    /// On the host, in a trusted folder; in the sandbox it covers what a
+    /// rule with no sandbox covers (`workspace-write`).
+    Host,
+}
+
+impl RuleSandbox {
+    /// The sandbox it covers when the command is sandboxed.
+    #[must_use]
+    pub const fn confined(self) -> SandboxMode {
+        match self {
+            Self::ReadOnly => SandboxMode::ReadOnly,
+            Self::WorkspaceWrite | Self::Host => SandboxMode::WorkspaceWrite,
+            Self::FullAccess => SandboxMode::FullAccess,
+        }
+    }
+
+    /// Whether it is `host`.
+    #[must_use]
+    pub const fn is_host(self) -> bool {
+        matches!(self, Self::Host)
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::ReadOnly => "read-only",
+            Self::WorkspaceWrite => "workspace-write",
+            Self::FullAccess => "full-access",
+        }
+    }
+}
+
+impl From<SandboxMode> for RuleSandbox {
+    fn from(mode: SandboxMode) -> Self {
+        match mode {
+            SandboxMode::ReadOnly => Self::ReadOnly,
+            SandboxMode::WorkspaceWrite => Self::WorkspaceWrite,
+            SandboxMode::FullAccess => Self::FullAccess,
+        }
+    }
 }
 
 /// Where a rule came from, when it was not written by the person.
@@ -308,6 +366,9 @@ pub enum RuleOrigin {
     /// Imported from a repository's `.elitea/rules.json`.
     Repository,
 }
+
+/// How the justification of a rule "Always allow" wrote starts.
+pub const REMEMBERED_JUSTIFICATION: &str = "Allowed from the approval dialog";
 
 /// The most `match` (or `not_match`) examples a remembered rule collects.
 pub const MAX_EXAMPLES: usize = 8;
@@ -337,6 +398,7 @@ impl PrefixRule {
             credential: None,
             hosts: Vec::new(),
             conditions: Conditions::default(),
+            requires_trust: false,
         }
     }
 
@@ -346,8 +408,9 @@ impl PrefixRule {
     pub fn same_scope(&self, other: &Self) -> bool {
         self.pattern == other.pattern
             && self.decision == other.decision
-            && self.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
-                == other.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
+            && self.sandbox.unwrap_or(RuleSandbox::WorkspaceWrite)
+                == other.sandbox.unwrap_or(RuleSandbox::WorkspaceWrite)
+            && self.requires_trust == other.requires_trust
             && self.network == other.network
             && self.credential == other.credential
             && self.hosts == other.hosts
@@ -395,6 +458,16 @@ impl PrefixRule {
         if let Some(problem) = self.conditions.problem() {
             return Some(problem);
         }
+        if self.requires_trust && (self.decision != RuleDecision::Allow || grants || self.network) {
+            return Some(
+                "`requires_trust` belongs to an allow rule without `credential`, `hosts` or \
+                 `network`"
+                    .to_owned(),
+            );
+        }
+        if self.requires_trust && self.origin.is_some() {
+            return Some("a repository's rule cannot require trust".to_owned());
+        }
         if self.network && grants {
             return Some(
                 "`hosts` and `credential` limit the network to named hosts; drop `network: true`"
@@ -439,6 +512,16 @@ impl PrefixRule {
         self.origin.is_none()
     }
 
+    /// Whether "Always allow" wrote it (its justification says so), not
+    /// the person by hand: such a rule vouches for the sandbox it was made
+    /// in only.
+    #[must_use]
+    pub fn is_remembered(&self) -> bool {
+        self.justification
+            .as_deref()
+            .is_some_and(|text| text.starts_with(REMEMBERED_JUSTIFICATION))
+    }
+
     /// The pattern, as the panel shows it (`cargo [test|check]`).
     #[must_use]
     pub fn display_pattern(&self) -> String {
@@ -456,7 +539,11 @@ impl PrefixRule {
     /// whether it covers one without that.
     #[must_use]
     pub fn covers(&self, sandbox: SandboxMode, network: bool) -> bool {
-        sandbox <= self.sandbox.unwrap_or(SandboxMode::WorkspaceWrite) && (!network || self.network)
+        sandbox
+            <= self
+                .sandbox
+                .map_or(SandboxMode::WorkspaceWrite, RuleSandbox::confined)
+            && (!network || self.network)
     }
 }
 
