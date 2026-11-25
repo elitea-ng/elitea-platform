@@ -27,6 +27,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	apimw "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 )
 
@@ -45,12 +46,12 @@ func (g *elevationRestrictions) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		candidates, rctx := actionCandidates(g.routes, r)
+		candidates, rctx := apimw.AdminActionCandidates(g.routes, r)
 		if len(candidates) == 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
-		candidates, r = selectEntries(candidates, r, rctx)
+		candidates, r = apimw.SelectAdminActions(candidates, r, rctx)
 		// Every entry allows an elevation: nothing to refuse or flag, so the
 		// resolution is not read twice (the route gate reads it next).
 		if !anyRestricted(candidates) {

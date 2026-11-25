@@ -41,8 +41,11 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
 
 export const adminAuthUsersActionRequestRoleNamesMax = 32;
+
+export const adminAuthUsersActionRequestReasonMax = 2000;
 
 export const AdminAuthUsersActionRequest = zod
   .object({
@@ -75,6 +78,14 @@ export const AdminAuthUsersActionRequest = zod
       .optional()
       .describe(
         "`set_admin_role`, the set form: the administration roles the account holds after the request, `[]` for none. Duplicates are ignored.\n",
+      ),
+    reason_code: ActionReasonCode.optional(),
+    reason: zod
+      .string()
+      .max(adminAuthUsersActionRequestReasonMax)
+      .optional()
+      .describe(
+        "Why the change is made (ADR-0059 R3.8a). Recorded on the admin audit row only; the server takes it out of the body before the handler reads it.\n",
       ),
   })
   .describe(

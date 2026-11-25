@@ -17,6 +17,8 @@ A default install favours getting started. A deployment that will be assessed ag
 - [ ] Store toolkit secrets in Vault or OpenBao through the secret-store integration. See [Secrets](/admin/secrets).
 - [ ] Set personal access tokens to expire, and keep expiry notices on.
 - [ ] Move automation off critical administration actions: a personal access token is refused them. Keep `inherit` tokens only for the identity trust repair path, held by a global administrator. See [Tokens and critical actions](/admin/authentication#tokens-and-critical-actions).
+- [ ] Keep the reason header out of your access logs. A dangerous administration action carries its reason in the `Elitea-Reason` request header when the request has no body, and the text can hold personal data. Configure the reverse proxy, ingress controller and load balancer so their access logs do not record the `Elitea-Reason` header (log `Elitea-Reason-Code` if you want the code). Elitea stores the text on the admin audit row only, where it can be erased. See [Reasons for dangerous actions](/admin/audit-trail#reasons-for-dangerous-actions).
+- [ ] Make your automation send a reason on dangerous administration actions. Until the sunset date a call without one is served with the response header `Elitea-Reason-Missing: 1`; after it, the call is refused.
 
 ## Tools and network
 

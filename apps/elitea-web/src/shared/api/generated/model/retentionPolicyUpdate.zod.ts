@@ -41,14 +41,25 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
 
 export const retentionPolicyUpdateMinAgeDaysMin = 0;
+
+export const retentionPolicyUpdateReasonMax = 2000;
 
 export const RetentionPolicyUpdate = zod
   .object({
     min_age_days: zod.int().min(retentionPolicyUpdateMinAgeDaysMin),
     max_age_days: zod.int().min(1).nullable(),
     allow_project_override: zod.boolean(),
+    reason_code: ActionReasonCode.optional(),
+    reason: zod
+      .string()
+      .max(retentionPolicyUpdateReasonMax)
+      .optional()
+      .describe(
+        "Why the change is made (ADR-0059 R3.8a). Recorded on the admin audit row only; the server takes it out of the body before the handler reads it.\n",
+      ),
   })
   .describe(
     "The platform row of one data class. The PUT replaces the row, so all three fields are required and an omitted one is refused with 400, never reset to a default. A null `max_age_days` keeps the data forever.\n",

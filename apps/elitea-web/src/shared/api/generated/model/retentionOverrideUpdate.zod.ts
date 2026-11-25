@@ -41,10 +41,21 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ActionReasonCode } from "./actionReasonCode.zod";
+
+export const retentionOverrideUpdateReasonMax = 2000;
 
 export const RetentionOverrideUpdate = zod
   .object({
     max_age_days: zod.int().min(1).nullish(),
+    reason_code: ActionReasonCode.optional(),
+    reason: zod
+      .string()
+      .max(retentionOverrideUpdateReasonMax)
+      .optional()
+      .describe(
+        "Why the change is made (ADR-0059 R3.8a). Recorded on the admin audit row only; the server takes it out of the body before the handler reads it.\n",
+      ),
   })
   .describe(
     "A project's own maximum age. It must lie inside the platform row's bounds; null keeps forever, which only fits a platform row that also keeps forever.\n",

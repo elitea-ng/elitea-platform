@@ -1859,7 +1859,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref"},
+		ExposedHeaders:   []string{"Content-Length", "X-Elitea-Support-Ref", adminaccess.ReasonMissingHeader},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -2274,6 +2274,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// elevation_restrictions.go): below the token rule, in the same place
 	// and for the same reasons, and marked from the same finished router.
 	elevationRule := &elevationRestrictions{resolver: permissionResolver}
+	// The reason of a dangerous action (ADR-0059 R3.8a,
+	// middleware/reason.go): below the elevation rule, in the same place and
+	// for the same reasons, and marked from the same finished router.
+	reasonRule := apimw.NewReasonCheck()
 	apiGates := []func(http.Handler) http.Handler{
 		apimw.Maintenance(apimw.MaintenanceConfig{
 			Pool:                cfg.Pool,
@@ -2584,6 +2588,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		r.Use(apimw.Audit(auditRecorder))
 		r.Use(tokenRule.middleware)
 		r.Use(elevationRule.middleware)
+		r.Use(reasonRule.Middleware)
 		// A write that can change what a callee agent holds asks for the drift
 		// check of its delegation grants (ADR-0044 amendment 1, A1.2 rule 3).
 		// Below Audit so it sees the final status; it never changes a response.
@@ -6518,14 +6523,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// where a project's ai_credentials are created, overwritten and deleted;
 	// without Audit here they left no centry.audit_events row. A fresh slice,
 	// so the append can never write into apiGates' backing array.
-	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+3)
+	reviewedGates := make([]func(http.Handler) http.Handler, 0, len(apiGates)+4)
 	reviewedGates = append(reviewedGates, apiGates...)
-	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware, elevationRule.middleware)
+	reviewedGates = append(reviewedGates, apimw.Audit(auditRecorder), tokenRule.middleware, elevationRule.middleware,
+		reasonRule.Middleware)
 	mountReviewedProductionRoutes(r, cfg, reviewedGates)
 
 	administrationRoutes.mark(r)
 	tokenRule.mark(r)
 	elevationRule.mark(r)
+	reasonRule.Mark(r)
 	return r
 }
 
