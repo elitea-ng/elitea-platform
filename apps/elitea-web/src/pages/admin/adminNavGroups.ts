@@ -175,6 +175,8 @@ export function navGroups(): readonly AdminNavGroup[] {
           anyPermission: [
             'runtime.plugins',
             'access.breakglass.manage',
+            'agents.governance.manage',
+            'agents.governance.view',
             'configuration.branding',
             'configuration.microsoft_apps',
             'configuration.native_clients',
@@ -277,7 +279,9 @@ export function navGroups(): readonly AdminNavGroup[] {
           path: '/agent-registry',
           label: t('pages.admin.nav.agentRegistry', 'Agent registry'),
           icon: FactCheckOutlinedIcon,
-          anyPermission: ['configuration.governance'],
+          // ADR-0059 R0.15: the registry route accepts either name of the
+          // agent governance pair beside the legacy name.
+          anyPermission: ['configuration.governance', 'agents.governance.view', 'agents.governance.manage'],
         },
         {
           // ADR-0044 decision 1 (#1501): the connector approval queue.
@@ -293,12 +297,14 @@ export function navGroups(): readonly AdminNavGroup[] {
           // ADR-0044 Amendment 1, A1.3 (epic 2156 story S6): the delegation
           // grants that await review, the queue the migration of existing
           // compositions left. Gated on `configuration.governance`, the
-          // permission of the Delegation section it explains.
+          // permission of the Delegation section it explains, or the agent
+          // governance pair (ADR-0059 R0.15): the list reads with either
+          // name, the scan writes with `agents.governance.manage`.
           id: 'delegation-review',
           path: '/delegation-review',
           label: t('pages.admin.nav.delegationReview', 'Delegations awaiting review'),
           icon: AccountTreeOutlinedIcon,
-          anyPermission: ['configuration.governance'],
+          anyPermission: ['configuration.governance', 'agents.governance.view', 'agents.governance.manage'],
         },
         {
           // ADR-0044 decision 5 (#1501): shared migration 0208 grants

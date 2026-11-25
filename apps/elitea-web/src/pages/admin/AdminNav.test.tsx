@@ -271,6 +271,11 @@ const PLATFORM_ISSUED_PERMISSIONS = new Set([
   // administration mode, super_admin and admin.
   'entitlements.export',
   'entitlements.export.manage',
+  // The agent governance pair (ADR-0059 R0.15):
+  // migrations/shared/0277_agent_governance_permissions.sql, administration
+  // mode, super_admin and admin.
+  'agents.governance.manage',
+  'agents.governance.view',
 ]);
 
 /**

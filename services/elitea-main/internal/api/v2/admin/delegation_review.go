@@ -16,7 +16,9 @@ import (
 // migration wrote are pending and flagged legacy, and nothing was approved.
 //
 // Both routes take `configuration.governance`, the permission of the Delegation
-// section whose settings they explain, so no new permission is declared.
+// section whose settings they explain, or the agent governance pair (ADR-0059
+// R0.15): the list either name of the pair, the scan
+// `agents.governance.manage`.
 
 // DelegationReviewSource is the review queue and the scan (repos.DelegationGrants
 // and repos.DelegationEdges).

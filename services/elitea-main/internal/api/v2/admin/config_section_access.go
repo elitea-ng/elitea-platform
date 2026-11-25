@@ -16,10 +16,9 @@ package admin
 //     `required_permission`, for both verbs.
 //
 // A section declares its console area and its pair in an `access` value next
-// to `required_permission`. The agent governance sections declare no pair
-// yet: they keep the legacy path only until R0.15 gives them
-// `agents.governance.view` and `.manage`. `required_permission` stays in the
-// JSON the web reads until R3.7 stops using it.
+// to `required_permission`. The agent governance sections declare
+// `agents.governance.view` and `.manage` (R0.15). `required_permission` stays
+// in the JSON the web reads until R3.7 stops using it.
 //
 // # The route gate is computed from the declarations
 //
@@ -91,10 +90,12 @@ func legacyOnlyAccess(area adminaccess.Area) sectionAccess {
 	return sectionAccess{Area: area, LegacyOnly: true}
 }
 
-// agentGovernanceAccess declares an agent governance section: the legacy path
-// only, until R0.15 gives it agents.governance.view and .manage.
+// agentGovernanceAccess declares an agent governance section: the pair of
+// ADR-0059 R0.15, agents.governance.view and agents.governance.manage, beside
+// the legacy path.
 func agentGovernanceAccess() sectionAccess {
-	return legacyOnlyAccess(adminaccess.AreaAgentsGovernance)
+	return narrowAccess(adminaccess.AreaAgentsGovernance,
+		adminaccess.AgentsGovernanceView, adminaccess.AgentsGovernanceManage)
 }
 
 // The pairs the sections share.

@@ -274,6 +274,9 @@ var Capabilities = map[string][]Capability{
 	// Which SCIM clients read the entitlement tree (#3026): it narrows
 	// runtime.plugins and the export, and carries both.
 	adminaccess.EntitlementsExportManage: {AdministerPlatform, ExportEntitlements},
+	// The agent governance pair (R0.15, shared 0277): the write narrows
+	// configuration.governance and runtime.plugins, and carries both.
+	adminaccess.AgentsGovernanceManage: {OverrideCaps, AdministerPlatform},
 }
 
 // OwnerCapabilities are what being an agent's business or technical owner
@@ -295,6 +298,7 @@ var NotGovernanceRelevant = map[string]bool{
 	adminaccess.IdentitySSOView:        true,
 	adminaccess.ProjectsSettingsView:   true,
 	adminaccess.AccessRolesView:        true,
+	adminaccess.AgentsGovernanceView:   true,
 	"models.applications.memory.list":  true,
 	// Saved teams (ADR-0050 decision 8, shared 0233): a team names agents and
 	// grants nothing, so saving or starting one configures nothing.

@@ -1278,7 +1278,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// columns and the elevation mark, the dispatcher by chain position and
 	// the append-only guard by the row's own form (issue 2576, ADR-0059
 	// R1.4b). No permission.
-	require.EqualValues(t, 276, Head(shared))
+	//
+	// 277: shared/0277_agent_governance_permissions.sql, the grants
+	// agents.governance.view and agents.governance.manage (super_admin, admin):
+	// the agent governance pair of ADR-0059 decision 2 (issue 2552, R0.15). No
+	// table.
+	require.EqualValues(t, 277, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
