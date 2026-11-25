@@ -143,6 +143,17 @@ func TestTheSealedCredentialListFailsClosed(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "append") {
 		t.Fatalf("a failed read: %d %s, want a bare 500", rec.Code, rec.Body)
 	}
+
+	// A principal with no owning account is refused, not served under an
+	// audit record that names nobody, even if a gate let it through.
+	lister := &fakeSealedLister{}
+	req := httptest.NewRequest(http.MethodGet, console.SealedCredentialsPath, nil)
+	req = req.WithContext(auth.ContextWithUser(req.Context(), auth.User{ID: "1", TokenID: "token-1", AuthType: "token"}))
+	rec = httptest.NewRecorder()
+	console.NewSealedCredentialsHandler(lister).List(rec, req)
+	if rec.Code != http.StatusUnauthorized || lister.calls != 0 {
+		t.Fatalf("no owning account: %d with %d reads, want 401 and none", rec.Code, lister.calls)
+	}
 }
 
 /* ── on PostgreSQL ─────────────────────────────────────────────────────── */

@@ -14,7 +14,8 @@ package adminaccess
 // holds it reads the list (the action table says `token: allowed`); the
 // posture card of ADR-0058 E5.3 reads the same route.
 //
-// No cache: each check is one query or one configuration read.
+// No cache: each check is one query or one configuration read, and the whole
+// list is bounded by postureTimeout.
 
 import (
 	"context"
@@ -32,6 +33,10 @@ import (
 
 // PosturePath is the route, relative to the /api/v2/admin group.
 const PosturePath = "/access/posture"
+
+// postureTimeout bounds one read of the list: a slow database answers 500
+// rather than hold a Home card's request open.
+const postureTimeout = 10 * time.Second
 
 // PostureHandler serves the route.
 type PostureHandler struct {
@@ -106,7 +111,9 @@ func (h *PostureHandler) Posture(w http.ResponseWriter, r *http.Request) {
 	}
 	checkedAt := sources.Now().UTC()
 	sources.Now = func() time.Time { return checkedAt }
-	results, err := registry.RunPosture(r.Context(), sources, h.checks)
+	ctx, cancel := context.WithTimeout(r.Context(), postureTimeout)
+	defer cancel()
+	results, err := registry.RunPosture(ctx, sources, h.checks)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {
 			return

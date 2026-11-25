@@ -19574,7 +19574,9 @@ components:
           description: The `warn` checks that do not pass.
         notices:
           type: integer
-          description: The `info` checks that do not pass.
+          description: >
+            The `info` checks that need attention. They are facts, never failures:
+            `super_admin_holders` needs attention whenever anyone holds `super_admin`.
         checked_at:
           type: string
           format: date-time
@@ -19621,7 +19623,10 @@ components:
           description: The verifier was printed as two halves for two custodians.
         unbound:
           type: boolean
-          description: The credential is unbound, and `bound_user` is the reserved break-glass account.
+          description: >
+            The credential is unbound, and `bound_user` is the reserved break-glass account.
+            A credential whose account row no longer exists reads as bound, with an empty
+            name and e-mail.
         bound_user:
           $ref: '#/components/schemas/SealedCredentialBoundUser'
         issued_at:
@@ -26364,7 +26369,7 @@ paths:
                     severity: info
                     state: attention
                     text_key: admin.access.posture.super_admin_holders
-                    text: 1 people hold super_admin as a standing role. The role reaches every project by its name.
+                    text: 1 person holds super_admin as a standing role. The role reaches every project by its name.
                     facts:
                       count: 1
                       roles: []
@@ -26408,7 +26413,8 @@ paths:
         people with emergency access, so an elevation never reads it
         (`elevation_restricted`) and no personal access token does
         (`token_critical_action_refused`). Every read is recorded as a
-        security audit decision event (`admin.elevation.credential_list`).
+        security audit decision event (`admin.elevation.credential_list`),
+        so a client fetches it once per page view and never polls it.
       tags: [admin]
       responses:
         '200':

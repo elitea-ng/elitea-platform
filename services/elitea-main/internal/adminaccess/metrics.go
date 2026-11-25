@@ -10,20 +10,28 @@ package adminaccess
 //     query, not a count kept in memory, so every replica reports the same
 //     value, and an elevation that expired with no reconciler pass already
 //     reads as inactive: started, not ended, and its expiry after the
-//     scrape's clock. Alert on max(), not sum().
+//     scrape's clock. Alert on max(), not sum(). A scrape whose read fails
+//     writes no sample of it at all, never a last or a seeded value, so the
+//     series goes stale and absent() fires; the read-ok gauge says why.
+//   - elitea_admin_elevations_read_ok: 1 when this scrape read the gauge
+//     from the database, 0 when it could not (no database, an error, the
+//     timeout).
 //   - elitea_break_glass_activations_total{path}: the elevations this
 //     replica started, by path (`approved`, `self`, `sealed`). StartElevation
 //     counts it, so every start path counts without code of its own. It is
 //     kept in process memory: it differs per replica and starts at 0 on a
 //     restart, which `rate()` and `sum()` absorb. A start counts once its row
-//     and its `started` event are written; a caller that then rolls its
-//     transaction back over-counts by one.
+//     and its `started` event are written, inside the caller's transaction:
+//     a caller that then rolls back has counted a start with no ledger row,
+//     so the counter is an upper bound of the committed starts. Alert on it
+//     as "a start was attempted"; the gauge and the ledger are the truth.
 //
 // No series names a user, a session, a level by person or a credential: the
 // one label is the path, a closed set.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -35,6 +43,7 @@ import (
 const (
 	MetricElevationsActive      = "elitea_admin_elevations_active"
 	MetricBreakGlassActivations = "elitea_break_glass_activations_total"
+	MetricElevationsReadOK      = "elitea_admin_elevations_read_ok"
 )
 
 // metricsQueryTimeout bounds the scrape-time query: a slow database must not
@@ -71,15 +80,12 @@ func BreakGlassActivations(path string) int64 {
 	return activations.counts[path]
 }
 
-// BreakGlassMetrics writes the two metrics. Build one per replica with
-// NewBreakGlassMetrics; the zero value has no database and writes the gauge
-// as 0.
+// BreakGlassMetrics writes the metrics. Build one per replica with
+// NewBreakGlassMetrics; one with no database writes no gauge sample and
+// read-ok 0.
 type BreakGlassMetrics struct {
 	db  Querier
 	now func() time.Time
-
-	mu         sync.Mutex
-	lastActive int64
 }
 
 // NewBreakGlassMetrics returns the metrics over db, the platform database.
@@ -99,7 +105,7 @@ func (m *BreakGlassMetrics) WithClock(now func() time.Time) *BreakGlassMetrics {
 // not ended, and expiring after now. Bounded by metricsQueryTimeout.
 func (m *BreakGlassMetrics) ActiveElevations(ctx context.Context) (int64, error) {
 	if m == nil || m.db == nil {
-		return 0, nil
+		return 0, errors.New("no database")
 	}
 	ctx, cancel := context.WithTimeout(ctx, metricsQueryTimeout)
 	defer cancel()
@@ -112,29 +118,27 @@ WHERE started_at IS NOT NULL AND ended_at IS NULL AND expires_at > $1`, m.now().
 	return active, nil
 }
 
-// refreshActive reads the gauge. A failed or slow read keeps the last value:
-// a database blip must not read as "every elevation ended".
-func (m *BreakGlassMetrics) refreshActive(ctx context.Context) int64 {
-	active, err := m.ActiveElevations(ctx)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err == nil {
-		m.lastActive = active
-	}
-	return m.lastActive
-}
-
 // WriteTextContext writes the exposition, reading the gauge first.
 func (m *BreakGlassMetrics) WriteTextContext(ctx context.Context, w io.Writer) error {
 	if m == nil {
 		return nil
 	}
-	active := m.refreshActive(ctx)
+	active, err := m.ActiveElevations(ctx)
+	readOK := 1
 	var b strings.Builder
 	b.WriteString("# HELP " + MetricElevationsActive +
 		" Break-glass elevations active now, read from the database (the same on every replica; alert on max).\n")
 	b.WriteString("# TYPE " + MetricElevationsActive + " gauge\n")
-	fmt.Fprintf(&b, "%s %d\n", MetricElevationsActive, active)
+	if err == nil {
+		fmt.Fprintf(&b, "%s %d\n", MetricElevationsActive, active)
+	} else {
+		// No sample: a failed read must not read as "no elevation is active".
+		readOK = 0
+	}
+	b.WriteString("# HELP " + MetricElevationsReadOK +
+		" 1 when this scrape read the active elevations from the database, 0 when it could not.\n")
+	b.WriteString("# TYPE " + MetricElevationsReadOK + " gauge\n")
+	fmt.Fprintf(&b, "%s %d\n", MetricElevationsReadOK, readOK)
 	b.WriteString("# HELP " + MetricBreakGlassActivations + " Break-glass elevations this replica started, by path.\n")
 	b.WriteString("# TYPE " + MetricBreakGlassActivations + " counter\n")
 	activations.mu.Lock()
@@ -142,6 +146,6 @@ func (m *BreakGlassMetrics) WriteTextContext(ctx context.Context, w io.Writer) e
 		fmt.Fprintf(&b, "%s{path=%q} %d\n", MetricBreakGlassActivations, path, activations.counts[path])
 	}
 	activations.mu.Unlock()
-	_, err := io.WriteString(w, b.String())
+	_, err = io.WriteString(w, b.String())
 	return err
 }

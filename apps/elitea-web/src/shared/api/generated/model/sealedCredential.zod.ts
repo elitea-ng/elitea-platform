@@ -67,7 +67,7 @@ export const SealedCredential = zod
     unbound: zod
       .boolean()
       .describe(
-        "The credential is unbound, and `bound_user` is the reserved break-glass account.",
+        "The credential is unbound, and `bound_user` is the reserved break-glass account. A credential whose account row no longer exists reads as bound, with an empty name and e-mail.\n",
       ),
     bound_user: SealedCredentialBoundUser,
     issued_at: zod.iso.datetime({ offset: true }),

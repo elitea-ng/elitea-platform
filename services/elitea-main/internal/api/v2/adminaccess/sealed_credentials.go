@@ -57,7 +57,11 @@ type BoundAccount struct {
 // ListedSealedCredential is one credential of the list with its account.
 type ListedSealedCredential struct {
 	registry.SealedCredential
-	// Account is the bound account; its ID is 0 when the row was deleted.
+	// Account is the bound account, zero when its row no longer exists
+	// (0271 keeps no foreign key). Unbound means "bound to the reserved
+	// account", which the credential does not record on its own: a credential
+	// whose reserved account row was deleted reads as bound, to the id it
+	// names, with no name or e-mail.
 	Account BoundAccount
 }
 
@@ -212,7 +216,14 @@ func (h *SealedCredentialsHandler) List(w http.ResponseWriter, r *http.Request) 
 		apierr.WriteStatus(w, http.StatusServiceUnavailable, "the sealed credential list is not configured")
 		return
 	}
-	actor, _ := user.OwningUserID()
+	// The read is recorded under the person who made it: a principal with no
+	// owning account (none reaches here past the token rule, which refuses
+	// every token) is refused rather than served under an empty record.
+	actor, ok := user.OwningUserID()
+	if !ok || actor <= 0 {
+		apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 	credentials, err := h.lister.ListSealedCredentials(r.Context(), actor)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) {

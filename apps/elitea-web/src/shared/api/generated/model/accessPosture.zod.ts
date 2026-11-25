@@ -50,7 +50,11 @@ export const AccessPosture = zod
       .int()
       .describe("The `fail` checks that do not pass. Only these are failures."),
     warnings: zod.int().describe("The `warn` checks that do not pass."),
-    notices: zod.int().describe("The `info` checks that do not pass."),
+    notices: zod
+      .int()
+      .describe(
+        "The `info` checks that need attention. They are facts, never failures: `super_admin_holders` needs attention whenever anyone holds `super_admin`.\n",
+      ),
     checked_at: zod.iso.datetime({ offset: true }),
   })
   .describe(

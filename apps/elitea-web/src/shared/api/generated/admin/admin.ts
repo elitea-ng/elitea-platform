@@ -5021,7 +5021,8 @@ export const getListSealedCredentialsUrl = () => {
  * people with emergency access, so an elevation never reads it
  * (`elevation_restricted`) and no personal access token does
  * (`token_critical_action_refused`). Every read is recorded as a
- * security audit decision event (`admin.elevation.credential_list`).
+ * security audit decision event (`admin.elevation.credential_list`),
+ * so a client fetches it once per page view and never polls it.
  * @summary List the sealed break-glass credentials, metadata only
  */
 export const listSealedCredentials = async (

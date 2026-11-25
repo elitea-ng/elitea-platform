@@ -7,13 +7,16 @@ package adminaccess
 // posture list says, in one place, what is wrong (`fail`) and what is only
 // worth knowing (`warn`, `info`). Only a `fail` that does not pass counts as
 // a failure: a check that is true everywhere, or that never clears, teaches
-// people to ignore the list, so `info` never fails and every check here can
-// pass on a well-kept deployment.
+// people to ignore the list. So every `fail` and `warn` check here passes on
+// a well-kept deployment, and an `info` check is a fact, never a failure:
+// super_admin_holders needs attention whenever anyone holds super_admin,
+// which a working deployment does, and is counted only as a notice.
 //
 // This file is the registry. Every check has a stable id (the wire id, the
 // text key's last part and the anchor of its docs entry), a severity and one
-// read: one query or one configuration read, so the list stays cheap enough
-// for a Home card with no cache. Later stories add their own checks here
+// read: one query or one configuration read (the presence of the seed
+// record is read once per list), so the list stays cheap enough for a Home
+// card with no cache. Later stories add their own checks here
 // (R2.14b, the break-glass checks; R2.15, Form sign-in beside single
 // sign-on); the order of postureChecks is the order of the list.
 //
@@ -98,6 +101,14 @@ type PostureSources struct {
 	GlobalAdministratorExists func(ctx context.Context) (bool, error)
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+
+	// seed memoizes the presence of the seed record for one RunPosture.
+	seed *seedMemo
+}
+
+type seedMemo struct {
+	read    bool
+	present bool
 }
 
 func (s PostureSources) now() time.Time {
@@ -178,6 +189,7 @@ func ValidatePostureChecks(checks []PostureCheck) error {
 // fails the whole list: a posture list with a silent hole reads as correct.
 func RunPosture(ctx context.Context, sources PostureSources, checks []PostureCheck) ([]PostureResult, error) {
 	results := make([]PostureResult, 0, len(checks))
+	sources.seed = &seedMemo{}
 	for _, check := range checks {
 		finding, err := check.Run(ctx, sources)
 		if err != nil {
@@ -199,12 +211,26 @@ func RunPosture(ctx context.Context, sources PostureSources, checks []PostureChe
 // seedRecordPresent reports whether the seed record (shared 0263) exists. A
 // database without it cannot tell a built-in role from a custom one, and the
 // two checks that need it then fail and say so, rather than pass.
-func seedRecordPresent(ctx context.Context, db Querier) (bool, error) {
+func seedRecordPresent(ctx context.Context, s PostureSources) (bool, error) {
+	if s.seed != nil && s.seed.read {
+		return s.seed.present, nil
+	}
 	var present bool
-	if err := db.QueryRow(ctx, `SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT to_regclass('elitea_auth.admin_role_seeds') IS NOT NULL`).Scan(&present); err != nil {
 		return false, fmt.Errorf("look for the built-in role record: %w", err)
 	}
+	if s.seed != nil {
+		s.seed.read, s.seed.present = true, present
+	}
 	return present, nil
+}
+
+// counted is "1 thing" or "n things", with the verb that agrees.
+func counted(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 const seedRecordMissing = "The record of which roles are built-in (elitea_auth.admin_role_seeds) is missing, so " +
@@ -230,7 +256,7 @@ func collectStrings(rows pgx.Rows, err error) ([]string, error) {
 // locked and cannot be bound to a group (decision 3), and the console would
 // show a built-in name with a custom set. security_auditor is included.
 func checkBuiltInNameCollision(ctx context.Context, s PostureSources) (PostureFinding, error) {
-	present, err := seedRecordPresent(ctx, s.DB)
+	present, err := seedRecordPresent(ctx, s)
 	if err != nil {
 		return PostureFinding{}, err
 	}
@@ -263,7 +289,7 @@ ORDER BY 1`, ModeAdministration, builtInNames()))
 // declare). Roles marked as_found (editor, viewer) and unassignable (system)
 // have no declared set and are never reported.
 func checkBuiltInSetDrift(ctx context.Context, s PostureSources) (PostureFinding, error) {
-	present, err := seedRecordPresent(ctx, s.DB)
+	present, err := seedRecordPresent(ctx, s)
 	if err != nil {
 		return PostureFinding{}, err
 	}
@@ -341,8 +367,9 @@ WHERE uuid IS NOT NULL AND admin_access = $1
 	if finding.Pass {
 		finding.Text = "No personal access token has inherit administration access."
 	} else {
-		finding.Text = fmt.Sprintf("%d personal access tokens have inherit administration access: they act with "+
-			"their owner's whole administration set. Give each the scopes it needs, or none.", count)
+		finding.Text = counted(count, "personal access token has", "personal access tokens have") +
+			" inherit administration access: each acts with its owner's whole administration set. Give " +
+			"each the scopes it needs, or none."
 	}
 	return finding, nil
 }
@@ -357,7 +384,7 @@ func checkCustomRoleLegacyPermission(ctx context.Context, s PostureSources) (Pos
 			legacy = append(legacy, row.Name)
 		}
 	}
-	present, err := seedRecordPresent(ctx, s.DB)
+	present, err := seedRecordPresent(ctx, s)
 	if err != nil {
 		return PostureFinding{}, err
 	}
@@ -429,8 +456,9 @@ func checkLegacySystemRoleHeld(ctx context.Context, s PostureSources) (PostureFi
 	if finding.Pass {
 		finding.Text = "Nobody holds the legacy role system."
 	} else {
-		finding.Text = fmt.Sprintf("%d people hold the legacy role system, which is never assigned: %s. "+
-			"Give each a built-in role instead.", len(people), names(people))
+		finding.Text = counted(len(people), "person holds", "people hold") +
+			" the legacy role system, which is never assigned: " + names(people) +
+			". Give each a built-in role instead."
 	}
 	return finding, nil
 }
@@ -458,9 +486,9 @@ func checkInitialGlobalAdmins(ctx context.Context, s PostureSources) (PostureFin
 		finding.Text = "identity.initial_global_admins is configured and no global administrator exists yet: " +
 			"the first sign-in of a listed person makes them one."
 	default:
-		finding.Text = fmt.Sprintf("identity.initial_global_admins still lists %d entries while a global "+
-			"administrator exists, so every entry is ignored at sign-in. Remove the list from the "+
-			"configuration.", entries)
+		finding.Text = "identity.initial_global_admins still lists " + counted(entries, "entry", "entries") +
+			" while a global administrator exists, so every entry is ignored at sign-in. Remove the list " +
+			"from the configuration."
 	}
 	return finding, nil
 }
@@ -474,8 +502,8 @@ func checkSuperAdminHolders(ctx context.Context, s PostureSources) (PostureFindi
 		return PostureFinding{}, fmt.Errorf("read the holders of %s: %w", RoleSuperAdmin, err)
 	}
 	finding := PostureFinding{Pass: len(people) == 0, Facts: PostureFacts{Count: len(people), People: people}}
-	finding.Text = fmt.Sprintf("%d people hold super_admin as a standing role. The role reaches every "+
-		"project by its name.", len(people))
+	finding.Text = counted(len(people), "person holds", "people hold") +
+		" super_admin as a standing role. The role reaches every project by its name."
 	return finding, nil
 }
 

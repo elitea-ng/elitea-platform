@@ -79,7 +79,7 @@ func TestTheBreakGlassMetricsHaveNoUserLabel(t *testing.T) {
 		}
 		seen[match[1]] = true
 		switch match[1] {
-		case adminaccess.MetricElevationsActive:
+		case adminaccess.MetricElevationsActive, adminaccess.MetricElevationsReadOK:
 			if match[2] != "" {
 				t.Errorf("the gauge has labels: %q", line)
 			}
@@ -111,15 +111,28 @@ func TestTheBreakGlassMetricsHaveNoUserLabel(t *testing.T) {
 
 // A failed read keeps the last value: a database blip is not "every
 // elevation ended".
-func TestTheGaugeKeepsItsLastValueWhenTheDatabaseFails(t *testing.T) {
+// A failed read writes no gauge sample (neither the last value nor 0, both
+// of which read as correct) and read-ok 0; no database is the same.
+func TestAFailedReadWritesNoGaugeSample(t *testing.T) {
 	querier := &switchingQuerier{count: 3}
 	metrics := adminaccess.NewBreakGlassMetrics(querier)
-	if text := exposition(t, metrics); !strings.Contains(text, adminaccess.MetricElevationsActive+" 3\n") {
+	text := exposition(t, metrics)
+	if !strings.Contains(text, adminaccess.MetricElevationsActive+" 3\n") ||
+		!strings.Contains(text, adminaccess.MetricElevationsReadOK+" 1\n") {
 		t.Fatalf("first scrape:\n%s", text)
 	}
 	querier.err = errors.New("the database is gone")
-	if text := exposition(t, metrics); !strings.Contains(text, adminaccess.MetricElevationsActive+" 3\n") {
-		t.Fatalf("a failed scrape dropped the last value:\n%s", text)
+	for name, m := range map[string]*adminaccess.BreakGlassMetrics{
+		"a failed read": metrics,
+		"no database":   adminaccess.NewBreakGlassMetrics(nil),
+	} {
+		text := exposition(t, m)
+		if strings.Contains(text, "\n"+adminaccess.MetricElevationsActive+" ") {
+			t.Errorf("%s wrote a gauge sample:\n%s", name, text)
+		}
+		if !strings.Contains(text, adminaccess.MetricElevationsReadOK+" 0\n") {
+			t.Errorf("%s did not say the read failed:\n%s", name, text)
+		}
 	}
 }
 

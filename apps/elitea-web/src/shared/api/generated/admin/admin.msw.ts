@@ -706,7 +706,7 @@ export const getGetAccessPostureResponseMock = (): AccessPosture => ({
       severity: "info",
       state: "attention",
       text_key: "admin.access.posture.super_admin_holders",
-      text: "1 people hold super_admin as a standing role. The role reaches every project by its name.",
+      text: "1 person holds super_admin as a standing role. The role reaches every project by its name.",
       facts: {
         count: 1,
         roles: [],

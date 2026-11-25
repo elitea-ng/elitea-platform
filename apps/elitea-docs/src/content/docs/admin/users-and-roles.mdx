@@ -283,7 +283,7 @@ Replacing an account's role writes two records: the old role `revoked` and the n
 
 **`GET /api/v2/admin/access/posture`** lists checks of the administration roles and tokens. Each check says what is wrong, or what is only worth knowing. The Access page and the Home posture card that show the list come in a later release. Reading it needs `access.roles.view`, or `admin.auth.users` or `modes.users`. A personal access token with scoped administration access can read it if it holds `access.roles.view`. The list is computed again on every read.
 
-Each check has a stable `id`, a `severity` and a `state` of `pass` or `attention`. It also has a translation key `admin.access.posture.<id>`, an English `text`, and `facts`: a count, role names and, for the checks about who holds a role, the people. The response counts the checks that do not pass as `failures` (`fail`), `warnings` (`warn`) and `notices` (`info`). Only a `fail` check that does not pass is a failure. Every check passes on a fresh install.
+Each check has a stable `id`, a `severity` and a `state` of `pass` or `attention`. It also has a translation key `admin.access.posture.<id>`, an English `text`, and `facts`: a count, role names and, for the checks about who holds a role, the people. The response counts the checks that do not pass as `failures` (`fail`), `warnings` (`warn`) and `notices` (`info`). Only a `fail` check that does not pass is a failure. On a well-kept deployment no `fail` or `warn` check needs attention. An `info` check is a fact: `super_admin_holders` needs attention whenever anyone holds `super_admin`, which a working deployment does.
 
 | Id | Severity | Needs attention when |
 | --- | --- | --- |

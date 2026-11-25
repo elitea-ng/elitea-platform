@@ -95,8 +95,9 @@ The same metrics port serves two break-glass metrics, also when the audit export
 | --- | --- | --- |
 | `elitea_admin_elevations_active` | gauge | Break-glass elevations active now: started, not ended, and not past their expiry. |
 | `elitea_break_glass_activations_total{path}` | counter | Elevations started by this replica, by `path`: `approved`, `self` or `sealed`. |
+| `elitea_admin_elevations_read_ok` | gauge | `1` when the scrape read the active elevations from the database, `0` when it could not. |
 
-The gauge is read from the database at every scrape, with a two-second bound, so every replica reports the same value and an elevation that ran out reads as inactive at once, before the housekeeping pass records its end. Alert on `max()` of it, not `sum()`. A scrape whose read fails reports the last value it read. The counter is kept in each replica's memory and starts at zero when the replica starts: use `sum(rate(...))` or `sum(increase(...))` over the replicas. Neither metric has a label that names a person, a session or a credential.
+The gauge is read from the database at every scrape, with a two-second bound, so every replica reports the same value and an elevation that ran out reads as inactive at once, before the housekeeping pass records its end. Alert on `max()` of it, not `sum()`. A scrape whose read fails writes no sample of the gauge at all, never an old value or zero, and sets `elitea_admin_elevations_read_ok` to `0`: alert on `absent(elitea_admin_elevations_active)` or on the read-ok gauge, so an unreachable database never reads as "no elevation is active". The counter is kept in each replica's memory and starts at zero when the replica starts: use `sum(rate(...))` or `sum(increase(...))` over the replicas. It counts a start when the elevation is written, before the surrounding sign-in or approval commits, so a start that is then rolled back is still counted: the counter is an upper bound, and the gauge and the elevation history are the record. Neither metric has a label that names a person, a session or a credential.
 
 ## Maintenance windows
 
