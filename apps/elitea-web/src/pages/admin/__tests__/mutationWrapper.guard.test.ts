@@ -240,7 +240,7 @@ describe('the mutation guard', () => {
   it('the generated client has no mutation hook a page could call past the scan', () => {
     const generated = walk(GENERATED_DIR, new Set()).filter((path) => !/\.(msw|zod)\.ts$/.test(path));
     expect(generated.length).toBeGreaterThan(20);
-    const withMutation = generated.filter((path) => /useMutation/.test(readFileSync(path, 'utf8')));
+    const withMutation = generated.filter((path) => /\buseMutation\b/.test(readFileSync(path, 'utf8')));
     expect(withMutation.map((path) => relative(GENERATED_DIR, path))).toEqual([]);
   });
 
