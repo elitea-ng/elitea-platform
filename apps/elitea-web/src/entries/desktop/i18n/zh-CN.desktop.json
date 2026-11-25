@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "团队 {{team}}：未指明智能体的消息发给 {{lead}}（负责人）；写 @名称 可发给其他成员。",
   "workspace.team.addressedNotice": "团队 {{team}}：写 @名称 可发给某个成员；未指明智能体的消息发给最后回答的智能体（起初是 {{lead}}）。",
   "workspace.team.folderNotice": "每个成员都在这台电脑上使用此文件夹及其工具工作。成员作为工具调用的智能体在云端运行，不会获得此文件夹。",
-  "workspace.team.notListed": "有智能体未在此列出"
+  "workspace.team.notListed": "有智能体未在此列出",
+  "workspace.approval.agent": "{{name}} 请求",
+  "workspace.composer.agents": "此会话中的智能体",
+  "workspace.exchange.label": "依次回答的智能体",
+  "workspace.exchange.next": "下一个:",
+  "workspace.exchange.now": "当前: {{name}}",
+  "workspace.exchange.skip": "跳过 {{name}}",
+  "workspace.exchange.skippedRest": "你已跳过其余智能体。",
+  "workspace.exchange.stop": "停止交流",
+  "workspace.exchange.stopped": "你已停止交流。",
+  "workspace.participants.cloud": "云端",
+  "workspace.participants.local": "本地",
+  "workspace.participants.title": "参与者",
+  "workspace.steer.to": "致 {{name}}: {{text}}"
 }

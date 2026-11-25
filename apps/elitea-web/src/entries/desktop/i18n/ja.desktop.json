@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "チーム {{team}}: エージェントを指定しないメッセージは {{lead}}（リード）に届きます。別のメンバーに宛てるには @名前 と書きます。",
   "workspace.team.addressedNotice": "チーム {{team}}: メンバーに宛てるには @名前 と書きます。エージェントを指定しないメッセージは、最後に回答したエージェント（最初は {{lead}}）に届きます。",
   "workspace.team.folderNotice": "各メンバーはこのコンピューターで、このフォルダーとそのツールを使って作業します。メンバーがツールとして呼び出すエージェントはクラウドで実行され、フォルダーを受け取りません。",
-  "workspace.team.notListed": "ここに表示されないエージェントがあります"
+  "workspace.team.notListed": "ここに表示されないエージェントがあります",
+  "workspace.approval.agent": "{{name}} からの確認",
+  "workspace.composer.agents": "このスレッドのエージェント",
+  "workspace.exchange.label": "順番に回答するエージェント",
+  "workspace.exchange.next": "次:",
+  "workspace.exchange.now": "現在: {{name}}",
+  "workspace.exchange.skip": "{{name}} をスキップ",
+  "workspace.exchange.skippedRest": "残りのエージェントをスキップしました。",
+  "workspace.exchange.stop": "やり取りを停止",
+  "workspace.exchange.stopped": "やり取りを停止しました。",
+  "workspace.participants.cloud": "クラウド",
+  "workspace.participants.local": "ローカル",
+  "workspace.participants.title": "参加者",
+  "workspace.steer.to": "{{name}} 宛て: {{text}}"
 }

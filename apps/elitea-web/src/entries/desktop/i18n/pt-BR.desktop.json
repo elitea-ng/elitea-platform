@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Equipe {{team}}: uma mensagem que não cita nenhum agente vai para {{lead}} (líder); escreva @Nome para falar com outro membro.",
   "workspace.team.addressedNotice": "Equipe {{team}}: escreva @Nome para falar com um membro; uma mensagem que não cita nenhum agente vai para o agente que respondeu por último (no início, {{lead}}).",
   "workspace.team.folderNotice": "Cada membro trabalha neste computador com esta pasta e suas ferramentas. Um agente que um membro chama como ferramenta é executado na nuvem e não recebe a pasta.",
-  "workspace.team.notListed": "Um agente não está listado aqui"
+  "workspace.team.notListed": "Um agente não está listado aqui",
+  "workspace.approval.agent": "{{name}} pergunta",
+  "workspace.composer.agents": "Agentes nesta conversa",
+  "workspace.exchange.label": "Agentes respondendo em sequência",
+  "workspace.exchange.next": "Próximos:",
+  "workspace.exchange.now": "Agora: {{name}}",
+  "workspace.exchange.skip": "Pular {{name}}",
+  "workspace.exchange.skippedRest": "Você pulou os agentes restantes.",
+  "workspace.exchange.stop": "Parar troca",
+  "workspace.exchange.stopped": "Você parou a troca.",
+  "workspace.participants.cloud": "Nuvem",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participantes",
+  "workspace.steer.to": "Para {{name}}: {{text}}"
 }

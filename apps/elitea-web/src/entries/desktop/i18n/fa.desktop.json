@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "تیم {{team}}: پیامی که نام هیچ عاملی را نمی‌برد به {{lead}} (سرپرست) می‌رود؛ برای خطاب به عضوی دیگر ‎@نام بنویسید.",
   "workspace.team.addressedNotice": "تیم {{team}}: برای خطاب به یک عضو ‎@نام بنویسید؛ پیامی که نام هیچ عاملی را نمی‌برد به عاملی می‌رود که آخرین بار پاسخ داد (در آغاز {{lead}}).",
   "workspace.team.folderNotice": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند. عاملی که یک عضو به‌عنوان ابزار فرا می‌خواند در ابر اجرا می‌شود و پوشه را دریافت نمی‌کند.",
-  "workspace.team.notListed": "یکی از عامل‌ها اینجا فهرست نشده است"
+  "workspace.team.notListed": "یکی از عامل‌ها اینجا فهرست نشده است",
+  "workspace.approval.agent": "{{name}} می‌پرسد",
+  "workspace.composer.agents": "عامل‌های این رشته",
+  "workspace.exchange.label": "عامل‌هایی که به نوبت پاسخ می‌دهند",
+  "workspace.exchange.next": "بعدی:",
+  "workspace.exchange.now": "اکنون: {{name}}",
+  "workspace.exchange.skip": "رد کردن {{name}}",
+  "workspace.exchange.skippedRest": "عامل‌های باقی‌مانده را رد کردید.",
+  "workspace.exchange.stop": "توقف تبادل",
+  "workspace.exchange.stopped": "تبادل را متوقف کردید.",
+  "workspace.participants.cloud": "ابر",
+  "workspace.participants.local": "محلی",
+  "workspace.participants.title": "شرکت‌کنندگان",
+  "workspace.steer.to": "به {{name}}: {{text}}"
 }

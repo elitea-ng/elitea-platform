@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "ٹیم {{team}}: جس پیغام میں کسی ایجنٹ کا نام نہ ہو وہ {{lead}} (لیڈ) کو جاتا ہے؛ کسی دوسرے رکن سے مخاطب ہونے کے لیے @نام لکھیں۔",
   "workspace.team.addressedNotice": "ٹیم {{team}}: کسی رکن سے مخاطب ہونے کے لیے @نام لکھیں؛ جس پیغام میں کسی ایجنٹ کا نام نہ ہو وہ اس ایجنٹ کو جاتا ہے جس نے آخر میں جواب دیا (شروع میں {{lead}})۔",
   "workspace.team.folderNotice": "ہر رکن اس کمپیوٹر پر اس فولڈر اور اس کے ٹولز کے ساتھ کام کرتا ہے۔ جس ایجنٹ کو کوئی رکن ٹول کے طور پر بلاتا ہے وہ کلاؤڈ میں چلتا ہے اور اسے فولڈر نہیں ملتا۔",
-  "workspace.team.notListed": "ایک ایجنٹ یہاں درج نہیں ہے"
+  "workspace.team.notListed": "ایک ایجنٹ یہاں درج نہیں ہے",
+  "workspace.approval.agent": "{{name}} پوچھ رہا ہے",
+  "workspace.composer.agents": "اس تھریڈ کے ایجنٹ",
+  "workspace.exchange.label": "باری باری جواب دینے والے ایجنٹ",
+  "workspace.exchange.next": "اگلا:",
+  "workspace.exchange.now": "ابھی: {{name}}",
+  "workspace.exchange.skip": "{{name}} کو چھوڑیں",
+  "workspace.exchange.skippedRest": "آپ نے باقی ایجنٹ چھوڑ دیے۔",
+  "workspace.exchange.stop": "تبادلہ روکیں",
+  "workspace.exchange.stopped": "آپ نے تبادلہ روک دیا۔",
+  "workspace.participants.cloud": "کلاؤڈ",
+  "workspace.participants.local": "مقامی",
+  "workspace.participants.title": "شرکاء",
+  "workspace.steer.to": "{{name}} کے لیے: {{text}}"
 }

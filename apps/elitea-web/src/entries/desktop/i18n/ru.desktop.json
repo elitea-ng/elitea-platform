@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Команда {{team}}: сообщение, в котором не назван агент, получает {{lead}} (ведущий); напишите @Имя, чтобы обратиться к другому участнику.",
   "workspace.team.addressedNotice": "Команда {{team}}: напишите @Имя, чтобы обратиться к участнику; сообщение, в котором не назван агент, получает агент, ответивший последним (сначала {{lead}}).",
   "workspace.team.folderNotice": "Каждый участник работает на этом компьютере с этой папкой и её инструментами. Агент, которого участник вызывает как инструмент, работает в облаке и не получает папку.",
-  "workspace.team.notListed": "Агента нет в этом списке"
+  "workspace.team.notListed": "Агента нет в этом списке",
+  "workspace.approval.agent": "{{name}} спрашивает",
+  "workspace.composer.agents": "Агенты в этом треде",
+  "workspace.exchange.label": "Агенты отвечают по очереди",
+  "workspace.exchange.next": "Далее:",
+  "workspace.exchange.now": "Сейчас: {{name}}",
+  "workspace.exchange.skip": "Пропустить {{name}}",
+  "workspace.exchange.skippedRest": "Вы пропустили остальных агентов.",
+  "workspace.exchange.stop": "Остановить обмен",
+  "workspace.exchange.stopped": "Вы остановили обмен.",
+  "workspace.participants.cloud": "Облако",
+  "workspace.participants.local": "Локально",
+  "workspace.participants.title": "Участники",
+  "workspace.steer.to": "Для {{name}}: {{text}}"
 }

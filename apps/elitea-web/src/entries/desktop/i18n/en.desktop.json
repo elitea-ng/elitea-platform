@@ -1196,5 +1196,18 @@
   "workspace.team.leadNotice": "Team {{team}}: a message that names no agent goes to {{lead}} (lead); write @Name to address another member.",
   "workspace.team.addressedNotice": "Team {{team}}: write @Name to address a member; a message that names no agent goes to the agent that answered last ({{lead}} at first).",
   "workspace.team.folderNotice": "Every member works on this computer with this folder and its tools. An agent a member calls as a tool runs in the cloud and does not get the folder.",
-  "workspace.team.notListed": "An agent is not listed here"
+  "workspace.team.notListed": "An agent is not listed here",
+  "workspace.approval.agent": "{{name}} asks",
+  "workspace.composer.agents": "Agents in this thread",
+  "workspace.exchange.label": "Agents answering in turn",
+  "workspace.exchange.next": "Next:",
+  "workspace.exchange.now": "Now: {{name}}",
+  "workspace.exchange.skip": "Skip {{name}}",
+  "workspace.exchange.skippedRest": "You skipped the remaining agents.",
+  "workspace.exchange.stop": "Stop exchange",
+  "workspace.exchange.stopped": "You stopped the exchange.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participants",
+  "workspace.steer.to": "To {{name}}: {{text}}"
 }

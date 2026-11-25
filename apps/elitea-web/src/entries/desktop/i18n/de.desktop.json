@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Team {{team}}: Eine Nachricht, die keinen Agenten nennt, geht an {{lead}} (Lead); schreiben Sie @Name, um ein anderes Mitglied anzusprechen.",
   "workspace.team.addressedNotice": "Team {{team}}: Schreiben Sie @Name, um ein Mitglied anzusprechen; eine Nachricht, die keinen Agenten nennt, geht an den Agenten, der zuletzt geantwortet hat (anfangs {{lead}}).",
   "workspace.team.folderNotice": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen. Ein Agent, den ein Mitglied als Werkzeug aufruft, läuft in der Cloud und erhält den Ordner nicht.",
-  "workspace.team.notListed": "Ein Agent ist hier nicht aufgeführt"
+  "workspace.team.notListed": "Ein Agent ist hier nicht aufgeführt",
+  "workspace.approval.agent": "{{name}} fragt",
+  "workspace.composer.agents": "Agenten in diesem Thread",
+  "workspace.exchange.label": "Agenten antworten nacheinander",
+  "workspace.exchange.next": "Als Nächstes:",
+  "workspace.exchange.now": "Jetzt: {{name}}",
+  "workspace.exchange.skip": "{{name}} überspringen",
+  "workspace.exchange.skippedRest": "Sie haben die übrigen Agenten übersprungen.",
+  "workspace.exchange.stop": "Austausch beenden",
+  "workspace.exchange.stopped": "Sie haben den Austausch beendet.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Lokal",
+  "workspace.participants.title": "Teilnehmer",
+  "workspace.steer.to": "An {{name}}: {{text}}"
 }
