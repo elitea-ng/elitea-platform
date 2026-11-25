@@ -16,3 +16,4 @@
 1544 services/elitea-worker-rust/src/agents/graph/fanout_wake.rs  # #1554 (FU-269) removed the FU-265 paused-writer meta key on purpose: the paused writer now comes from the claim receipt, and a continuation still carrying the key is refused
 2080 libs/rust/local-tools/src/checkpoint.rs  # #2086 (#2085) replaced the direct loose-ref prune that #2080's squash carried with ref locking on purpose: the prune now takes the ref's lock and removes the reflog first
 2724 .github/workflows/ci-web-coverage.yml  # #2721: the routing condition was rewritten (schedules, dispatches and pushes route too); the shards are routed again
+3037 apps/elitea-web/src/pages/admin/AdminLayout.tsx  # #3046 removed the TEMPORARY Roles-link branch on purpose (temporaryRolesLink.ts deleted): /roles belongs to the Access item now
