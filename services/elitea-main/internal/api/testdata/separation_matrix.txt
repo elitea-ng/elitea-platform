@@ -55,6 +55,7 @@
 # security_auditor emergency_access, elevated admin, elevated super_admin,
 # then class, method, route and action.
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/history -
+allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/posture -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/roles -
 allowed allowed refused refused refused refused restricted restricted read    GET /api/v2/admin/access/sealed_credentials -
 allowed allowed refused refused allowed refused allowed    allowed    read    GET /api/v2/admin/access/tokens -

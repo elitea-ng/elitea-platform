@@ -3175,6 +3175,8 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	defer stopMonitor()
 	go readinessMonitor.Run(monitorCtx)
 	r := api.NewRouter(api.RouterConfig{
+		// The access posture warns while the bootstrap list outlives it (ADR-0059 R2.14a).
+		PostureInitialGlobalAdmins:    firstLoginPolicy.InitialGlobalAdmins,
 		RetentionAdmin:                v2retention.NewHandler(dbrepos.NewRetentionPolicyRepo(pool)),
 		AgentIdentityAdmin:            agentIdentity.Admin,
 		CredentialGrantsAdmin:         credentialGrantsAdminHandler,

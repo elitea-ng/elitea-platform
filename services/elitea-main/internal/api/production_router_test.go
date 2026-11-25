@@ -1855,6 +1855,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/openapi.json",
 		"GET /api/openapi.yaml",
 		"GET /api/v2/admin/access/history",
+		"GET /api/v2/admin/access/posture",
 		"GET /api/v2/admin/access/roles",
 		"GET /api/v2/admin/access/sealed_credentials",
 		"GET /api/v2/admin/access/tokens",

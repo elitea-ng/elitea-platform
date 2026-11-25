@@ -148,7 +148,7 @@ func TestAScopedTokenIsRefusedCriticalActions(t *testing.T) {
 // access posture (R2.14a) is an ordinary read: a scoped token that holds
 // access.roles.view passes the rule. Without a database the handlers answer
 // what they answer; what is held here is the rule's refusal.
-func TestNoTokenReadsTheSealedCredentialList(t *testing.T) {
+func TestNoTokenReadsTheSealedCredentialListAndAScopedTokenReadsThePosture(t *testing.T) {
 	const sealed = "/api/v2/admin/access/sealed_credentials"
 	granted := append([]string{adminaccess.AccessBreakglassManage, adminaccess.AccessRolesView}, tokenRuleSuperAdmin...)
 	for _, access := range []string{adminaccess.TokenAccessScoped, adminaccess.TokenAccessInherit} {
@@ -161,6 +161,11 @@ func TestNoTokenReadsTheSealedCredentialList(t *testing.T) {
 	session := newTokenRuleRouter(t, auth.CredentialKindNone, "", granted)
 	if status, code := tokenRuleAnswer(t, session, http.MethodGet, sealed, ""); status == http.StatusForbidden {
 		t.Errorf("a session that holds access.breakglass.manage: %d %q, want it past the gates", status, code)
+	}
+	scoped := newTokenRuleRouter(t, auth.CredentialKindToken, adminaccess.TokenAccessScoped,
+		[]string{adminaccess.AccessRolesView})
+	if status, code := tokenRuleAnswer(t, scoped, http.MethodGet, "/api/v2/admin/access/posture", ""); status == http.StatusForbidden {
+		t.Errorf("a scoped token with access.roles.view on the posture: %d %q, want it past the gates", status, code)
 	}
 }
 

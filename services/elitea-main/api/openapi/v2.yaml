@@ -19490,6 +19490,95 @@ components:
       description: >
         NOTE(W2): internal/api/v2/admin/access_tokens.go (AccessTokens).
 
+    AccessPosturePerson:
+      type: object
+      required: [id, name, email]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/posture.go (posturePersonBody).
+        A person a finding names; shown to a holder of `access.roles.view`
+        only.
+      properties:
+        id:
+          type: integer
+          format: int64
+        name: { type: string }
+        email: { type: string }
+
+    AccessPostureFacts:
+      type: object
+      required: [count, roles, people]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/posture.go (postureFactsBody).
+      properties:
+        count:
+          type: integer
+          description: How many things the check found (roles, tokens, people or configured entries).
+        roles:
+          type: array
+          items: { type: string }
+          description: The roles the finding is about, by name.
+        people:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessPosturePerson'
+          description: The people the finding is about, for the checks about who holds a role.
+
+    AccessPostureCheck:
+      type: object
+      required: [id, severity, state, text_key, text, facts]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/posture.go (postureCheckBody);
+        the checks are the registry of internal/adminaccess/posture.go.
+      properties:
+        id:
+          type: string
+          description: >
+            The stable id of the check: `builtin_name_collision`,
+            `builtin_set_drift`, `inherit_tokens`,
+            `custom_role_legacy_permission`, `legacy_system_role_held`,
+            `initial_global_admins_configured`, `super_admin_holders`,
+            `legacy_system_role_exists`. Later releases add checks; a client
+            renders an id it does not know from `text`.
+        severity:
+          type: string
+          description: >
+            `fail`, `warn` or `info`. Only a `fail` check that does not pass
+            counts as a failure.
+        state:
+          type: string
+          description: "`pass`, or `attention` when the check found something."
+        text_key:
+          type: string
+          description: The translation key, `admin.access.posture.<id>`.
+        text:
+          type: string
+          description: The finding in English, with its facts.
+        facts:
+          $ref: '#/components/schemas/AccessPostureFacts'
+
+    AccessPosture:
+      type: object
+      required: [checks, failures, warnings, notices, checked_at]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/posture.go (postureBody).
+      properties:
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessPostureCheck'
+        failures:
+          type: integer
+          description: The `fail` checks that do not pass. Only these are failures.
+        warnings:
+          type: integer
+          description: The `warn` checks that do not pass.
+        notices:
+          type: integer
+          description: The `info` checks that do not pass.
+        checked_at:
+          type: string
+          format: date-time
+
     SealedCredentialBoundUser:
       type: object
       required: [id, name, email]
@@ -26205,6 +26294,100 @@ paths:
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500': { $ref: '#/components/responses/500' }
+
+  /admin/access/posture:
+    get:
+      operationId: getAccessPosture
+      summary: The access posture checks
+      description: |
+        What is wrong with the administration roles and tokens, and what is
+        only worth knowing (ADR-0059 decision 8, R2.14a). Every check has a
+        severity, `fail`, `warn` or `info`; only a `fail` that does not pass
+        is a failure. The Access page and the Home posture card read it.
+
+        For a holder of `access.roles.view` (or `admin.auth.users` or
+        `modes.users`, which it narrows): the facts name the people who hold
+        `system` and `super_admin`. A scoped personal access token that holds
+        `access.roles.view` may read it. Computed on every read, no cache.
+      tags: [admin]
+      responses:
+        '200':
+          description: The checks, in order of severity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessPosture'
+              example:
+                checks:
+                  - id: builtin_name_collision
+                    severity: fail
+                    state: pass
+                    text_key: admin.access.posture.builtin_name_collision
+                    text: Every role with a built-in name is recorded as built-in.
+                    facts: { count: 0, roles: [], people: [] }
+                  - id: builtin_set_drift
+                    severity: fail
+                    state: attention
+                    text_key: admin.access.posture.builtin_set_drift
+                    text: >-
+                      These built-in roles hold a set that differs from the one Elitea defines: admin.
+                      A built-in set is locked in the console; put it back from the main workload with
+                      `elitea-main admin-role reset admin`.
+                    facts: { count: 1, roles: [admin], people: [] }
+                  - id: inherit_tokens
+                    severity: warn
+                    state: attention
+                    text_key: admin.access.posture.inherit_tokens
+                    text: >-
+                      2 personal access tokens have inherit administration access: they act with their
+                      owner's whole administration set. Give each the scopes it needs, or none.
+                    facts: { count: 2, roles: [], people: [] }
+                  - id: custom_role_legacy_permission
+                    severity: warn
+                    state: pass
+                    text_key: admin.access.posture.custom_role_legacy_permission
+                    text: No custom role holds a legacy permission.
+                    facts: { count: 0, roles: [], people: [] }
+                  - id: legacy_system_role_held
+                    severity: warn
+                    state: pass
+                    text_key: admin.access.posture.legacy_system_role_held
+                    text: Nobody holds the legacy role system.
+                    facts: { count: 0, roles: [], people: [] }
+                  - id: initial_global_admins_configured
+                    severity: warn
+                    state: pass
+                    text_key: admin.access.posture.initial_global_admins_configured
+                    text: identity.initial_global_admins is not configured.
+                    facts: { count: 0, roles: [], people: [] }
+                  - id: super_admin_holders
+                    severity: info
+                    state: attention
+                    text_key: admin.access.posture.super_admin_holders
+                    text: 1 people hold super_admin as a standing role. The role reaches every project by its name.
+                    facts:
+                      count: 1
+                      roles: []
+                      people:
+                        - { id: 11, name: Ada Admin, email: ada@example.com }
+                  - id: legacy_system_role_exists
+                    severity: info
+                    state: pass
+                    text_key: admin.access.posture.legacy_system_role_exists
+                    text: The legacy role system does not exist.
+                    facts: { count: 0, roles: [], people: [] }
+                failures: 1
+                warnings: 1
+                notices: 1
+                checked_at: '2026-11-25T12:00:00Z'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The access posture is not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /admin/access/sealed_credentials:
     get:

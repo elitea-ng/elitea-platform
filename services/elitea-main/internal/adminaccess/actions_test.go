@@ -187,6 +187,11 @@ func TestARestrictedReadHasAnEntry(t *testing.T) {
 		entry.Elevation != adminaccess.ElevationDeny || entry.Token != adminaccess.TokenNever {
 		t.Fatalf("the sealed credential list's entry = %+v, %v; want access.breakglass.manage, deny, never", entry, ok)
 	}
+	entry, ok = adminaccess.ActionFor(http.MethodGet, adminaccess.AccessPosturePattern, "")
+	if !ok || entry.Permission != adminaccess.AccessRolesView ||
+		entry.Elevation != adminaccess.ElevationAllow || entry.Token != adminaccess.TokenAllowed {
+		t.Fatalf("the access posture's entry = %+v, %v; want access.roles.view, allow, allowed", entry, ok)
+	}
 }
 
 func TestEveryActionPermissionIsRegistered(t *testing.T) {

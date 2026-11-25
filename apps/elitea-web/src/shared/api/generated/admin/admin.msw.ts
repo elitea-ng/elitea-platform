@@ -47,6 +47,7 @@ import type { RequestHandlerOptions } from "msw";
 
 import { CredentialKind, PermissionTrimmingItemKind } from "../model";
 import type {
+  AccessPosture,
   AdminAuthUsersActionResult,
   AdminAuthUsersPage,
   AdminConsoleDocument,
@@ -118,6 +119,7 @@ import type {
   RetentionPolicy,
   RetentionPolicyListResponse,
   Role,
+  SealedCredentialList,
   SendBrandingTestEmail200,
   SystemInfo,
   UserInviteResult,
@@ -645,6 +647,120 @@ export const getListAdministrationAccessTokensResponseMock =
         owner_name: "Sam Auditor",
         owner_email: "sam@example.com",
         owner_suspended: false,
+      },
+    ],
+  });
+
+export const getGetAccessPostureResponseMock = (): AccessPosture => ({
+  checks: [
+    {
+      id: "builtin_name_collision",
+      severity: "fail",
+      state: "pass",
+      text_key: "admin.access.posture.builtin_name_collision",
+      text: "Every role with a built-in name is recorded as built-in.",
+      facts: { count: 0, roles: [], people: [] },
+    },
+    {
+      id: "builtin_set_drift",
+      severity: "fail",
+      state: "attention",
+      text_key: "admin.access.posture.builtin_set_drift",
+      text: "These built-in roles hold a set that differs from the one Elitea defines: admin. A built-in set is locked in the console; put it back from the main workload with `elitea-main admin-role reset admin`.",
+      facts: { count: 1, roles: ["admin"], people: [] },
+    },
+    {
+      id: "inherit_tokens",
+      severity: "warn",
+      state: "attention",
+      text_key: "admin.access.posture.inherit_tokens",
+      text: "2 personal access tokens have inherit administration access: they act with their owner's whole administration set. Give each the scopes it needs, or none.",
+      facts: { count: 2, roles: [], people: [] },
+    },
+    {
+      id: "custom_role_legacy_permission",
+      severity: "warn",
+      state: "pass",
+      text_key: "admin.access.posture.custom_role_legacy_permission",
+      text: "No custom role holds a legacy permission.",
+      facts: { count: 0, roles: [], people: [] },
+    },
+    {
+      id: "legacy_system_role_held",
+      severity: "warn",
+      state: "pass",
+      text_key: "admin.access.posture.legacy_system_role_held",
+      text: "Nobody holds the legacy role system.",
+      facts: { count: 0, roles: [], people: [] },
+    },
+    {
+      id: "initial_global_admins_configured",
+      severity: "warn",
+      state: "pass",
+      text_key: "admin.access.posture.initial_global_admins_configured",
+      text: "identity.initial_global_admins is not configured.",
+      facts: { count: 0, roles: [], people: [] },
+    },
+    {
+      id: "super_admin_holders",
+      severity: "info",
+      state: "attention",
+      text_key: "admin.access.posture.super_admin_holders",
+      text: "1 people hold super_admin as a standing role. The role reaches every project by its name.",
+      facts: {
+        count: 1,
+        roles: [],
+        people: [{ id: 11, name: "Ada Admin", email: "ada@example.com" }],
+      },
+    },
+    {
+      id: "legacy_system_role_exists",
+      severity: "info",
+      state: "pass",
+      text_key: "admin.access.posture.legacy_system_role_exists",
+      text: "The legacy role system does not exist.",
+      facts: { count: 0, roles: [], people: [] },
+    },
+  ],
+  failures: 1,
+  warnings: 1,
+  notices: 1,
+  checked_at: "2026-11-25T12:00:00Z",
+});
+
+export const getListSealedCredentialsResponseMock =
+  (): SealedCredentialList => ({
+    total: 2,
+    rows: [
+      {
+        id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+        label: "safe B, envelope 2",
+        level: "super_admin",
+        state: "active",
+        split: true,
+        unbound: true,
+        bound_user: {
+          id: 77,
+          name: "Break-glass account",
+          email: "break-glass@centry.user",
+        },
+        issued_at: "2026-11-20T09:00:00Z",
+        expires_at: "2027-11-20T09:00:00Z",
+        used_at: null,
+        revoked_at: null,
+      },
+      {
+        id: "0193a1c4-6b2d-7f00-8e44-90ab12cd34ef",
+        label: "on-call laptop",
+        level: "admin",
+        state: "revoked",
+        split: false,
+        unbound: false,
+        bound_user: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+        issued_at: "2026-06-02T08:30:00Z",
+        expires_at: "2027-06-02T08:30:00Z",
+        used_at: null,
+        revoked_at: "2026-10-01T12:00:00Z",
       },
     ],
   });
@@ -4870,6 +4986,58 @@ export const getListAdministrationAccessTokensMockHandler = (
   );
 };
 
+export const getGetAccessPostureMockHandler = (
+  overrideResponse?:
+    | AccessPosture
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AccessPosture> | AccessPosture),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/posture",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAccessPostureResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListSealedCredentialsMockHandler = (
+  overrideResponse?:
+    | SealedCredentialList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<SealedCredentialList> | SealedCredentialList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/sealed_credentials",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListSealedCredentialsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListUserModeRolesMockHandler = (
   overrideResponse?:
     | ModeRoleListing
@@ -7672,6 +7840,8 @@ export const getAdminMock = () => [
   getListAdministrationRoleHoldersMockHandler(),
   getListAdministrationRoleHistoryMockHandler(),
   getListAdministrationAccessTokensMockHandler(),
+  getGetAccessPostureMockHandler(),
+  getListSealedCredentialsMockHandler(),
   getListUserModeRolesMockHandler(),
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),

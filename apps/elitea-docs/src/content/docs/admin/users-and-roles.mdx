@@ -278,3 +278,22 @@ Two read routes answer "who holds which administration role" and "who changed it
 Both need `access.roles.view`, or one of the two broader permissions it narrows, `admin.auth.users` and `modes.users`. The built-in `security_auditor` role holds `access.roles.view`, so an auditor reads the holders and the history, but not the user directory: `GET /api/v2/admin/auth_users/administration`, which lists every account with its e-mail address, stays on `admin.auth.users`, and an auditor gets `403` there. The names of administrators appear only in these two reads, because a list of administrators is a target list for phishing.
 
 Replacing an account's role writes two records: the old role `revoked` and the new one `granted`. Removing one of two roles writes one record and leaves the other role as it was. Assigning a role that the account already holds writes nothing and changes nothing. A refused change writes nothing either. Records start at the upgrade that added them: assignments made before it have none. Deleting an account revokes each of its central roles first, with one `revoked` record each that names who deleted it. A change made outside Elitea, such as SQL run by hand against the database, leaves no record.
+
+## Access posture
+
+**`GET /api/v2/admin/access/posture`** lists checks of the administration roles and tokens. Each check says what is wrong, or what is only worth knowing. The Access page and the Home posture card that show the list come in a later release. Reading it needs `access.roles.view`, or `admin.auth.users` or `modes.users`. A personal access token with scoped administration access can read it if it holds `access.roles.view`. The list is computed again on every read.
+
+Each check has a stable `id`, a `severity` and a `state` of `pass` or `attention`. It also has a translation key `admin.access.posture.<id>`, an English `text`, and `facts`: a count, role names and, for the checks about who holds a role, the people. The response counts the checks that do not pass as `failures` (`fail`), `warnings` (`warn`) and `notices` (`info`). Only a `fail` check that does not pass is a failure. Every check passes on a fresh install.
+
+| Id | Severity | Needs attention when |
+| --- | --- | --- |
+| `builtin_name_collision` | `fail` | An administration role has a built-in name, `security_auditor` included, but the built-in record does not list it. It is a custom role that took the name before the upgrade: it is not locked, cannot be bound to a group, and looks built-in. Rename it. |
+| `builtin_set_drift` | `fail` | A built-in role holds a set that differs from the one Elitea defines. Only the names in the permission table count, so an administrator role's legacy names do not trip it. The text gives the command that puts the set back, `elitea-main admin-role reset <role>`. `editor` and `viewer`, kept as found, and `system` have no defined set and never trip it. |
+| `inherit_tokens` | `warn` | Unexpired personal access tokens have `inherit` administration access. Give each the scopes it needs, or none. |
+| `custom_role_legacy_permission` | `warn` | A custom role holds `runtime.plugins` or `configuration.governance`, which end on the sunset date. The check is about the permissions the role holds, not its name. |
+| `legacy_system_role_held` | `warn` | Someone holds the legacy role `system`, which is never assigned. |
+| `initial_global_admins_configured` | `warn` | `identity.initial_global_admins` is still configured while a global administrator exists. Every entry is then ignored at sign-in. Remove the list. |
+| `super_admin_holders` | `info` | Someone holds `super_admin` as a standing role. The count and the people are shown because the name reaches every project. This check is never a failure. |
+| `legacy_system_role_exists` | `info` | The legacy role `system` exists: the database was migrated from the legacy platform. This check is never a failure. |
+
+If the built-in record is missing, the two built-in checks and `custom_role_legacy_permission` need attention and say to run the database migrations. A check that cannot read the database makes the whole read answer `500`, so the list is never shown with a check missing.

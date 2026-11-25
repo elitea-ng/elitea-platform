@@ -139,6 +139,7 @@ func actionRows() []Action {
 		// The access posture (R2.14a) is an ordinary read, and its entry
 		// says so: a scoped token that holds access.roles.view reads it.
 		read(SealedCredentialsPattern, AccessBreakglassManage).elevation(deny).tokenNever(),
+		read(AccessPosturePattern, AccessRolesView),
 
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),
