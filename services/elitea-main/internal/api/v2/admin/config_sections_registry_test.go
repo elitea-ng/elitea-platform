@@ -173,7 +173,9 @@ func TestTheRouteGateIsComputedFromTheSections(t *testing.T) {
 			t.Errorf("%+v admits %q on the narrow path, want nothing", incomplete, got)
 		}
 	}
-	for _, refused := range []string{adminaccess.ConfigurationGovernance, adminaccess.EntitlementsExport} {
+	// entitlements.export is admitted since #3026: it is the read half of the
+	// entitlement_export section, whose save takes entitlements.export.manage.
+	for _, refused := range []string{adminaccess.ConfigurationGovernance} {
 		if slices.Contains(admitted, refused) {
 			t.Errorf("the route gate admits %q; its holder alone was refused at the route before", refused)
 		}
@@ -190,7 +192,9 @@ func TestSectionPairsFollowDecisionTwo(t *testing.T) {
 		"email":           {adminaccess.PlatformEmailManage, adminaccess.PlatformEmailManage},
 		"maintenance":     {adminaccess.PlatformMaintenanceManage, adminaccess.PlatformMaintenanceManage},
 		"auth":            {adminaccess.IdentitySSOView, adminaccess.IdentitySSOSettingsManage},
-		"analytics":       {adminaccess.PlatformConfigView, adminaccess.PlatformConfigManage},
+		// A write permission saves it, not the export read (#3026).
+		"entitlement_export": {adminaccess.EntitlementsExport, adminaccess.EntitlementsExportManage},
+		"analytics":          {adminaccess.PlatformConfigView, adminaccess.PlatformConfigManage},
 		// The read half is the pointer's page (pointerReadHalves).
 		"llm_proxy":      {adminaccess.LLMCatalogueView, adminaccess.PlatformConfigManage},
 		"branding":       {adminaccess.ConfigurationBranding, adminaccess.ConfigurationBranding},

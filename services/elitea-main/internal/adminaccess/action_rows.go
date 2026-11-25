@@ -373,7 +373,7 @@ func actionRows() []Action {
 		section("default_secrets", RuntimePlugins),
 		section("delegation", ConfigurationGovernance),
 		section("email", RuntimePlugins).elevation(deny),
-		section("entitlement_export", EntitlementsExport),
+		section("entitlement_export", EntitlementsExportManage),
 		section("governance", ConfigurationGovernance),
 		section("guardrails", RuntimePlugins),
 		section("llm_proxy", RuntimePlugins),

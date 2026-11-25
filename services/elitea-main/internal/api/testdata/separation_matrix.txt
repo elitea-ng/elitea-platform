@@ -1,6 +1,6 @@
 # The separation matrix of the administration surface (ADR-0059 R0.9a, #2498).
 #
-# Generated; do not edit by hand except for a pending marker. Regenerate with
+# Generated; do not edit by hand. Regenerate with
 #   go test ./internal/api/ -run TestSeparationMatrixMatchesTheRouter -update
 # CI runs without the flag and fails on any difference, so review every changed
 # line: it is a route whose answer for a role changed.
@@ -24,18 +24,21 @@
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
-#   pending #N  the row belongs to issue N, which pins it against a database.
-#               R0.9b (#2587) owns: role assignment (the set_admin_role
-#               action, the mode role writes), the Roles matrix save and sync,
-#               role create, rename and delete, the project member writes (both
-#               routes), the bulk invite, the project matrix, the SCIM group
-#               binding writes, the identity provider writes, and every route
-#               of the central project settings (/configurations, reads too).
+#
+# These are GATE answers: who passes the administration checks of a route.
+# The rules a write applies after its gate (no escalation, not yourself, the
+# bound role's permissions in the project, the configuration type of a central
+# settings write) read the database, and testdata/separation_matrix_writes.txt
+# pins their outcomes, with the refusal code, against one (ADR-0059 R0.9b,
+# #2587). The configuration list and create routes are driven with a guarded
+# setting type (action "type=cloud_executor"). Their {mode} row routes read the
+# stored type from the database this router does not have, so those rows show
+# the central permission check alone.
 #
 # The class column: read for GET and HEAD; for a write, the class of the
 # permission its action table entry names (write or approve), write without one.
 # A write whose entry names a read permission reads read: an effect-free check
-# (validate-cel), and the entitlement_export section (#3026). The assertion
+# (validate-cel). The assertion
 # tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
@@ -54,7 +57,7 @@ allowed allowed refused refused refused refused write   POST /api/v2/admin/agent
 allowed allowed refused refused refused refused read    GET /api/v2/admin/agent_registry -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/auth_users/{mode} -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/auth_users/{mode} action delete
-pending #2587                                   write   POST /api/v2/admin/auth_users/{mode} action set_admin_role
+allowed allowed refused refused refused refused write   POST /api/v2/admin/auth_users/{mode} action set_admin_role
 allowed allowed refused refused refused refused read    GET /api/v2/admin/background_jobs/administration -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/background_jobs/administration/pat_expiry_notices:run -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/background_jobs/administration/{kind}/{jobID}:cancel -
@@ -133,10 +136,10 @@ allowed allowed allowed refused refused refused write   POST /api/v2/admin/gatew
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/status -
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/gateway/usage -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/identity_providers/administration -
-pending #2587                                   write   DELETE /api/v2/admin/identity_providers/administration/{key} -
-pending #2587                                   write   PUT /api/v2/admin/identity_providers/administration/{key} -
-pending #2587                                   write   POST /api/v2/admin/identity_providers/administration/{key}/rebind -
-pending #2587                                   write   POST /api/v2/admin/invites_bulk/administration -
+allowed allowed refused refused refused refused write   DELETE /api/v2/admin/identity_providers/administration/{key} -
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/identity_providers/administration/{key} -
+allowed refused refused refused refused refused write   POST /api/v2/admin/identity_providers/administration/{key}/rebind -
+allowed allowed refused allowed refused refused write   POST /api/v2/admin/invites_bulk/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/legal_holds -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/legal_holds -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/legal_holds/{id}/release -
@@ -165,9 +168,9 @@ allowed allowed refused refused refused refused write   POST /api/v2/admin/micro
 allowed allowed refused refused refused refused write   POST /api/v2/admin/microsoft_oauth_apps/{id}/test -
 allowed allowed refused allowed refused refused write   PUT /api/v2/admin/moderation_status/administration -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/moderation_statuses/administration -
-pending #2587                                   write   DELETE /api/v2/admin/modes/administration -
+allowed allowed refused refused refused refused write   DELETE /api/v2/admin/modes/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/modes/administration -
-pending #2587                                   write   POST /api/v2/admin/modes/administration -
+allowed allowed refused refused refused refused write   POST /api/v2/admin/modes/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/native_clients/administration -
 allowed allowed refused refused refused refused write   DELETE /api/v2/admin/native_clients/administration/{clientID} -
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/native_clients/administration/{clientID} -
@@ -176,8 +179,8 @@ allowed allowed refused refused refused refused write   DELETE /api/v2/admin/nat
 allowed allowed refused refused refused refused read    GET /api/v2/admin/permission_trimming -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/permission_trimming/remove -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/permissions/{scope}/{mode} -
-pending #2587                                   write   POST /api/v2/admin/permissions/{scope}/{mode} -
-pending #2587                                   write   PUT /api/v2/admin/permissions/{scope}/{mode} -
+allowed allowed refused refused refused refused write   POST /api/v2/admin/permissions/{scope}/{mode} -
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/permissions/{scope}/{mode} -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/platform_routines/administration -
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/platform_routines/administration/{id} -
 allowed allowed allowed refused refused refused read    GET /api/v2/admin/plugin_config_schemas/{mode} -
@@ -245,7 +248,7 @@ allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section default_secrets
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section delegation
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section email
-allowed allowed refused refused refused refused read    PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section entitlement_export
 allowed allowed allowed refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section governance
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section guardrails
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/plugin_config_values/administration/{plugin} section llm_proxy
@@ -278,19 +281,19 @@ allowed allowed refused refused refused refused write   DELETE /api/v2/admin/ret
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/roles/administration/{projectID} -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/roles/{mode}/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/roles/{scope}/{mode} -
-pending #2587                                   write   POST /api/v2/admin/roles/{scope}/{mode} -
-pending #2587                                   write   PUT /api/v2/admin/roles/{scope}/{mode} -
+allowed allowed refused refused refused refused write   DELETE /api/v2/admin/roles/{scope}/{mode} -
+allowed allowed refused refused refused refused write   POST /api/v2/admin/roles/{scope}/{mode} -
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/roles/{scope}/{mode} -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/scim_clients/administration -
 allowed refused refused refused refused refused write   POST /api/v2/admin/scim_clients/administration -
 allowed refused refused refused refused refused write   DELETE /api/v2/admin/scim_clients/administration/{id} -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/scim_clients/administration/{id}/revoke -
 allowed refused refused refused refused refused write   POST /api/v2/admin/scim_clients/administration/{id}/rotate -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/scim_group_bindings/administration -
-pending #2587                                   write   POST /api/v2/admin/scim_group_bindings/administration -
+allowed allowed refused refused refused refused write   POST /api/v2/admin/scim_group_bindings/administration -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/scim_group_bindings/administration/project_roles/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/scim_group_bindings/administration/{id} -
-pending #2587                                   write   PUT /api/v2/admin/scim_group_bindings/administration/{id} -
+allowed allowed refused refused refused refused write   DELETE /api/v2/admin/scim_group_bindings/administration/{id} -
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/scim_group_bindings/administration/{id} -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/system_info/{mode} -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/toolkit_types/administration -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/toolkit_types/administration/bulk -
@@ -299,29 +302,29 @@ allowed allowed refused refused refused refused write   DELETE /api/v2/admin/too
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/toolkit_types/administration/{type}/projects/{projectID} -
 allowed allowed refused refused refused refused write   POST /api/v2/admin/user_invite/administration -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/user_project_permissions/administration -
-pending #2587                                   write   PUT /api/v2/admin/user_project_permissions/administration -
+allowed allowed refused refused refused refused write   PUT /api/v2/admin/user_project_permissions/administration -
 allowed allowed refused refused refused refused write   PUT /api/v2/admin/user_suspend/{mode}/{userID} -
-pending #2587                                   write   DELETE /api/v2/admin/users/administration/{projectID} -
+allowed allowed refused allowed refused refused write   DELETE /api/v2/admin/users/administration/{projectID} -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   POST /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   PUT /api/v2/admin/users/administration/{projectID} -
-pending #2587                                   write   DELETE /api/v2/admin/users/{mode}/{projectID} -
+allowed allowed refused allowed refused refused write   POST /api/v2/admin/users/administration/{projectID} -
+allowed allowed refused allowed refused refused write   PUT /api/v2/admin/users/administration/{projectID} -
+allowed allowed refused allowed refused refused write   DELETE /api/v2/admin/users/{mode}/{projectID} -
 allowed allowed refused allowed refused refused read    GET /api/v2/admin/users/{mode}/{projectID} -
-pending #2587                                   write   POST /api/v2/admin/users/{mode}/{projectID} -
-pending #2587                                   write   PUT /api/v2/admin/users/{mode}/{projectID} -
+allowed allowed refused allowed refused refused write   POST /api/v2/admin/users/{mode}/{projectID} -
+allowed allowed refused allowed refused refused write   PUT /api/v2/admin/users/{mode}/{projectID} -
 allowed allowed refused refused refused refused read    GET /api/v2/admin/worker_egress/hosts -
 allowed allowed allowed allowed allowed allowed read    GET /api/v2/auth/permissions/administration -
 refused refused refused refused refused refused write   POST /api/v2/auth/token/ native_session
-pending #2587                                   write   DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   write   PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
-pending #2587                                   write   DELETE /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   write   PUT /api/v2/configurations/configuration/{projectID}/{configID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{mode}/{projectID} -
-pending #2587                                   read    GET /api/v2/configurations/configurations/{projectID} -
-pending #2587                                   write   POST /api/v2/configurations/configurations/{projectID} -
+allowed allowed refused allowed refused refused write   DELETE /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+allowed allowed refused allowed refused refused write   PUT /api/v2/configurations/configuration/{mode}/{projectID}/{configID} -
+allowed allowed refused allowed refused refused write   DELETE /api/v2/configurations/configuration/{projectID}/{configID} -
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configuration/{projectID}/{configID} -
+allowed allowed refused allowed refused refused write   PUT /api/v2/configurations/configuration/{projectID}/{configID} -
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configurations/{mode}/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused write   POST /api/v2/configurations/configurations/{mode}/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused read    GET /api/v2/configurations/configurations/{projectID} type=cloud_executor
+allowed allowed refused allowed refused refused write   POST /api/v2/configurations/configurations/{projectID} type=cloud_executor
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/admin_published_agents/administration -
 allowed allowed refused refused refused refused read    GET /api/v2/elitea_core/applications/prompt_lib/{projectID} maintenance_window

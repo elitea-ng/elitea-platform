@@ -42,10 +42,11 @@ var separationRoles = []string{
 }
 
 // pendingIssues are the issues a `pending` row may name: the story that owns
-// the row. R0.9b (#2587) owns the role write paths, the project plane, the
-// central-override pairs and the per-action identity rows; it removes every
-// marker and empties this list.
-var pendingIssues = []int{2587}
+// the row. It is empty: R0.9b (#2587) pinned the last rows R0.9a left
+// pending, and the rule outcomes of those writes are pinned against a
+// database in testdata/separation_matrix_writes.txt. A story that adds a row
+// no grant can read names itself here until it pins the row.
+var pendingIssues = []int{}
 
 // The answer classes of the file.
 const (
@@ -90,7 +91,7 @@ func (r matrixRow) format() string {
 
 const separationMatrixHeader = `# The separation matrix of the administration surface (ADR-0059 R0.9a, #2498).
 #
-# Generated; do not edit by hand except for a pending marker. Regenerate with
+# Generated; do not edit by hand. Regenerate with
 #   go test ./internal/api/ -run TestSeparationMatrixMatchesTheRouter -update
 # CI runs without the flag and fails on any difference, so review every changed
 # line: it is a route whose answer for a role changed.
@@ -114,18 +115,21 @@ const separationMatrixHeader = `# The separation matrix of the administration su
 #               still answer 4xx or 5xx: the test router has no database.
 #   refused     an authorization check refused it: 401, 403 or the window's 503
 #               where a holder of every permission gets another answer.
-#   pending #N  the row belongs to issue N, which pins it against a database.
-#               R0.9b (#2587) owns: role assignment (the set_admin_role
-#               action, the mode role writes), the Roles matrix save and sync,
-#               role create, rename and delete, the project member writes (both
-#               routes), the bulk invite, the project matrix, the SCIM group
-#               binding writes, the identity provider writes, and every route
-#               of the central project settings (/configurations, reads too).
+#
+# These are GATE answers: who passes the administration checks of a route.
+# The rules a write applies after its gate (no escalation, not yourself, the
+# bound role's permissions in the project, the configuration type of a central
+# settings write) read the database, and testdata/separation_matrix_writes.txt
+# pins their outcomes, with the refusal code, against one (ADR-0059 R0.9b,
+# #2587). The configuration list and create routes are driven with a guarded
+# setting type (action "type=cloud_executor"). Their {mode} row routes read the
+# stored type from the database this router does not have, so those rows show
+# the central permission check alone.
 #
 # The class column: read for GET and HEAD; for a write, the class of the
 # permission its action table entry names (write or approve), write without one.
 # A write whose entry names a read permission reads read: an effect-free check
-# (validate-cel), and the entitlement_export section (#3026). The assertion
+# (validate-cel). The assertion
 # tests hold every method but GET and HEAD to the write rules whatever its class.
 #
 # The columns: super_admin admin llm_manager project_administrator
@@ -506,20 +510,20 @@ func TestSeparationMatrixMatchesTheRouter(t *testing.T) {
 }
 
 // TestSeparationMatrixPendingRowsNameAnOwningIssue: a pending row names an
-// issue of pendingIssues, and that list holds R0.9b (#2587) only.
+// issue of pendingIssues, and since R0.9b (#2587) that list is empty, so the
+// file has no pending row.
 func TestSeparationMatrixPendingRowsNameAnOwningIssue(t *testing.T) {
-	if !slices.Equal(pendingIssues, []int{2587}) {
-		t.Errorf("pendingIssues is %v; only R0.9b (#2587) owns pending rows", pendingIssues)
+	if len(pendingIssues) != 0 {
+		t.Errorf("pendingIssues is %v; R0.9b (#2587) pinned every pending row", pendingIssues)
 	}
 	fixture, err := parseMatrix(separationMatrixHeader +
-		"pending #2587 write POST /api/v2/admin/roles/{scope}/{mode} -\n" +
-		"pending #9999 write POST /api/v2/admin/fixture -\n")
+		"pending #2587 write POST /api/v2/admin/roles/{scope}/{mode} -\n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if failures := pendingFailures(fixture, pendingIssues); len(failures) != 1 ||
-		!strings.HasPrefix(failures[0], "POST /api/v2/admin/fixture - is pending on #9999") {
-		t.Errorf("got %q, want one failure naming the row pending on #9999", failures)
+		!strings.HasPrefix(failures[0], "POST /api/v2/admin/roles/{scope}/{mode} - is pending on #2587") {
+		t.Errorf("got %q, want one failure naming the row pending on #2587", failures)
 	}
 	for _, failure := range pendingFailures(readSeparationMatrix(t), pendingIssues) {
 		t.Error(failure)
@@ -569,26 +573,18 @@ func actionArea(row matrixRow) adminaccess.Area {
 	return ""
 }
 
-// roleAssertion reads the file and, for a pending row, the router: a pending
-// row has no answers in the file, but its gate is still the role's. A row
-// whose answer the router cannot read either (the central-override pairs) is
-// R0.9b's alone.
+// roleAssertion reads the file. Since R0.9b (#2587) no row is pending, so
+// every row has its answers there; a pending row a later story adds is
+// skipped, and the rule outcomes behind a gate are asserted over
+// testdata/separation_matrix_writes.txt (separation_matrix_writes_test.go).
 type roleAssertion struct {
-	t      *testing.T
-	file   []matrixRow
-	router map[string]matrixRow
+	t    *testing.T
+	file []matrixRow
 }
 
 func newRoleAssertion(t *testing.T) roleAssertion {
 	t.Helper()
-	m := composedMatrix(t)
-	router := map[string]matrixRow{}
-	for _, row := range m.rows {
-		if _, unreadable := m.unreadable[row.key()]; !unreadable {
-			router[row.key()] = row
-		}
-	}
-	return roleAssertion{t: t, file: readSeparationMatrix(t), router: router}
+	return roleAssertion{t: t, file: readSeparationMatrix(t)}
 }
 
 // refused fails on a row of rows where role is not refused, and when no row
@@ -597,17 +593,12 @@ func (a roleAssertion) refused(role, category string, rows []matrixRow) {
 	a.t.Helper()
 	checked := 0
 	for _, row := range rows {
-		source := "the file"
 		if row.Pending != 0 {
-			pinned, ok := a.router[row.key()]
-			if !ok {
-				continue
-			}
-			row, source = pinned, "the router (the row is pending on #"+strconv.Itoa(row.Pending)+")"
+			continue
 		}
 		checked++
 		if row.answer(role) != classRefused {
-			a.t.Errorf("%s: %s is %s on %s in %s", category, role, row.answer(role), row.key(), source)
+			a.t.Errorf("%s: %s is %s on %s in the file", category, role, row.answer(role), row.key())
 		}
 	}
 	if checked == 0 {
@@ -617,9 +608,9 @@ func (a roleAssertion) refused(role, category string, rows []matrixRow) {
 
 // TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend: llm_manager is
 // refused on every identity, role, user, agent registry, delegation review,
-// worker egress, kill switch, retention and guardrail write route. A row of
-// these that is pending on R0.9b is read from the router: llm_manager holds no
-// permission their gates accept, so the gate answer is the whole answer.
+// worker egress, kill switch, retention and guardrail write route.
+// llm_manager holds no permission their gates accept, so the gate answer is
+// the whole answer.
 func TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend(t *testing.T) {
 	a := newRoleAssertion(t)
 	for category, markers := range map[string][]string{
@@ -642,7 +633,8 @@ func TestSeparationMatrixLLMManagerIsRefusedOutsideModelsAndSpend(t *testing.T) 
 // project_administrator is refused on every platform configuration route and
 // every LLM write route: the writes whose action names a models and spend
 // permission, wherever they are mounted. The project-role matrix edit and the
-// SCIM group bindings are asserted in R0.9b.
+// SCIM group bindings are asserted over the write-path file
+// (TestSeparationMatrixWritesProjectAdministratorStaysOffTheRoleSets).
 func TestSeparationMatrixProjectAdministratorIsRefusedOnPlatformAndLLMWrites(t *testing.T) {
 	a := newRoleAssertion(t)
 	platform := rowsMatching(a.file, false, "/plugin_config_values/", "/plugin_config_schemas/",

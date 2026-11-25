@@ -75,7 +75,7 @@ func TestCurrentConfigurationRoutesComposeOnAnOIDCOnlyDeployment(t *testing.T) {
 		},
 		"mutation": func() error {
 			_, err := handler.NewCurrentConfigurationMutationRoute(
-				&currentConfigurationMutatorStub{}, oidcOnly, permissions,
+				&currentConfigurationMutatorStub{}, currentMutationReader{}, oidcOnly, permissions,
 			)
 			return err
 		},

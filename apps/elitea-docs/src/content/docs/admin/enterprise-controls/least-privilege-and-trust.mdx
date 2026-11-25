@@ -515,7 +515,7 @@ The SCIM tree uses the same SCIM client credential as provisioning (see [Authent
     Create a SCIM client for the governance tool on **Configuration › Authentication**, or choose an existing one. Note its id.
   </Step>
   <Step title="Allow the client">
-    Open **Configuration › Entitlement Export** (permission `entitlements.export`) and add the client id to **SCIM Clients Allowed** (`scim_client_ids`). The list is empty by default, and every client that is not on it gets `403` with a SCIM error on every path of the tree. Provisioning is not affected.
+    Open **Configuration › Entitlement Export** (permission `entitlements.export` to read it, `entitlements.export.manage` to save it; both administrator roles hold both) and add the client id to **SCIM Clients Allowed** (`scim_client_ids`). The list is empty by default, and every client that is not on it gets `403` with a SCIM error on every path of the tree. Provisioning is not affected.
   </Step>
   <Step title="Point the governance tool at the tree">
     Configure the tool with the base URL `https://<host>/api/v2/scim/v2/entitlements` and the client's credential.

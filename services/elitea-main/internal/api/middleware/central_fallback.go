@@ -37,6 +37,27 @@ func RequireResolvedPermissionsOrCentral(
 	fallback CentralFallback,
 	required ...string,
 ) func(http.Handler) http.Handler {
+	return RequireResolvedPermissionsForProjectOrCentral(resolver, mode, projectIDFromPath, fallback, required...)
+}
+
+// projectIDFromPath is the `{projectID}` path parameter, as it is.
+func projectIDFromPath(r *http.Request) (string, bool) {
+	projectID := chi.URLParam(r, "projectID")
+	return projectID, projectID != ""
+}
+
+// RequireResolvedPermissionsForProjectOrCentral is
+// RequireResolvedPermissionsOrCentral for a route that reads its project with
+// its own extractor (the reviewed Configurations routes accept a decimal
+// `{projectID}` only, #3024). A project the extractor refuses is refused
+// before anything is resolved, and the fallback is never asked.
+func RequireResolvedPermissionsForProjectOrCentral(
+	resolver auth.PermissionResolver,
+	mode string,
+	project ProjectIDExtractor,
+	fallback CentralFallback,
+	required ...string,
+) func(http.Handler) http.Handler {
 	requiredSet := permissionSet(required)
 	return func(next http.Handler) http.Handler {
 		return MarkAdministrationRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,8 +66,12 @@ func RequireResolvedPermissionsOrCentral(
 				apierr.WriteStatus(w, http.StatusUnauthorized, "authentication required")
 				return
 			}
-			projectID := chi.URLParam(r, "projectID")
-			if resolver == nil || projectID == "" {
+			if resolver == nil || project == nil {
+				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+			projectID, valid := project(r)
+			if !valid {
 				apierr.WriteStatus(w, http.StatusForbidden, "insufficient permissions")
 				return
 			}
