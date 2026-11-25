@@ -409,7 +409,7 @@ These jobs are routed (when `ENG_RUNNER` is on, on our own pull requests):
 | `ci-governed-scale.yml` | `scale` (PostgreSQL and NATS as processes) |
 | `ci-web-mutation.yml`, `codeql.yml`, `docs-pages.yml` | `mutation-spotcheck`, `analyze`, `build-and-deploy` |
 | `publish.yml`, `release-retention.yml`, `ci-image-cleanup.yml` | `release`, `prune`; `admin`, `prune`; `prune`, `actions-cache` |
-| `desktop-package.yml` | `linux` (the AppImage and the `.deb`: the image has the Tauri build libraries and xvfb; no FUSE, so linuxdeploy runs extracted) |
+| `desktop-package.yml` | `linux` (the AppImage and the `.deb`: the image has the Tauri build libraries and xvfb; no FUSE, so linuxdeploy runs extracted; appimagetool's `file(1)`, which the image lacks, comes from Ubuntu noble's packages pinned by SHA-256 and unpacked in the job) |
 | `eng-runner-image.yml` | `runner-pin` |
 | `sunset-reminder.yml` | `remind` (the ADR-0059 sunset tracking issue, daily on `main`) |
 | `mobile-eas-build.yml`, `mobile-eas-submit.yml` | `build`, `submit` (EAS builds in Expo's cloud) |

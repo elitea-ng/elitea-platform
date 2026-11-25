@@ -70,6 +70,38 @@ runs:
           exit 1
         fi
 
+    # appimagetool (linuxdeploy's AppImage plugin) refuses to run without
+    # file(1), and the pool image has none (its pods have no root, so no apt).
+    # Ubuntu noble's own packages, each pinned by the SHA-256 that noble's
+    # main/binary-amd64 Packages index lists, unpacked into RUNNER_TEMP and
+    # reached through a wrapper on PATH. A runner that has `file` skips this.
+    - name: file(1) for appimagetool, when the runner has none
+      shell: bash
+      env:
+        FILE_DEBS: >-
+          file_5.45-3build1_amd64.deb:17dae1d6e803d0304e318f451c8abf62cbd5bb2a0068300cdeea77c62075b895
+          libmagic1t64_5.45-3build1_amd64.deb:fc2319f342c437e044ccf854e0c95bd472a7eb0b9363e1f76ad1524ab04df68e
+          libmagic-mgc_5.45-3build1_amd64.deb:f0ed0e314a63ae1b7e5403d7e43a26c6e0c0ee69e9a305babcf9c6775607377a
+      run: |
+        set -euo pipefail
+        if command -v file >/dev/null 2>&1; then echo "file: $(command -v file)"; exit 0; fi
+        . /etc/os-release
+        [ "$VERSION_CODENAME" = noble ] || { echo "::error::no file(1) here, and the pinned packages are Ubuntu noble's (this is $VERSION_CODENAME)"; exit 1; }
+        root="$RUNNER_TEMP/file-cmd"
+        rm -rf "${root:?}" && mkdir -p "$root/debs" "$root/bin"
+        for entry in $FILE_DEBS; do
+          deb="${entry%%:*}" sum="${entry##*:}"
+          curl -fsSL --retry 5 --retry-all-errors -o "$root/debs/$deb" "http://archive.ubuntu.com/ubuntu/pool/main/f/file/$deb"
+          echo "$sum  $root/debs/$deb" | sha256sum -c -
+          dpkg-deb -x "$root/debs/$deb" "$root/tree"
+        done
+        printf '#!/bin/sh\nLD_LIBRARY_PATH="%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" MAGIC="%s" exec "%s" "$@"\n' \
+          "$root/tree/usr/lib/x86_64-linux-gnu" "$root/tree/usr/lib/file/magic.mgc" "$root/tree/usr/bin/file" > "$root/bin/file"
+        chmod +x "$root/bin/file"
+        "$root/bin/file" --version
+        "$root/bin/file" -b /bin/sh
+        echo "$root/bin" >> "$GITHUB_PATH"
+
     - name: Plan (Linux packages carry no code signature)
       id: plan
       shell: bash

@@ -433,7 +433,9 @@ release and for device management:
 - **Linux (#3034):** an x86_64 AppImage and a `.deb`, from one `tauri build
   --bundles appimage,deb` (`.github/actions/desktop-linux-package`), on the
   self-hosted pool, whose image has the Tauri build libraries and xvfb. No FUSE
-  there: linuxdeploy runs with `APPIMAGE_EXTRACT_AND_RUN=1`. The action then runs
+  there: linuxdeploy runs with `APPIMAGE_EXTRACT_AND_RUN=1`. appimagetool needs
+  `file(1)`, which the pool image lacks: the action unpacks Ubuntu noble's
+  `file` and `libmagic` packages, pinned by SHA-256, when the runner has none. The action then runs
   the AppImage: `--version` must print the stamped version, and the app must
   still be up after 30 s under `xvfb-run`; it checks the AppImage's `.desktop`
   entry and the `.deb`'s `Depends` (WebKitGTK) and `Recommends` (bubblewrap,

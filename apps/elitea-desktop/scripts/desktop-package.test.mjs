@@ -91,6 +91,10 @@ test('the Linux job: the pool, the shared action, the release names and the smok
   assert.match(linux, /for ext in AppImage deb; do/);
   assert.match(linux, /asset-name linux "\$ext" "\$brand" "\$version" "\$SIGNED"/);
   assert.match(linux, /name: desktop-release-linux/);
+  // appimagetool needs file(1); the pool image has none: noble's packages, each pinned by SHA-256.
+  assert.match(action, /if command -v file >\/dev\/null 2>&1; then/);
+  assert.match(action, /file_5\.45-3build1_amd64\.deb:[0-9a-f]{64}/);
+  assert.match(action, /sha256sum -c -/);
   // No FUSE on the pool: linuxdeploy and the AppImage run extracted.
   assert.match(action, /APPIMAGE_EXTRACT_AND_RUN: "1"/);
   assert.match(action, /npx tauri build --verbose --bundles appimage,deb/);
