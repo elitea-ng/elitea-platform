@@ -3,7 +3,7 @@ import type { PaletteOptions } from '@mui/material/styles';
 import type { DeriveContext } from './color';
 import { hueOf, rehue } from './color';
 import type { BrandInput, SchemeRecord } from './schema';
-import { BRAND_ANCHOR_TOKEN, DEFAULT_BRAND_PACK } from './tokens';
+import { BRAND_ANCHOR_TOKEN, DEFAULT_BRAND_PACK, LEGACY_ROLES, ROLE_GROUP } from './tokens';
 
 /** The two schemes a pack always carries. `hc` is optional and not built yet. */
 export type SchemeName = 'light' | 'dark';
@@ -50,11 +50,21 @@ function deriveContextFor(scheme: SchemeName, brand: BrandInput): DeriveContext 
  * Resolve one scheme's full token record: the pack's own values, plus a
  * derived value for every catalogue id the pack does not state.
  *
- * This is where §4.1 Blocker 1 is resolved. The default pack states all 362
- * ids per scheme, so derivation is fully shadowed and rendering is byte-equal
+ * This is where §4.1 Blocker 1 is resolved. The default pack states every id
+ * per scheme, so derivation is fully shadowed and rendering is byte-equal
  * to the baseline (N4). A tenant pack that states only `brand.hue` states
  * zero tokens, so every id is derived and the whole surface repaints —
  * accents, neutrals and gradients alike — from one field.
+ *
+ * A role (`role.<name>`) takes the first value the pack states differently
+ * from the default pack: the role id itself, then each legacy id of its list
+ * in `tokens/legacy-roles.json`, in list order (ADR-0062 decision 1.4). So a
+ * hand-tuned deployment keeps its colours in the roles. If none differs, the
+ * role resolves as every other id above: its stated value, or its default
+ * re-hued (decision 1.6). "Stated with the default value" covers both kinds
+ * of export: a tuned deployment's states only the ids it set, the product
+ * default's states every id with its default, so nothing in it overrides a
+ * role.
  */
 export function resolveScheme(
   record: SchemeRecord,
@@ -68,10 +78,25 @@ export function resolveScheme(
     const stated = record[id];
     resolved[id] = stated ?? rehue(reference[id] as string, context);
   }
+  for (const [role, legacyIds] of Object.entries(LEGACY_ROLES)) {
+    const roleId = `${ROLE_GROUP}.${role}`;
+    for (const id of [roleId, ...legacyIds]) {
+      const stated = record[id];
+      if (stated !== undefined && !sameColour(stated, reference[id])) {
+        resolved[roleId] = stated;
+        break;
+      }
+    }
+  }
   for (const [id, value] of Object.entries(record)) {
     resolved[id] ??= value;
   }
   return resolved;
+}
+
+/** Hex case differs between the admin editor and the pack; the colour does not. */
+function sameColour(a: string, b: string | undefined): boolean {
+  return b !== undefined && a.toLowerCase() === b.toLowerCase();
 }
 
 /** Expand `a.b.c` -> nested objects. Throws on an id that shadows a group. */

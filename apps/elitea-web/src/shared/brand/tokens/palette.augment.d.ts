@@ -164,6 +164,35 @@ declare module '@mui/material/styles' {
         off: string;
       };
     };
+    role: {
+      ai: string;
+      aiText: string;
+      bg: string;
+      border: string;
+      borderStrong: string;
+      codeBg: string;
+      codeText: string;
+      danger: string;
+      dangerFill: string;
+      dot: string;
+      elevated: string;
+      hover: string;
+      onDangerFill: string;
+      onPrimary: string;
+      onSignal: string;
+      primary: string;
+      primaryHover: string;
+      primaryPressed: string;
+      scrim: string;
+      selected: string;
+      signal: string;
+      success: string;
+      surface: string;
+      text: string;
+      textDisabled: string;
+      textMuted: string;
+      warning: string;
+    };
     scrollbar: {
       thumb: string;
       thumbHover: string;
