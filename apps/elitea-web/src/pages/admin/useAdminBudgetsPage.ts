@@ -31,8 +31,12 @@ import {
   type ProjectTypeFilter,
 } from './api/adminBudgetsApi';
 import type { BudgetDialogInitialValues } from './AdminBudgetDialog';
+import { useAdminWritable, type AdminWriteAccess } from './adminWriteAccess';
 
 export const ADMIN_BUDGETS_PAGE_SIZE = 20;
+
+/** The console item of this page (`internal/adminaccess/console.go`). */
+export const BUDGETS_ITEM_ID = 'budgets-alerts';
 
 /** Which budget the dialog is editing, if any. */
 type DialogTarget =
@@ -181,11 +185,15 @@ interface BudgetWriteSinks {
   readonly onDone: () => void;
 }
 
-function useBudgetWrites(sinks: BudgetWriteSinks) {
-  const saveProject = useSaveProjectBudget();
-  const clearProject = useClearProjectBudget();
-  const saveMember = useSaveMemberBudget();
-  const clearMember = useClearMemberBudget();
+/**
+ * Each write goes through the read-only guard (R3.4a, issue 2534): at `read`
+ * a write sends nothing, whatever control reached it.
+ */
+function useBudgetWrites(sinks: BudgetWriteSinks, access: AdminWriteAccess) {
+  const saveProject = access.guard(useSaveProjectBudget());
+  const clearProject = access.guard(useClearProjectBudget());
+  const saveMember = access.guard(useSaveMemberBudget());
+  const clearMember = access.guard(useClearMemberBudget());
 
   const clearFailed = useCallback(
     (error: unknown) => {
@@ -280,7 +288,7 @@ export function useAdminBudgetsPage(): AdminBudgetsPageState {
     }),
     [],
   );
-  const writes = useBudgetWrites(sinks);
+  const writes = useBudgetWrites(sinks, useAdminWritable(BUDGETS_ITEM_ID));
 
   const onEditMember = useCallback(
     (row: MemberBudgetRow) => {

@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "Keine Rolle in dieser Bereitstellung öffnet es.",
   "pages.admin.itemDenied.rolesIntro": "Diese Rollen öffnen es:",
   "pages.admin.itemDenied.askSupport": "Um eine dieser Rollen anzufragen, wenden Sie sich an Ihren IT-Support:",
-  "pages.admin.itemDenied.askFallback": "Um eine dieser Rollen anzufragen, wenden Sie sich an die Personen, die diese Bereitstellung verwalten."
+  "pages.admin.itemDenied.askFallback": "Um eine dieser Rollen anzufragen, wenden Sie sich an die Personen, die diese Bereitstellung verwalten.",
+  "pages.admin.viewOnly.controlReason": "Nur ansehen: Ihre Rollen können diese Seite sehen, aber nicht ändern.",
+  "pages.admin.viewOnly.noRole": "Sie können diese Seite sehen, aber nicht ändern. Keine Rolle in dieser Bereitstellung kann sie ändern.",
+  "pages.admin.viewOnly.roles": "Sie können diese Seite sehen, aber nicht ändern. Diese Rollen können sie ändern: {{roles}}.",
+  "pages.admin.viewOnly.title": "Nur ansehen",
+  "pages.admin.viewOnly.unnamed": "Sie können diese Seite sehen, aber nicht ändern."
 }

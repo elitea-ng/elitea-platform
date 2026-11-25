@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "لا يوجد دور في هذا النشر يفتحه.",
   "pages.admin.itemDenied.rolesIntro": "تفتحه هذه الأدوار:",
   "pages.admin.itemDenied.askSupport": "لطلب أحد هذه الأدوار، تواصل مع دعم تقنية المعلومات:",
-  "pages.admin.itemDenied.askFallback": "لطلب أحد هذه الأدوار، تواصل مع الأشخاص الذين يديرون هذا النشر."
+  "pages.admin.itemDenied.askFallback": "لطلب أحد هذه الأدوار، تواصل مع الأشخاص الذين يديرون هذا النشر.",
+  "pages.admin.viewOnly.controlReason": "للعرض فقط: يمكن لأدوارك رؤية هذه الصفحة دون تغييرها.",
+  "pages.admin.viewOnly.noRole": "يمكنك رؤية هذه الصفحة دون تغييرها. لا يوجد دور في هذا النشر يمكنه تغييرها.",
+  "pages.admin.viewOnly.roles": "يمكنك رؤية هذه الصفحة دون تغييرها. هذه الأدوار يمكنها تغييرها: {{roles}}.",
+  "pages.admin.viewOnly.title": "للعرض فقط",
+  "pages.admin.viewOnly.unnamed": "يمكنك رؤية هذه الصفحة دون تغييرها."
 }

@@ -5001,5 +5001,10 @@
   "pages.admin.itemDenied.noRole": "Żadna rola w tym wdrożeniu tego nie otwiera.",
   "pages.admin.itemDenied.rolesIntro": "Te role to otwierają:",
   "pages.admin.itemDenied.askSupport": "Aby poprosić o jedną z tych ról, skontaktuj się z pomocą techniczną IT:",
-  "pages.admin.itemDenied.askFallback": "Aby poprosić o jedną z tych ról, skontaktuj się z osobami zarządzającymi tym wdrożeniem."
+  "pages.admin.itemDenied.askFallback": "Aby poprosić o jedną z tych ról, skontaktuj się z osobami zarządzającymi tym wdrożeniem.",
+  "pages.admin.viewOnly.controlReason": "Tylko podgląd: Twoje role pozwalają zobaczyć tę stronę, ale nie zmienić jej.",
+  "pages.admin.viewOnly.noRole": "Możesz zobaczyć tę stronę, ale nie możesz jej zmienić. Żadna rola w tym wdrożeniu nie może jej zmienić.",
+  "pages.admin.viewOnly.roles": "Możesz zobaczyć tę stronę, ale nie możesz jej zmienić. Te role mogą ją zmienić: {{roles}}.",
+  "pages.admin.viewOnly.title": "Tylko podgląd",
+  "pages.admin.viewOnly.unnamed": "Możesz zobaczyć tę stronę, ale nie możesz jej zmienić."
 }

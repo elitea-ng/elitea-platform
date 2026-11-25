@@ -68,7 +68,9 @@ describe('WikiChatSessions', () => {
     await user.click(screen.getByText('Older question'));
 
     expect(onResume).toHaveBeenCalledWith(expect.objectContaining({ id: '2' }));
-    expect(screen.queryByTestId('wiki-chat-session-option')).toBeNull();
+    // The menu unmounts at the end of its exit transition, a timer: under the
+    // coverage shard's load the synchronous check ran before it fired (seen on PR 3037).
+    await waitFor(() => expect(screen.queryByTestId('wiki-chat-session-option')).toBeNull());
   });
 
   // A session listed without a key cannot be filed into — there is nothing to

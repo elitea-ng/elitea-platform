@@ -56,11 +56,13 @@ adminTest.use({ storageState: STORAGE_STATE.admin });
  * Every nav item, in navigation order, with its area and the heading its page
  * renders. The pairing is the point: a link whose page does not render its
  * heading is a link to nowhere. e2e-admin holds `admin` (and the custom
- * `e2e_admin_extras`), and its document opens every item the web table places;
- * Roles is not among them until its Access item ships (R3.6).
+ * `e2e_admin_extras`), and its document opens every item the web table places.
+ * Roles is the TEMPORARY link for the Access item, whose page ships in R3.6
+ * (issue 2537); R3.6 replaces this row with the Access item.
  */
 const ITEMS = [
   { area: 'people_access', id: 'users', heading: 'Users', path: '/admin/app/users' },
+  { area: 'people_access', id: 'access', heading: 'Roles', path: '/admin/app/roles' },
   { area: 'projects', id: 'projects', heading: 'Projects', path: '/admin/app/projects' },
   { area: 'projects', id: 'app-requests', heading: 'App Requests', path: '/admin/app/app-requests' },
   { area: 'models_spend', id: 'llm-governance', heading: 'LLM Governance', path: '/admin/app/governance' },

@@ -94,7 +94,28 @@ interface StatusOptions {
   readonly rateLimitsEnforceable?: boolean | undefined;
 }
 
-function useBudgetHandlers(status: StatusOptions = {}): void {
+/** The capability document with the page's item at `level`. */
+function consoleDocument(level: 'read' | 'write') {
+  return {
+    areas: [
+      {
+        id: 'models_spend',
+        label_key: 'pages.admin.console.area.models_spend',
+        items: [{ id: 'budgets-alerts', label_key: 'pages.admin.console.item.budgets-alerts', level }],
+      },
+    ],
+    roles: [{ name: level === 'read' ? 'budget_reader' : 'admin', built_in: level !== 'read' }],
+    elevation: null,
+    admin_console_areas: true,
+  };
+}
+
+function useConsoleHandler(level: 'read' | 'write'): void {
+  server.use(http.get('*/admin/console', () => HttpResponse.json(consoleDocument(level))));
+}
+
+function useBudgetHandlers(status: StatusOptions = {}, level: 'read' | 'write' = 'write'): void {
+  useConsoleHandler(level);
   server.use(
     http.get('*/elitea_core/project_budgets/administration*', () =>
       HttpResponse.json({ rows: [PROJECT_ROW], total: 1, counts: { team: 1, personal: 0 } }),
@@ -314,6 +335,7 @@ describe('what reaches the wire', () => {
  * inherited platform-default member limit the Usage page never showed). */
 describe('personal projects have no member-budget action (issue 6079, issue 6008)', () => {
   it('does not offer "Member budgets" for a personal project row', async () => {
+    useConsoleHandler('write');
     server.use(
       http.get('*/elitea_core/project_budgets/administration*', () =>
         HttpResponse.json({
@@ -400,5 +422,98 @@ describe('the clear action', () => {
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]?.method).toBe('DELETE');
     expect(recorded[0]?.url).toContain('/project_budget/administration/21/budget');
+  });
+});
+
+/*
+ * Read-only mode (ADR-0059 decision 6; R3.4a, issue 2534). At the `read`
+ * level of the page's console item, every write control is disabled (not
+ * hidden: the person sees what a writer can do) and the "View only" notice
+ * names the roles that can change the page, from the server's item read.
+ */
+describe('view only (R3.4a, issue 2534)', () => {
+  const WRITE_CONTROL = /edit budget|clear back to default|save|create|delete/i;
+
+  function useItemRoles(): void {
+    server.use(
+      http.get('*/admin/console/items/budgets-alerts', () =>
+        HttpResponse.json({
+          id: 'budgets-alerts',
+          area: 'models_spend',
+          label_key: 'pages.admin.console.item.budgets-alerts',
+          area_label_key: 'pages.admin.console.area.models_spend',
+          available: true,
+          granting_roles: [
+            { name: 'admin', display_name: 'Platform administrator', built_in: true, level: 'write' },
+            { name: 'llm_manager', display_name: 'LLM manager', built_in: true, level: 'write' },
+            { name: 'budget_reader', built_in: false, level: 'read' },
+          ],
+        }),
+      ),
+    );
+  }
+
+  function enabledWriteControls(): HTMLElement[] {
+    return screen
+      .queryAllByRole('button')
+      .filter((button) => WRITE_CONTROL.test(button.getAttribute('aria-label') ?? button.textContent))
+      .filter((button) => !(button as HTMLButtonElement).disabled);
+  }
+
+  it('disables every save, create and delete control and names the roles that can change the page', async () => {
+    useBudgetHandlers({}, 'read');
+    useItemRoles();
+    renderAdminRoute(<AdminBudgets />);
+
+    await screen.findByText('alpha-team');
+    const notice = await screen.findByTestId('admin-view-only');
+    expect(notice).toHaveTextContent('View only');
+    const roles = await screen.findByTestId('admin-view-only-roles');
+    expect(roles).toHaveTextContent('Platform administrator, LLM manager');
+    // A role that only reads the page is not one that can change it.
+    expect(roles).not.toHaveTextContent('budget_reader');
+
+    await waitFor(() => expect(screen.getByTestId('admin-budgets-edit-21')).toBeDisabled());
+    expect(screen.getByTestId('admin-budgets-clear-21')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+
+    // Reading is still reading: the member drawer opens, and its writes are disabled too.
+    await userEvent.click(screen.getByTestId('admin-budgets-members-21'));
+    expect(await screen.findByTestId('admin-budgets-member-edit-502')).toBeDisabled();
+    expect(screen.getByTestId('admin-budgets-member-clear-502')).toBeDisabled();
+    expect(enabledWriteControls()).toEqual([]);
+    expect(recorded).toHaveLength(0);
+  });
+
+  it('says the page is view only without naming a role when the roles cannot be read', async () => {
+    useBudgetHandlers({}, 'read');
+    server.use(http.get('*/admin/console/items/budgets-alerts', () => new HttpResponse(null, { status: 500 })));
+    renderAdminRoute(<AdminBudgets />);
+
+    const notice = await screen.findByTestId('admin-view-only');
+    await waitFor(() => expect(notice).toHaveTextContent('You can see this page but not change it.'));
+    expect(screen.queryByTestId('admin-view-only-roles')).toBeNull();
+    expect(notice).not.toHaveTextContent('No role');
+  });
+
+  it('shows no notice and keeps the controls enabled at write', async () => {
+    useBudgetHandlers();
+    renderAdminRoute(<AdminBudgets />);
+
+    await screen.findByText('alpha-team');
+    await waitFor(() => expect(screen.getByTestId('admin-budgets-edit-21')).toBeEnabled());
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
+  });
+
+  // A failed read is not an answer about access: the page keeps its controls
+  // and the server answers each write for itself.
+  it('keeps the controls enabled when the capability document cannot be read', async () => {
+    useBudgetHandlers();
+    server.use(http.get('*/admin/console', () => new HttpResponse(null, { status: 503 })));
+    renderAdminRoute(<AdminBudgets />);
+
+    await screen.findByText('alpha-team');
+    expect(screen.getByTestId('admin-budgets-edit-21')).toBeEnabled();
+    expect(screen.queryByTestId('admin-view-only')).toBeNull();
   });
 });
