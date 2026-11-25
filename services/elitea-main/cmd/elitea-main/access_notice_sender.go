@@ -84,7 +84,7 @@ func runAccessNoticeSender(ctx context.Context, backend routines.Backend,
 		Def: routines.Definition{
 			ID:              adminaccess.AccessNoticeSenderRoutineID,
 			Owner:           routines.OwnerMain,
-			Description:     "Sends the break-glass access notices and the notice to owners of inherit tokens by e-mail (and the break-glass notices to the out-of-band webhook when one is configured), and retries the ones that failed.",
+			Description:     "Sends the break-glass access notices and the inherit token notice by e-mail or webhook, and retries the ones that failed.",
 			DefaultSchedule: adminaccess.AccessNoticeSenderDefaultSchedule,
 			MinInterval:     10 * time.Second,
 		},
