@@ -10,6 +10,15 @@
  * commit GitHub builds (refs/pull/N/merge), so its first parent is the base
  * branch the PR lands on, and HEAD^1..HEAD is exactly what the PR adds. The
  * gates job checks out with depth 1, so the parent is fetched when missing.
+ * On a branch HEAD^1 is only the previous commit. To run check 10 locally as
+ * CI does, give the merge base, and an --out outside the work tree:
+ *
+ *   node scripts/style-ratchet-base.mjs --out "$TMPDIR/ratchet-base" \
+ *     --base "$(git merge-base origin/main HEAD)"
+ *   npm run theme-gate -- --base "$TMPDIR/ratchet-base"
+ *
+ * The script deletes and rewrites <out>/src, so it refuses an --out inside
+ * the work tree.
  *
  * A file the PR renames is written under its HEAD path (git rename
  * detection), so a move between two folders does not make the target folder
@@ -21,7 +30,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
@@ -29,8 +38,11 @@ import { UNPAIRED_MANIFEST, planBaseTree, unpairedFiles } from './lib/style-ratc
 
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+/** No quoting of non-ASCII paths, so `planBaseTree` sees every path as it is. */
+const GIT_CONFIG = ['-c', 'core.quotePath=false'];
+
 function git(args, options = {}) {
-  const run = spawnSync('git', args, { cwd: APP_DIR, maxBuffer: 1 << 30, ...options });
+  const run = spawnSync('git', [...GIT_CONFIG, ...args], { cwd: APP_DIR, maxBuffer: 1 << 30, ...options });
   if (run.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${String(run.stderr).trim()}`);
   }
@@ -72,6 +84,12 @@ function readBlobs(specs) {
 
 function main() {
   const { base, head, out } = parseArgs(process.argv.slice(2));
+  const outDir = resolve(out);
+  const work = String(git(['rev-parse', '--show-toplevel'])).trim();
+  const inside = relative(work, outDir);
+  if (!inside || (inside !== '..' && !inside.startsWith('../') && !isAbsolute(inside))) {
+    throw new Error(`--out ${outDir} is inside the work tree ${work}: it deletes <out>/src; use a temporary folder`);
+  }
   const headSha = String(git(['rev-parse', head])).trim();
   if (!hasCommit(base)) {
     // Depth-1 checkout: fetch the head with its parent.
@@ -85,7 +103,7 @@ function main() {
   const baseFiles = String(git(['ls-tree', '-r', '--name-only', baseSha, '--', src], { cwd: top }))
     .split('\n')
     .filter(Boolean);
-  const diff = spawnSync('git', ['diff', '--name-status', '-M', baseSha, headSha, '--', src], {
+  const diff = spawnSync('git', [...GIT_CONFIG, 'diff', '--name-status', '-M', baseSha, headSha, '--', src], {
     cwd: top,
     encoding: 'utf8',
     maxBuffer: 1 << 30,
@@ -99,7 +117,6 @@ function main() {
   const unpaired = unpairedFiles(nameStatus, prefix);
   const blobs = readBlobs(plan.map(({ from }) => `${baseSha}:${from}`));
 
-  const outDir = resolve(out);
   rmSync(join(outDir, 'src'), { recursive: true, force: true });
   plan.forEach(({ to }, i) => {
     const target = join(outDir, to);

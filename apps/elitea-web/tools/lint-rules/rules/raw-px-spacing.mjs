@@ -2,10 +2,10 @@ import { isStringLiteral, propertyKeyName } from '../lib/ast.mjs';
 import { REM_PX, nearestSteps, onScale, scaleFor, toUnits } from '../lib/spacing-scale.mjs';
 
 /**
- * R-T9 (spec §4.4): spacing uses `theme.spacing(n)` with integer n (or plain
- * numbers in `sx`, which MUI multiplies by the spacing unit). Raw px strings
- * in margin/padding/gap are a lint error — the old app has 301 distinct
- * spacing string values.
+ * R-T9 (spec §4.4, amended by ADR-0062): spacing uses `theme.spacing(n)` or
+ * a unitless `sx` number (MUI multiplies it by the spacing unit). Raw px
+ * strings in margin/padding/gap are a lint error — the old app has 301
+ * distinct spacing string values.
  *
  * Covers both object styles (sx / styled objects) and CSS template literals
  * (styled`margin: 12px`).
@@ -19,6 +19,11 @@ import { REM_PX, nearestSteps, onScale, scaleFor, toUnits } from '../lib/spacing
  *   [spacing-off-scale] numbers MUI multiplies (`sx`, a JSX spacing prop,
  *                       `theme.spacing()` in a spacing value) that are not on
  *                       the brand scale (`unit` set).
+ * An object is an `sx` value when it is typed as one (SX_TYPES) or when its
+ * name is `sx` or ends in `Sx` (`const rowSx = {…}`, `<Card headerSx={…}>`,
+ * `{ paperSx: {…} }`): the code names untyped sx objects so. A number in an
+ * object with neither is not counted; rem and px strings are counted in any
+ * object.
  * Options: `{ "units": ["px", "rem"], "unit": 8 }`. Without options the rule
  * reports exactly what it reported before, so the main lint does not change.
  */
@@ -50,6 +55,8 @@ const TEMPLATE_SPACING_RE =
   /(?:^|[;{\s])(?:margin|padding|gap|row-gap|column-gap)[a-z-]*\s*:([^;{}]*)/gi;
 /** Type names that mark an object as an `sx` value. */
 const SX_TYPES = new Set(['SxProps', 'SystemStyleObject', 'SxProp']);
+/** Names that mark an untyped object, prop or key as an `sx` value: `sx`, `rowSx`. */
+const SX_NAME_RE = /^sx$|Sx$/;
 
 const fmt = (n) => String(n);
 
@@ -112,25 +119,33 @@ function ratchetVisitors(context, options) {
     if (stack.length && stack[stack.length - 1].node === node) stack.pop();
   };
 
-  const stepAdvice = (units_) => {
-    if (onScale(units_, scale ?? [])) return `→ ${fmt(units_)} (theme.spacing(${fmt(units_)}) or the sx number ${fmt(units_)})`;
+  /** The fix for a value of `units_` steps, in the words of its context: only `sx` takes a bare number. */
+  const stepAdvice = (units_, kind) => {
+    const n = fmt(units_);
+    const how =
+      kind === 'sx'
+        ? `theme.spacing(${n}) or the sx number ${n}`
+        : kind === 'template'
+          ? `\${({ theme }) => theme.spacing(${n})}`
+          : `theme.spacing(${n})`;
+    if (onScale(units_, scale ?? [])) return `→ ${n} (${how})`;
     const near = scale ? nearestSteps(units_, scale) : [];
     return `is ${fmt(units_)} units, off the scale → nearest steps ${near.map(fmt).join(' or ')} (a visible change, ADR-0062 decision 5)`;
   };
 
-  function reportLength(node, key, raw, value, lengthUnit) {
+  function reportLength(node, key, raw, value, lengthUnit, kind) {
     if (!units.has(lengthUnit)) return;
     const px = lengthUnit === 'rem' ? value * REM_PX : value;
-    const advice = unit ? stepAdvice(toUnits(px, unit)) : '→ theme.spacing(n) or a unitless sx number';
+    const advice = unit ? stepAdvice(toUnits(px, unit), kind) : '→ theme.spacing(n) or a unitless sx number';
     context.report({
       node,
       message: `R-T9 [spacing-${lengthUnit}] ${key}: '${raw}' ${advice}`,
     });
   }
 
-  function scanString(node, key, text) {
+  function scanString(node, key, text, kind) {
     for (const match of text.matchAll(LENGTH_RE)) {
-      reportLength(node, key, `${match[1]}${match[2]}`, Number(match[1]), match[2]);
+      reportLength(node, key, `${match[1]}${match[2]}`, Number(match[1]), match[2], kind);
     }
   }
 
@@ -142,7 +157,7 @@ function ratchetVisitors(context, options) {
         message: `R-T9 [spacing-off-scale] ${key}: ${fmt(n)} is off the scale → nearest steps ${near.map(fmt).join(' or ')} (a visible change, ADR-0062 decision 5)`,
       });
     } else if (kind === 'px' && n !== 0 && units.has('px')) {
-      const advice = unit ? stepAdvice(toUnits(n, unit)) : '→ theme.spacing(n)';
+      const advice = unit ? stepAdvice(toUnits(n, unit), 'px') : '→ theme.spacing(n)';
       context.report({
         node,
         message: `R-T9 [spacing-px] ${key}: ${fmt(n)} is px here (a styled() object or a style prop) ${advice}`,
@@ -155,7 +170,7 @@ function ratchetVisitors(context, options) {
     if (!node) return;
     switch (node.type) {
       case 'Literal':
-        if (typeof node.value === 'string') scanString(node, key, node.value);
+        if (typeof node.value === 'string') scanString(node, key, node.value, kind);
         else if (typeof node.value === 'number') reportNumber(node, key, node.value, kind);
         return;
       case 'UnaryExpression':
@@ -167,7 +182,7 @@ function ratchetVisitors(context, options) {
         }
         return;
       case 'TemplateLiteral':
-        for (const quasi of node.quasis) scanString(quasi, key, quasi.value.cooked ?? quasi.value.raw);
+        for (const quasi of node.quasis) scanString(quasi, key, quasi.value.cooked ?? quasi.value.raw, kind);
         // A number inside `${}` becomes text: only theme.spacing() calls matter there.
         for (const expression of node.expressions) analyze(expression, key, null);
         return;
@@ -214,7 +229,7 @@ function ratchetVisitors(context, options) {
     },
     JSXAttribute(node) {
       const name = node.name?.type === 'JSXIdentifier' ? node.name.name : null;
-      if (name === 'sx') push(node, 'sx');
+      if (name && SX_NAME_RE.test(name)) push(node, 'sx');
       else if (name === 'style') push(node, 'px');
       if (!name || !JSX_SPACING_PROPS.has(name)) return;
       const element = node.parent;
@@ -226,13 +241,14 @@ function ratchetVisitors(context, options) {
     'JSXAttribute:exit': pop,
     Property(node) {
       const key = propertyKeyName(node);
-      if (key === 'sx') push(node, 'sx');
+      if (key && SX_NAME_RE.test(key)) push(node, 'sx');
       if (!key || !RATCHET_KEYS.has(key)) return;
       analyze(node.value, key, ctx());
     },
     'Property:exit': pop,
     VariableDeclarator(node) {
-      if (namesSxType(node.id?.typeAnnotation)) push(node, 'sx');
+      const named = node.id?.type === 'Identifier' && SX_NAME_RE.test(node.id.name);
+      if (named || namesSxType(node.id?.typeAnnotation)) push(node, 'sx');
     },
     'VariableDeclarator:exit': pop,
     TSSatisfiesExpression(node) {
@@ -259,7 +275,7 @@ function ratchetVisitors(context, options) {
       const raw = node.value && (node.value.cooked ?? node.value.raw);
       if (typeof raw !== 'string') return;
       for (const declaration of raw.matchAll(TEMPLATE_SPACING_RE)) {
-        scanString(node, 'css template', declaration[1]);
+        scanString(node, 'css template', declaration[1], 'template');
       }
     },
   };

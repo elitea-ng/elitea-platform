@@ -8,8 +8,11 @@
  *   EXEMPT   — each source must give nothing. Some are exempt by design (a
  *              size, a chart's own px prop); one is a known blind spot and is
  *              listed so a change to it is seen: an untyped object outside
- *              JSX is not known to be sx, so its numbers are not counted
- *              (the counts are a floor, as ADR-0062 says).
+ *              JSX whose name is not `sx` or `…Sx` is not known to be sx, so
+ *              its numbers are not counted (the counts are a floor, as
+ *              ADR-0062 says).
+ *   An expectation is a prefix of the message after its tag; the "the fix
+ *   names …" cases give the whole message.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -144,6 +147,35 @@ const FINDINGS = [
     ['mui-dialog'],
   ],
   ['Switch from its own path', "import Switch from '@mui/material/Switch';\nexport const W = Switch;", ['mui-switch']],
+  ['Dialog from its own path', "import Dialog from '@mui/material/Dialog';\nexport const D = Dialog;", ['mui-dialog']],
+  ['Switch from the barrel', "import { Switch } from '@mui/material';\nexport const W = Switch;", ['mui-switch']],
+  ['an untyped object named …Sx', 'export const rowSx = { p: 0.75 };', ['spacing-off-scale p: 0.75']],
+  ['an untyped object named sx', 'export const sx = { gap: 0.75 };', ['spacing-off-scale gap: 0.75']],
+  ['a JSX prop named …Sx', 'export const A = () => <Box headerSx={{ p: 0.75 }} />;', ['spacing-off-scale p: 0.75']],
+  ['a key named …Sx', 'export const props = { paperSx: { mt: 0.75 } };', ['spacing-off-scale mt: 0.75']],
+  [
+    'the fix in sx names the sx number',
+    "export const A = () => <Box sx={{ p: '1rem' }} />;",
+    ["spacing-rem p: '1rem' → 2 (theme.spacing(2) or the sx number 2)"],
+  ],
+  [
+    'the fix in a styled() object names only theme.spacing()',
+    "export const S = styled(Box)({ padding: '1rem', margin: 16 });",
+    [
+      "spacing-rem padding: '1rem' → 2 (theme.spacing(2))",
+      'spacing-px margin: 16 is px here (a styled() object or a style prop) → 2 (theme.spacing(2))',
+    ],
+  ],
+  [
+    'the fix in a style prop names only theme.spacing()',
+    "export const A = () => <div style={{ padding: '1rem' }} />;",
+    ["spacing-rem padding: '1rem' → 2 (theme.spacing(2))"],
+  ],
+  [
+    'the fix in a css template names a theme.spacing() interpolation',
+    'export const S = styled.div`\n  padding: 1rem;\n`;',
+    ["spacing-rem css template: '1rem' → 2 (${({ theme }) => theme.spacing(2)})"],
+  ],
 ];
 
 const EXEMPT = [
@@ -164,7 +196,7 @@ const EXEMPT = [
     "import type { DialogProps } from '@mui/material/Dialog';\nexport type P = DialogProps;",
   ],
   ['Dialog parts other than Dialog', "import { DialogTitle } from '@mui/material';\nexport const T = DialogTitle;"],
-  ['known blind spot: an untyped object outside JSX', 'export const styles = { root: { p: 0.75 } };'],
+  ['known blind spot: an untyped object outside JSX not named …Sx', 'export const styles = { root: { p: 0.75 } };'],
 ];
 
 let dir;
