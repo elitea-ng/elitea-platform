@@ -132,10 +132,10 @@ allowed allowed allowed refused refused refused allowed    allowed    write   DE
 allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/default_model/ -
 allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/default_model/ -
 allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/governance -
-allowed allowed allowed refused refused refused allowed    allowed    write   POST /api/v2/admin/gateway/governance -
+allowed allowed allowed refused refused refused restricted restricted write   POST /api/v2/admin/gateway/governance -
 allowed allowed allowed refused refused refused allowed    allowed    read    POST /api/v2/admin/gateway/governance/validate-cel -
-allowed allowed allowed refused refused refused allowed    allowed    write   DELETE /api/v2/admin/gateway/governance/{id} -
-allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/governance/{id} -
+allowed allowed allowed refused refused refused restricted restricted write   DELETE /api/v2/admin/gateway/governance/{id} -
+allowed allowed allowed refused refused refused restricted restricted write   PUT /api/v2/admin/gateway/governance/{id} -
 allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/logs -
 allowed allowed allowed refused refused refused allowed    allowed    read    GET /api/v2/admin/gateway/metered-prices -
 allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/admin/gateway/metered-prices -
@@ -371,7 +371,7 @@ allowed allowed allowed allowed refused refused allowed    allowed    read    GE
 allowed allowed allowed refused refused refused allowed    allowed    write   PUT /api/v2/elitea_core/user_budget/administration/{projectID}/user_budget/{userID} -
 allowed allowed allowed allowed refused refused allowed    allowed    read    GET /api/v2/elitea_core/user_budgets/administration/{projectID} -
 allowed allowed refused allowed refused refused allowed    allowed    write   POST /api/v2/projects/project/{mode} -
-allowed allowed refused allowed refused refused allowed    allowed    write   DELETE /api/v2/projects/project/{mode}/{projectID} -
+allowed allowed refused allowed refused refused restricted restricted write   DELETE /api/v2/projects/project/{mode}/{projectID} -
 allowed allowed refused refused refused refused allowed    allowed    write   POST /api/v2/secrets/hide/{mode}/{projectID}/{name} -
 allowed allowed refused refused refused refused allowed    allowed    write   DELETE /api/v2/secrets/secret/{mode}/{projectID}/{name} -
 allowed allowed refused refused refused refused allowed    allowed    read    GET /api/v2/secrets/secret/{mode}/{projectID}/{name} -

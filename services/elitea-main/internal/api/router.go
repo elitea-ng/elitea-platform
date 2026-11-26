@@ -2280,7 +2280,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// What an elevation cannot do (ADR-0059 R2.8a,
 	// elevation_restrictions.go): below the token rule, in the same place
 	// and for the same reasons, and marked from the same finished router.
-	elevationRule := &elevationRestrictions{resolver: permissionResolver}
+	// A critical action it admits is announced in the transaction of the
+	// change (R2.8b), with the security audit appender of the access events.
+	elevationRule := &elevationRestrictions{resolver: permissionResolver, announcer: &adminaccess.CriticalAnnouncer{
+		Appender: accessevent.DefaultAppender("elitea-main/admin"), Now: time.Now,
+	}}
 	// The reason of a dangerous action (ADR-0059 R3.8a,
 	// middleware/reason.go): below the elevation rule, in the same place and
 	// for the same reasons, and marked from the same finished router.

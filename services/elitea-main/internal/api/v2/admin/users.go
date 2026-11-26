@@ -43,6 +43,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -370,6 +371,15 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		// the caller holds every permission of each role taken, and changes
 		// no role of its own. One refused account refuses the whole delete.
 		if ruled {
+			// An elevated caller deletes nobody who can approve or review
+			// break-glass access (ADR-0059 R2.8b).
+			if refusal, err := adminaccess.ElevationProtectedTargets(ctx, tx, caller, int64(id)); err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			} else if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
 			refusal, err := h.checkAccountDeletion(ctx, tx, caller, id)
 			if err != nil {
 				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
@@ -596,6 +606,13 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
+	// A critical change under an elevation is announced in this
+	// transaction (ADR-0059 R2.8b).
+	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {
+		slog.ErrorContext(ctx, "admin: the critical role change could not be announced", "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
@@ -758,6 +775,18 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
+	// An elevated caller suspends nobody who can approve or review
+	// break-glass access (ADR-0059 R2.8b), read under the role-writes lock
+	// the guard took.
+	if *body.Suspended {
+		if refusal, err := h.checkSuspension(r, tx, int64(userID)); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+			return
+		} else if refusal != nil {
+			adminaccess.Write(w, r, refusal)
+			return
+		}
+	}
 	tag, err := tx.Exec(r.Context(),
 		`UPDATE public.auth_core__user SET suspended = $1 WHERE id = $2`, *body.Suspended, userID)
 	if err != nil {
@@ -814,6 +843,21 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"id": userID, "suspended": *body.Suspended})
+}
+
+// checkSuspension applies the rules about people to a suspension of userID:
+// an elevated caller suspends no holder of access.breakglass.approve or
+// access.breakglass.review (ADR-0059 R2.8b). A handler built without a
+// permission resolver (unit fixtures only) applies none.
+func (h *Handler) checkSuspension(r *http.Request, tx pgx.Tx, userID int64) (*adminaccess.Refusal, error) {
+	if h.resolver == nil {
+		return nil, nil
+	}
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return adminaccess.Unresolved("your own permissions could not be read, so the suspension was refused"), nil
+	}
+	return adminaccess.ElevationProtectedTargets(r.Context(), tx, caller, userID)
 }
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
@@ -881,6 +925,13 @@ func (h *Handler) checkCentralRoles(
 	caller, err := caller.Reload(ctx)
 	if err != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
+	}
+	// An elevated caller demotes nobody who can approve or review
+	// break-glass access (ADR-0059 R2.8b).
+	if len(change.taken) > 0 && change.changes {
+		if refusal, err := adminaccess.ElevationProtectedTargets(ctx, q, caller, int64(change.targetID)); err != nil || refusal != nil {
+			return refusal, err
+		}
 	}
 	// The reserved break-glass account holds no role (ADR-0059 R2.6b), for a
 	// global administrator too; rolegrants.Grant refuses it again at the

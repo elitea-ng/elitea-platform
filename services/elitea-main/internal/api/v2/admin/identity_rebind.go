@@ -241,6 +241,11 @@ func (h *Handler) applyIdentityRebind(
 	}); err != nil {
 		return unavailable(err)
 	}
+	// A rebind under a sealed elevation is announced in this transaction
+	// (ADR-0059 R2.8b).
+	if err := securityaudit.RunTransactionHooks(ctx, tx); err != nil {
+		return unavailable(err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return unavailable(err)
 	}

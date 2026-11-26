@@ -185,6 +185,19 @@ The table lists every action whose value is not `allow`, reads included (reading
 
 {/* elevation-table:end */}
 
+### The people an elevation cannot remove
+
+Some limits are about people, not actions, so they hold on routes the table allows:
+
+- **The people who can stop and review the elevation stay.** An elevated session cannot demote, suspend or delete a holder of `access.breakglass.approve` or `access.breakglass.review` (`403` with the code `elevation_protected_person`). This covers both role assignment routes (the Users page and **Modes**), user suspension and user deletion. Who holds the two permissions is read from standing roles.
+- **Not the own roles, not the own eligibility.** An elevated person cannot give or take any of the own roles, and so cannot change the own `access.breakglass.request`, at either level (`403 role_self_assignment`). The exemption a standing global administrator has is read from standing roles only: an elevation at the `super_admin` level never carries it.
+
+### A critical change is announced at once
+
+A `critical` action that an elevation may do (for example changing a global provider's endpoint, or giving an administration role) is announced in the same transaction as the change: it writes the security audit event `admin.elevation.critical_change` and a notice to the same people as an elevation start (see [Who is told](#who-is-told)). If the event or the notices cannot be written, the change is rolled back. The review is not the first time someone hears of it.
+
+Two critical actions cannot be announced this way yet, so an elevation is refused them (`403 elevation_restricted`): writing a guardrail row of the gateway governance (an elevation is refused every governance row write, because which kind of row a request writes is decided after the route), and deleting a project. A person whose standing roles admit them is not affected.
+
 ## The sealed credential list
 
 The console reads the sealed credentials with `GET /api/v2/admin/access/sealed_credentials`, for a holder of `access.breakglass.manage`. Issuing and revoking a credential stay operator commands (see the [runbook](/deployment/break-glass-runbook#sealed-credentials)); there is no route for either.

@@ -45,7 +45,24 @@ func elevatedWant(entries []adminaccess.Action) (restricted, flagged, decided bo
 			return true, false, true
 		}
 	}
-	return first.Refusal != nil, first.Flag, true
+	if first.Refusal != nil {
+		return true, first.Flag, true
+	}
+	// A critical entry the elevation may do is refused when its change
+	// cannot be announced in its transaction (R2.8b), and so is a route
+	// whose entries mix critical and other ones that no handler classifies.
+	critical, unannounced := 0, false
+	for _, entry := range entries {
+		if entry.Danger == adminaccess.DangerCritical {
+			critical++
+			unannounced = unannounced || !adminaccess.CriticalChangeAnnounced[entry.Key()]
+		}
+	}
+	if critical > 0 && (unannounced || critical < len(entries)) &&
+		!adminaccess.ElevationRuleInHandler[entries[0].Classifier] {
+		return true, false, true
+	}
+	return false, first.Flag, true
 }
 
 func TestSeparationMatrixElevatedColumnsMatchTheRegistry(t *testing.T) {
