@@ -61,10 +61,19 @@ func NewIdentityProviderHTTPClient(allowlist []string, allowLoopback bool, opts 
 		if entry == "" {
 			continue
 		}
-		if !allowLoopback && namesLoopback(entry) {
-			slog.Warn("identity-provider egress: a loopback allowlist entry is ignored without the development flag",
-				"entry", entry, "flag", IdentityProviderAllowLoopbackEnv)
-			continue
+		if !allowLoopback {
+			switch loopbackScope(entry) {
+			case loopbackOnly:
+				slog.Warn("identity-provider egress: a loopback allowlist entry is ignored without the development flag",
+					"entry", entry, "flag", IdentityProviderAllowLoopbackEnv)
+				continue
+			case loopbackAndMore:
+				// Dropping it would silently leave the private ranges the
+				// operator meant to permit refused; keeping it would permit
+				// loopback. Neither is what was asked for, so boot fails.
+				return nil, fmt.Errorf("%s: entry %q also covers loopback, which needs %s=true; list the private ranges instead (e.g. 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16)",
+					IdentityProviderEgressAllowlistEnv, entry, IdentityProviderAllowLoopbackEnv)
+			}
 		}
 		entries = append(entries, entry)
 	}
@@ -120,25 +129,58 @@ func splitAllowlist(raw string) []string {
 	return strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == '\t' })
 }
 
-// namesLoopback reports whether an allowlist entry would permit a loopback
-// address: `localhost`, a loopback IP, or a CIDR block that overlaps
-// 127.0.0.0/8 or ::1.
-func namesLoopback(entry string) bool {
+// How much of an allowlist entry is loopback.
+type loopbackCoverage int
+
+const (
+	loopbackNone    loopbackCoverage = iota
+	loopbackOnly                     // localhost, a loopback IP, or a block inside 127.0.0.0/8 or ::1
+	loopbackAndMore                  // a block that contains loopback and other addresses, e.g. 0.0.0.0/0
+)
+
+// loopbackScope reports whether an allowlist entry would permit a loopback
+// address, and whether it permits anything else.
+func loopbackScope(entry string) loopbackCoverage {
 	host := entry
 	if h, _, err := net.SplitHostPort(entry); err == nil {
 		host = h
 	}
 	host = strings.Trim(host, "[]")
 	if strings.EqualFold(host, "localhost") {
-		return true
+		return loopbackOnly
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
+		if ip.IsLoopback() {
+			return loopbackOnly
+		}
+		return loopbackNone
 	}
-	if _, block, err := net.ParseCIDR(host); err == nil {
-		v4 := net.IPv4(127, 0, 0, 1)
-		_, loop4, _ := net.ParseCIDR("127.0.0.0/8")
-		return block.Contains(v4) || block.Contains(net.IPv6loopback) || loop4.Contains(block.IP)
+	_, block, err := net.ParseCIDR(host)
+	if err != nil {
+		return loopbackNone
 	}
-	return false
+	_, loop4, _ := net.ParseCIDR("127.0.0.0/8")
+	_, loop6, _ := net.ParseCIDR("::1/128")
+	for _, loop := range []*net.IPNet{loop4, loop6} {
+		blockBits, blockLen := block.Mask.Size()
+		loopBits, loopLen := loop.Mask.Size()
+		if blockLen != loopLen {
+			continue
+		}
+		switch {
+		case loop.Contains(block.IP) && blockBits >= loopBits:
+			return loopbackOnly
+		case block.Contains(loop.IP):
+			return loopbackAndMore
+		}
+	}
+	// An IPv4-mapped IPv6 block (::ffff:0:0/96) covers 127.0.0.1 too.
+	if block.Contains(net.IPv4(127, 0, 0, 1)) || block.Contains(net.IPv6loopback) {
+		return loopbackAndMore
+	}
+	return loopbackNone
 }
+
+// namesLoopback reports whether an allowlist entry would permit a loopback
+// address at all.
+func namesLoopback(entry string) bool { return loopbackScope(entry) != loopbackNone }

@@ -222,7 +222,7 @@ Third-party subcharts (NATS, Qdrant) keep their own values. The CI test `deploy/
 ```bash
 curl -si https://elitea.example.com/healthz   # 200 {"status":"ok"} with "vary: Origin"
 ```
-`/readyz` and `/startupz` are deliberately not routed by the edge: their bodies name each dependency's state. The chart's probes reach them on the pod directly.
+`/readyz` and `/startupz` are deliberately not routed by the edge: their bodies name each dependency's state. elitea-main answers them only inside the container, and the chart's startup and readiness probes run `elitea-main -healthcheck <path>` there.
 </Step>
 <Step title="Admin console">
 `/admin/app` — sign in as the account you named above.

@@ -2338,7 +2338,7 @@ networkPolicies:
     # .port), for example the Prometheus pods. Empty admits nobody to it.
     metricsFrom: []
   web:
-    # More peers on elitea-web's port 80 besides elitea-main, which relays every
+    # More peers on elitea-web's port 8080 besides elitea-main, which relays every
     # browser request for /app and /docs. Normally empty: a peer listed here
     # reaches the SPA without passing the edge's `/` redirect and MCP carve-out.
     extraIngressFrom: []

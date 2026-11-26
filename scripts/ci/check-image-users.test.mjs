@@ -20,10 +20,9 @@ test("a web image with no USER, or that switches back to root, fails", () => {
 });
 
 test("a rust-runtime stage without the chmod, or with it after USER, fails", () => {
+  const fix = "RUN chmod -R go-w /usr/local/cargo && \\\n    find /usr/local/rustup -type d -perm /022 -exec chmod go-w {} +\n";
   assert.equal(checkRustRuntime("FROM rust AS rust-runtime\nUSER 10001:10001\n").length, 1);
-  assert.equal(
-    checkRustRuntime("FROM rust AS rust-runtime\nUSER 10001\nRUN chmod -R go-w /usr/local/cargo /usr/local/rustup\n").length,
-    1,
-  );
-  assert.deepEqual(checkRustRuntime("FROM rust AS rust-runtime\nRUN chmod -R go-w /usr/local/cargo /usr/local/rustup\nUSER 10001:10001\n"), []);
+  assert.equal(checkRustRuntime("FROM rust AS rust-runtime\nRUN chmod -R go-w /usr/local/cargo\nUSER 10001\n").length, 1);
+  assert.equal(checkRustRuntime(`FROM rust AS rust-runtime\nUSER 10001\n${fix}`).length, 1);
+  assert.deepEqual(checkRustRuntime(`FROM rust AS rust-runtime\n${fix}USER 10001:10001\n`), []);
 });

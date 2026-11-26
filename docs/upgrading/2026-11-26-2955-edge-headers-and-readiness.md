@@ -25,8 +25,12 @@
 **What to do.**
 
 - Point external monitors and load-balancer health checks at `/healthz`. The
-  chart's own probes already run `elitea-main -healthcheck <path>` inside the
-  container, and the compose healthchecks are unchanged.
+  chart's startup and readiness probes now always run
+  `elitea-main -healthcheck <path>` inside the container. Before, they were an
+  `httpGet` when `web.enabled` was false. `main.probes.startup.path` and
+  `main.probes.readiness.path` must be `/readyz`, `/startupz` or `/healthz` in
+  every install, not only with the web edge on. The compose healthchecks are
+  unchanged.
 - Make sure a proxy in front of elitea-main passes `Strict-Transport-Security`
   through.
 - No chart value changes.

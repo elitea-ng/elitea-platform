@@ -275,23 +275,16 @@ spec:
               value: {{ . | quote }}
             {{- end }}
           {{- /*
-            With the browser edge on, elitea-main refuses /readyz and /startupz
-            to every caller that is not loopback (their bodies name each
-            dependency's state), and a kubelet httpGet arrives from the node.
-            The startup and readiness probes then run the binary's own
-            `-healthcheck <path>`, which requests the path over loopback inside
-            the container — the compose healthcheck's mechanism. The liveness
-            path, /healthz, is public and stays an httpGet.
+            elitea-main answers /readyz and /startupz only to a probe inside
+            the container (their bodies name each dependency's state; #2955),
+            and a kubelet httpGet arrives from the node. So the startup and
+            readiness probes run the binary's own `-healthcheck <path>`, which
+            requests the path over loopback inside the container (the compose
+            healthcheck's mechanism), with or without the browser edge. The
+            liveness path, /healthz, is public and stays an httpGet.
           */}}
-          {{- $edge := include "elitea-main.webUpstream" . }}
           startupProbe:
-            {{- if $edge }}
             {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.startup.path) | nindent 12 }}
-            {{- else }}
-            httpGet:
-              path: {{ .Values.main.probes.startup.path }}
-              port: http
-            {{- end }}
             initialDelaySeconds: {{ .Values.main.probes.startup.initialDelaySeconds }}
             periodSeconds: {{ .Values.main.probes.startup.periodSeconds }}
             timeoutSeconds: {{ .Values.main.probes.startup.timeoutSeconds | default 3 }}
@@ -304,13 +297,7 @@ spec:
             timeoutSeconds: {{ .Values.main.probes.liveness.timeoutSeconds | default 1 }}
             failureThreshold: {{ .Values.main.probes.liveness.failureThreshold }}
           readinessProbe:
-            {{- if $edge }}
             {{- include "elitea-main.healthcheckExec" (list . .Values.main.probes.readiness.path) | nindent 12 }}
-            {{- else }}
-            httpGet:
-              path: {{ .Values.main.probes.readiness.path }}
-              port: http
-            {{- end }}
             periodSeconds: {{ .Values.main.probes.readiness.periodSeconds }}
             timeoutSeconds: {{ .Values.main.probes.readiness.timeoutSeconds | default 3 }}
             failureThreshold: {{ .Values.main.probes.readiness.failureThreshold }}

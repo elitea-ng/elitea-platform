@@ -106,14 +106,34 @@ func TestNilClientRefusesDiscovery(t *testing.T) {
 	}
 }
 
-func TestNamesLoopback(t *testing.T) {
-	for entry, want := range map[string]bool{
-		"localhost": true, "127.0.0.1": true, "127.0.0.1:9400": true, "::1": true, "[::1]:80": true,
-		"127.0.0.0/8": true, "0.0.0.0/0": true, "::/0": true,
-		"10.0.0.0/8": false, "10.0.0.5:8443": false, "idp.corp.example": false, "*.corp.example": false,
+func TestLoopbackScope(t *testing.T) {
+	for entry, want := range map[string]loopbackCoverage{
+		"localhost": loopbackOnly, "127.0.0.1": loopbackOnly, "127.0.0.1:9400": loopbackOnly, "::1": loopbackOnly,
+		"[::1]:80": loopbackOnly, "127.0.0.0/8": loopbackOnly, "127.1.0.0/16": loopbackOnly, "::1/128": loopbackOnly,
+		"0.0.0.0/0": loopbackAndMore, "::/0": loopbackAndMore, "64.0.0.0/2": loopbackAndMore, "::ffff:0:0/96": loopbackAndMore,
+		"10.0.0.0/8": loopbackNone, "10.0.0.5:8443": loopbackNone, "idp.corp.example": loopbackNone,
+		"*.corp.example": loopbackNone, "fd00::/8": loopbackNone,
 	} {
-		if got := namesLoopback(entry); got != want {
-			t.Errorf("namesLoopback(%q) = %v, want %v", entry, got, want)
+		if got := loopbackScope(entry); got != want {
+			t.Errorf("loopbackScope(%q) = %v, want %v", entry, got, want)
+		}
+		if namesLoopback(entry) != (want != loopbackNone) {
+			t.Errorf("namesLoopback(%q) disagrees with loopbackScope", entry)
+		}
+	}
+}
+
+// A block that covers loopback and more fails boot instead of being dropped
+// (which would leave the private ranges it meant to permit refused) or kept
+// (which would permit loopback without the development flag).
+func TestBroadBlockOverLoopbackFailsWithoutTheFlag(t *testing.T) {
+	for _, entry := range []string{"0.0.0.0/0", "::/0"} {
+		_, err := NewIdentityProviderHTTPClient([]string{"10.0.0.0/8", entry}, false)
+		if err == nil || !strings.Contains(err.Error(), IdentityProviderAllowLoopbackEnv) {
+			t.Fatalf("%s without the flag: err = %v, want a refusal naming %s", entry, err, IdentityProviderAllowLoopbackEnv)
+		}
+		if _, err := NewIdentityProviderHTTPClient([]string{entry}, true); err != nil {
+			t.Fatalf("%s with the flag: %v", entry, err)
 		}
 	}
 }

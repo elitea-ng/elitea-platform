@@ -429,7 +429,10 @@ jobs:
           writable="$(docker run --rm --network none --entrypoint sh "$image" -c '
             id -u
             find $(echo "$PATH" | tr ":" " ") -maxdepth 0 -perm -o+w 2>/dev/null
-            for d in $(echo "$PATH" | tr ":" " "); do [ -d "$d" ] && [ -w "$d" ] && echo "$d"; done
+            for d in $(echo "$PATH" | tr ":" " "); do
+              if [ -d "$d" ] && [ -w "$d" ]; then echo "$d"; fi
+            done
+            exit 0
           ')"
           uid="$(printf '%s\n' "$writable" | head -n 1)"
           dirs="$(printf '%s\n' "$writable" | tail -n +2 | sort -u)"

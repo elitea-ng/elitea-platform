@@ -7,8 +7,9 @@
 //   * apps/elitea-web/Containerfile: the `spa` stage ends on a non-root USER,
 //     and the stages built FROM it never switch back to root.
 //   * services/elitea-code-runner/Containerfile: the `rust-runtime` stage
-//     removes group and world write from /usr/local/cargo and
-//     /usr/local/rustup before it switches to its non-root USER.
+//     removes group and world write from /usr/local/cargo (on PATH) and from
+//     every directory under /usr/local/rustup before it switches to its
+//     non-root USER.
 //
 // Usage: node scripts/ci/check-image-users.mjs [repo root]
 import { readFileSync } from "node:fs";
@@ -60,10 +61,19 @@ export function checkWeb(text) {
 export function checkRustRuntime(text) {
   const stage = stages(text).find((s) => s.name === "rust-runtime");
   if (!stage) return ["services/elitea-code-runner/Containerfile has no `rust-runtime` stage"];
-  const chmod = stage.lines.findIndex((l) => /^RUN\s.*chmod\s+-R\s+go-w\s+\/usr\/local\/cargo\s+\/usr\/local\/rustup\b/i.test(l));
+  // /usr/local/cargo (on PATH) entirely; /usr/local/rustup's directories.
+  const chmod = stage.lines.findIndex(
+    (l) =>
+      /^RUN\s.*chmod\s+-R\s+go-w\s+\/usr\/local\/cargo(\s|$)/i.test(l) &&
+      /find\s+\/usr\/local\/rustup\s+-type\s+d\b.*chmod\s+go-w/i.test(l),
+  );
   const user = stage.lines.findIndex((l) => /^USER\s/i.test(l));
   const problems = [];
-  if (chmod < 0) problems.push("services/elitea-code-runner/Containerfile: rust-runtime must `chmod -R go-w /usr/local/cargo /usr/local/rustup`");
+  if (chmod < 0) {
+    problems.push(
+      "services/elitea-code-runner/Containerfile: rust-runtime must `chmod -R go-w /usr/local/cargo` and drop go-w from every directory under /usr/local/rustup, in one RUN",
+    );
+  }
   if (user < 0 || isRoot(users(stage).at(-1))) problems.push("services/elitea-code-runner/Containerfile: rust-runtime must end on a non-root USER");
   if (chmod >= 0 && user >= 0 && chmod > user) problems.push("services/elitea-code-runner/Containerfile: rust-runtime's chmod must run before its USER");
   return problems;

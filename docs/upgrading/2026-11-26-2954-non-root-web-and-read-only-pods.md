@@ -21,8 +21,9 @@
   `readOnlyRootFilesystem: true` and `capabilities.drop: [ALL]`, applied to the
   PgBouncer container and its `userlist` init container. PgBouncer gets an
   `emptyDir` at `/tmp` for its Unix socket.
-- The code runner's `rust-runtime` image no longer leaves `/usr/local/cargo` and
-  `/usr/local/rustup` group- or world-writable.
+- The code runner's `rust-runtime` image no longer leaves `/usr/local/cargo`
+  (on `PATH`) or any directory under `/usr/local/rustup` group- or
+  world-writable.
 - The compose stacks reach elitea-web on `http://elitea-web:8080`.
 
 **Who is affected.**

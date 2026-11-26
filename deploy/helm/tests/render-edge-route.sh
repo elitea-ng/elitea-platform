@@ -14,10 +14,11 @@
 #   2. the Ingress: one path `/` to elitea-main, nothing to elitea-web;
 #   3. ELITEA_WEB_UPSTREAM names the web Service when web is rendered, and is
 #      absent when it is not;
-#   4. with the edge on, the startup and readiness probes are the binary's
-#      loopback -healthcheck (the edge refuses /readyz and /startupz to a
-#      kubelet httpGet), liveness stays an httpGet on /healthz;
-#   5. a probe path -healthcheck cannot read is refused while rendering;
+#   4. with the edge on or off, the startup and readiness probes are the
+#      binary's loopback -healthcheck (elitea-main refuses /readyz and
+#      /startupz to a kubelet httpGet), liveness stays an httpGet on /healthz;
+#   5. a probe path -healthcheck cannot read is refused while rendering, with
+#      the edge on or off;
 #   6. no plain-Ingress identity-header acknowledgement is demanded any more.
 #
 # Usage: deploy/helm/tests/render-edge-route.sh
@@ -108,8 +109,11 @@ fi
 if render edge-off "${HTTPROUTE[@]}" --set web.enabled=false; then
   f="$WORK/edge-off.yaml"
   expect "no ELITEA_WEB_UPSTREAM without elitea-web" "$(main_container "$f" '[.env[] | select(.name == "ELITEA_WEB_UPSTREAM")] | length')" "0"
-  expect "readiness is an httpGet without the edge" "$(main_container "$f" '.readinessProbe.httpGet.path')" "/readyz"
-  expect "startup is an httpGet without the edge" "$(main_container "$f" '.startupProbe.httpGet.path')" "/startupz"
+  # #2955: /readyz and /startupz answer only inside the container whether or
+  # not the edge is on, so a kubelet httpGet would never see the pod Ready.
+  expect "readiness is the loopback -healthcheck without the edge" "$(main_container "$f" '.readinessProbe.exec.command | join(" ")')" "/elitea-main -healthcheck /readyz"
+  expect "startup is the loopback -healthcheck without the edge" "$(main_container "$f" '.startupProbe.exec.command | join(" ")')" "/elitea-main -healthcheck /startupz"
+  expect "no httpGet on a container-local path without the edge" "$(main_container "$f" '[.readinessProbe.httpGet, .startupProbe.httpGet] | map(select(. != null)) | length')" "0"
 fi
 
 # ── 5. A probe path -healthcheck cannot read ─────────────────────────────────
@@ -120,8 +124,13 @@ elif grep -q "main.probes.readiness.path" "$WORK/probe.err"; then
 else
   fail "the custom probe path was refused for another reason: $(tail -1 "$WORK/probe.err")"
 fi
-render probe-no-edge --set web.enabled=false --set main.probes.readiness.path=/custom >/dev/null \
-  && pass "any probe path renders when the edge is off (it stays an httpGet)"
+if helm template t "$CHART" "${POSTURE[@]}" --set web.enabled=false --set main.probes.readiness.path=/custom >/dev/null 2>"$WORK/probe-no-edge.err"; then
+  fail "a readiness path -healthcheck cannot read rendered with the edge off"
+elif grep -q "main.probes.readiness.path" "$WORK/probe-no-edge.err"; then
+  pass "a readiness path -healthcheck cannot read is refused with the edge off too"
+else
+  fail "the custom probe path was refused for another reason: $(tail -1 "$WORK/probe-no-edge.err")"
+fi
 
 # ── 6. A plain Ingress needs no identity-header acknowledgement ──────────────
 # values-standalone.yaml turns Form sign-in on, which is what the old guard

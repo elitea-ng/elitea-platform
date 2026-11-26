@@ -31,6 +31,8 @@ Google, Okta, Auth0, a public Keycloak) need nothing.
   provider (as webhook and MCP traffic already needs).
 - Loopback identity providers are a development affordance:
   `ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK=true` admits them, and a loopback entry
-  in the allowlist is ignored without it. The compose and native development
+  in the allowlist is ignored without it. A block that covers loopback and more,
+  such as `0.0.0.0/0` or `::/0`, fails startup without the flag: list the
+  private ranges instead (`10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`). The compose and native development
   stacks set both variables for the bundled OIDC mock. The chart does not expose
   the loopback flag.
