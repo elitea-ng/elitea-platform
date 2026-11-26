@@ -38,12 +38,13 @@ import { t } from '@/shared/i18n';
 import { LlmProviderAdoptModelsDialog } from './LlmProviderAdoptModelsDialog';
 import { LlmProviderDialog } from './LlmProviderDialog';
 import {
-  ConfirmDelete,
   ProviderAlerts,
   ProviderResults,
   type ProviderRowActions,
 } from './LlmProviderTableParts';
 import { PlatformModelsPanel } from './PlatformModelsPanel';
+import { providerDeleteRequest, providerSaveRequest } from './llmProviderDangerous';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
@@ -122,7 +123,6 @@ export function LlmProxyProvidersPanel(): ReactNode {
     open: false,
     row: undefined,
   });
-  const [pendingDelete, setPendingDelete] = useState<LlmProvider | undefined>(undefined);
   // The provider whose catalogue is being read, or undefined when no adoption
   // is open. It is the row itself rather than an id because the dialog needs
   // the credential's TITLE: a platform model names its provider by title, and
@@ -136,6 +136,7 @@ export function LlmProxyProvidersPanel(): ReactNode {
   const deleteProvider = access.guard(useDeleteAdminLlmProvider());
   const checkProvider = access.guard(useCheckAdminLlmProvider());
   const revalidateProvider = access.guard(useRevalidateAdminLlmProvider());
+  const confirm = useAdminDangerousConfirm();
 
   // This session's own live-check verdicts, kept locally rather than in the
   // query cache: a check writes NOTHING server-side (see the api module's own
@@ -176,17 +177,30 @@ export function LlmProxyProvidersPanel(): ReactNode {
     const onSuccess = () => {
       setEditor({ open: false, row: undefined });
     };
-    if (editor.row !== undefined) {
-      // The TYPE is not resent on an edit: it cannot change (see the dialog),
-      // and restating it would make a partial update carry a field the operator
-      // did not touch.
-      updateProvider.mutate(
-        { id: editor.row.id, draft: { elitea_title: draft.elitea_title, data: draft.data } },
-        { onSuccess },
-      );
-      return;
-    }
-    createProvider.mutate(draft, { onSuccess });
+    const editing = editor.row;
+    confirm.ask({
+      ...providerSaveRequest(draft.elitea_title, editing !== undefined),
+      run: (reason) => {
+        if (editing !== undefined) {
+          // The TYPE is not resent on an edit: it cannot change (see the dialog),
+          // and restating it would make a partial update carry a field the operator
+          // did not touch.
+          updateProvider.mutate(
+            { id: editing.id, draft: { elitea_title: draft.elitea_title, data: draft.data }, reason },
+            { onSuccess },
+          );
+          return;
+        }
+        createProvider.mutate({ draft, reason }, { onSuccess });
+      },
+    });
+  };
+
+  const onDelete = (row: LlmProvider) => {
+    confirm.ask({
+      ...providerDeleteRequest(row.elitea_title),
+      run: (reason) => deleteProvider.mutate({ id: row.id, reason }),
+    });
   };
 
   return (
@@ -235,17 +249,11 @@ export function LlmProxyProvidersPanel(): ReactNode {
         failed={error != null}
         items={items}
         onEdit={(row) => setEditor({ open: true, row })}
-        onDelete={setPendingDelete}
+        onDelete={onDelete}
         rowActions={rowActions}
       />
 
-      <ConfirmDelete
-        provider={pendingDelete}
-        onCancel={() => setPendingDelete(undefined)}
-        onConfirm={(row) => {
-          deleteProvider.mutate(row.id, { onSuccess: () => setPendingDelete(undefined) });
-        }}
-      />
+      {confirm.dialog}
 
       {/* Models sit under the providers on the SAME tab. A model names a
           credential, and the commonest mistake is a model naming one that is

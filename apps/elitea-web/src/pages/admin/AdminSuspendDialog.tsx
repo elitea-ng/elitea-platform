@@ -2,9 +2,10 @@
  * The Suspend dialog of `Admin › Kill switch` (ADR-0041 decision 1).
  *
  * One form for the four scopes. The platform scope stops every run on the
- * platform, so it also needs the typed confirmation STOP; the server refuses
- * it without that word too (`confirmation_required`), so this check is
- * presentation and the route is the rule.
+ * platform, so it is a dangerous action: the page confirms it in the shared
+ * dialog (`AdminDangerousActionDialog`, ADR-0059 R3.8b), where the operator
+ * types STOP and chooses a reason code. The server refuses it without that
+ * word too (`confirmation_required`), so the word is sent with the body.
  */
 import { useState, type ReactNode } from 'react';
 
@@ -63,7 +64,6 @@ interface FormState {
   toolkitType: string;
   reason: string;
   resumeRequires: string;
-  confirm: string;
 }
 
 const EMPTY: FormState = {
@@ -73,7 +73,6 @@ const EMPTY: FormState = {
   toolkitType: '',
   reason: '',
   resumeRequires: 'any_admin',
-  confirm: '',
 };
 
 /** The largest project or agent id the API accepts (a PostgreSQL integer). */
@@ -91,7 +90,7 @@ export function suspensionBody(form: FormState): ExecutionSuspensionCreate | und
   const base = { scope: form.scope, reason, resume_requires: form.resumeRequires };
   switch (form.scope) {
     case 'platform':
-      return form.confirm === PLATFORM_STOP_CONFIRMATION ? { ...base, confirm: form.confirm } : undefined;
+      return { ...base, confirm: PLATFORM_STOP_CONFIRMATION };
     case 'project': {
       const projectId = positive(form.projectId);
       return projectId === undefined ? undefined : { ...base, project_id: projectId };
@@ -161,7 +160,7 @@ export function AdminSuspendDialog({ open, pending, error, onClose, onSubmit }: 
             label={t('pages.admin.killSwitch.scope', 'Scope')}
             value={form.scope}
             slotProps={{ htmlInput: { 'data-testid': 'kill-switch-scope' } }}
-            onChange={(event) => set({ scope: event.target.value as Scope, confirm: '' })}
+            onChange={(event) => set({ scope: event.target.value as Scope })}
           >
             {SUSPENSION_SCOPES.map((scope) => (
               <MenuItem key={scope} value={scope}>{scopeLabel(scope)}</MenuItem>
@@ -212,20 +211,12 @@ export function AdminSuspendDialog({ open, pending, error, onClose, onSubmit }: 
             </Alert>
           )}
           {form.scope === 'platform' && (
-            <>
-              <Alert severity="error">
-                {t(
-                  'pages.admin.killSwitch.platformWarning',
-                  'This stops every run on the platform and cancels every run in flight. Type STOP to confirm.',
-                )}
-              </Alert>
-              <TextField
-                label={t('pages.admin.killSwitch.confirm', 'Type STOP')}
-                value={form.confirm}
-                slotProps={{ htmlInput: { 'data-testid': 'kill-switch-confirm' } }}
-                onChange={(event) => set({ confirm: event.target.value })}
-              />
-            </>
+            <Alert severity="error">
+              {t(
+                'pages.admin.killSwitch.platformStepWarning',
+                'This stops every run on the platform and cancels every run in flight. You confirm it in the next step.',
+              )}
+            </Alert>
           )}
           {error !== undefined && <Alert severity="error">{error}</Alert>}
         </Stack>

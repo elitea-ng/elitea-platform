@@ -13,6 +13,7 @@ import { server } from '@/test/setup';
 
 import { MAX_SUSPENSION_ID, PLATFORM_STOP_CONFIRMATION, suspensionBody } from './AdminSuspendDialog';
 import { AdminKillSwitch } from './KillSwitch';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -140,8 +141,7 @@ describe('suspensionBody', () => {
   };
 
   it('holds the platform stop until STOP is typed', () => {
-    expect(suspensionBody({ ...base, scope: 'platform', confirm: 'stop' })).toBeUndefined();
-    expect(suspensionBody({ ...base, scope: 'platform', confirm: PLATFORM_STOP_CONFIRMATION })).toEqual({
+    expect(suspensionBody({ ...base, scope: 'platform' })).toEqual({
       scope: 'platform',
       reason: 'incident',
       resume_requires: 'two_person',
@@ -191,12 +191,22 @@ describe('suspensionBody', () => {
     await user.click(screen.getByRole('combobox', { name: 'Scope' }));
     await user.click(await screen.findByRole('option', { name: 'Platform' }));
     await user.type(screen.getByRole('textbox', { name: 'Reason' }), 'incident');
-    expect(screen.getByTestId('kill-switch-submit')).toBeDisabled();
-    await user.type(screen.getByTestId('kill-switch-confirm'), 'STOP');
     await user.click(screen.getByTestId('kill-switch-submit'));
+    // Nothing is sent until the shared dialog has STOP and a reason code.
+    expect(screen.getByTestId('admin-dangerous-confirm')).toBeDisabled();
+    expect(creates).toEqual([]);
+    await confirmDangerousAction(user, PLATFORM_STOP_CONFIRMATION, { text: '' });
 
     await waitFor(() => {
-      expect(creates).toEqual([{ scope: 'platform', reason: 'incident', resume_requires: 'any_admin', confirm: 'STOP' }]);
+      expect(creates).toEqual([
+        {
+          scope: 'platform',
+          reason: 'incident',
+          resume_requires: 'any_admin',
+          confirm: 'STOP',
+          reason_code: 'incident',
+        },
+      ]);
     });
   });
 });

@@ -86,7 +86,18 @@ function GrantingRoles({ itemId }: { readonly itemId: string }): ReactNode {
   );
 }
 
-function WhomToAsk(): ReactNode {
+export interface AdminSupportContactProps {
+  /** The sentence before the contact; it ends with a colon. */
+  readonly lead?: string;
+  /** The sentence when the deployment names no support contact. */
+  readonly fallback?: string;
+}
+
+/**
+ * Whom to ask: the deployment's IT support line, or a fixed sentence when it
+ * names none. Never an administrator's name.
+ */
+export function AdminSupportContact({ lead, fallback }: AdminSupportContactProps = {}): ReactNode {
   const query = useGetClientDiscovery({
     query: {
       retry: false,
@@ -99,17 +110,18 @@ function WhomToAsk(): ReactNode {
   if (contact === null) {
     return (
       <Typography component="p" variant="bodyMedium" sx={secondarySx} data-testid="admin-item-denied-contact">
-        {t(
-          'pages.admin.itemDenied.askFallback',
-          'To ask for one of these roles, contact the people who manage this deployment.',
-        )}
+        {fallback ??
+          t(
+            'pages.admin.itemDenied.askFallback',
+            'To ask for one of these roles, contact the people who manage this deployment.',
+          )}
       </Typography>
     );
   }
   const { text, href } = supportContactLink(contact);
   return (
     <Typography component="p" variant="bodyMedium" sx={secondarySx} data-testid="admin-item-denied-contact">
-      {t('pages.admin.itemDenied.askSupport', 'To ask for one of these roles, contact your IT support:')}{' '}
+      {lead ?? t('pages.admin.itemDenied.askSupport', 'To ask for one of these roles, contact your IT support:')}{' '}
       {href === null ? (
         <span>{text}</span>
       ) : (
@@ -135,7 +147,7 @@ export function AdminItemAccessDenied({ itemId, label }: AdminItemAccessDeniedPr
         )}
       </Typography>
       <GrantingRoles itemId={itemId} />
-      <WhomToAsk />
+      <AdminSupportContact />
     </DrawerPage>
   );
 }

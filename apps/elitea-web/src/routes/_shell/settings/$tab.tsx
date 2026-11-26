@@ -24,26 +24,16 @@
  */
 import { createFileRoute } from '@tanstack/react-router';
 
-import { ComputerUseEntry, HooksEntry, McpEntry, RulesEntry, TroubleshootEntry, TrustedFoldersEntry } from '@/pages/workspace/desktopEntry';
+import { DesktopSettingsEntry } from '@/pages/workspace/desktopEntry';
 
 /**
- * Six exceptions, desktop build only: `troubleshoot` is the Doctor (README of
- * apps/elitea-desktop, "Diagnostics"), `approval-rules` the approval rules
- * panel (#1216), `mcp-servers` the local MCP servers (#1230), `hooks` the
- * person's hooks (#1237), `computer-use` computer use on this device
- * (ADR-0047, #1584), `trusted-folders` the folders whose commands run without
- * a sandbox (ADR-0061, #3062). They ride on
- * this catch-all instead of route files of their own so the web build's
- * route tree does not grow; each entry renders nothing outside `desktop`.
+ * The desktop tabs (`DESKTOP_SETTINGS_TABS`, desktop build only) ride on this catch-all instead of route files of their
+ * own, so the web build's route tree does not grow; each entry renders nothing outside `desktop`. The redirect reads the
+ * same list (#3078), so it never bounces them.
  */
 function SettingsTab(): React.JSX.Element | null {
   const { tab } = Route.useParams();
-  if (tab === 'troubleshoot') return <TroubleshootEntry />;
-  if (tab === 'mcp-servers') return <McpEntry />;
-  if (tab === 'hooks') return <HooksEntry />;
-  if (tab === 'computer-use') return <ComputerUseEntry />;
-  if (tab === 'trusted-folders') return <TrustedFoldersEntry />;
-  return tab === 'approval-rules' ? <RulesEntry /> : null;
+  return <DesktopSettingsEntry tab={tab} />;
 }
 
 export const Route = createFileRoute('/_shell/settings/$tab')({

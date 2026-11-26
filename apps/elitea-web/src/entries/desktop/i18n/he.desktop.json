@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "הסוכן לא נוצר: {{message}}",
   "workspace.noAgents.createCoding": "יצירת סוכן Local coding",
   "workspace.agent": "סוכן",
-  "workspace.version": "גרסה",
   "workspace.composer.files": "קבצים בתיקייה הזו",
   "workspace.composer.commands": "פקודות",
   "workspace.composer.placeholder": "מה הסוכן צריך לעשות? הקלד @ כדי להוסיף קובץ, / לפקודות ולמיומנויות",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "ללא אישורים",
   "workspace.mode.planHint": "מתכנן, לא משנה דבר",
   "workspace.usage.context": "הקשר: {{percent}}% מהחלון בשימוש",
-  "workspace.team.menu": "הפעלה כצוות",
   "workspace.team.note": "מתחיל שרשור חדש עם הסוכנים והמוביל של הצוות. כולם עובדים במחשב הזה עם התיקייה הזו.",
   "workspace.team.otherProject": "סוכנים של פרויקט אחר",
   "workspace.team.pipeline": "כולל צינור",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(בענן, ללא התיקייה)",
   "workspace.consult.failed": "אין תשובה: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "ענן · ללא תיקייה",
-  "workspace.team.folderNoticeLocal": "כל חבר עובד במחשב הזה עם התיקייה הזו והכלים שלה, גם כשחבר אחר שואל אותו או מעביר אליו את רשות הדיבור. רק סוכן שאינו יכול לרוץ במחשב הזה רץ בענן ללא התיקייה."
+  "workspace.team.folderNoticeLocal": "כל חבר עובד במחשב הזה עם התיקייה הזו והכלים שלה, גם כשחבר אחר שואל אותו או מעביר אליו את רשות הדיבור. רק סוכן שאינו יכול לרוץ במחשב הזה רץ בענן ללא התיקייה.",
+  "workspace.floor.addLocal": "הוספת סוכן",
+  "workspace.floor.addCloud": "הוספת סוכן ענן",
+  "workspace.floor.cloudNote": "סוכן ענן מקבל רק את טקסט השיחה, אף פעם לא את התיקייה הזו.",
+  "workspace.participants.change": "שינוי",
+  "workspace.participants.joining": "מצטרפים עם ההודעה הבאה שלך",
+  "workspace.participants.noMatch": "אין התאמה",
+  "workspace.participants.open": "הסוכנים של השרשור הזה",
+  "workspace.participants.search": "חיפוש",
+  "workspace.participants.team": "צוות: {{name}}",
+  "workspace.team.add": "הוספת צוות"
 }

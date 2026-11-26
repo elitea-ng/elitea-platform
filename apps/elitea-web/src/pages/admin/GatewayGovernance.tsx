@@ -62,8 +62,8 @@ import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { GovernanceDialog } from './GovernanceDialog';
 import { GovernanceGuardrailPresetDialog } from './GovernanceGuardrailPresetDialog';
 import { GovernanceTable } from './GovernanceTable';
-import { ADMIN_ITEM } from './adminItemIds';
-import { useAdminWriteControl } from './adminWriteAccess';
+import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
+import { useAdminActionControl, useAdminWriteControl } from './adminWriteAccess';
 import { useGatewayGovernancePage } from './useGatewayGovernancePage';
 
 export function AdminGatewayGovernance() {
@@ -77,6 +77,12 @@ export function AdminGatewayGovernance() {
 function GatewayGovernancePage() {
   const state = useGatewayGovernancePage();
   const writeControl = useAdminWriteControl();
+  // A guardrail needs llm.guardrails.manage (or the legacy name): an LLM
+  // manager writes the other kinds but not this one (ADR-0059 decision 3).
+  const guardrailControl = useAdminActionControl(
+    ADMIN_ACTION_PERMISSION.guardrailsManage,
+    ADMIN_ACTION_PERMISSION.governanceLegacy,
+  );
   const [presetOpen, setPresetOpen] = useState(false);
 
   return (
@@ -98,8 +104,8 @@ function GatewayGovernancePage() {
             variant="outlined"
             size="small"
             startIcon={<ShieldOutlinedIcon />}
-            disabled={writeControl.disabled}
-            title={writeControl.reason}
+            disabled={guardrailControl.disabled}
+            title={guardrailControl.reason}
             onClick={() => setPresetOpen(true)}
             data-testid="governance-guardrail-preset"
           >
@@ -169,6 +175,7 @@ function GatewayGovernancePage() {
           onSave={state.onSave}
         />
       )}
+      {state.confirmDialog}
     </DrawerPage>
   );
 }

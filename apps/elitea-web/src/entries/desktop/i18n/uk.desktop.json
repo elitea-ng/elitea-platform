@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "Агента не створено: {{message}}",
   "workspace.noAgents.createCoding": "Створити агента Local coding",
   "workspace.agent": "Агент",
-  "workspace.version": "Версія",
   "workspace.composer.files": "Файли в цій теці",
   "workspace.composer.commands": "Команди",
   "workspace.composer.placeholder": "Що має зробити агент? Введіть @, щоб додати файл, / для команд і навичок",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Без схвалень",
   "workspace.mode.planHint": "Планує, нічого не змінює",
   "workspace.usage.context": "Контекст: зайнято {{percent}}% вікна",
-  "workspace.team.menu": "Запустити командою",
   "workspace.team.note": "Починає нову гілку з агентами та провідним команди. Усі вони працюють на цьому комп’ютері з цією папкою.",
   "workspace.team.otherProject": "Агенти іншого проєкту",
   "workspace.team.pipeline": "Має конвеєр",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(у хмарі, без папки)",
   "workspace.consult.failed": "Немає відповіді: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Хмара · без папки",
-  "workspace.team.folderNoticeLocal": "Кожен учасник працює на цьому комп’ютері з цією папкою та її інструментами, зокрема коли інший учасник запитує його або передає йому слово. Лише агент, який не може працювати на цьому комп’ютері, працює в хмарі без папки."
+  "workspace.team.folderNoticeLocal": "Кожен учасник працює на цьому комп’ютері з цією папкою та її інструментами, зокрема коли інший учасник запитує його або передає йому слово. Лише агент, який не може працювати на цьому комп’ютері, працює в хмарі без папки.",
+  "workspace.floor.addLocal": "Додати агента",
+  "workspace.floor.addCloud": "Додати хмарного агента",
+  "workspace.floor.cloudNote": "Хмарний агент отримує лише текст розмови, але не цю папку.",
+  "workspace.participants.change": "Змінити",
+  "workspace.participants.joining": "Приєднаються з вашим наступним повідомленням",
+  "workspace.participants.noMatch": "Нічого не знайдено",
+  "workspace.participants.open": "Агенти цієї гілки",
+  "workspace.participants.search": "Пошук",
+  "workspace.participants.team": "Команда: {{name}}",
+  "workspace.team.add": "Додати команду"
 }

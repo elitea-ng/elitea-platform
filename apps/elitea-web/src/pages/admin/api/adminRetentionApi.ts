@@ -35,6 +35,8 @@ import {
 } from '@/shared/api/generated/admin/admin';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 import type { LegalHold, LegalHoldCreate, RetentionPolicy } from '@/shared/api/generated/model';
+
+import { reasonFields, reasonHeaders, type AdminReason } from '../adminDangerousAction';
 import { unwrapBody } from '@/shared/api/unwrap';
 
 const retentionKeys = {
@@ -95,14 +97,21 @@ export interface PlatformPolicyDraft {
 }
 
 /** `PUT /admin/retention/policies/{data_class}`. */
-export function useSetPlatformPolicy(): UseMutationResult<void, Error, PlatformPolicyDraft> {
+export function useSetPlatformPolicy(): UseMutationResult<
+  void,
+  Error,
+  { readonly draft: PlatformPolicyDraft; readonly reason: AdminReason }
+> {
   const invalidate = useInvalidateRetention();
   return useMutation({
-    mutationFn: async (draft: PlatformPolicyDraft) => {
+    mutationFn: async ({ draft, reason }) => {
+      // Shortening is critical and only the stored row tells it from
+      // lengthening, so every write carries the reason (ADR-0059 R3.8b).
       await setPlatformRetentionPolicy(encodeURIComponent(draft.dataClass), {
         min_age_days: draft.minAgeDays,
         max_age_days: draft.maxAgeDays,
         allow_project_override: draft.allowProjectOverride,
+        ...reasonFields('PUT /api/v2/admin/retention/policies/{dataClass} shorten', reason),
       });
     },
     onSuccess: invalidate,
@@ -117,12 +126,17 @@ export interface OverrideDraft {
 }
 
 /** `PUT /admin/retention/policies/{data_class}/projects/{project_id}`. */
-export function useSetProjectOverride(): UseMutationResult<void, Error, OverrideDraft> {
+export function useSetProjectOverride(): UseMutationResult<
+  void,
+  Error,
+  { readonly draft: OverrideDraft; readonly reason: AdminReason }
+> {
   const invalidate = useInvalidateRetention();
   return useMutation({
-    mutationFn: async (draft: OverrideDraft) => {
+    mutationFn: async ({ draft, reason }) => {
       await setProjectRetentionOverride(encodeURIComponent(draft.dataClass), draft.projectId, {
         max_age_days: draft.maxAgeDays,
+        ...reasonFields('PUT /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} shorten', reason),
       });
     },
     onSuccess: invalidate,
@@ -133,12 +147,17 @@ export function useSetProjectOverride(): UseMutationResult<void, Error, Override
 export function useDeleteProjectOverride(): UseMutationResult<
   void,
   Error,
-  { readonly dataClass: string; readonly projectId: number }
+  { readonly dataClass: string; readonly projectId: number; readonly reason: AdminReason }
 > {
   const invalidate = useInvalidateRetention();
   return useMutation({
-    mutationFn: async ({ dataClass, projectId }) => {
-      await deleteProjectRetentionOverride(encodeURIComponent(dataClass), projectId);
+    mutationFn: async ({ dataClass, projectId, reason }) => {
+      // Falling back to the platform maximum can shorten the retention.
+      await deleteProjectRetentionOverride(
+        encodeURIComponent(dataClass),
+        projectId,
+        reasonHeaders('DELETE /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} shorten', reason),
+      );
     },
     onSuccess: invalidate,
   });
@@ -159,12 +178,13 @@ export function useCreateLegalHold(): UseMutationResult<void, Error, LegalHoldCr
 export function useReleaseLegalHold(): UseMutationResult<
   void,
   Error,
-  { readonly id: number; readonly reason: string }
+  { readonly id: number; readonly reason: AdminReason }
 > {
   const invalidate = useInvalidateRetention();
   return useMutation({
     mutationFn: async ({ id, reason }) => {
-      await releaseLegalHold(id, reason === '' ? {} : { reason });
+      // The route keeps its own `reason` (the release reason the hold records).
+      await releaseLegalHold(id, reasonFields('POST /api/v2/admin/legal_holds/{id}/release', reason));
     },
     onSuccess: invalidate,
   });

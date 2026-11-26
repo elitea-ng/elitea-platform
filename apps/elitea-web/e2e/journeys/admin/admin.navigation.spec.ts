@@ -7,6 +7,7 @@
  * SPA the one that ships. Its root route was a bare `<Outlet/>`: every page
  * worked by URL and NOTHING in the product linked any of them. An operator
  * opening `/admin/app/` landed on Users and had no way to reach the other nine.
+ * (The index is Home under the six areas since ADR-0059 R3.3a, issue 2533.)
  *
  * The whole admin suite was green throughout, because every journey in this
  * directory reaches its page with `page.goto(BASE_URL + '/admin/app/<path>')`.
@@ -72,6 +73,11 @@ const ITEMS = [
   { area: 'people_access', id: 'scim', heading: 'SCIM', path: '/admin/app/scim' },
   { area: 'projects', id: 'projects', heading: 'Projects', path: '/admin/app/projects' },
   { area: 'projects', id: 'app-requests', heading: 'App Requests', path: '/admin/app/app-requests' },
+  { area: 'models_spend', id: 'providers-models', heading: 'Providers and models', path: '/admin/app/models/providers' },
+  { area: 'models_spend', id: 'models-pricing', heading: 'Models and pricing', path: '/admin/app/models/pricing' },
+  { area: 'models_spend', id: 'tool-prices', heading: 'Tool prices', path: '/admin/app/models/tool-prices' },
+  { area: 'models_spend', id: 'usage', heading: 'Usage', path: '/admin/app/models/usage' },
+  { area: 'models_spend', id: 'logs', heading: 'Logs', path: '/admin/app/models/logs' },
   { area: 'models_spend', id: 'llm-governance', heading: 'LLM Governance', path: '/admin/app/governance' },
   { area: 'models_spend', id: 'budgets-alerts', heading: 'Budgets', path: '/admin/app/budgets' },
   { area: 'agents_governance', id: 'agent-registry', heading: 'Agent registry', path: '/admin/app/agent-registry' },
@@ -168,13 +174,20 @@ async function openAdminLanding(page: Page): Promise<void> {
   await expect(page.getByTestId('admin-nav')).toBeVisible({ timeout: 20_000 });
 }
 
-adminTest('J37: the landing page offers a nav, and marks the page it is showing', async ({ page }) => {
+adminTest('J37: the landing page is Home, beside a nav that marks the page it is showing', async ({ page }) => {
   await openAdminLanding(page);
 
-  // The root route renders the Users page rather than redirecting, so Users is
-  // the item that must be marked — without the index alias the LANDING screen
-  // would be the one screen with nothing active, which reads as a broken nav on
-  // first contact.
+  // The index is Home under the six areas (ADR-0059 R3.3a, issue 2533): a
+  // card per area the document opens, and the queues the caller decides.
+  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('admin-home-area-platform')).toBeVisible();
+  await expect(page.getByTestId('admin-home-queue-app-requests')).toBeVisible();
+  // Its own link in the navigation is the one current.
+  await expect(page.getByTestId('admin-nav-item-home')).toHaveAttribute('aria-current', 'page');
+
+  // A card's link opens its page, and the nav marks it there.
+  await page.getByTestId('admin-home-item-users').click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/users', { timeout: 20_000 });
   await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-nav-item-users')).toHaveAttribute('aria-current', 'page');
 
@@ -219,9 +232,9 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     );
   }
 
-  // Exactly the items above, each under its area's label. One more would
-  // mean an item nothing in this list covers.
-  await expect(nav.getByRole('link')).toHaveCount(ITEMS.length);
+  // Exactly the items above, each under its area's label, and Home above
+  // them. One more would mean an item nothing in this list covers.
+  await expect(nav.getByRole('link')).toHaveCount(ITEMS.length + 1);
   for (const area of AREAS) {
     const section = nav.getByTestId(`admin-nav-area-${area.id}`);
     await expect(section.getByRole('heading', { name: area.label, exact: true })).toBeVisible();
@@ -308,7 +321,7 @@ adminTest('J37e: collapsing the nav survives a full reload', async ({ page }) =>
 adminTest('J37f: every admin page renders on the one type scale', async ({ page }) => {
   adminTest.setTimeout(120_000);
   await openAdminLanding(page);
-  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({ timeout: 20_000 });
   await expectTextSpacingSurvives(page, 'admin landing');
 
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });

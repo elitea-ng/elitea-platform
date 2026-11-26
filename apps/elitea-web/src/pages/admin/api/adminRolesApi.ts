@@ -34,6 +34,8 @@ import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
+import { reasonFields, reasonHeaders, type AdminReason } from '../adminDangerousAction';
+
 /** Which matrix is being read or written. See this module's header. */
 type PermissionScope = 'administration' | 'public' | 'support';
 
@@ -238,14 +240,17 @@ interface PermissionMatrixSaveVariables {
 export function useSavePermissionMatrix(): UseMutationResult<
   void,
   Error,
-  PermissionMatrixSaveVariables
+  PermissionMatrixSaveVariables & { readonly reason: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ target, rows }: PermissionMatrixSaveVariables) => {
+    mutationFn: async ({ target, rows, reason }) => {
+      // The body is an array, not an object, so the reason of this critical
+      // action travels in the headers (ADR-0059 R3.8b).
+      const marked = reasonHeaders('PUT /api/v2/admin/permissions/{scope}/{mode}', reason);
       await eliteaFetch<unknown>(matrixUrl(target), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...marked.headers },
         body: JSON.stringify(rows),
       });
     },
@@ -258,11 +263,14 @@ export function useSavePermissionMatrix(): UseMutationResult<
  * onto every shared project. Defined for that one target only, server-side and
  * in the legacy runtime before it.
  */
-export function useSyncPermissionMatrix(): UseMutationResult<void, Error, void> {
+export function useSyncPermissionMatrix(): UseMutationResult<void, Error, AdminReason> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      await eliteaFetch<unknown>('/admin/permissions/administration/default', { method: 'POST' });
+    mutationFn: async (reason: AdminReason) => {
+      await eliteaFetch<unknown>('/admin/permissions/administration/default', {
+        method: 'POST',
+        ...reasonHeaders('POST /api/v2/admin/permissions/{scope}/{mode}', reason),
+      });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminRolesKeys.all }),
   });
@@ -314,6 +322,7 @@ export interface RoleRenameVariables {
 export interface RoleDeleteVariables {
   readonly target: PermissionMatrixTarget;
   readonly name: string;
+  readonly reason: AdminReason;
 }
 
 export function useCreateRole(): UseMutationResult<void, Error, RoleCreateVariables> {
@@ -354,13 +363,13 @@ export function useRenameRole(): UseMutationResult<void, Error, RoleRenameVariab
 export function useDeleteRole(): UseMutationResult<void, Error, RoleDeleteVariables> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ target, name }: RoleDeleteVariables) => {
+    mutationFn: async ({ target, name, reason }: RoleDeleteVariables) => {
       await eliteaFetch<unknown>(
         `${roleDefinitionUrl(target)}?name=${encodeURIComponent(name)}`,
         {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, ...reasonFields('DELETE /api/v2/admin/roles/{scope}/{mode}', reason) }),
         },
       );
     },

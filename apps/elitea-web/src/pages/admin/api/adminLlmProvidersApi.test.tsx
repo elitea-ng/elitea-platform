@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { server } from '@/test/setup';
 
+import type { AdminReason } from '../adminDangerousAction';
 import { useAdminPlatformModels } from './adminLlmPlatformModelsApi';
 import {
   useCreateAdminLlmProvider,
@@ -94,6 +95,9 @@ function renderProviderWrites() {
   );
 }
 
+/** The reason of the dangerous action each write carries (ADR-0059 R3.8b). */
+const REASON: AdminReason = { code: 'maintenance', text: '' };
+
 describe('admin LLM provider mutations', () => {
   it('refreshes the credential-names listing after a provider is created', async () => {
     serveGrowingCredentialNames();
@@ -102,9 +106,12 @@ describe('admin LLM provider mutations', () => {
     await waitFor(() => expect(result.current.models.data?.credential_names).toEqual(['platform-openai']));
 
     result.current.create.mutate({
-      elitea_title: 'platform-bedrock',
-      type: 'amazon_bedrock',
-      data: { api_base: 'https://bedrock.example' },
+      draft: {
+        elitea_title: 'platform-bedrock',
+        type: 'amazon_bedrock',
+        data: { api_base: 'https://bedrock.example' },
+      },
+      reason: REASON,
     });
 
     await waitFor(() =>
@@ -118,7 +125,7 @@ describe('admin LLM provider mutations', () => {
 
     await waitFor(() => expect(result.current.models.data?.credential_names).toEqual(['platform-openai']));
 
-    result.current.update.mutate({ id: 2, draft: { elitea_title: 'platform-bedrock' } });
+    result.current.update.mutate({ id: 2, draft: { elitea_title: 'platform-bedrock' }, reason: REASON });
 
     await waitFor(() =>
       expect(result.current.models.data?.credential_names).toEqual(['platform-openai', 'platform-bedrock']),
@@ -131,12 +138,15 @@ describe('admin LLM provider mutations', () => {
 
     await waitFor(() => expect(result.current.models.data?.credential_names).toEqual(['platform-openai']));
 
-    result.current.create.mutate({ elitea_title: 'platform-bedrock', type: 'amazon_bedrock', data: {} });
+    result.current.create.mutate({
+      draft: { elitea_title: 'platform-bedrock', type: 'amazon_bedrock', data: {} },
+      reason: REASON,
+    });
     await waitFor(() =>
       expect(result.current.models.data?.credential_names).toEqual(['platform-openai', 'platform-bedrock']),
     );
 
-    result.current.remove.mutate(2);
+    result.current.remove.mutate({ id: 2, reason: REASON });
     await waitFor(() => expect(result.current.models.data?.credential_names).toEqual(['platform-openai']));
   });
 });

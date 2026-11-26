@@ -27,6 +27,7 @@ import {
 import { server } from "@/test/setup";
 
 import { AdminScimGroupBindingsEditor } from "./AdminScimGroupBindingsEditor";
+import { confirmDangerousAction } from "./__tests__/dangerousDialog";
 import { renderAdminRoute } from "./__tests__/testRouter";
 
 const BINDING_TEMPLATE = {
@@ -138,7 +139,11 @@ function useBindingHandlers(
     http.delete(
       "*/admin/scim_group_bindings/administration/*",
       ({ request }) => {
-        recorded.push({ method: "DELETE", url: request.url, body: null });
+        recorded.push({
+          method: "DELETE",
+          url: request.url,
+          body: { reasonCode: request.headers.get("Elitea-Reason-Code") },
+        });
         return new HttpResponse(null, { status: 204 });
       },
     ),
@@ -215,6 +220,7 @@ describe("Admin › Authentication › SCIM group bindings", () => {
     await user.click(screen.getByLabelText("Role"));
     await user.click(await screen.findByRole("option", { name: "viewer" }));
     await user.click(screen.getByTestId("admin-scim-binding-save"));
+    await confirmDangerousAction(user, "Finance");
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -225,6 +231,8 @@ describe("Admin › Authentication › SCIM group bindings", () => {
       display_name: "Finance",
       project_id: 12,
       role_name: "viewer",
+      reason_code: "incident",
+      reason: "ticket 42",
     });
 
     // And the same screen, editing the existing row, addresses it by id.
@@ -234,10 +242,12 @@ describe("Admin › Authentication › SCIM group bindings", () => {
     );
     await user.click(edit as HTMLElement);
     await user.click(screen.getByTestId("admin-scim-binding-save"));
+    await confirmDangerousAction(user, "Platform Team", { code: "correction" });
 
     await waitFor(() => {
       expect(writes()).toHaveLength(2);
     });
+    expect(writes()[1]?.body).toMatchObject({ reason_code: "correction" });
     expect(writes()[1]?.method).toBe("PUT");
     expect(writes()[1]?.url).toContain(
       "/admin/scim_group_bindings/administration/7",
@@ -259,6 +269,7 @@ describe("Admin › Authentication › SCIM group bindings", () => {
     );
     await user.click(edit as HTMLElement);
     await user.click(screen.getByTestId("admin-scim-binding-save"));
+    await confirmDangerousAction(user, "Platform Team");
 
     expect(
       await screen.findByTestId("admin-scim-binding-dialog-error"),
@@ -278,13 +289,11 @@ describe("Admin › Authentication › SCIM group bindings", () => {
     );
     await user.click(remove as HTMLElement);
 
-    const dialog = await screen.findByTestId(
-      "admin-scim-binding-delete-dialog",
-    );
+    const dialog = await screen.findByTestId("admin-dangerous-dialog");
     expect(dialog).toHaveTextContent("withdraws");
     expect(dialog).toHaveTextContent("added by hand are not affected");
 
-    await user.click(screen.getByTestId("admin-scim-binding-delete-confirm"));
+    await confirmDangerousAction(user, "Platform Team");
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
     });
@@ -292,6 +301,7 @@ describe("Admin › Authentication › SCIM group bindings", () => {
     expect(writes()[0]?.url).toContain(
       "/admin/scim_group_bindings/administration/7",
     );
+    expect(writes()[0]?.body).toEqual({ reasonCode: "incident" });
   });
 
   it("offers the project's own roles, never the general listing's defaults", async () => {

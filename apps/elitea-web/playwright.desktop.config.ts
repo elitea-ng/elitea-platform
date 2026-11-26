@@ -20,15 +20,13 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: process.env['CI'] !== undefined,
   retries: 0,
-  // The harness is Vite's dev server, which compiles a module the first time a
-  // page asks for it. The first step that reaches a new code path (a team's
-  // first send adds its agents, writes the lead, then starts) can outlast the
-  // 5 s default on a runner busy with every worker's first load: a run once
-  // failed with the page still showing "Starting…". 15 s still fails a real
-  // stall quickly.
-  expect: { timeout: 15_000 },
   reporter: process.env['CI'] === undefined ? 'list' : [['list'], ['html', { open: 'never', outputFolder: 'playwright-report-desktop' }]],
   outputDir: 'test-results-desktop',
+  // The harness is Vite's dev build (unbundled modules, React's dev runtime): on a CI runner a send's chain of renders
+  // to the host's start takes seconds (about 2 s at an 8x CPU throttle, 3 s with the Participants tab open, which the
+  // composer chip opens since #3081). 5 s, the default, failed four journeys on a loaded runner; a wait ends on the
+  // first match, so a longer one costs a passing journey nothing.
+  expect: { timeout: 20_000 },
   use: {
     baseURL: `http://localhost:${String(PORT)}`,
     trace: 'retain-on-failure',

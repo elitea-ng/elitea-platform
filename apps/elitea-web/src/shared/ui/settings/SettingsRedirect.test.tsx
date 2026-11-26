@@ -68,6 +68,7 @@ import {
   computeRedirectTarget,
   computeShouldRedirect,
 } from './SettingsRedirect';
+import { DESKTOP_SETTINGS_TABS } from './desktopSettingsTabs';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, throwOnError: true } },
@@ -366,6 +367,15 @@ describe('computeRedirectTarget (pure)', () => {
   it('leaves an explicitly-declared settings child alone', () => {
     expect(computeRedirectTarget(settled('/_shell/settings/secrets'))).toBeUndefined();
     expect(computeRedirectTarget(settled('/_shell/settings/project-general'))).toBeUndefined();
+  });
+
+  it('opens the desktop tabs in the desktop build, and keeps redirecting them in the web build (#3078)', () => {
+    for (const { id } of DESKTOP_SETTINGS_TABS) {
+      expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab: id }), 'desktop')).toBeUndefined();
+      expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab: id }), 'production')).toBe(DEFAULT_SETTINGS_TAB);
+    }
+    // A slug that is no desktop tab still redirects in the desktop build.
+    expect(computeRedirectTarget(settled('/_shell/settings/$tab', { tab: 'integrations' }), 'desktop')).toBe(DEFAULT_SETTINGS_TAB);
   });
 
   it('sends the layout route itself, and a missing tab param, to the default tab', () => {

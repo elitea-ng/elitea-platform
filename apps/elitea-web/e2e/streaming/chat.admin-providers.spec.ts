@@ -84,6 +84,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { AUTOTEST_PREFIX } from '../fixtures/api';
+import { confirmDangerousAction } from '../fixtures/dangerousAction';
 
 test.use({ storageState: STORAGE_STATE.admin });
 
@@ -180,26 +181,23 @@ async function requireProvider(request: APIRequestContext, title: string): Promi
 }
 
 /**
- * Opens Admin › Configuration › LLM Proxy › Providers & models.
+ * Opens Admin › Models and spend › Providers and models.
  *
  * Waits for a POSITIVE terminal state — the table or the empty notice — rather
  * than for the absence of an error, which is also true while the request is
  * still in flight.
  */
 async function openProvidersPanel(page: Page): Promise<void> {
-  const response = await page.goto(BASE_URL + '/admin/app/configuration', {
+  // The Providers & models tab of the gateway editor is a page of Models and
+  // spend since ADR-0059 R3.5a (issue 2535).
+  const response = await page.goto(BASE_URL + '/admin/app/models/providers', {
     waitUntil: 'domcontentloaded',
   });
   expect(
     response?.status(),
-    'the admin SPA must serve the configuration route, not 404',
+    'the admin SPA must serve the providers route, not 404',
   ).toBeLessThan(400);
-
-  const llmProxy = page.getByRole('button', { name: /LLM Proxy/ });
-  await expect(llmProxy).toBeVisible({ timeout: 30_000 });
-  await llmProxy.click();
-  await expect(page.getByTestId('llm-proxy-tabs')).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  await expect(page.getByTestId('admin-llm-providers-page')).toBeVisible({ timeout: 30_000 });
 
   await expect(
     page.getByTestId('llm-providers-table').or(page.getByTestId('llm-providers-empty')),
@@ -228,6 +226,8 @@ async function createProviderThroughPanel(page: Page, title: string): Promise<vo
       response.url().endsWith('/admin/gateway/providers') && response.request().method() === 'POST',
   );
   await page.getByTestId('llm-provider-save').click();
+  // A platform credential reaches every project: it is confirmed with a reason (ADR-0059 R3.8b).
+  await confirmDangerousAction(page, title);
   const response = await created;
   expect(response.status(), `POST /providers for ${title} was refused`).toBe(201);
 
@@ -387,7 +387,7 @@ test('a platform provider is published, breaks, and is repaired by Re-validate',
         response.url().includes(`/admin/gateway/providers/${String(created.id)}`) &&
         response.request().method() === 'DELETE',
     );
-    await page.getByTestId('llm-providers-confirm-delete-button').click();
+    await confirmDangerousAction(page, PROVIDER_NAME);
     expect((await deleted).status(), 'DELETE /providers/{id} must answer 204').toBe(204);
 
     await expect(providerRowLocator(page, PROVIDER_NAME)).toHaveCount(0, { timeout: 20_000 });

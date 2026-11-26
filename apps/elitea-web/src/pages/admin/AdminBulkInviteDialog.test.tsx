@@ -24,6 +24,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { testTimeout } from '@/test/timeouts';
 
@@ -120,9 +121,17 @@ describe('Admin › Users › Bulk invite', () => {
     await chooseRole(user, 'editor');
 
     await user.click(screen.getByTestId('bulk-invite-submit'));
+    await confirmDangerousAction(user, 'editor');
 
     await waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toEqual({ users: [11], projects: [7, 8], role: 'editor' });
+    expect(posted[0]).toEqual({
+      users: [11],
+      projects: [7, 8],
+      role: 'editor',
+      reason_code: 'incident',
+      reason: 'ticket 42',
+    });
+    expect(screen.queryByTestId('admin-dangerous-dialog')).not.toBeInTheDocument();
   });
 
   it('cannot submit before a user, a project and a role are chosen', async () => {
@@ -165,6 +174,7 @@ describe('Admin › Users › Bulk invite', () => {
     await pick(user, 'bulk-invite-projects', 'alpha-team');
     await chooseRole(user, 'editor');
     await user.click(screen.getByTestId('bulk-invite-submit'));
+    await confirmDangerousAction(user, 'editor');
 
     // The 200 is NOT reported as an unqualified success.
     const summary = await screen.findByTestId('bulk-invite-summary');
@@ -187,6 +197,7 @@ describe('Admin › Users › Bulk invite', () => {
     await pick(user, 'bulk-invite-projects', 'beta-team');
     await chooseRole(user, 'editor');
     await user.click(screen.getByTestId('bulk-invite-submit'));
+    await confirmDangerousAction(user, 'editor');
 
     const summary = await screen.findByTestId('bulk-invite-summary');
     expect(summary.className).toContain('MuiAlert-colorSuccess');
@@ -206,6 +217,7 @@ describe('Admin › Users › Bulk invite', () => {
     await pick(user, 'bulk-invite-projects', 'alpha-team');
     await chooseRole(user, 'editor');
     await user.click(screen.getByTestId('bulk-invite-submit'));
+    await confirmDangerousAction(user, 'editor');
 
     expect(await screen.findByTestId('bulk-invite-error')).toBeInTheDocument();
     expect(screen.queryByTestId('bulk-invite-summary')).not.toBeInTheDocument();

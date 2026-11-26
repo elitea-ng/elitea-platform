@@ -13,13 +13,8 @@
  * adminui handler's `BasePath` — the handler serves this SPA at that prefix and
  * rewrites its asset URLs to match.
  *
- * All eleven reachable pages exist: Users, Audit Trail, Roles, Projects,
- * Secrets, Schedules & Tasks, App Requests, Configuration, Service Descriptors,
- * Features and LLM Governance. Issue #200 scopes ELEVEN; the eleventh is LiteLLM, which is not
- * ported because #201 replaces LiteLLM with Bifrost — porting an admin page for
- * a subsystem being removed would be building a control for something on its
- * way out. `adminNav.ts` therefore has no LiteLLM entry either, and its test
- * derives the legal nav targets from THIS route table so the two cannot drift.
+ * LiteLLM has no page: #201 replaced it with Bifrost. The navigation tests
+ * derive the legal nav targets from THIS route table so the two cannot drift.
  *
  * The index route RENDERS Users rather than redirecting to `/users`: a `redirect()`
  * here would be type-checked against the MAIN app's generated route ids (the
@@ -111,6 +106,14 @@ const AdminAccess = lazyRouteComponent(() => import('./Access'), 'AdminAccess');
 const AdminIdentityProviders = lazyRouteComponent(() => import('./IdentityProviders'), 'AdminIdentityProviders');
 const AdminScim = lazyRouteComponent(() => import('./Scim'), 'AdminScim');
 const AdminClientApplications = lazyRouteComponent(() => import('./ClientApplications'), 'AdminClientApplications');
+// Models and spend: the seven gateway tabs as pages, since R3.5a (issue 2535).
+const AdminLlmProviders = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmProviders');
+const AdminLlmModelsPricing = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmModelsPricing');
+const AdminLlmToolPrices = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmToolPrices');
+const AdminLlmUsage = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmUsage');
+const AdminLlmStatus = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmStatus');
+const AdminLlmLogs = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminLlmLogs');
+const AdminBudgetAlerts = lazyRouteComponent(() => import('./ModelsSpendPages'), 'AdminBudgetAlerts');
 
 /**
  * The root route renders `AdminLayout` — the nav plus an `<Outlet/>` — rather
@@ -219,13 +222,7 @@ const serviceDescriptorsRoute = createRoute({
   component: AdminServiceDescriptors,
 });
 
-/**
- * Admin › Toolkits (shared migration 0114). The path is `/toolkits`, and the
- * page decides which toolkit TYPES this platform offers and to which projects.
- * The reference SPA has no counterpart: the legacy platform's only operator
- * control over the toolkit catalogue is the guardrails deny-list, which is a
- * section of the Configuration page.
- */
+/** Admin › Toolkits (shared migration 0114): which toolkit TYPES this platform offers, and to which projects. */
 const toolkitTypesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/toolkits',
@@ -332,6 +329,15 @@ const identityProvidersRoute = pageRoute('/identity-providers', AdminIdentityPro
 const scimRoute = pageRoute('/scim', AdminScim);
 const clientApplicationsRoute = pageRoute('/client-applications', AdminClientApplications);
 
+// Models and spend (R3.5a): `./ModelsSpendPages.tsx`; `/configuration#llm_proxy` redirects.
+const llmProvidersRoute = pageRoute('/models/providers', AdminLlmProviders);
+const llmModelsPricingRoute = pageRoute('/models/pricing', AdminLlmModelsPricing);
+const llmToolPricesRoute = pageRoute('/models/tool-prices', AdminLlmToolPrices);
+const llmUsageRoute = pageRoute('/models/usage', AdminLlmUsage);
+const llmStatusRoute = pageRoute('/models/status', AdminLlmStatus);
+const llmLogsRoute = pageRoute('/models/logs', AdminLlmLogs);
+const budgetAlertsRoute = pageRoute('/budgets/alerts', AdminBudgetAlerts);
+
 const adminRouteTree = rootRoute.addChildren([
   brandingRoute,
   emailRoute,
@@ -361,6 +367,13 @@ const adminRouteTree = rootRoute.addChildren([
   identityProvidersRoute,
   scimRoute,
   clientApplicationsRoute,
+  llmProvidersRoute,
+  llmModelsPricingRoute,
+  llmToolPricesRoute,
+  llmUsageRoute,
+  llmStatusRoute,
+  llmLogsRoute,
+  budgetAlertsRoute,
 ]);
 
 export function createAdminRouter(): AnyRouter {

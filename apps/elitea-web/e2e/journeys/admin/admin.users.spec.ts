@@ -33,6 +33,7 @@
 import { test as adminTest, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
@@ -236,7 +237,9 @@ adminTest('J28: suspending a user is written to the database and survives a relo
   // users perfectly — a stack that looks working and is not.
   const [suspendResponse] = await Promise.all([
     page.waitForResponse((r) => r.url().includes('/admin/user_suspend/administration/') && r.request().method() === 'PUT'),
-    suspend.click(),
+    // Suspending is a dangerous action, confirmed with a reason and the
+    // account's email (ADR-0059 R3.8b); unsuspending below is not.
+    suspend.click().then(() => confirmDangerousAction(page, subject)),
   ]);
   expect(suspendResponse.status(), 'the suspend write must be authorised server-side').toBe(200);
 
@@ -523,7 +526,10 @@ adminTest('J39: a bulk invite writes every pair and the second run reports them 
       (r) =>
         r.url().includes('/admin/invites_bulk/administration') && r.request().method() === 'POST',
     ),
-    page.getByTestId('bulk-invite-submit').click(),
+    page
+      .getByTestId('bulk-invite-submit')
+      .click()
+      .then(() => confirmDangerousAction(page, 'editor')),
   ]);
   // 200 is the route's answer for a partial batch too, so the status alone
   // proves authorisation and nothing else.

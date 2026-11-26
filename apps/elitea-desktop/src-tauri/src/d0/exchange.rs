@@ -307,6 +307,16 @@ impl Exchanges {
         Some(exchange.remaining())
     }
 
+    /// Hand-offs are queued for the exchange of `question` (#3080: an
+    /// unattended turn that handed the floor ends its chain for them).
+    #[must_use]
+    pub fn has_hands(&self, question: &str) -> bool {
+        self.inner()
+            .by_question
+            .get(question)
+            .is_some_and(|exchange| !exchange.stopped && !exchange.hands.is_empty())
+    }
+
     /// The next hand-off of the exchange `template` belongs to, reserved
     /// (it leaves the queue, as [`Self::advance`] reserves a routed agent);
     /// `None` when the exchange was stopped or none is queued.

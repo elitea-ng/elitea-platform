@@ -58,7 +58,8 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
-import { RoleDeleteDialog, RoleNameDialog } from './AdminRoleDialogs';
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
+import { RoleNameDialog } from './AdminRoleDialogs';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { useAdminActionControl } from './adminWriteAccess';
@@ -275,14 +276,25 @@ function RolesPage() {
         onClose={state.onCloseRoleDialog}
         onSubmit={state.onSubmitRoleDialog}
       />
-      <RoleDeleteDialog
-        open={state.roleToDelete !== null}
-        role={state.roleToDelete ?? ''}
-        isSubmitting={state.isWritingRole}
-        failureReason={roleWriteText(state.roleWriteFailure)}
-        onClose={state.onCloseRoleDialog}
-        onConfirm={state.onConfirmDeleteRole}
-      />
+      {state.roleToDelete !== null ? (
+        <AdminDangerousActionDialog
+          open
+          action="DELETE /api/v2/admin/roles/{scope}/{mode}"
+          title={t('pages.admin.roles.delete.title', 'Delete role')}
+          change={t(
+            'pages.admin.roles.delete.warningBody',
+            'Every permission granted to this role goes with it. A role that is still assigned to anyone is refused, and the response says how many assignments remain.',
+          )}
+          reach={{ count: undefined, unit: 'people' }}
+          target={state.roleToDelete}
+          confirmLabel={t('pages.admin.roles.delete.submit', 'Delete role')}
+          pending={state.isWritingRole}
+          error={roleWriteText(state.roleWriteFailure)}
+          onClose={state.onCloseRoleDialog}
+          onConfirm={state.onConfirmDeleteRole}
+        />
+      ) : null}
+      {state.confirmDialog}
     </DrawerPage>
   );
 }

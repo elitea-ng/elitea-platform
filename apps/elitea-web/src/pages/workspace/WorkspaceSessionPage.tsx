@@ -199,7 +199,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         conversationId={conversationId}
         cloudBrowserSession={cloudBrowser}
       />
-      <ParticipantsTab projectId={projectId} conversationId={conversationId} subject={subject} executorLocked={handoff.offLaptop} onAddress={(name) => requestAddress(conversationId, name)} turn={turn} ipc={ipc} />
+      <ParticipantsTab projectId={projectId} conversationId={conversationId} subject={subject} executorLocked={handoff.offLaptop} onAddress={(name) => requestAddress(conversationId, name)} turn={turn} ipc={ipc} selection={session.selection} />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
         open={createAgentOpen}

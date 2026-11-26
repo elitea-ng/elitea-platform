@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "Агент не создан: {{message}}",
   "workspace.noAgents.createCoding": "Создать агента Local coding",
   "workspace.agent": "Агент",
-  "workspace.version": "Версия",
   "workspace.composer.files": "Файлы в этой папке",
   "workspace.composer.commands": "Команды",
   "workspace.composer.placeholder": "Что должен сделать агент? Введите @, чтобы добавить файл, / для команд и навыков",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Без одобрений",
   "workspace.mode.planHint": "Планирует, ничего не меняет",
   "workspace.usage.context": "Контекст: занято {{percent}}% окна",
-  "workspace.team.menu": "Запустить командой",
   "workspace.team.note": "Начинает новую ветку с агентами и ведущим команды. Все они работают на этом компьютере с этой папкой.",
   "workspace.team.otherProject": "Агенты другого проекта",
   "workspace.team.pipeline": "Есть конвейер",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(в облаке, без папки)",
   "workspace.consult.failed": "Нет ответа: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Облако · без папки",
-  "workspace.team.folderNoticeLocal": "Каждый участник работает на этом компьютере с этой папкой и её инструментами, в том числе когда другой участник спрашивает его или передаёт ему слово. Только агент, который не может работать на этом компьютере, работает в облаке без папки."
+  "workspace.team.folderNoticeLocal": "Каждый участник работает на этом компьютере с этой папкой и её инструментами, в том числе когда другой участник спрашивает его или передаёт ему слово. Только агент, который не может работать на этом компьютере, работает в облаке без папки.",
+  "workspace.floor.addLocal": "Добавить агента",
+  "workspace.floor.addCloud": "Добавить облачного агента",
+  "workspace.floor.cloudNote": "Облачный агент получает только текст беседы, но не эту папку.",
+  "workspace.participants.change": "Изменить",
+  "workspace.participants.joining": "Присоединятся с вашим следующим сообщением",
+  "workspace.participants.noMatch": "Ничего не найдено",
+  "workspace.participants.open": "Агенты этой ветки",
+  "workspace.participants.search": "Поиск",
+  "workspace.participants.team": "Команда: {{name}}",
+  "workspace.team.add": "Добавить команду"
 }

@@ -39,15 +39,14 @@ import { useMemo, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { AdminDangerousActionDialog } from "./AdminDangerousActionDialog";
+import type { AdminReason } from "./adminDangerousAction";
+import { confirmLocked, providerDialog, type PendingProviderAction } from "./adminIdentityProviderDangerous";
 import { AdminIdentityProviderDialog } from "./AdminIdentityProviderDialog";
 import { AdminIdentityTrustNotice, useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
 import { ProviderTable } from "./AdminIdentityProviderTable";
@@ -132,22 +131,6 @@ function ProviderAlerts({
   );
 }
 
-/**
- * The delete confirmation's wording.
- *
- * Interpolated through `t`'s own options rather than by `String.replace` on the
- * fallback: the fallback is only used when the bundle has no entry, so a
- * `replace` would silently stop substituting the moment the string was
- * translated.
- */
-function deleteWarning(name: string): string {
-  return t(
-    "pages.admin.identityProviders.delete.body",
-    "This removes “{{name}}” and deletes its stored secret, which cannot be recovered. To stop using it while keeping the secret, edit it and clear “Use this provider for logins” instead.",
-    { name },
-  );
-}
-
 /** The editor under the read-only wrapper of its own item (R3.4b, issue 2613). */
 export function AdminIdentityProvidersEditor() {
   return (
@@ -168,9 +151,9 @@ function IdentityProvidersEditor() {
   const [editing, setEditing] = useState<AdminIdentityProvider | undefined>(
     undefined,
   );
-  const [pendingDelete, setPendingDelete] = useState<
-    AdminIdentityProvider | undefined
-  >(undefined);
+  const [pending, setPending] = useState<PendingProviderAction | undefined>(
+    undefined,
+  );
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
   const [rebindIssuer, setRebindIssuer] = useState<string | undefined>(
@@ -198,9 +181,9 @@ function IdentityProvidersEditor() {
     setDialogOpen(true);
   };
 
-  const handleSubmit = (draft: AdminIdentityProviderDraft): void => {
+  const handleSubmit = (draft: AdminIdentityProviderDraft, reason: AdminReason): void => {
     setSaveError(undefined);
-    saveMutation.mutate(draft, {
+    saveMutation.mutate({ draft, reason }, {
       onSuccess: (result) => {
         setDialogOpen(false);
         setEditing(undefined);
@@ -216,18 +199,23 @@ function IdentityProvidersEditor() {
     });
   };
 
-  const handleDelete = (): void => {
-    if (pendingDelete === undefined) return;
+  const handleConfirm = (reason: AdminReason): void => {
+    if (pending === undefined) return;
+    if (pending.kind === "save") {
+      setPending(undefined);
+      handleSubmit(pending.draft, reason);
+      return;
+    }
     setActionError(undefined);
-    deleteMutation.mutate(pendingDelete.key, {
+    deleteMutation.mutate({ key: pending.provider.key, reason }, {
       onSuccess: () => {
-        setPendingDelete(undefined);
+        setPending(undefined);
       },
       onError: (error: unknown) => {
         // Deleting a provider is a trust action (ADR-0059 R0.4c): an
         // `admin` gets the translated super admin refusal.
         setActionError(identityTrustFailureReason(error) ?? "delete");
-        setPendingDelete(undefined);
+        setPending(undefined);
       },
     });
   };
@@ -305,7 +293,9 @@ function IdentityProvidersEditor() {
         <ProviderTable
           providers={providers}
           onEdit={openEdit}
-          onRemove={setPendingDelete}
+          onRemove={(provider) => {
+            setPending({ kind: "delete", provider });
+          }}
         />
       ) : null}
 
@@ -327,50 +317,24 @@ function IdentityProvidersEditor() {
           setDialogOpen(false);
           setEditing(undefined);
         }}
-        onSubmit={handleSubmit}
+        onSubmit={(draft) => {
+          setPending({ kind: "save", draft });
+        }}
       />
 
-      <Dialog
-        open={pendingDelete !== undefined}
-        onClose={() => {
-          setPendingDelete(undefined);
-        }}
-        maxWidth="xs"
-        fullWidth
-        data-testid="admin-identity-provider-delete-dialog"
-      >
-        <DialogTitle>
-          {t(
-            "pages.admin.identityProviders.delete.title",
-            "Remove identity provider",
-          )}
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="bodyMedium">
-            {deleteWarning(pendingDelete?.display_name ?? "")}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setPendingDelete(undefined);
-            }}
-            disabled={deleteMutation.isPending}
-            sx={{ textTransform: "none" }}
-          >
-            {t("pages.admin.identityProviders.delete.cancel", "Cancel")}
-          </Button>
-          <Button
-            variant="elitea" color="alarm"
-            onClick={handleDelete}
-            disabled={!access.writable || trustLocked || deleteMutation.isPending}
-            sx={{ textTransform: "none" }}
-            data-testid="admin-identity-provider-delete-confirm"
-          >
-            {t("pages.admin.identityProviders.delete.confirm", "Remove")}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {pending !== undefined ? (
+        <AdminDangerousActionDialog
+          open
+          {...providerDialog(pending)}
+          pending={saveMutation.isPending || deleteMutation.isPending}
+          locked={confirmLocked(pending, !access.writable || trustLocked)}
+          onClose={() => {
+            setPending(undefined);
+          }}
+          onConfirm={handleConfirm}
+        />
+      ) : null}
+
     </Box>
   );
 }

@@ -39,6 +39,7 @@ import {
   resolveProviderSecretForSave,
   splitLoginDomains,
 } from './adminIdentityProviderForm';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -171,6 +172,7 @@ describe('Admin › Authentication › identity providers', () => {
     await user.clear(redirect);
     await user.type(redirect, 'https://elitea.example.com/new/callback');
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -179,6 +181,8 @@ describe('Admin › Authentication › identity providers', () => {
     const oidc = body['oidc'] as Record<string, unknown>;
     expect(oidc['redirect_uri']).toBe('https://elitea.example.com/new/callback');
     expect(Object.hasOwn(body, 'secret')).toBe(false);
+    // Every provider save carries the reason (ADR-0059 R3.8b).
+    expect(body['reason_code']).toBe('incident');
   });
 
   it('sends exactly the document its kind names, and not the other', async () => {
@@ -187,6 +191,7 @@ describe('Admin › Authentication › identity providers', () => {
     await openEditFor('Corporate SSO');
 
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -210,6 +215,7 @@ describe('Admin › Authentication › identity providers', () => {
     await openEditFor('Corporate SSO');
 
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     // The server's own sentence, not "Failed to save": it is the only text that
     // says which value to fix.
@@ -232,6 +238,7 @@ describe('Admin › Authentication › identity providers', () => {
     await openEditFor('Corporate SSO');
 
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     expect(
       await screen.findByText(
@@ -265,7 +272,7 @@ describe('Admin › Authentication › identity providers', () => {
     );
     if (!remove) throw new Error('no remove button for Corporate SSO');
     await user.click(remove);
-    await user.click(await screen.findByTestId('admin-identity-provider-delete-confirm'));
+    await confirmDangerousAction(user, 'corporate');
 
     expect(await screen.findByTestId('admin-identity-providers-action-error')).toHaveTextContent(
       'Only a super admin can create or delete an identity provider, turn it on or off, replace its secret, or change its issuer, metadata, certificates or identity attributes. Changed: deleted.',
@@ -289,6 +296,7 @@ describe('Admin › Authentication › identity providers', () => {
     await openEditFor('Corporate SSO');
 
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     expect(await screen.findByTestId('admin-identity-providers-rebind-note')).toHaveTextContent(
       'https://old-idp.example.com',
@@ -303,6 +311,7 @@ describe('Admin › Authentication › identity providers', () => {
     const domains = await screen.findByTestId('identity-provider-login-domains');
     await user.type(domains, 'Corp.example.com, @example.org');
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -324,6 +333,7 @@ describe('Admin › Authentication › identity providers', () => {
     expect(adopt).toHaveAccessibleDescription(/paired with your SCIM client/);
     await user.click(adopt);
     await user.click(screen.getByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -495,6 +505,7 @@ describe('the trust fields', () => {
     await openEditFor('Corporate SSO');
 
     await user.click(await screen.findByTestId('identity-provider-save'));
+    await confirmDangerousAction(user, 'corporate');
 
     expect(await screen.findByText(/Only a super admin can create or delete an identity provider/)).toBeInTheDocument();
   });

@@ -416,21 +416,35 @@ func validUUID(text string) bool {
 // PreserveForkedFrom keeps the stored `meta.forked_from` through a meta
 // write: the client PUTs the whole document, and the key is the server's.
 func PreserveForkedFrom(current Conversation, update *Conversation) {
+	preserveMetaKey(current, update, ForkedFromMetaKey)
+}
+
+// PreserveClientRequestID keeps the stored `meta.client_request_id` through
+// a meta write (#3077): only a create sets it, so an update can neither add
+// one (and have a later create with that id replay this conversation) nor
+// drop or change the one a create stored.
+func PreserveClientRequestID(current Conversation, update *Conversation) {
+	preserveMetaKey(current, update, ClientRequestIDMetaKey)
+}
+
+// preserveMetaKey puts the stored value of the server's `key` into the
+// update's meta, or takes a supplied one out when none is stored.
+func preserveMetaKey(current Conversation, update *Conversation, key string) {
 	if update.Meta == nil {
 		return
 	}
-	stored, present := current.Meta[ForkedFromMetaKey]
-	if _, supplied := update.Meta[ForkedFromMetaKey]; !present && !supplied {
+	stored, present := current.Meta[key]
+	if _, supplied := update.Meta[key]; !present && !supplied {
 		return
 	}
 	preserved := make(map[string]any, len(update.Meta)+1)
-	for key, value := range update.Meta {
-		preserved[key] = value
+	for k, value := range update.Meta {
+		preserved[k] = value
 	}
 	if present {
-		preserved[ForkedFromMetaKey] = stored
+		preserved[key] = stored
 	} else {
-		delete(preserved, ForkedFromMetaKey)
+		delete(preserved, key)
 	}
 	update.Meta = preserved
 }

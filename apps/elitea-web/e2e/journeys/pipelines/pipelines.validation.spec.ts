@@ -29,7 +29,12 @@ import { load as loadYaml } from 'js-yaml';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, clickCreateButton, deleteAgent } from '../../fixtures/api';
-import { parseStoredGraph, readStoredPipelineVersion, resolveLatestPipelineVersionId } from '../../fixtures/pipelines';
+import {
+  createPipelineThroughApi,
+  parseStoredGraph,
+  readStoredPipelineVersion,
+  resolveLatestPipelineVersionId,
+} from '../../fixtures/pipelines';
 
 /**
  * A one-node pipeline the compiler admits: the LLM node's single data output
@@ -301,8 +306,24 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
 
 /* onetest: Authored static pauses bind to stored node identities and survive save. */
 test('J16: active interrupt controls roundtrip the exact stored node lists', async ({ page }) => {
-  const id = await createPipeline(page, `${AUTOTEST_PREFIX}intr-${Date.now() % 1e9}`);
-  await authorYaml(page, ADMISSIBLE_YAML);
+  // Issue 3052 (WebKit): every failure of this journey on a webkit leg was
+  // Playwright's 30 s TEST budget running out, never a step's own wait. In
+  // the retry trace of the #3045 baseline dispatch (run 45609290925) the
+  // test had spent 16 s in the UI create form and 3 s authoring YAML before
+  // its first switch; both saves and their refetches answered in under 0.6 s
+  // and the panel closed 1.7 s after each refetch, and the budget expired at
+  // the second `openInterruptSwitches`. The first attempt's "panel did not
+  // close" and the retries' "Response has been disposed" / "performing click
+  // action" are the same cut-off landing on whichever step was in flight.
+  // This journey is about the switches, not the create form (the first J16
+  // test drives that), so the pipeline is created over the API already
+  // holding the admissible graph, and the editor is opened on it.
+  const { id } = await createPipelineThroughApi(page.request, `${AUTOTEST_PREFIX}intr-${Date.now() % 1e9}`, {
+    instructions: ADMISSIBLE_YAML,
+  });
+  createdIds.push(id);
+  await page.goto(`${BASE_URL}/app/pipelines/latest/${id}`);
+  await expect(page.locator('.react-flow__node[data-id="LLM_1"]')).toBeVisible({ timeout: 15_000 });
   const { before, after } = await openInterruptSwitches(page, 'LLM_1');
   await expect(before).toBeEnabled();
   await expect(after).toBeEnabled();
@@ -311,8 +332,9 @@ test('J16: active interrupt controls roundtrip the exact stored node lists', asy
   await expect(before).toBeChecked();
   await expect(after).toBeChecked();
   await saveAndAwaitPersist(page);
-  const stored = parseStoredDocument(await readStoredInstructions(page, id));
-  expect(parseStoredGraph(await readStoredInstructions(page, id)).nodes.map((node) => node['id'])).toContain('LLM_1');
+  const storedInstructions = await readStoredInstructions(page, id);
+  const stored = parseStoredDocument(storedInstructions);
+  expect(parseStoredGraph(storedInstructions).nodes.map((node) => node['id'])).toContain('LLM_1');
   expect(stored['interrupt_before']).toEqual(['LLM_1']);
   expect(stored['interrupt_after']).toEqual(['LLM_1']);
 

@@ -19,6 +19,9 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
+import type { AdminReason } from './adminDangerousAction';
+import { governanceSaveRequest } from './governanceDangerous';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 import { BaseCheckbox } from '@/shared/ui/BaseCheckbox';
 
 import { ADMIN_ITEM } from './adminItemIds';
@@ -86,14 +89,15 @@ export function GovernanceGuardrailPresetDialog({ onClose }: GovernanceGuardrail
   const [made, setMade] = useState<readonly string[]>([]);
   const patch = (change: Partial<GuardrailPresetChoice>): void => setChoice((current) => ({ ...current, ...change }));
 
-  const onCreate = async (): Promise<void> => {
+  const confirm = useAdminDangerousConfirm();
+  const onCreate = async (reason: AdminReason): Promise<void> => {
     setSaving(true);
     setError(undefined);
     const done = [...made];
     try {
       for (const entry of presetEntries(choice)) {
         if (done.includes(entry.name)) continue;
-        await create.mutateAsync(entry);
+        await create.mutateAsync({ row: entry, reason });
         done.push(entry.name);
         setMade(done.slice());
       }
@@ -155,13 +159,19 @@ export function GovernanceGuardrailPresetDialog({ onClose }: GovernanceGuardrail
         <Button onClick={onClose} disabled={saving}>{t('common.cancel', 'Cancel')}</Button>
         <Button
           variant="contained"
-          onClick={() => { void onCreate(); }}
+          onClick={() =>
+            confirm.ask({
+              ...governanceSaveRequest({ type: 'guardrail', name: choice.name }),
+              run: (reason) => { void onCreate(reason); },
+            })
+          }
           disabled={saving || !presetIsComplete(choice)}
           data-testid="governance-preset-create"
         >
           {t('pages.admin.governance.preset.create', 'Create')}
         </Button>
       </DialogActions>
+      {confirm.dialog}
     </Dialog>
   );
 }

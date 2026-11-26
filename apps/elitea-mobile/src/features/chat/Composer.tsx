@@ -196,6 +196,9 @@ export function Composer({
   const [stopping, setStopping] = useState(false);
   /** When the last send read the text, and when the text last changed after it (#56). */
   const sentAt = useRef(0);
+  // A send in flight, decided synchronously (#3077): `submitting` changes a render later, so a second tap in that
+  // window would send the text twice.
+  const inFlight = useRef(false);
   const changedAt = useRef<number | null>(null);
   /** The text typed before the current dictation; the words heard go after it. */
   const dictationBase = useRef<string | null>(null);
@@ -364,7 +367,7 @@ export function Composer({
     if (keptAs !== null) composerDrafts.clearIfSent(keptAs, (stored) => holdsOnlySent(sent, stored, at, last));
   };
   const submit = () => {
-    if (!canSend) return;
+    if (!canSend || inFlight.current) return;
     haptic('send');
     // Abort, not stop: a stop makes the recogniser deliver a final result, which would write
     // the sent words back into the cleared input (and a second tap sends them twice, #56).
@@ -383,11 +386,15 @@ export function Composer({
       settle(sent, result, keptAs);
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
     result
       .then((problem) => settle(sent, problem, keptAs))
       .catch(() => settle(sent, 'This message could not be sent.', keptAs))
-      .finally(() => setSubmitting(false));
+      .finally(() => {
+        inFlight.current = false;
+        setSubmitting(false);
+      });
   };
 
   const applyInsert = (trigger: ActiveTrigger, insert: string) => {

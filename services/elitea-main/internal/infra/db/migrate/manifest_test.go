@@ -1651,7 +1651,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// record that the one-time migration of existing compositions to pending
 	// legacy grants ran for the project, and the queue index (delegation epic
 	// 2156 story S6). No permission.
-	require.EqualValues(t, 254, Head(tenant))
+	//
+	// 255: tenant/0255_chat_conversation_client_request_id_index.sql, a
+	// partial index on chat_conversations (author_id,
+	// meta->>'client_request_id') for the idempotent create (#3077). No
+	// permission.
+	require.EqualValues(t, 255, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
