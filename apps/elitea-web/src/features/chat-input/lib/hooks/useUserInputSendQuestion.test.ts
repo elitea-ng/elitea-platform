@@ -34,6 +34,20 @@ describe('useUserInputSendQuestion', () => {
     expect(onSend).toHaveBeenCalledWith('fix the build', 'fix the build');
   });
 
+  it('sends the text again when the parent puts it back in the same batch as the clear', async () => {
+    let restore: ((value: string) => void) | undefined;
+    const onSend = vi.fn((question: string) => restore?.(question));
+    const { result } = renderHook(() => {
+      const input = useInput(onSend, 'retry me');
+      restore = input.setQuestion;
+      return input;
+    });
+    act(() => result.current.send());
+    await act(() => new Promise((resolve) => { setTimeout(resolve, 0); }));
+    act(() => result.current.send());
+    expect(onSend).toHaveBeenCalledTimes(2);
+  });
+
   it('sends the same text again once it was typed again', () => {
     const onSend = vi.fn();
     const { result } = renderHook(() => useInput(onSend, 'yes'));

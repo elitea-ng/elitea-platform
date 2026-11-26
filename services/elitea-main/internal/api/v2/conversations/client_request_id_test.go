@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversations"
@@ -61,5 +62,27 @@ func TestCreate_AReplayAnswersTheEarlierConversation(t *testing.T) {
 		})
 	if w.Code != http.StatusCreated || !bytes.Contains(w.Body.Bytes(), []byte(`"id":"41"`)) {
 		t.Fatalf("expected the earlier conversation, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// An update can neither add a client_request_id (a later create with it would
+// replay this conversation) nor drop or change the stored one.
+func TestPreserveClientRequestID(t *testing.T) {
+	const id = "8f9a2b8e-3b1c-4d2e-9f0a-1b2c3d4e5f60"
+	for name, tc := range map[string]struct {
+		current, update, want map[string]any
+	}{
+		"kept through a write without it":  {map[string]any{"client_request_id": id}, map[string]any{"a": 1}, map[string]any{"a": 1, "client_request_id": id}},
+		"a client value cannot replace it": {map[string]any{"client_request_id": id}, map[string]any{"client_request_id": "x"}, map[string]any{"client_request_id": id}},
+		"a client value cannot add one":    {map[string]any{}, map[string]any{"client_request_id": id, "a": 1}, map[string]any{"a": 1}},
+		"no meta write, nothing changes":   {map[string]any{"client_request_id": id}, nil, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			update := conversations.Conversation{Meta: tc.update}
+			conversations.PreserveClientRequestID(conversations.Conversation{Meta: tc.current}, &update)
+			if !reflect.DeepEqual(update.Meta, tc.want) {
+				t.Fatalf("meta = %v, want %v", update.Meta, tc.want)
+			}
+		})
 	}
 }

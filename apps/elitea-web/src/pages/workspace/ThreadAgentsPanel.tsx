@@ -138,7 +138,7 @@ function PendingRow({ agent, selection, several, locked }: RowProps): React.JSX.
         {agent.lead && (
           <SearchPicker label={t('workspace.participants.change', 'Change')} testId="thread-lead-change" variant="text" options={others} disabled={locked} onPick={(id) => selection.selectAgent(id)} />
         )}
-        {!agent.lead && selection.makeLead !== undefined && selection.conversationId === '' && (
+        {!agent.lead && !agent.cloud && !isCloudOnlyPick(selection) && selection.makeLead !== undefined && selection.conversationId === '' && (
           <Button size="small" variant="text" data-testid="thread-pending-make-lead" disabled={locked} onClick={() => selection.makeLead?.(agent.agentId)}>
             {t('chat.lead.make', 'Make lead')}
           </Button>

@@ -15,16 +15,21 @@ export interface UseUserInputSendQuestionParams {
 export function useUserInputSendQuestion(params: UseUserInputSendQuestionParams): () => void {
   const { question, inputContent, disabledSend, clearInputAfterSend, onSend, setQuestion, setInputContent, setShowExpandIcon } =
     params;
-  // The text just sent, until the input re-renders without it (#3077): the state copy is a render behind, so Enter
-  // pressed again in that window would send the same text twice.
+  // The text just sent, until the input's next render commits (#3077): the state copy is a render behind, so Enter
+  // pressed again in that window would send the same text twice. Released on every commit, and by a timer after the
+  // current task (React skips the commit when a parent puts the same text back in the same batch), never on a change
+  // of the text, so the same text can always be sent again.
   const sent = useRef<string | null>(null);
   useEffect(() => {
-    if (question !== sent.current) sent.current = null;
-  }, [question]);
+    sent.current = null;
+  });
   return useCallback(() => {
     if (question.trim() && !disabledSend && sent.current !== question) {
       if (clearInputAfterSend) {
         sent.current = question;
+        setTimeout(() => {
+          if (sent.current === question) sent.current = null;
+        }, 0);
         setInputContent('');
         setQuestion('');
         setShowExpandIcon(false);

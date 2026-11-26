@@ -707,3 +707,32 @@ async fn a_failed_handing_turn_starts_no_hand_off() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(starts(&h).len(), 1);
 }
+
+/// #3080: an unattended turn that handed the floor and then failed ends its
+/// chain `failed`, not `completed`, and starts none of its hand-offs.
+#[tokio::test]
+async fn a_failed_unattended_handing_turn_ends_its_chain_failed() {
+    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), |n| match n {
+        0 => hand_to(&[99]),
+        _ => Res::json(400, &json!({"error": {"message": "bad request"}})),
+    });
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let grant: super::super::unattended::UnattendedGrant =
+        serde_json::from_value(json!({})).unwrap();
+    let started = h
+        .host
+        .start(TurnRequest {
+            unattended: Some(super::super::unattended::UnattendedTurn::root(
+                grant.admit().unwrap(),
+            )),
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    let ended = event_of(&h, "chain_ended", Some(&started.turn_id)).await;
+    assert_eq!(ended.payload["outcome"], "failed");
+    commits_settled(&h.host).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(starts(&h).len(), 1);
+}

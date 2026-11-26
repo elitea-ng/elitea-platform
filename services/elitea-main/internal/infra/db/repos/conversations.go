@@ -878,6 +878,7 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 		return conversations.Conversation{}, err
 	}
 	conversations.PreserveForkedFrom(current, &conv)
+	conversations.PreserveClientRequestID(current, &conv)
 	s := schema(projectID)
 
 	if conv.IsPrivate != nil && !*conv.IsPrivate && publicproject.IDString() == projectID {

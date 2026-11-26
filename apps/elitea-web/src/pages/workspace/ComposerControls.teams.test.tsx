@@ -88,16 +88,19 @@ describe('the Participants tab’s agents panel (#3081)', () => {
     const user = userEvent.setup();
     const makeLead = vi.fn();
     const removeCompanion = vi.fn();
-    render(<ThreadAgentsPanel selection={selection({ companions: [reviewer], makeLead, removeCompanion, addCompanion: vi.fn(), team: crew })} joined={[]} locked={false} />);
+    const writer = { agentId: '7', name: 'Docs Writer', versionId: 11, agentType: 'openai', cloud: false, versionName: 'base' };
+    render(<ThreadAgentsPanel selection={selection({ companions: [reviewer, writer], makeLead, removeCompanion, addCompanion: vi.fn(), team: crew })} joined={[]} locked={false} />);
     const rows = screen.getAllByTestId('thread-pending-agent');
-    expect(rows.map((row) => row.getAttribute('data-agent-id'))).toEqual(['5', '6']);
+    expect(rows.map((row) => row.getAttribute('data-agent-id'))).toEqual(['5', '6', '7']);
     expect(within(rows[0] as HTMLElement).getByTestId('thread-pending-lead')).toHaveTextContent('Lead');
     expect(within(rows[0] as HTMLElement).getByTestId('thread-lead-version')).toHaveTextContent('base');
     expect(rows[1]).toHaveTextContent('Cloud');
     expect(rows[1]).toHaveTextContent('v2');
     expect(screen.getByTestId('thread-team-name')).toHaveTextContent('Team: Review crew');
-    await user.click(within(rows[1] as HTMLElement).getByTestId('thread-pending-make-lead'));
-    expect(makeLead).toHaveBeenCalledWith('6');
+    // A cloud agent is not made lead: the composer's agent runs on this computer.
+    expect(within(rows[1] as HTMLElement).queryByTestId('thread-pending-make-lead')).toBeNull();
+    await user.click(within(rows[2] as HTMLElement).getByTestId('thread-pending-make-lead'));
+    expect(makeLead).toHaveBeenCalledWith('7');
     await user.click(within(rows[1] as HTMLElement).getByTestId('thread-pending-remove'));
     expect(removeCompanion).toHaveBeenCalledWith('6');
   });

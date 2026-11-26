@@ -155,6 +155,12 @@ function swapLead(team: WorkTeam, next: ThreadCompanion): WorkTeam {
   return { ...team, primary: member, others: [team.primary, ...team.others.filter((m) => m !== member)] };
 }
 
+/** The version `wanted` names for `agentId`, when it is offered; else `undefined`. */
+function wantedVersion(wanted: { agentId: string; versionId: string } | null, agentId: string, versions: readonly VersionChoice[]): string | undefined {
+  if (wanted?.agentId !== agentId) return undefined;
+  return versions.some((v) => String(v.id) === wanted.versionId) ? wanted.versionId : undefined;
+}
+
 /** The first version of an agent, read when the person adds it to a thread. */
 async function firstVersion(projectId: string, agentId: string): Promise<VersionChoice | undefined> {
   const detail = unwrapBody(await getApplication(projectId, Number(agentId))) as ApplicationDetail | undefined;
@@ -181,6 +187,8 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
   const [team, setTeam] = useState<WorkTeam | undefined>(undefined);
   // The thread the new thread's first send created (`markCreated`).
   const created = useRef('');
+  // The version a member made lead was added with (`makeLead`): picked once the new lead's versions are read.
+  const wanted = useRef<{ agentId: string; versionId: string } | null>(null);
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
   const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });
@@ -228,8 +236,9 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       return;
     }
     if (versions.some((v) => String(v.id) === versionId)) return;
-    const pinned = teamVersion(team, agentId, versions);
+    const pinned = teamVersion(team, agentId, versions) ?? wantedVersion(wanted.current, agentId, versions);
     if (pinned !== undefined) {
+      wanted.current = null;
       setVersionId(pinned);
       return;
     }
@@ -261,15 +270,19 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     (id: string) => {
       const next = companions.find((c) => c.agentId === id);
       const lead = agents.find((a) => a.id === agentId);
-      if (next === undefined || lead === undefined || conversationId !== '') return;
       const version = versions.find((v) => String(v.id) === versionId);
-      const former: ThreadCompanion = { agentId, name: lead.name, versionId: Number(versionId), agentType: version?.agentType ?? '', cloud: false, ...(version === undefined ? {} : { versionName: version.name }) };
+      // The composer's agent runs on this computer: a cloud agent is not made lead, nor is a cloud-only lead (a
+      // pipeline) moved here; and the lead's version must be known to keep it.
+      if (next === undefined || next.cloud || lead === undefined || version === undefined || conversationId !== '') return;
+      if (pipelineIds.has(agentId) || version.agentType === 'pipeline') return;
+      const former: ThreadCompanion = { agentId, name: lead.name, versionId: version.id, agentType: version.agentType, cloud: false, versionName: version.name };
+      wanted.current = { agentId: id, versionId: String(next.versionId) };
       setCompanions((current) => [former, ...current.filter((c) => c.agentId !== id)]);
       setTeam((current) => (current === undefined ? undefined : swapLead(current, next)));
       setAgentId(id);
       setVersionId(String(next.versionId));
     },
-    [companions, agents, agentId, versionId, versions, conversationId],
+    [companions, agents, agentId, versionId, versions, conversationId, pipelineIds],
   );
   // A team always starts a new thread (chat cannot add a team to a conversation either).
   const selectTeam = useCallback(

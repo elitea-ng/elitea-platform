@@ -3579,8 +3579,10 @@ impl AgentHost {
             chain_step = Some(ChainStep::Handoff);
         }
         // The agent handed the floor (#3080): the hand-offs answer next, so
-        // an unattended run's chain ends here instead of continuing.
+        // an unattended run's chain ends here instead of continuing. A turn
+        // that failed ends `failed` as before, and starts none of them.
         let handed_floor = request.unattended.is_some()
+            && failure.is_none()
             && !handed_off
             && started
                 .message_question(
