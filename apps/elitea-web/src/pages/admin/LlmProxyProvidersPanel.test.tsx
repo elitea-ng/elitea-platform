@@ -31,6 +31,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { LlmProxyProvidersPanel } from './LlmProxyProvidersPanel';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 
 /** What the shipped catalogue admits — all nine the gateway dispatches to. */
@@ -187,6 +188,7 @@ describe('LlmProxyProvidersPanel', () => {
     await userEvent.clear(name);
     await userEvent.type(name, 'renamed-openai');
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'renamed-openai');
 
     await waitFor(() => {
       expect(bodies).toHaveLength(1);
@@ -213,6 +215,7 @@ describe('LlmProxyProvidersPanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await userEvent.type(await screen.findByTestId('llm-provider-api_key'), 'sk-rotated');
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'platform-openai');
 
     await waitFor(() => {
       expect(bodies).toHaveLength(1);
@@ -235,6 +238,7 @@ describe('LlmProxyProvidersPanel', () => {
     await userEvent.type(await screen.findByTestId('llm-provider-name'), 'new-openai');
     await userEvent.type(screen.getByTestId('llm-provider-api_key'), 'sk-new');
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'new-openai');
 
     await waitFor(() => {
       expect(bodies).toHaveLength(1);
@@ -242,6 +246,8 @@ describe('LlmProxyProvidersPanel', () => {
     // The server forces it and REFUSES an explicit false, so a client that sent
     // the field would either restate the rule or be refused for contradicting it.
     expect(Object.hasOwn(bodies[0] as object, 'shared')).toBe(false);
+    // Publishing a platform credential is critical: the reason rides in the body.
+    expect(bodies[0]).toMatchObject({ reason_code: 'incident', reason: 'ticket 42' });
   });
 
   it("renders the server's own refusal rather than a generic failure", async () => {
@@ -260,6 +266,7 @@ describe('LlmProxyProvidersPanel', () => {
     await userEvent.type(await screen.findByTestId('llm-provider-name'), 'x');
     await userEvent.type(screen.getByTestId('llm-provider-api_key'), 'sk-x');
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'x');
 
     expect(await screen.findByTestId('llm-provider-dialog-error')).toHaveTextContent(
       'the gateway can dispatch to',
@@ -270,12 +277,24 @@ describe('LlmProxyProvidersPanel', () => {
     useProviders([SEALED_OPENAI]);
     renderAdminRoute(<LlmProxyProvidersPanel />);
 
+    const codes: Array<string | null> = [];
+    server.use(
+      http.delete('*/admin/gateway/providers/4', ({ request }) => {
+        codes.push(request.headers.get('Elitea-Reason-Code'));
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
-    expect(await screen.findByTestId('llm-providers-confirm-delete')).toHaveTextContent(
+    expect(await screen.findByTestId('admin-dangerous-dialog')).toHaveTextContent(
       'every project at once',
     );
-    // Deletion needs a second, explicit act.
-    expect(screen.getByTestId('llm-providers-confirm-delete-button')).toBeVisible();
+    // Deletion needs a second, explicit act, and carries a reason in the headers.
+    expect(screen.getByTestId('admin-dangerous-confirm')).toBeDisabled();
+    await confirmDangerousAction(userEvent.setup(), 'platform-openai', { code: 'offboarding' });
+    await waitFor(() => {
+      expect(codes).toEqual(['offboarding']);
+    });
   });
 });
 
@@ -614,6 +633,7 @@ describe('LlmProxyProvidersPanel — keyless authentication and the vLLM switch'
     );
 
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'platform-dial');
     await waitFor(() => {
       expect(bodies).toHaveLength(1);
     });
@@ -670,6 +690,7 @@ describe('LlmProxyProvidersPanel — keyless authentication and the vLLM switch'
     expect(toggle).toBeChecked();
     await userEvent.click(toggle);
     await userEvent.click(screen.getByTestId('llm-provider-save'));
+    await confirmDangerousAction(userEvent.setup(), 'platform-vllm');
 
     await waitFor(() => {
       expect(bodies).toHaveLength(1);

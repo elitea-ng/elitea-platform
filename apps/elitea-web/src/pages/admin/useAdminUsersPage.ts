@@ -17,19 +17,17 @@ import { EliteaApiError } from '@/shared/api/generated/mutator';
 import { t } from '@/shared/i18n';
 
 import type { AdminUserRowActions } from './AdminUsersTable';
+import type { AdminReason } from './adminDangerousAction';
 import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { adminUiShowsControlFor } from './adminUiConfig';
 import { useAdminWritable } from './adminWriteAccess';
 import { downloadCsv, fetchAllPages } from './adminCsv';
 import { buildAdminUsersCsv } from './adminUsersCsv';
+import { useAdminUserDangerousActions, type AdminUserDangerousDialog } from './useAdminUserDangerousActions';
 import { useAdministrationRoles, type AdministrationRole } from './api/adminRoleOptionsApi';
-import { permissionMatrixFailureReason } from './api/adminRolesApi';
 import {
   fetchAdminUsersPage,
   useAdminUsers,
-  useDeleteAdminUsers,
-  useSetAdminRoles,
-  useSuspendAdminUser,
   type AdminUserRow,
   type AdminUsersPage,
   type AdminUserType,
@@ -51,7 +49,8 @@ export interface AdminUsersPageState {
   readonly sortField: string;
   readonly sortDirection: 'asc' | 'desc';
   readonly selectedIds: number[];
-  readonly deleteIds: number[];
+  /** The dangerous action waiting for its confirmation (ADR-0059 R3.8b). */
+  readonly dangerous: AdminUserDangerousDialog | undefined;
   readonly errorMessage: string;
   /** The user whose activity drawer is open, or `null` when it is closed. */
   readonly activityUser: AdminUserRow | null;
@@ -79,8 +78,8 @@ export interface AdminUsersPageState {
   readonly onNextPage: () => void;
   readonly onDismissError: () => void;
   readonly onRequestDelete: (ids: number[]) => void;
-  readonly onCancelDelete: () => void;
-  readonly onConfirmDelete: () => void;
+  readonly onCancelDangerous: () => void;
+  readonly onConfirmDangerous: (reason: AdminReason) => void;
   /**
    * Activity is a READ over the audit endpoints, so it is not part of the
    * `undefined`-means-absent set below: it exists on both tabs and whatever the
@@ -156,7 +155,6 @@ export function useAdminUsersPage(): AdminUsersPageState {
   const [sortField, setSortField] = useState('name');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [deleteIds, setDeleteIds] = useState<number[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [activityUser, setActivityUser] = useState<AdminUserRow | null>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -178,11 +176,18 @@ export function useAdminUsersPage(): AdminUsersPageState {
     sortOrder: sortDirection,
   });
 
-  const deleteUsers = access.guard(useDeleteAdminUsers());
-  const setAdminRole = access.guard(useSetAdminRoles());
-  const suspendUser = access.guard(useSuspendAdminUser());
-
   const listing = useMemo(() => readListing(listQuery.data), [listQuery.data]);
+  const onDeleted = useCallback((ids: readonly number[]) => {
+    setSelectedIds((previous) => previous.filter((id) => !ids.includes(id)));
+  }, []);
+  const clearError = useCallback(() => setErrorMessage(''), []);
+  const dangerous = useAdminUserDangerousActions({
+    rows: listing.rows,
+    onStart: clearError,
+    onError: setErrorMessage,
+    onDeleted,
+  });
+  const { deleteUsers, setAdminRole, suspendUser } = dangerous;
 
   /**
    * Rows with a mutation in flight. Read from react-query's `variables` (the
@@ -193,7 +198,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
       collectPendingIds(
         { isPending: setAdminRole.isPending, variables: setAdminRole.variables },
         { isPending: suspendUser.isPending, variables: suspendUser.variables },
-        { isPending: deleteUsers.isPending, variables: deleteUsers.variables },
+        { isPending: deleteUsers.isPending, variables: deleteUsers.variables?.userIds },
       ),
     [
     setAdminRole.isPending,
@@ -243,58 +248,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
     setSelectedIds([]);
   }, []);
 
-  const handleSetAdminRoles = useCallback(
-    (userId: number, roleNames: string[]) => {
-      setErrorMessage('');
-      setAdminRole.mutate(
-        { userId, roleNames },
-        {
-          // The no-escalation refusals carry a stable code (role_self_assignment,
-          // role_permission_not_held, …); the page says what it means.
-          onError: (error) =>
-            setErrorMessage(
-              permissionMatrixFailureReason(error) ??
-                t('pages.admin.users.error.roles', 'Failed to change the administration roles.'),
-            ),
-        },
-      );
-    },
-    [setAdminRole],
-  );
-
-  const handleToggleSuspended = useCallback(
-    (user: AdminUserRow) => {
-      setErrorMessage('');
-      suspendUser.mutate(
-        { userId: user.id, suspended: !user.suspended },
-        {
-          onError: (error) =>
-            reportFailure(
-              t('pages.admin.users.error.suspend', 'Failed to change the suspended state.'),
-              error,
-            ),
-        },
-      );
-    },
-    [suspendUser, reportFailure],
-  );
-
   const handleOpenActivity = useCallback((user: AdminUserRow) => setActivityUser(user), []);
-
-  const onConfirmDelete = useCallback(() => {
-    const ids = deleteIds;
-    setErrorMessage('');
-    deleteUsers.mutate(ids, {
-      onSuccess: () => {
-        setDeleteIds([]);
-        setSelectedIds((previous) => previous.filter((id) => !ids.includes(id)));
-      },
-      onError: (error) => {
-        setDeleteIds([]);
-        reportFailure(t('pages.admin.users.error.delete', 'Failed to delete the selected users.'), error);
-      },
-    });
-  }, [deleteIds, deleteUsers, reportFailure]);
 
   /**
    * Export. CSV rather than the reference's .xlsx — see `adminUsersCsv.ts` for
@@ -343,17 +297,18 @@ export function useAdminUsersPage(): AdminUsersPageState {
   // port.
   const writable = !isSystemTab;
 
+  const { onRequestRoles, onToggleSuspended, onRequestDelete } = dangerous;
   const rowActions = useMemo<AdminUserRowActions>(
     () => ({
-      onSetAdminRoles: writable ? handleSetAdminRoles : undefined,
-      onToggleSuspended: writable ? handleToggleSuspended : undefined,
-      onDelete: writable ? setDeleteIds : undefined,
+      onSetAdminRoles: writable ? onRequestRoles : undefined,
+      onToggleSuspended: writable ? onToggleSuspended : undefined,
+      onDelete: writable ? onRequestDelete : undefined,
       // Not gated on `writable`: activity is a READ, so it exists on the
       // system tab and for an operator with no write permissions. The server
       // authorises the audit query itself.
       onOpenActivity: handleOpenActivity,
     }),
-    [writable, handleSetAdminRoles, handleToggleSuspended, handleOpenActivity],
+    [writable, onRequestRoles, onToggleSuspended, onRequestDelete, handleOpenActivity],
   );
 
   return {
@@ -364,7 +319,7 @@ export function useAdminUsersPage(): AdminUsersPageState {
     sortField,
     sortDirection,
     selectedIds: isSystemTab ? [] : selectedIds,
-    deleteIds,
+    dangerous: dangerous.dialog,
     errorMessage,
     activityUser,
 
@@ -387,9 +342,9 @@ export function useAdminUsersPage(): AdminUsersPageState {
     onPreviousPage,
     onNextPage,
     onDismissError: useCallback(() => setErrorMessage(''), []),
-    onRequestDelete: useCallback((ids: number[]) => setDeleteIds(ids), []),
-    onCancelDelete: useCallback(() => setDeleteIds([]), []),
-    onConfirmDelete,
+    onRequestDelete,
+    onCancelDangerous: dangerous.onCancel,
+    onConfirmDangerous: dangerous.onConfirm,
     onCloseActivity: useCallback(() => setActivityUser(null), []),
     onExport,
 

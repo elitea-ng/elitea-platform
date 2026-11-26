@@ -40,15 +40,12 @@ const shots = screenshotIndex.shots as readonly IndexShot[];
  * The routes the admin router declares, as the index spells them.
  *
  * `__root__` is TanStack Router's synthetic root (it renders `AdminLayout`, not
- * a page). `/` is excluded for a substantive reason rather than a mechanical
- * one: `router.tsx` renders `AdminUsers` at the index rather than redirecting to
- * `/users`, so a row for it would name a second copy of the same screen, and a
- * baseline for it would be a duplicate PNG. Journey 37 asserts the one thing
- * that distinguishes them (the index marks the Users nav item active).
+ * a page). The index `/` is Home under the six areas (ADR-0059 R3.3a, issue
+ * 2533), a page of its own, so it is indexed as `/admin/app/`.
  */
 function routerAdminRoutes(): string[] {
   return Object.keys(createAdminRouter().routesById)
-    .filter((id) => id !== '__root__' && id !== '/')
+    .filter((id) => id !== '__root__')
     .map((id) => ADMIN_BASE_PATH + id)
     .sort();
 }

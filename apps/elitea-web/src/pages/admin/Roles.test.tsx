@@ -18,6 +18,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminRoles } from './Roles';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -71,6 +72,9 @@ function matrixBody(rows: MatrixRow[]): { rows: MatrixRow[]; total: number } {
   return { rows, total: rows.length };
 }
 
+/** The reason codes of the matrix writes: an array body, so they travel in the header (ADR-0059 R3.8b). */
+let reasonCodes: Array<string | null> = [];
+
 function useRolesHandlers(): void {
   server.use(
     http.get('*/admin/permissions/administration/administration', async ({ request }) => {
@@ -96,10 +100,12 @@ function useRolesHandlers(): void {
       return HttpResponse.json({ error: SUPPORT_UNAVAILABLE }, { status: 404 });
     }),
     http.put('*/admin/permissions/:scope/:mode', async ({ request, params }) => {
+      reasonCodes.push(request.headers.get('Elitea-Reason-Code'));
       recorded.push({ method: 'PUT', url: String(params.scope), body: await request.json() });
       return HttpResponse.json({ ok: true, granted: 1, revoked: 0 });
     }),
     http.post('*/admin/permissions/:scope/:mode', async ({ request, params }) => {
+      reasonCodes.push(request.headers.get('Elitea-Reason-Code'));
       recorded.push({ method: 'POST', url: String(params.scope), body: await request.text() });
       return HttpResponse.json({ ok: true });
     }),
@@ -121,6 +127,7 @@ function lastPut(): RecordedRequest | undefined {
 
 beforeEach(() => {
   recorded = [];
+  reasonCodes = [];
   adminReads = 0;
   adminRowsAfterFirstRead = ADMIN_ROWS;
   configureGeneratedClient({ baseUrl: '/api/v2' });
@@ -171,6 +178,7 @@ describe('Admin › Roles', () => {
 
     await user.click(cell);
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
     await waitFor(() => expect(lastPut()).toBeDefined());
     const rows = lastPut()?.body as MatrixRow[];
     expect(rows.find((row) => row.name === 'models.alpha.view')?.auditor).toBe(false);
@@ -186,6 +194,7 @@ describe('Admin › Roles', () => {
 
     await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     await waitFor(() => expect(lastPut()).toBeDefined());
     const sent = lastPut();
@@ -205,6 +214,7 @@ describe('Admin › Roles', () => {
       },
     ]);
     expect(await screen.findByText('Permissions saved.')).toBeInTheDocument();
+    expect(reasonCodes).toEqual(['incident']);
   });
 
   it('explains a refusal by the no-escalation rule, with the role and the permissions', async () => {
@@ -230,6 +240,7 @@ describe('Admin › Roles', () => {
     await expandGroup(user, 'models.alpha');
     await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(
@@ -260,6 +271,7 @@ describe('Admin › Roles', () => {
     await expandGroup(user, 'models.alpha');
     await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       "This permission is granted only by the platform's own setup, so no change here can add it to a role.",
@@ -290,6 +302,7 @@ describe('Admin › Roles', () => {
     await expandGroup(user, 'models.alpha');
     await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(message);
@@ -311,6 +324,7 @@ describe('Admin › Roles', () => {
     await expandGroup(user, 'models.alpha');
     await user.click(screen.getByRole('checkbox', { name: 'editor: models.alpha.edit' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'This is a built-in role, so its permissions are locked. Create a custom role for a different set. Roles: admin, editor.',
@@ -372,6 +386,7 @@ describe('Admin › Roles', () => {
     // A refusal still explains itself (another administrator's view was older).
     await user.click(row.getByRole('checkbox', { name: 'admin: runtime.plugins' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(
@@ -400,6 +415,7 @@ describe('Admin › Roles', () => {
 
     await user.click(await screen.findByRole('checkbox', { name: 'editor: models.alpha' }));
     await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'admin');
 
     await waitFor(() => expect(lastPut()).toBeDefined());
     const rows = lastPut()?.body as MatrixRow[];
@@ -545,11 +561,13 @@ describe('Admin › Roles', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Standard Roles' }));
     await user.click(await screen.findByRole('button', { name: 'Apply to Projects' }));
+    await confirmDangerousAction(user, 'standard');
 
     await waitFor(() =>
       expect(recorded.some((entry) => entry.method === 'POST' && entry.url === 'administration')).toBe(true),
     );
     expect(await screen.findByText('Permissions synced to shared projects.')).toBeInTheDocument();
+    expect(reasonCodes).toEqual(['incident']);
 
     // It is defined for administration/default alone, so it must not follow the
     // operator to a project tab.

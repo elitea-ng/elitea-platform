@@ -68,7 +68,7 @@ for (const persona of ADMIN_PERSONAS) {
 const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
   people_access: ['users', 'access', 'identity-providers', 'scim'],
   projects: ['projects', 'app-requests'],
-  models_spend: ['llm-governance', 'budgets-alerts'],
+  models_spend: ['providers-models', 'models-pricing', 'tool-prices', 'usage', 'logs', 'llm-governance', 'budgets-alerts'],
   agents_governance: [
     'agent-registry',
     'connector-requests',
@@ -93,20 +93,21 @@ const EVERY_AREA: Readonly<Record<string, readonly string[]>> = {
 
 /**
  * Each persona's areas and items in the navigation. The gateway tabs are
- * still tabs of Configuration, which stands for them. SCIM and Access are
+ * pages of Models and spend since R3.5a (issue 2535). SCIM and Access are
  * pages of their own since R3.6 (issue 2537); the security auditor opens
  * Access at read through access.roles.view.
  */
 const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, readonly string[]>>>> = {
   super_admin: EVERY_AREA,
   admin: EVERY_AREA,
-  llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
+  llm_manager: { projects: ['projects'], models_spend: EVERY_AREA['models_spend'] ?? [] },
   project_administrator: {
     people_access: ['scim'],
     projects: ['projects', 'app-requests'],
     models_spend: ['budgets-alerts'],
   },
   security_auditor: { people_access: ['access'], security: ['audit-trail'] },
+  // No area: the no-access page, and no navigation at all.
   emergency_access: {},
 };
 
@@ -117,11 +118,21 @@ for (const persona of ADMIN_PERSONAS) {
       const page = await context.newPage();
       await page.goto(`${BASE_URL}/admin/app/`, { waitUntil: 'domcontentloaded' });
       const nav = page.getByTestId('admin-nav');
+      if (persona.role === 'emergency_access') {
+        // A document that opens no area: the no-access page with the support
+        // contact, and no navigation (ADR-0059 R3.3a, issue 2533).
+        await expect(page.getByTestId('admin-no-access')).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId('admin-item-denied-contact')).toBeVisible({ timeout: 20_000 });
+        await expect(nav).toHaveCount(0);
+        return;
+      }
       await expect(nav).toBeVisible({ timeout: 30_000 });
 
       const expected = PERSONA_AREAS[persona.role];
       const expectedLinks = Object.values(expected).flat();
-      await expect(nav.getByRole('link')).toHaveCount(expectedLinks.length, { timeout: 20_000 });
+      // Home is a link of its own for a caller with more than one area (R3.3a).
+      const home = Object.keys(expected).length > 1 ? 1 : 0;
+      await expect(nav.getByRole('link')).toHaveCount(expectedLinks.length + home, { timeout: 20_000 });
       const rendered = await nav.locator('section[data-testid^="admin-nav-area-"]').evaluateAll((sections) =>
         Object.fromEntries(
           sections.map((section) => [

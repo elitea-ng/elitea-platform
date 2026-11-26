@@ -190,7 +190,7 @@ function FeaturesSectionForm({
           size="small"
           variant="elitea" color="primary"
           disabled={state.readOnly || !state.isDirty || state.isSaving}
-          onClick={state.onSave}
+          onClick={() => state.onSave()}
           sx={{ textTransform: 'none' }}
         >
           {state.isSaving
