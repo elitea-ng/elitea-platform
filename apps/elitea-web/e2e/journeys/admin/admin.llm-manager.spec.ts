@@ -163,7 +163,7 @@ test('the LLM manager adds a provider, adopts a model, sets a budget and saves t
 
     // 2. Adopt one of its models as a platform model.
     await page.getByTestId(`admin-provider-adopt-${String(providerId)}`).click();
-    await page.getByTestId(`adopt-models-item-${modelId}`).check();
+    await page.getByRole('checkbox', { name: modelId, exact: true }).check();
     const adopted = page.waitForResponse(
       (response) =>
         new URL(response.url()).pathname.endsWith('/admin/gateway/platform_models') &&
