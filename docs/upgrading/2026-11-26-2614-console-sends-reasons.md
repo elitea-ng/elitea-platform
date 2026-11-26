@@ -7,8 +7,11 @@ action table marks in one dialog, and sends the reason with the request: the
 object body. The old per-page confirmations (branding reset, project delete,
 role delete, SCIM client and binding, platform model and provider delete,
 credential revoke, legal hold release) are gone; the platform-wide kill switch
-asks for `STOP` in the same dialog instead of in its form. The maintenance and
-`break_glass` section saves do not ask yet.
+asks for `STOP` in the same dialog instead of in its form. Every save of the
+Configuration › Maintenance section asks too: turning maintenance mode on is
+the marked action, and the server cannot tell it from another save of the
+section by the request alone. The `break_glass` section has no console editor
+yet, so nothing asks for it.
 
 **Who is affected.** Administrators, and anything that drives the console's
 dialogs by their old test ids or labels (end-to-end suites, browser automation).

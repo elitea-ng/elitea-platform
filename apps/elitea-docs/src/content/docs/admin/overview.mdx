@@ -42,7 +42,7 @@ The areas and items in the sidebar come from the [capability document](#what-the
 
 ## Home
 
-The console opens on **Home**, at `/admin/app`. Home has one card for each area your roles open, listing the items you can open there, and a **Waiting for you** section with the queues you decide:
+The console opens on **Home**, at `/admin/app`, and **Home** at the top of the sidebar returns to it. Home has one card for each area your roles open, listing the items you can open there, and a **Waiting for you** section with the queues you decide:
 
 | Queue | Shown when your roles |
 | --- | --- |
@@ -97,6 +97,7 @@ The actions that ask are listed by the server, and a test checks that the consol
 - saving or deleting a governance entry;
 - changing a retention policy or a project's override, and releasing a legal hold;
 - resetting branding, revoking a credential, inviting in bulk and stopping the whole platform.
+- saving the **Maintenance** section of Configuration. Turning maintenance mode on is the dangerous action; every save of the section asks, because the server cannot tell the two apart from the request alone.
 
 Unsuspending an account and suspending a single agent, project or toolkit type do not ask. Where the server cannot tell from the request alone whether a save is dangerous, as on a retention policy or an identity provider, every save asks.
 
