@@ -63,19 +63,22 @@ func fixedKeys(keys ...SigningKey) func() ([]auditexport.SigningKey, error) {
 func TestWebhookReceiverVerifiesWithBothKeys(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey1, testKey2)
 	defer func() { _ = rcv.Stop(t) }()
-	sink := newWebhookSink(t, rcv.URL(), testKey2)
-	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
-	if err := sink.Send(context.Background(), events); err != nil {
-		t.Fatalf("send: %v", err)
+	// Key 1 signs: the receiver must accept.
+	sink1 := newWebhookSink(t, rcv.URL(), testKey1)
+	if err := sink1.Send(context.Background(), []auditexport.Event{testEvent("event-1")}); err != nil {
+		t.Fatalf("send with key 1: %v", err)
 	}
-	for _, e := range events {
-		if rcv.Delivered(e.EventID) != 1 {
-			t.Fatalf("event %s delivered %d times, want 1", e.EventID, rcv.Delivered(e.EventID))
-		}
+	// Key 2 signs: the same receiver must accept too.
+	sink2 := newWebhookSink(t, rcv.URL(), testKey2)
+	if err := sink2.Send(context.Background(), []auditexport.Event{testEvent("event-2")}); err != nil {
+		t.Fatalf("send with key 2: %v", err)
 	}
-	// The receiver saw the batch ids.
-	if len(rcv.BatchIDs()) != 1 {
-		t.Fatalf("batch ids = %v", rcv.BatchIDs())
+	if rcv.Delivered("event-1") != 1 || rcv.Delivered("event-2") != 1 {
+		t.Fatalf("received: %v", rcv.Received())
+	}
+	// The receiver saw both batch ids.
+	if len(rcv.BatchIDs()) != 2 {
+		t.Fatalf("batch ids = %v, want 2 (one per key)", rcv.BatchIDs())
 	}
 }
 
