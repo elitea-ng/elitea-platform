@@ -30,6 +30,7 @@
 import { test as adminTest, expect, type Page } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
@@ -146,7 +147,11 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
         r.url().includes('/admin/permissions/administration/administration') &&
         r.request().method() === 'PUT',
     ),
-    page.getByRole('button', { name: 'Save' }).click(),
+    page
+      .getByRole('button', { name: 'Save' })
+      .click()
+      // A matrix save is critical: confirmed with a reason (ADR-0059 R3.8b).
+      .then(() => confirmDangerousAction(page, 'admin')),
   ]);
   // 200 proves the write was AUTHORISED. It does not prove it was written —
   // that is what the reload below is for.
@@ -167,7 +172,11 @@ adminTest('J30b: granting a permission survives a reload, and revoking it takes 
         r.url().includes('/admin/permissions/administration/administration') &&
         r.request().method() === 'PUT',
     ),
-    page.getByRole('button', { name: 'Save' }).click(),
+    page
+      .getByRole('button', { name: 'Save' })
+      .click()
+      // A matrix save is critical: confirmed with a reason (ADR-0059 R3.8b).
+      .then(() => confirmDangerousAction(page, 'admin')),
   ]);
   expect(reverted.status()).toBe(200);
 

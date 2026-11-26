@@ -163,16 +163,40 @@ func configurationRoutePermissions() []string {
 // readableBy reports whether a caller holding held may read the section:
 // on the legacy path or on the narrow one.
 func (s configSection) readableBy(held []string) bool {
+	return s.openTo(held, false)
+}
+
+// writableBy reports whether a caller holding held may save the section: on
+// the legacy path, which opens both verbs, or on the narrow write permission.
+func (s configSection) writableBy(held []string) bool {
+	return s.openTo(held, true)
+}
+
+func (s configSection) openTo(held []string, write bool) bool {
 	if slices.Contains(held, adminaccess.RuntimePlugins) &&
 		(s.legacyPermission == "" || slices.Contains(held, s.legacyPermission)) {
 		return true
 	}
-	for _, name := range s.access.narrowPermissions(false) {
-		if slices.Contains(held, name) {
-			return true
-		}
+	return slices.ContainsFunc(s.access.narrowPermissions(write), func(name string) bool {
+		return slices.Contains(held, name)
+	})
+}
+
+// Values of a listed section's `level` in the schema list (R3.7, issue
+// 2538): what the caller may do with it. The page disables a `read`
+// section's save; the PUT refuses it on its own account either way.
+const (
+	sectionLevelKey   = "level"
+	sectionLevelRead  = "read"
+	sectionLevelWrite = "write"
+)
+
+// levelFor answers the section's `level` for a caller holding held.
+func (s configSection) levelFor(held []string) string {
+	if s.writableBy(held) {
+		return sectionLevelWrite
 	}
-	return false
+	return sectionLevelRead
 }
 
 // RequireConfigurationAccess is the route gate of the three Configuration
@@ -263,11 +287,12 @@ func (h *Handler) administrationSet(r *http.Request) ([]string, bool) {
 	return resolution.Permissions, true
 }
 
-// readableSections answers the sections the caller may read, in order.
-func (h *Handler) readableSections(r *http.Request) []configSection {
+// readableSections answers the sections the caller may read, in order, and
+// the caller's set they were decided on.
+func (h *Handler) readableSections(r *http.Request) ([]configSection, []string) {
 	held, ok := h.administrationSet(r)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	var readable []configSection
 	for _, section := range configurationSections() {
@@ -275,7 +300,7 @@ func (h *Handler) readableSections(r *http.Request) []configSection {
 			readable = append(readable, section)
 		}
 	}
-	return readable
+	return readable, held
 }
 
 // suggestionSourceSections indexes, once, the sections that declare each

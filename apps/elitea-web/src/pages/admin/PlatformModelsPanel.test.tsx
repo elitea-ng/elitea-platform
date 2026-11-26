@@ -25,6 +25,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { PlatformModelsPanel } from './PlatformModelsPanel';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 
 const MODEL_TYPES = [
@@ -510,9 +511,11 @@ describe('PlatformModelsPanel — deletion', () => {
   it('confirms before withdrawing a model from every project', async () => {
     useModels([GPT4O]);
     const deletes: string[] = [];
+    const codes: Array<string | null> = [];
     server.use(
-      http.delete('*/admin/gateway/platform_models/:id', ({ params }) => {
+      http.delete('*/admin/gateway/platform_models/:id', ({ params, request }) => {
         deletes.push(String(params.id));
+        codes.push(request.headers.get('Elitea-Reason-Code'));
         return new HttpResponse(null, { status: 204 });
       }),
     );
@@ -520,15 +523,16 @@ describe('PlatformModelsPanel — deletion', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
 
-    const confirm = await screen.findByTestId('platform-models-confirm-delete');
+    const confirm = await screen.findByTestId('admin-dangerous-dialog');
     expect(confirm).toHaveTextContent('every project at once');
     // Nothing has been deleted yet.
     expect(deletes).toEqual([]);
 
-    await userEvent.click(screen.getByTestId('platform-models-confirm-delete-button'));
+    await confirmDangerousAction(userEvent.setup(), 'gpt-4o', { code: 'correction' });
     await waitFor(() => {
       expect(deletes).toEqual(['11']);
     });
+    expect(codes).toEqual(['correction']);
   });
 
   // #6826: the confirmation says who falls back before the operator confirms.
@@ -571,7 +575,7 @@ describe('PlatformModelsPanel — deletion', () => {
     renderAdminRoute(<PlatformModelsPanel />);
 
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
-    expect(await screen.findByTestId('platform-models-confirm-delete')).toBeVisible();
+    expect(await screen.findByTestId('admin-dangerous-dialog')).toBeVisible();
     expect(screen.queryByTestId('platform-models-delete-default-impact')).toBeNull();
   });
 
@@ -590,7 +594,7 @@ describe('PlatformModelsPanel — deletion', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
     await waitFor(() => {
-      expect(screen.queryByTestId('platform-models-confirm-delete')).toBeNull();
+      expect(screen.queryByTestId('admin-dangerous-dialog')).toBeNull();
     });
     expect(deletes).toEqual([]);
   });

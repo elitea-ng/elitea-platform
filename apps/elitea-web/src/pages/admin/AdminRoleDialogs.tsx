@@ -1,6 +1,5 @@
 /**
- * The two dialogs behind role create / rename / delete on Admin › Roles
- * (gap G9).
+ * The name dialog behind role create and rename on Admin › Roles (gap G9).
  *
  * The page's matrix edits the CELLS of a table whose columns already exist.
  * These change the columns: `POST | PUT | DELETE /admin/roles/{scope}/{mode}`.
@@ -15,19 +14,17 @@
  * `system` column. Nothing here is allowed to be the only thing standing
  * between an operator and a mutation.
  *
- * ## Why deleting asks for the ROLE NAME and not a fixed word
+ * ## Delete
  *
- * `AdminProjectDeleteDialog` asks for the literal word DELETE, because it can
- * destroy several projects at once and a per-project prompt would be unusable.
- * This dialog deletes exactly one named thing, so the name is the stronger
- * prompt: typing it proves the operator read WHICH role they are about to take
- * away, which is the mistake that matters when four tabs show four different
- * role lists that share the same names.
+ * A role delete is critical (ADR-0059 decision 6) and is confirmed in the one
+ * dangerous-action dialog (`AdminDangerousActionDialog`, R3.8b), which asks for
+ * the role's name: typing it proves the operator read WHICH role they are
+ * about to take away, the mistake that matters when four tabs show four
+ * different role lists that share the same names.
  */
 import { useCallback, useEffect, useState } from 'react';
 
 import Alert from '@mui/material/Alert';
-import AlertTitle from '@mui/material/AlertTitle';
 import Button from '@mui/material/Button';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
@@ -187,78 +184,6 @@ export function RoleNameDialog({
           {mode === 'create'
             ? t('pages.admin.roles.create.submit', 'Create role')
             : t('pages.admin.roles.rename.submit', 'Rename role')}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
-export interface RoleDeleteDialogProps {
-  readonly open: boolean;
-  readonly role: string;
-  readonly isSubmitting: boolean;
-  /**
-   * The server's own words. A refused delete is usually the 409 that names how
-   * many members still hold the role, and that count is the thing the operator
-   * acts on — replacing it with "Failed to delete" would hide it.
-   */
-  readonly failureReason: string | undefined;
-  readonly onClose: () => void;
-  readonly onConfirm: () => void;
-}
-
-export function RoleDeleteDialog({
-  open,
-  role,
-  isSubmitting,
-  failureReason,
-  onClose,
-  onConfirm,
-}: RoleDeleteDialogProps) {
-  const [confirmation, setConfirmation] = useState('');
-
-  useEffect(() => {
-    if (open) setConfirmation('');
-  }, [open, role]);
-
-  const armed = confirmation.trim() === role && !isSubmitting;
-
-  return (
-    <Dialog open={open} onClose={isSubmitting ? undefined : onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>{t('pages.admin.roles.delete.title', 'Delete role')}</DialogTitle>
-      <DialogContent>
-        <Alert severity="warning" sx={{ marginBottom: '1rem' }}>
-          <AlertTitle>{t('pages.admin.roles.delete.warningTitle', 'This removes the role')}</AlertTitle>
-          {t(
-            'pages.admin.roles.delete.warningBody',
-            'Every permission granted to this role goes with it. A role that is still assigned to anyone is refused, and the response says how many assignments remain.',
-          )}
-        </Alert>
-
-        {failureReason ? (
-          <Alert severity="error" sx={{ marginBottom: '1rem' }} data-testid="admin-roles-delete-error">
-            {failureReason}
-          </Alert>
-        ) : null}
-
-        <TextField
-          fullWidth
-          margin="dense"
-          value={confirmation}
-          disabled={isSubmitting}
-          onChange={(event) => setConfirmation(event.target.value)}
-          label={t('pages.admin.roles.delete.confirmLabel', 'Type {{role}} to confirm', { role })}
-          slotProps={{ htmlInput: { 'aria-label': `Type ${role} to confirm` } }}
-        />
-      </DialogContent>
-      <DialogActions sx={{ paddingX: '1.5rem', paddingBottom: '1rem' }}>
-        <Button variant="elitea" color="tertiary" onClick={onClose} disabled={isSubmitting}>
-          {t('pages.admin.roles.dialog.cancel', 'Cancel')}
-        </Button>
-        <Button color="error" variant="contained" onClick={onConfirm} disabled={!armed}>
-          {isSubmitting
-            ? t('pages.admin.roles.delete.submitting', 'Deleting…')
-            : t('pages.admin.roles.delete.submit', 'Delete role')}
         </Button>
       </DialogActions>
     </Dialog>

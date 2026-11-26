@@ -63,7 +63,9 @@ import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { useAdminUsers, type AdminUserRow } from './api/adminUsersApi';
 import { useAdminProjects, useProjectRoles, type AdminProjectRow } from './api/adminProjectsApi';
+import type { AdminReason } from './adminDangerousAction';
 import { useBulkInviteMembers, type BulkInviteReport } from './api/adminBulkInviteApi';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 
 export interface AdminBulkInviteDialogProps {
   readonly open: boolean;
@@ -205,6 +207,7 @@ function AdminBulkInviteForm({ onClose }: { readonly onClose: () => void }) {
   const roleOptions = useRoleOptions(selectedProjects);
   const access = useAdminWritable(ADMIN_ITEM.users);
   const invite = access.guard(useBulkInviteMembers());
+  const confirm = useAdminDangerousConfirm();
 
   const pairCount = selectedUsers.length * selectedProjects.length;
   const overCap = pairCount > MAX_PAIRS;
@@ -216,8 +219,7 @@ function AdminBulkInviteForm({ onClose }: { readonly onClose: () => void }) {
   const userOptions = useMemo(() => usersQuery.data?.rows ?? [], [usersQuery.data]);
   const projectOptions = useMemo(() => projectsQuery.data?.rows ?? [], [projectsQuery.data]);
 
-  const handleSubmit = () => {
-    if (!canSubmit) return;
+  const send = (reason: AdminReason) => {
     setReport(null);
     setErrorMessage('');
     invite.mutate(
@@ -225,6 +227,7 @@ function AdminBulkInviteForm({ onClose }: { readonly onClose: () => void }) {
         users: selectedUsers.map((user) => user.id),
         projects: selectedProjects.map((project) => project.id),
         role,
+        reason,
       },
       {
         onSuccess: (result) => setReport(result),
@@ -238,8 +241,28 @@ function AdminBulkInviteForm({ onClose }: { readonly onClose: () => void }) {
     );
   };
 
+  // Granting a role to many people in many projects at once is a dangerous
+  // action (ADR-0059 R3.8b): the operator types the role and gives a reason.
+  const handleSubmit = () => {
+    if (!canSubmit) return;
+    confirm.ask({
+      action: 'POST /api/v2/admin/invites_bulk/administration',
+      title: t('pages.admin.users.bulkInvite.confirmTitle', 'Invite in bulk'),
+      change: t(
+        'pages.admin.users.bulkInvite.confirmBody',
+        '{{users}} people get the role {{role}} in every chosen project.',
+        { users: selectedUsers.length, role },
+      ),
+      reach: { count: selectedProjects.length, unit: 'projects' },
+      target: role,
+      confirmLabel: t('pages.admin.users.bulkInvite.invite', 'Invite {{pairs}} pairs', { pairs: pairCount }),
+      run: send,
+    });
+  };
+
   return (
     <>
+      {confirm.dialog}
       <DialogContent>
         <Stack spacing={2} sx={{ paddingTop: '0.5rem' }}>
           <Typography variant="bodyMedium" color="text.secondary">

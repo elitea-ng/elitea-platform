@@ -53,12 +53,12 @@ import Tabs from '@mui/material/Tabs';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
 import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { t } from '@/shared/i18n';
 import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminBulkInviteDialog } from './AdminBulkInviteDialog';
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
 import { AdminEntitlementsExportButton } from './AdminEntitlementsExportButton';
 import { AdminUserDevicesDrawer } from './AdminUserDevicesDrawer';
 import { AdminUsersTable, type AdminUserRowActions } from './AdminUsersTable';
@@ -96,15 +96,10 @@ function UsersPage() {
     [baseRowActions],
   );
 
-  const { total, page, deleteIds, rows } = state;
+  const { total, page } = state;
   const lastPage = total === 0 ? 0 : Math.ceil(total / ADMIN_USERS_PAGE_SIZE) - 1;
   const firstShown = total === 0 ? 0 : page * ADMIN_USERS_PAGE_SIZE + 1;
   const lastShown = Math.min((page + 1) * ADMIN_USERS_PAGE_SIZE, total);
-
-  const deleteTargetName =
-    deleteIds.length === 1
-      ? (rows.find((row) => row.id === deleteIds[0])?.email ?? String(deleteIds[0]))
-      : `${deleteIds.length} ${t('pages.admin.users.deleteModal.users', 'users')}`;
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
@@ -265,14 +260,15 @@ function UsersPage() {
         </Box>
       )}
 
-      <DeleteEntityModal
-        open={deleteIds.length > 0}
-        onClose={state.onCancelDelete}
-        onConfirm={state.onConfirmDelete}
-        confirming={state.isDeleting}
-        name={deleteTargetName}
-        copy={{ title: t('pages.admin.users.deleteModal.title', 'Delete confirmation') }}
-      />
+      {state.dangerous ? (
+        <AdminDangerousActionDialog
+          open
+          {...state.dangerous}
+          pending={state.isDeleting}
+          onClose={state.onCancelDangerous}
+          onConfirm={state.onConfirmDangerous}
+        />
+      ) : null}
 
       <AdminBulkInviteDialog open={bulkInviteOpen} onClose={() => setBulkInviteOpen(false)} />
 

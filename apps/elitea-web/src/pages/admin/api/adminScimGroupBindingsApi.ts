@@ -36,6 +36,8 @@ import {
 import { eliteaFetch } from "@/shared/api/generated/mutator";
 import { unwrapBody } from "@/shared/api/unwrap";
 
+import { reasonFields, reasonHeaders, type AdminReason } from "../adminDangerousAction";
+
 /** A binding is a deployment fact; there is no project-scoped view of it. */
 const ADMIN_MODE = "administration";
 
@@ -193,15 +195,21 @@ export function useAdminScimGroupProjectRoles(
 export function useSaveAdminScimGroupBinding(): UseMutationResult<
   void,
   Error,
-  AdminScimGroupBindingDraft
+  { readonly draft: AdminScimGroupBindingDraft; readonly reason: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (draft: AdminScimGroupBindingDraft) => {
+    mutationFn: async ({ draft, reason }) => {
       const body = {
         display_name: draft.displayName,
         project_id: draft.projectId,
         role_name: draft.roleName,
+        ...reasonFields(
+          draft.id === undefined
+            ? "POST /api/v2/admin/scim_group_bindings/administration"
+            : "PUT /api/v2/admin/scim_group_bindings/administration/{id}",
+          reason,
+        ),
       };
       await eliteaFetch<unknown>(
         draft.id === undefined ? BINDINGS_URL : bindingUrl(draft.id),
@@ -229,12 +237,15 @@ export function useSaveAdminScimGroupBinding(): UseMutationResult<
 export function useDeleteAdminScimGroupBinding(): UseMutationResult<
   void,
   Error,
-  string
+  { readonly id: string; readonly reason: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      await eliteaFetch<unknown>(bindingUrl(id), { method: "DELETE" });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(bindingUrl(id), {
+        method: "DELETE",
+        ...reasonHeaders("DELETE /api/v2/admin/scim_group_bindings/administration/{id}", reason),
+      });
     },
     onSuccess: () =>
       queryClient.invalidateQueries({

@@ -13,11 +13,8 @@
  * The item ids are the server's, so `admin-nav-item-<id>` names the same
  * thing in the console, the document and the access-denied page.
  *
- * Some document items have no page of their own here:
+ * One document item has no page of their own here:
  *
- *  - the gateway tabs (story R3.5a, issue 2535) are still tabs of the
- *    Configuration page, so Configuration `standsFor` them and shows for a
- *    caller the document opens any of them to;
  *  - Identity trust (R3.6, issue 2537) is the trust half of the Identity
  *    providers and SCIM pages, never a page: Identity providers `standsFor`
  *    it, and the two pages read its level to lock the trust controls.
@@ -33,20 +30,25 @@ import AccountBalanceWalletOutlinedIcon from '@mui/icons-material/AccountBalance
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AssignmentOutlinedIcon from '@mui/icons-material/AssignmentOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
+import CloudOutlinedIcon from '@mui/icons-material/CloudOutlined';
 import ContentCutOutlinedIcon from '@mui/icons-material/ContentCutOutlined';
 import DevicesOutlinedIcon from '@mui/icons-material/DevicesOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import FingerprintOutlinedIcon from '@mui/icons-material/FingerprintOutlined';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
+import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import LinkOutlinedIcon from '@mui/icons-material/LinkOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutlined';
 import PaletteOutlinedIcon from '@mui/icons-material/PaletteOutlined';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutlineOutlined';
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
+import PriceChangeOutlinedIcon from '@mui/icons-material/PriceChangeOutlined';
+import ReceiptLongOutlinedIcon from '@mui/icons-material/ReceiptLongOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
@@ -144,8 +146,36 @@ export function adminConsoleNavItems(): readonly AdminConsoleNavItem[] {
     item('scim', 'people_access', '/scim', t('pages.admin.nav.scim', 'SCIM'), SyncAltOutlinedIcon),
     item('projects', 'projects', '/projects', t('pages.admin.nav.projects', 'Projects'), FolderOutlinedIcon),
     item('app-requests', 'projects', '/app-requests', t('pages.admin.nav.appRequests', 'App Requests'), AssignmentOutlinedIcon),
+    // The seven of decision 6 (R3.5a, issue 2535). Status is a tab of Usage,
+    // Budget alerts a tab of Budgets and alerts (`./AdminItemTabs.tsx`).
+    item(
+      'providers-models',
+      'models_spend',
+      '/models/providers',
+      t('pages.admin.console.item.providers-models', 'Providers and models'),
+      CloudOutlinedIcon,
+    ),
+    item(
+      'models-pricing',
+      'models_spend',
+      '/models/pricing',
+      t('pages.admin.console.item.models-pricing', 'Models and pricing'),
+      PriceChangeOutlinedIcon,
+    ),
+    item('tool-prices', 'models_spend', '/models/tool-prices', t('pages.admin.console.item.tool-prices', 'Tool prices'), HandymanOutlinedIcon),
+    item('usage', 'models_spend', '/models/usage', t('pages.admin.console.item.usage', 'Usage'), InsightsOutlinedIcon, {
+      alsoOn: ['/models/status'],
+    }),
+    item('logs', 'models_spend', '/models/logs', t('pages.admin.console.item.logs', 'Logs'), ReceiptLongOutlinedIcon),
     item('llm-governance', 'models_spend', '/governance', t('pages.admin.nav.governance', 'LLM Governance'), PolicyOutlinedIcon),
-    item('budgets-alerts', 'models_spend', '/budgets', t('pages.admin.nav.budgets', 'Budgets'), AccountBalanceWalletOutlinedIcon),
+    item(
+      'budgets-alerts',
+      'models_spend',
+      '/budgets',
+      t('pages.admin.console.item.budgets-alerts', 'Budgets and alerts'),
+      AccountBalanceWalletOutlinedIcon,
+      { alsoOn: ['/budgets/alerts'] },
+    ),
     item('agent-registry', 'agents_governance', '/agent-registry', t('pages.admin.nav.agentRegistry', 'Agent registry'), FactCheckOutlinedIcon),
     item(
       'connector-requests',
@@ -179,15 +209,7 @@ export function adminConsoleNavItems(): readonly AdminConsoleNavItem[] {
     item('kill-switch', 'agents_governance', '/kill-switch', t('pages.admin.nav.killSwitch', 'Kill switch'), StopCircleOutlinedIcon),
     item('audit-trail', 'security', '/audit', t('pages.admin.nav.audit', 'Audit Trail'), HistoryOutlinedIcon),
     item('data-retention', 'security', '/retention', t('pages.admin.nav.retention', 'Data retention'), GavelOutlinedIcon),
-    item('configuration', 'platform', '/configuration', t('pages.admin.nav.configuration', 'Configuration'), SettingsOutlinedIcon, {
-      standsFor: [
-        'providers-models',
-        'models-pricing',
-        'tool-prices',
-        'usage',
-        'logs',
-      ],
-    }),
+    item('configuration', 'platform', '/configuration', t('pages.admin.nav.configuration', 'Configuration'), SettingsOutlinedIcon),
     item('features', 'platform', '/features', t('pages.admin.nav.features', 'Features'), TuneOutlinedIcon),
     item('branding', 'platform', '/branding', t('pages.admin.nav.branding', 'Branding'), PaletteOutlinedIcon),
     item('email', 'platform', '/email', t('pages.admin.nav.email', 'E-mail'), MailOutlineIcon),
@@ -249,11 +271,11 @@ export function visibleConsoleNavAreas(level: ConsoleItemLevel): readonly AdminC
 
 /**
  * The item that owns the matched route, from the router's matched route ids
- * (leaf and ancestors). The index route `/` renders Users, so it is Users'.
+ * (leaf and ancestors). The index route `/` is Home (issue 2533) under the
+ * six areas, which no item owns.
  */
 export function consoleNavItemForRoute(matchedRouteIds: readonly string[]): AdminConsoleNavItem | undefined {
   const matched = new Set(matchedRouteIds);
   const items = adminConsoleNavItems();
-  if (matched.has('/')) return items.find((entry) => entry.id === 'users');
   return items.find((entry) => matched.has(entry.path) || (entry.alsoOn ?? []).some((path) => matched.has(path)));
 }

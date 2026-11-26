@@ -130,3 +130,8 @@ export function listItemTypeFor(field: AdminConfigField): ConfigListItemType | u
   if (declared === 'integer') return 'integer';
   return undefined;
 }
+
+/** The label a field shows: its title, or its key when it has none. */
+export function fieldLabel(field: AdminConfigField): string {
+  return field.title === '' ? field.key : field.title;
+}

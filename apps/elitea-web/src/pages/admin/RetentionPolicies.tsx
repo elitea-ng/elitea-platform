@@ -10,7 +10,6 @@ import { useState } from 'react';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import MenuItem from '@mui/material/MenuItem';
 import Switch from '@mui/material/Switch';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
@@ -23,35 +22,11 @@ import Typography from '@mui/material/Typography';
 import type { RetentionPolicy } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { OverrideForm, classLabel, errorMessage, parseDays, retentionRequest } from './RetentionOverrideForm';
+import { useAdminDangerousConfirm, type AdminDangerousRequest } from './useAdminDangerousConfirm';
 import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
-import {
-  retentionFailureReason,
-  useDeleteProjectOverride,
-  useSetPlatformPolicy,
-  useSetProjectOverride,
-} from './api/adminRetentionApi';
-
-function classLabel(dataClass: string): string {
-  switch (dataClass) {
-    case 'conversation':
-      return t('pages.admin.retention.class.conversation', 'Conversations');
-    case 'attachment':
-      return t('pages.admin.retention.class.attachment', 'Attachments');
-    case 'step_content':
-      return t('pages.admin.retention.class.stepContent', 'Run step content');
-    case 'step_record':
-      return t('pages.admin.retention.class.stepRecord', 'Run step records');
-    case 'gateway_request_log':
-      return t('pages.admin.retention.class.gatewayRequestLog', 'LLM gateway request log');
-    case 'admin_audit':
-      return t('pages.admin.retention.class.adminAudit', 'Admin audit trail');
-    case 'security_audit':
-      return t('pages.admin.retention.class.securityAudit', 'Security audit outbox');
-    default:
-      return dataClass;
-  }
-}
+import { useDeleteProjectOverride, useSetPlatformPolicy } from './api/adminRetentionApi';
 
 function classNote(policy: RetentionPolicy): string | undefined {
   switch (policy.data_class) {
@@ -78,28 +53,16 @@ function classNote(policy: RetentionPolicy): string | undefined {
   }
 }
 
-/** Parses a day count field. Empty is null (keep forever); NaN is refused. */
-function parseDays(value: string): number | null | 'invalid' {
-  const trimmed = value.trim();
-  if (trimmed === '') return null;
-  if (!/^\d+$/.test(trimmed)) return 'invalid';
-  return Number(trimmed);
-}
-
-function errorMessage(error: unknown): string {
-  return (
-    retentionFailureReason(error) ?? t('pages.admin.retention.error.save', 'Failed to save the retention policy.')
-  );
-}
-
 function PlatformRow({
   policy,
   onError,
   onSaved,
+  ask,
 }: {
   readonly policy: RetentionPolicy;
   readonly onError: (message: string) => void;
   readonly onSaved: () => void;
+  readonly ask: (request: AdminDangerousRequest) => void;
 }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
   const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
@@ -117,15 +80,18 @@ function PlatformRow({
       onError(t('pages.admin.retention.error.days', 'Enter a whole number of days.'));
       return;
     }
-    save.mutate(
-      {
-        dataClass: policy.data_class,
-        minAgeDays: parsedMin ?? 0,
-        maxAgeDays: parsedMax,
-        allowProjectOverride: allowOverride,
-      },
-      { onSuccess: onSaved, onError: (error) => onError(errorMessage(error)) },
-    );
+    const draft = {
+      dataClass: policy.data_class,
+      minAgeDays: parsedMin ?? 0,
+      maxAgeDays: parsedMax,
+      allowProjectOverride: allowOverride,
+    };
+    ask({
+      ...retentionRequest(policy.data_class, undefined),
+      action: 'PUT /api/v2/admin/retention/policies/{dataClass} shorten',
+      run: (reason) =>
+        save.mutate({ draft, reason }, { onSuccess: onSaved, onError: (error) => onError(errorMessage(error)) }),
+    });
   };
 
   return (
@@ -188,96 +154,11 @@ function PlatformRow({
   );
 }
 
-function OverrideForm({
-  classes,
-  onError,
-  onSaved,
-}: {
-  readonly classes: readonly string[];
-  readonly onError: (message: string) => void;
-  readonly onSaved: () => void;
-}) {
-  const access = useAdminWritable(ADMIN_ITEM.dataRetention);
-  const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
-  const setOverride = access.guard(useSetProjectOverride());
-  const [dataClass, setDataClass] = useState(classes[0] ?? '');
-  const [projectId, setProjectId] = useState('');
-  const [maxDays, setMaxDays] = useState('');
-
-  if (classes.length === 0) {
-    return (
-      <Typography variant="bodySmall" color="text.secondary">
-        {t(
-          'pages.admin.retention.override.none',
-          'No data class allows project overrides. Switch on "Project overrides" for a class to allow them.',
-        )}
-      </Typography>
-    );
-  }
-
-  const onSubmit = () => {
-    const parsedProject = parseDays(projectId);
-    const parsedMax = parseDays(maxDays);
-    if (parsedProject === null || parsedProject === 'invalid' || parsedProject < 1 || parsedMax === 'invalid') {
-      onError(t('pages.admin.retention.error.override', 'Enter a project id and a whole number of days.'));
-      return;
-    }
-    setOverride.mutate(
-      { dataClass, projectId: parsedProject, maxAgeDays: parsedMax },
-      {
-        onSuccess: () => {
-          setProjectId('');
-          setMaxDays('');
-          onSaved();
-        },
-        onError: (error) => onError(errorMessage(error)),
-      },
-    );
-  };
-
-  return (
-    <Box sx={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-      <TextField
-        select
-        size="small"
-        label={t('pages.admin.retention.override.class', 'Data class')}
-        value={dataClass}
-        disabled={locked}
-        onChange={(event) => setDataClass(event.target.value)}
-        sx={{ minWidth: '12rem' }}
-      >
-        {classes.map((item) => (
-          <MenuItem key={item} value={item}>
-            {classLabel(item)}
-          </MenuItem>
-        ))}
-      </TextField>
-      <TextField
-        size="small"
-        label={t('pages.admin.retention.override.project', 'Project id')}
-        value={projectId}
-        disabled={locked}
-        onChange={(event) => setProjectId(event.target.value)}
-      />
-      <TextField
-        size="small"
-        label={t('pages.admin.retention.column.max', 'Maximum (days)')}
-        placeholder={t('pages.admin.retention.forever', 'Forever')}
-        value={maxDays}
-        disabled={locked}
-        onChange={(event) => setMaxDays(event.target.value)}
-      />
-      <Button variant="outlined" size="small" disabled={locked || setOverride.isPending} onClick={onSubmit}>
-        {t('pages.admin.retention.override.set', 'Set override')}
-      </Button>
-    </Box>
-  );
-}
-
 export function RetentionPolicies({ policies }: { readonly policies: readonly RetentionPolicy[] }) {
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
   const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.retentionManage).disabled;
   const removeOverride = access.guard(useDeleteProjectOverride());
+  const confirm = useAdminDangerousConfirm();
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
@@ -326,6 +207,7 @@ export function RetentionPolicies({ policies }: { readonly policies: readonly Re
               policy={policy}
               onError={onError}
               onSaved={onSaved}
+              ask={confirm.ask}
             />
           ))}
         </TableBody>
@@ -363,10 +245,15 @@ export function RetentionPolicies({ policies }: { readonly policies: readonly Re
                     size="small"
                     disabled={locked || removeOverride.isPending}
                     onClick={() =>
-                      removeOverride.mutate(
-                        { dataClass: policy.data_class, projectId: policy.project_id ?? 0 },
-                        { onSuccess: onSaved, onError: (failure) => onError(errorMessage(failure)) },
-                      )
+                      confirm.ask({
+                        ...retentionRequest(policy.data_class, policy.project_id ?? 0),
+                        action: 'DELETE /api/v2/admin/retention/policies/{dataClass}/projects/{projectID} shorten',
+                        run: (reason) =>
+                          removeOverride.mutate(
+                            { dataClass: policy.data_class, projectId: policy.project_id ?? 0, reason },
+                            { onSuccess: onSaved, onError: (failure) => onError(errorMessage(failure)) },
+                          ),
+                      })
                     }
                   >
                     {t('pages.admin.retention.override.remove', 'Remove')}
@@ -377,7 +264,8 @@ export function RetentionPolicies({ policies }: { readonly policies: readonly Re
           </TableBody>
         </Table>
       ) : null}
-      <OverrideForm classes={overridable} onError={onError} onSaved={onSaved} />
+      <OverrideForm classes={overridable} onError={onError} onSaved={onSaved} ask={confirm.ask} />
+      {confirm.dialog}
     </Box>
   );
 }

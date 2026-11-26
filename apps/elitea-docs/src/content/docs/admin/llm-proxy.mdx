@@ -3,22 +3,28 @@ title: "LLM proxy"
 description: "Publish platform-wide model providers, grant models to specific projects, and read gateway status, usage, and logs."
 ---
 
-The LLM Proxy screen lives under **Configuration › LLM Proxy** in the admin console. It is the platform-wide control over the LLM gateway that sits in front of every model call, organized into six tabs.
+The LLM gateway sits in front of every model call. Its platform-wide controls are the pages of the **Models and spend** area of the admin console, beside **LLM Governance** and **Budgets and alerts**.
 
 <CardGroup cols={2}>
-  <Card title="Status" icon="activity">Whether the gateway is reachable, and whether rate limits and budgets are actually enforceable right now.</Card>
-  <Card title="Models" icon="cpu">The platform model catalogue and its per-project grants.</Card>
-  <Card title="Usage" icon="chart-bar">Deployment-wide spend by provider and model.</Card>
-  <Card title="Logs" icon="list">A per-request log of every call the gateway served.</Card>
-  <Card title="Providers & models" icon="plug">Publish a provider credential once for the whole platform.</Card>
-  <Card title="Alerts" icon="bell">The default soft-alert threshold for budget warnings.</Card>
+  <Card title="Providers and models" icon="plug">Publish a provider credential once for the whole platform, grant platform models to projects, and pick the platform default model. Address: `/admin/app/models/providers`.</Card>
+  <Card title="Models and pricing" icon="cpu">The gateway model catalogue and its prices. Address: `/admin/app/models/pricing`.</Card>
+  <Card title="Tool prices" icon="coins">The prices of metered tool calls. Address: `/admin/app/models/tool-prices`.</Card>
+  <Card title="Usage" icon="chart-bar">Deployment-wide spend by model, project and member. Its **Status** tab shows whether the gateway is reachable, and whether rate limits and budgets are enforceable right now. Addresses: `/admin/app/models/usage`, `/admin/app/models/status`.</Card>
+  <Card title="Logs" icon="list">A per-request log of every call the gateway served. Address: `/admin/app/models/logs`.</Card>
+  <Card title="Budget alerts" icon="bell">The default soft-alert threshold for budget warnings, a tab of **Budgets and alerts**. Address: `/admin/app/budgets/alerts`.</Card>
 </CardGroup>
 
-## Permissions per tab
+### Where the pages were
 
-Each tab accepts a narrow administration permission or `configuration.governance`, which still opens every tab. A read permission never shows a credential value.
+Until this release these were the seven tabs of **Configuration › LLM Proxy**. Each page shows only to a person whose administration roles open it, and the **LLM Proxy** row of Configuration now opens **Providers and models**. A bookmark of the old section still works: `/admin/app/configuration#llm_proxy` opens Providers and models, and `#llm_proxy/<tab>` opens that tab's page (`status`, `providers`, `models`, `tools`, `usage`, `logs`, `alerts`).
 
-| Tab | Read | Change |
+While the six labelled areas are off (**Admin › Features › Administration console › Six labelled areas**, on an upgraded deployment), the console keeps the earlier navigation and Configuration still shows the seven tabs. The addresses above work either way.
+
+## Permissions per page
+
+Each page accepts a narrow administration permission or `configuration.governance`, which still opens every tab. A read permission never shows a credential value.
+
+| Page | Read | Change |
 |---|---|---|
 | Status, Usage, Logs | `llm.usage.view` | — |
 | Alerts | `llm.usage.view` | `llm.alerts.manage` |
@@ -29,14 +35,14 @@ Each tab accepts a narrow administration permission or `configuration.governance
 
 **Status** shows the rules the gateway loaded: the id, name and type of each governance rule, and why the gateway refused a rule. So a holder of `llm.usage.view` sees the names and types of the rules, guardrails and allowlists included, even without `llm.policy.view`. It never shows the content of a rule, a credential, or a prompt.
 
-The navigation still asks for `configuration.governance`. A role with only the narrow permissions can call these routes, but the console does not show it the LLM Proxy menu yet.
+The navigation follows the same permissions: an LLM manager, whose role holds only the narrow ones, sees every page of Models and spend and never needs Configuration.
 
 ## Publish a provider platform-wide
 
-Normally an AI provider credential belongs to one project. **Providers & models** lets you publish one from the public project instead, so every project can use it without configuring its own copy.
+Normally an AI provider credential belongs to one project. **Providers and models** lets you publish one from the public project instead, so every project can use it without configuring its own copy.
 
 <Steps>
-  <Step title="Open Providers & models">
+  <Step title="Open Providers and models">
     Existing platform providers are listed with a `status_ok` indicator — the gateway only ever dispatches to a provider whose endpoint and key resolve, so a row reporting `status_ok = false` is stored and listed but silently never used.
   </Step>
   <Step title="Add or edit a provider">

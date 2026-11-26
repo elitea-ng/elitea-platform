@@ -24,11 +24,19 @@ import { t } from '@/shared/i18n';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { useValidateCel } from './api/adminGovernanceApi';
-import {
-  targetWeightSum,
-  type GovernanceDraft,
-  type RoutingTargetDraft,
-} from './useGatewayGovernancePage';
+import type { GovernanceDraft, RoutingTargetDraft } from './useGatewayGovernancePage';
+
+/**
+ * The inline weight-sum hint. UX ONLY — the server re-verifies the sum on every
+ * write and rejects a rule that fails, whatever this showed
+ * (design-governance-config-authoring §3.1).
+ */
+export function targetWeightSum(targets: readonly RoutingTargetDraft[]): number {
+  return targets.reduce((total, target) => {
+    const weight = Number.parseFloat(target.weight);
+    return Number.isFinite(weight) ? total + weight : total;
+  }, 0);
+}
 
 /** How far a weight sum may sit from 1.0 before the hint calls it wrong. */
 const WEIGHT_EPSILON = 1e-6;

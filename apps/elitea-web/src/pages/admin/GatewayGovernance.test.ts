@@ -21,9 +21,9 @@ import {
   draftToData,
   EMPTY_DRAFT,
   rowToDraft,
-  targetWeightSum,
   type GovernanceDraft,
 } from './useGatewayGovernancePage';
+import { targetWeightSum } from './GovernanceRoutingFields';
 
 function draft(patch: Partial<GovernanceDraft>): GovernanceDraft {
   return { ...EMPTY_DRAFT, ...patch };

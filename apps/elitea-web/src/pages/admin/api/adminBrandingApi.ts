@@ -37,6 +37,8 @@ import {
 import type { BrandingAsset, BrandingSettings } from '@/shared/api/generated/model';
 import { EliteaApiError } from '@/shared/api/generated/mutator';
 
+import { reasonHeaders, type AdminReason } from '../adminDangerousAction';
+
 /** The upload kinds the asset route accepts, as the generated client spells them. */
 export type BrandingAssetKind = Parameters<typeof uploadBrandingAsset>[0];
 
@@ -102,11 +104,11 @@ export function useSaveBrandingSettings(): UseMutationResult<
  * added later) included (issue 1057). It answers the re-read state, as the
  * save does.
  */
-export function useResetBrandingSettings(): UseMutationResult<BrandingSettings, Error, void> {
+export function useResetBrandingSettings(): UseMutationResult<BrandingSettings, Error, AdminReason> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (): Promise<BrandingSettings> => {
-      const response = await resetBrandingSettings();
+    mutationFn: async (reason: AdminReason): Promise<BrandingSettings> => {
+      const response = await resetBrandingSettings(reasonHeaders('DELETE /api/v2/admin/branding/administration', reason));
       if (response.status !== 200) throw new Error(`branding reset answered ${response.status}`);
       return response.data;
     },
