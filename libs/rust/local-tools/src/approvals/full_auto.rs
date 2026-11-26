@@ -1,6 +1,6 @@
 //! Full auto (ADR-0061 amendment of 2026-11-26, issue 3079).
 //!
-//! [`PermissionProfile::FullAuto`] answers every ask Bypass answers, and
+//! [`super::PermissionProfile::FullAuto`] answers every ask Bypass answers, and
 //! the taint gate's ask too (decision 5f): after an agent read outside
 //! content, a host command no longer waits for the person. That is the
 //! residual risk the person accepts when they turn it on: instructions in
@@ -454,7 +454,7 @@ fn contained(path: &Path, root: &Path) -> bool {
 }
 
 impl RulesEngine {
-    /// [`PermissionProfile::FullAuto`]'s answer to an ask (`asked`, what
+    /// [`super::PermissionProfile::FullAuto`]'s answer to an ask (`asked`, what
     /// the layers said): allowed, unless the call is on the hard-deny list
     /// ([`hold`]), which stays asked, or is declined in an unattended turn.
     pub(super) fn decide_full_auto(&self, call: &ToolCall, asked: Decision) -> Decision {
