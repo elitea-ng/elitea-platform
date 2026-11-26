@@ -8,10 +8,9 @@
  * Key deviations from the baseline:
  *  - No Redux (no sidebar/collapsed state tracking)
  *  - No tour IDs
- *  - No `GridTableContainer` (old-app entity) — uses MUI `Table` directly;
- *    its `emptyMessage="No tokens"` is reproduced as a plain message box
- *    (Warning #8) so a search that matches nothing still shows feedback
- *    instead of rendering blank
+ *  - On the shared `GridTable` (`shared/ui/grid-table`, the port of the
+ *    old-app entity; ADR-0062 decision 4, D35); its `emptyMessage="No
+ *    tokens"` shows when a search matches nothing (Warning #8)
  *  - Uses RTK Query hooks from `entities/token/api/tokenApi`
  *  - Uses selectors from `entities/token/model/selectors` for masking/sorting
  *  - Delete confirmation uses `DeleteEntityModal` from `shared/ui`
@@ -26,26 +25,26 @@
  *    (Warning #11) — personal tokens are not project-scoped
  *    (`/auth/token/` takes no project param)
  */
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useMemo } from 'react';
 
 import { useRouteContext } from '@tanstack/react-router';
 
 import Box from '@mui/material/Box';
-import Paper from '@mui/material/Paper';
-import Table from '@mui/material/Table';
-import TableBody from '@mui/material/TableBody';
-import TableCell from '@mui/material/TableCell';
-import TableContainer from '@mui/material/TableContainer';
-import TableHead from '@mui/material/TableHead';
-import TableRow from '@mui/material/TableRow';
-import TableSortLabel from '@mui/material/TableSortLabel';
-import Typography from '@mui/material/Typography';
 import { useTheme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 import {
+  GridTable,
+  GridTableBody,
+  GridTableHeader,
+  GridTableRow,
+  SortComparators,
+  useResponsiveColumns,
+  useTableSort,
+  type GridTableColumn,
+} from '@/shared/ui/grid-table';
+import {
   maskedTokenValue,
-  sortTokensByName,
   tokenProjectKey,
   useDeleteTokenMutation,
   useListTokensQuery,
@@ -79,25 +78,29 @@ function selectPersonalProjectId(context: unknown): string | undefined {
 
 /* ── column definitions ────────────────────────────────────────────────── */
 
+type ColumnId = 'name' | 'token' | 'project' | 'administration' | 'expires' | 'actions';
+
 interface ColumnDef {
-  id: 'name' | 'token' | 'project' | 'administration' | 'expires' | 'actions';
+  id: ColumnId;
   label: string;
   sortable: boolean;
+  /** The grid track; the old app's `TOKENS_COLUMNS` widths. */
+  width: string;
 }
 
 const COLUMNS: ColumnDef[] = [
-  { id: 'name', label: t('entities.token.table.name', 'Token name'), sortable: true },
-  { id: 'token', label: t('entities.token.table.tokenValue', 'Token value'), sortable: false },
-  { id: 'project', label: t('entities.token.table.project', 'Project'), sortable: false },
-  { id: 'expires', label: t('entities.token.table.expiration', 'Expiration'), sortable: true },
-  { id: 'actions', label: t('entities.token.table.actions', 'Actions'), sortable: false },
+  { id: 'name', label: t('entities.token.table.name', 'Token name'), sortable: true, width: '1.5fr' },
+  { id: 'token', label: t('entities.token.table.tokenValue', 'Token value'), sortable: false, width: '1fr' },
+  { id: 'project', label: t('entities.token.table.project', 'Project'), sortable: false, width: '1fr' },
+  { id: 'expires', label: t('entities.token.table.expiration', 'Expiration'), sortable: true, width: '0.8fr' },
+  { id: 'actions', label: t('entities.token.table.actions', 'Actions'), sortable: false, width: '9.375rem' },
 ];
 
 /**
  * The administration column (ADR-0059 R1.3b) appears only when a token has
  * administration access: for everyone else the table stays as it was.
  */
-const ADMIN_COLUMN: ColumnDef = { id: 'administration', label: t('entities.token.table.adminAccess', 'Administration'), sortable: false };
+const ADMIN_COLUMN: ColumnDef = { id: 'administration', label: t('entities.token.table.adminAccess', 'Administration'), sortable: false, width: '1.5fr' };
 const COLUMNS_WITH_ADMIN: ColumnDef[] = [...COLUMNS.slice(0, 3), ADMIN_COLUMN, ...COLUMNS.slice(3)];
 
 function columnsFor(tokens: readonly PersonalAccessToken[]): ColumnDef[] {
@@ -148,6 +151,9 @@ export interface TokensTableProps {
   projectNames?: ReadonlyMap<string, string>;
 }
 
+/** `expires` sorts as a date; a token that never expires sorts first, as before. */
+const SORT_COMPARATORS = { expires: SortComparators.date };
+
 export const TokensTable = memo(function TokensTable({
   search = '',
   showPreview = false,
@@ -162,24 +168,10 @@ export const TokensTable = memo(function TokensTable({
   const deleteMutation = useDeleteTokenMutation();
   const theme = useTheme();
   const styles = tokensTableStyles(theme);
-
-  const [sortField, setSortField] = useState<'name' | 'expires'>('name');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [hoveredRowId, setHoveredRowId] = useState<string | null>(null);
-
-  /* ── sorting ──────────────────────────────────────────────────────── */
-
-  const handleSort = useCallback(
-    (field: 'name' | 'expires') => {
-      if (sortField === field) {
-        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-      } else {
-        setSortField(field);
-        setSortDir('asc');
-      }
-    },
-    [sortField],
-  );
+  const { sort, handleSort, sortRows } = useTableSort<PersonalAccessToken>({
+    defaultField: 'name',
+    comparators: SORT_COMPARATORS,
+  });
 
   /* ── search filtering (Warning #10) ─────────────────────────────────── */
 
@@ -191,83 +183,45 @@ export const TokensTable = memo(function TokensTable({
     );
   }, [tokens, search]);
 
-  const sortedTokens = useMemo(() => {
-    const base = sortTokensByName(filteredTokens);
+  const sortedTokens = useMemo(() => sortRows(filteredTokens), [sortRows, filteredTokens]);
 
-    if (sortField === 'expires') {
-      return [...base].sort((a, b) => {
-        const aExp = a.expires ? new Date(a.expires).getTime() : 0;
-        const bExp = b.expires ? new Date(b.expires).getTime() : 0;
-        const cmp = aExp - bExp;
-        return sortDir === 'asc' ? cmp : -cmp;
-      });
-    }
-    return base;
-  }, [filteredTokens, sortField, sortDir]);
-  const columns = useMemo(() => columnsFor(tokens), [tokens]);
+  /* ── columns ──────────────────────────────────────────────────────── */
 
-  /* ── render cell ──────────────────────────────────────────────────── */
-
-  const renderCell = useCallback(
-    (column: ColumnDef, row: PersonalAccessToken) => {
-      if (column.id === 'name') {
-        return (
-          <Typography
-            variant="bodyMedium"
-            sx={styles.nameCell}
-            color="text.secondary"
-          >
-            {row.name}
-          </Typography>
-        );
-      }
-
-      if (column.id === 'token') {
-        return (
-          <Typography
-            variant="bodyMedium"
-            color="text.secondary"
-          >
-            {maskedTokenValue(row)}
-          </Typography>
-        );
-      }
-
-      if (column.id === 'project') {
-        return (
-          <Typography
-            variant="bodyMedium"
-            color="text.secondary"
-          >
-            {projectCellLabel(row, projectNames)}
-          </Typography>
-        );
-      }
-
-      if (column.id === 'expires') {
-        return <ExpiryCell expires={row.expires} />;
-      }
-
-      if (column.id === 'administration') return <TokenAdminAccessCell token={row} />;
-
-      return '-';
-    },
-    [styles.nameCell, projectNames],
+  const columns = useMemo(
+    (): GridTableColumn<PersonalAccessToken>[] =>
+      columnsFor(tokens).map((column) => ({
+        field: column.id,
+        label: column.label,
+        sortable: column.sortable,
+        width: column.width,
+        ...(column.id === 'actions' ? { align: 'right' as const } : {}),
+        render: (row: PersonalAccessToken) => {
+          switch (column.id) {
+            case 'name':
+              return row.name;
+            case 'token':
+              return maskedTokenValue(row);
+            case 'project':
+              return projectCellLabel(row, projectNames);
+            case 'expires':
+              return <ExpiryCell expires={row.expires} />;
+            case 'administration':
+              return <TokenAdminAccessCell token={row} />;
+            case 'actions':
+              return (
+                <ActionsCell
+                  token={row}
+                  onDelete={(uuid) => deleteMutation.mutateAsync(uuid)}
+                  onPreview={onPreviewToken ?? (() => {})}
+                  showPreview={showPreview}
+                />
+              );
+          }
+        },
+      })),
+    [tokens, projectNames, deleteMutation, onPreviewToken, showPreview],
   );
-
-  /* ── render actions ───────────────────────────────────────────────── */
-
-  const renderActions = useCallback(
-    (row: PersonalAccessToken) => (
-      <ActionsCell
-        token={row}
-        onDelete={(uuid) => deleteMutation.mutateAsync(uuid)}
-        onPreview={onPreviewToken ?? (() => {})}
-        showPreview={showPreview}
-      />
-    ),
-    [deleteMutation, onPreviewToken, showPreview],
-  );
+  const { visibleColumns, gridTemplateColumns } = useResponsiveColumns({ columns });
 
   /* ── skeletons while loading ──────────────────────────────────────── */
 
@@ -283,70 +237,27 @@ export const TokensTable = memo(function TokensTable({
 
   /* ── table ────────────────────────────────────────────────────────── */
 
-  if (sortedTokens.length === 0) {
-    return (
-      <Box sx={styles.emptyContainer}>
-        <Typography
-          variant="bodyMedium"
-          color="text.secondary"
-        >
-          {t('entities.token.table.empty', 'No tokens')}
-        </Typography>
-      </Box>
-    );
-  }
-
   return (
-    <TableContainer component={Paper} elevation={0} sx={styles.container}>
-      <Table size="small">
-        <TableHead>
-          <TableRow>
-            {columns.map((col) => (
-              <TableCell
-                key={col.id}
-                sx={styles.headerCell}
-                sortDirection={col.sortable && sortField === col.id ? sortDir : false}
-              >
-                {col.sortable ? (
-                  <TableSortLabel
-                    active={sortField === col.id}
-                    direction={sortDir}
-                    onClick={() => handleSort(col.id as 'name' | 'expires')}
-                  >
-                    {col.label}
-                  </TableSortLabel>
-                ) : (
-                  col.label
-                )}
-              </TableCell>
-            ))}
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {sortedTokens.map((row) => (
-            <TableRow
-              key={row.uuid}
-              hover
-              onMouseEnter={() => setHoveredRowId(row.uuid)}
-              onMouseLeave={() => setHoveredRowId(null)}
-              sx={{
-                backgroundColor:
-                  hoveredRowId === row.uuid
-                    ? theme.vars.palette.action.hover
-                    : 'inherit',
-              }}
-            >
-              {columns.map((col) => (
-                <TableCell key={col.id}>
-                  {col.id === 'actions'
-                    ? renderActions(row)
-                    : renderCell(col, row)}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
+    <GridTable
+      isEmpty={sortedTokens.length === 0}
+      emptyMessage={t('entities.token.table.empty', 'No tokens')}
+    >
+      <GridTableHeader
+        columns={visibleColumns}
+        gridTemplateColumns={gridTemplateColumns}
+        sort={sort}
+        onSort={handleSort}
+      />
+      <GridTableBody>
+        {sortedTokens.map((row) => (
+          <GridTableRow
+            key={row.uuid}
+            row={row}
+            columns={visibleColumns}
+            gridTemplateColumns={gridTemplateColumns}
+          />
+        ))}
+      </GridTableBody>
+    </GridTable>
   );
 });
