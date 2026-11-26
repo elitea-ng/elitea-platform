@@ -2,6 +2,7 @@ package exporttest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -254,4 +255,27 @@ func TestOTLPReceiverAllBodiesAndWaitForEvent(t *testing.T) {
 	}
 	_ = rcv.ChainSequences(t)
 	_ = rcv.DeliverySeqs(t)
+}
+
+func TestWebhookReceiverDeadLettersOnBadContent(t *testing.T) {
+	// A receiver that answers 400 for the event is a content refusal: the sink
+	// retries a bounded number of times, then the pipeline dead-letters the
+	// event. The existing plumbing test (TestWebhookSplitsARefusedBatchAndDeliversTheNeighbours)
+	// covers the split; this one asserts the default attempt bound.
+	rcv := NewWebhookReceiver(t, testKey2)
+	defer func() { _ = rcv.Stop(t) }()
+	sink := newWebhookSink(t, rcv.URL(), testKey2)
+	rcv.Refusals()["event-bad"] = http.StatusBadRequest
+	events := []auditexport.Event{testEvent("event-ok"), testEvent("event-bad")}
+	err := sink.Send(context.Background(), events)
+	if err == nil {
+		t.Fatal("a content refusal must return an error")
+	}
+	var permanent *auditexport.PermanentError
+	if !errors.As(err, &permanent) {
+		t.Fatalf("err = %v, want a permanent error", err)
+	}
+	if len(permanent.Events) != 1 || permanent.Events[0].EventID != "event-bad" {
+		t.Fatalf("permanent events = %v, want only event-bad", permanent.Events)
+	}
 }
