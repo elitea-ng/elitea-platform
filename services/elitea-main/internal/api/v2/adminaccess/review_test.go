@@ -8,6 +8,7 @@ package adminaccess_test
 import (
 	"context"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -50,6 +51,9 @@ func (f *fakeReviews) Review(_ context.Context, review registry.ElevationReview)
 	f.reviews = append(f.reviews, review)
 	if registry.InvolvedIn(f.elevation, review.ReviewerUserID) {
 		return registry.ReviewResult{}, registry.ErrReviewerInvolved
+	}
+	if !slices.Contains(f.reviewers, review.ReviewerUserID) {
+		return registry.ReviewResult{}, registry.ErrReviewerNotEligible
 	}
 	if f.elevation.ReviewState != registry.ElevationReviewPending {
 		return registry.ReviewResult{}, registry.ErrElevationNotReviewable
@@ -155,6 +159,29 @@ func TestAReviewerTokenIsRefusedAndTheOutcomeIsChecked(t *testing.T) {
 	}
 	if len(store.reviews) != 0 {
 		t.Fatalf("a refused review reached the ledger: %+v", store.reviews)
+	}
+}
+
+// A recorded reviewer whose review permission was taken away after the end
+// still reads and writes THIS review; a person who is neither recorded nor
+// holds the permission is refused by the gate.
+func TestARecordedReviewerKeepsTheReview(t *testing.T) {
+	t.Parallel()
+	store := pendingReview()
+	d := requestDirectory()
+	d.users[auditor] = []string{registry.RoleLLMManager}
+	h := reviewRouter(store, d)
+	path := "/access/elevations/" + store.elevation.ID.String() + "/review"
+	if rec := call(t, h, browser(auditor), http.MethodGet, path, ""); rec.Code != http.StatusOK {
+		t.Fatalf("the recorded reviewer's read: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"justified"}`); rec.Code != http.StatusOK {
+		t.Fatalf("the recorded reviewer's review: %d %s", rec.Code, rec.Body)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if rec := call(t, h, browser(bystander), method, path, `{"outcome":"justified"}`); rec.Code != http.StatusForbidden {
+			t.Errorf("a bystander %s: %d %s, want 403", method, rec.Code, rec.Body)
+		}
 	}
 }
 

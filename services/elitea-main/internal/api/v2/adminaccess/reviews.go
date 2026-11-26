@@ -156,7 +156,7 @@ type ReviewGates struct {
 
 // Register mounts the routes on the /api/v2/admin router.
 func (h *ReviewsHandler) Register(r chi.Router, gates ReviewGates) {
-	review := r.With(RequireElevationCredential, gates.Review)
+	review := r.With(RequireElevationCredential, h.recordedReviewerOr(gates.Review))
 	manage := r.With(RequireElevationCredential, gates.Manage)
 	review.Get(ElevationReviewPath, h.Read)
 	review.Post(ElevationReviewPath, h.Write)
@@ -374,6 +374,33 @@ func (h *ReviewsHandler) caller(w http.ResponseWriter, r *http.Request) (int64, 
 		return 0, false
 	}
 	return actor, true
+}
+
+// recordedReviewerOr admits a reviewer recorded for the elevation of the
+// path past gate: eligibility for a review is the record made when the
+// elevation ended (R2.9a), so a reviewer whose access.breakglass.review was
+// taken away afterwards (GuardPendingReviewer lists that change) still reads
+// and writes THIS review. Everyone else goes through gate, the standing
+// permission; the handler's own rules apply to both.
+func (h *ReviewsHandler) recordedReviewerOr(gate func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if h.store != nil {
+				principal, ok := auth.UserFromContext(r.Context())
+				actor, owned := principal.OwningUserID()
+				id, err := uuid.Parse(chi.URLParam(r, "elevationID"))
+				if ok && owned && actor > 0 && err == nil {
+					reviewers, err := h.store.Reviewers(r.Context(), id)
+					if err == nil && slices.Contains(reviewers, actor) {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
+			}
+			gated.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (h *ReviewsHandler) reviewCaller(w http.ResponseWriter, r *http.Request) (int64, uuid.UUID, bool) {

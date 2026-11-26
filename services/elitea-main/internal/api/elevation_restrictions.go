@@ -194,12 +194,14 @@ func armCritical(r *http.Request, entries []adminaccess.Action, caller adminacce
 
 // serveAnnounced serves the request and logs a critical change that was
 // armed and never run by a transaction, on an answer that reports success:
-// a writer missing from the hook path.
+// either a writer missing from the hook path or a write that changed nothing
+// (an assignment the person already held), so it is a warning to look at,
+// not a missed announcement by itself.
 func (g *elevationRestrictions) serveAnnounced(w http.ResponseWriter, r *http.Request, next http.Handler) {
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	next.ServeHTTP(recorder, r)
 	if recorder.status < http.StatusBadRequest && securityaudit.TransactionHooksPending(r.Context()) {
-		slog.ErrorContext(r.Context(), "a critical change under an elevation was not announced in its transaction",
+		slog.WarnContext(r.Context(), "a critical action under an elevation answered success without running its announcement",
 			"method", r.Method, "path", r.URL.Path, "status", recorder.status)
 	}
 }
@@ -213,6 +215,14 @@ type statusRecorder struct {
 func (s *statusRecorder) WriteHeader(status int) {
 	s.status = status
 	s.ResponseWriter.WriteHeader(status)
+}
+
+// Flush passes a flush through, for a handler that asserts http.Flusher on
+// its writer directly.
+func (s *statusRecorder) Flush() {
+	if flusher, ok := s.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 // Unwrap lets http.ResponseController reach the writer below.

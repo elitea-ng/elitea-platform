@@ -164,6 +164,8 @@ An `unauthorized` review opens one entry per flagged change of the elevation. Th
 - `GET /api/v2/admin/access/reverts?open=true`: the entries not handled yet; without `open`, every entry, unhandled ones first.
 - `POST /api/v2/admin/access/reverts/{itemID}/handled`: marks an entry handled, once. A Security auditor can read the review but cannot mark an entry.
 
+Marking an entry handled writes no security audit event. The entry keeps who marked it and when (`handled_by`, `handled_at`), and that record cannot be changed afterwards.
+
 ## What an elevation cannot do
 
 An elevation must not make itself permanent or switch off the controls that watch it. Every administration action carries an elevation value in the platform's action table, and the platform applies it when the permission that admitted the request came from the elevation:

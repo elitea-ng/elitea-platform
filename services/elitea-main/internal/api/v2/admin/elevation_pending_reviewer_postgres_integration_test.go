@@ -29,16 +29,7 @@ func pendingReviewEnvironment(t *testing.T) (escalationEnvironment, uuid.UUID) {
 	t.Helper()
 	env := newEscalationEnvironment(t)
 	ctx := context.Background()
-	for _, statement := range []string{
-		`INSERT INTO public.auth_core__role (name, mode) VALUES ('` + pendingReviewerRole + `', 'administration')`,
-		`INSERT INTO public.auth_core__role_permission (role_id, permission)
-			SELECT id, '` + adminaccess.AccessBreakglassReview + `' FROM public.auth_core__role
-			WHERE name = '` + pendingReviewerRole + `' AND mode = 'administration'`,
-	} {
-		if _, err := env.pool.Exec(ctx, statement); err != nil {
-			t.Fatalf("seed %q: %v", statement, err)
-		}
-	}
+	seedReviewRole(t, env, pendingReviewerRole)
 	giveRole(t, env, escalationPlainTarget, pendingReviewerRole)
 	now := time.Now().UTC()
 	var id uuid.UUID
@@ -58,6 +49,22 @@ VALUES ($1, 'reviewer', $2, $3)`, id, env.ids[escalationPlainTarget], now.Add(-9
 		t.Fatalf("record the reviewer: %v", err)
 	}
 	return env, id
+}
+
+// seedReviewRole creates an administration role that holds
+// access.breakglass.review.
+func seedReviewRole(t *testing.T, env escalationEnvironment, name string) {
+	t.Helper()
+	for _, statement := range []string{
+		`INSERT INTO public.auth_core__role (name, mode) VALUES ('` + name + `', 'administration')`,
+		`INSERT INTO public.auth_core__role_permission (role_id, permission)
+			SELECT id, '` + adminaccess.AccessBreakglassReview + `' FROM public.auth_core__role
+			WHERE name = '` + name + `' AND mode = 'administration'`,
+	} {
+		if _, err := env.pool.Exec(context.Background(), statement); err != nil {
+			t.Fatalf("seed %q: %v", statement, err)
+		}
+	}
 }
 
 func reviewerChanges(t *testing.T, env escalationEnvironment, id uuid.UUID) []string {
@@ -129,5 +136,24 @@ func TestSuspendingOrDeletingAPendingReviewerNeedsTheSuperAdmin(t *testing.T) {
 	got := reviewerChanges(t, env, id)
 	if len(got) != 2 || got[0] != adminaccess.ReviewerChangeSuspended || got[1] != adminaccess.ReviewerChangeDeleted {
 		t.Fatalf("reviewer changes = %v, want suspended then deleted", got)
+	}
+}
+
+// Removing one of two roles that grant the review permission leaves the
+// person a reviewer: no super_admin is needed and nothing is listed.
+func TestRemovingARoleTheReviewerHoldsTwiceIsNoReviewerChange(t *testing.T) {
+	env, id := pendingReviewEnvironment(t)
+	target := env.ids[escalationPlainTarget]
+	const second = "r29a_auditor_2"
+	seedReviewRole(t, env, second)
+	giveRole(t, env, escalationPlainTarget, second)
+	// The admin holds the permission, so the subset rule lets the removal
+	// through to the pending-reviewer rule.
+	giveRole(t, env, escalationAdmin, pendingReviewerRole)
+
+	expectStatus(t, adminDo(t, env.as(escalationAdmin), http.MethodDelete,
+		modesRemove(target, pendingReviewerRole), nil), http.StatusOK)
+	if got := reviewerChanges(t, env, id); len(got) != 0 {
+		t.Fatalf("a removal that kept the permission was listed: %v", got)
 	}
 }

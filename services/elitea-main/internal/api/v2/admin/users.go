@@ -972,7 +972,8 @@ func (h *Handler) checkCentralRoles(
 		// needs the standing super_admin, and is listed in the review
 		// (ADR-0059 R2.9a).
 		if !change.deletion {
-			takesReview, err := adminaccess.RolesGrant(ctx, q, change.mode, change.taken, adminaccess.AccessBreakglassReview)
+			takesReview, err := adminaccess.RolesTakePermission(ctx, q, change.mode, int64(change.targetID),
+				change.taken, change.given, adminaccess.AccessBreakglassReview)
 			if err != nil {
 				return nil, err
 			}

@@ -368,6 +368,36 @@ func RolesGrant(ctx context.Context, q Querier, mode string, roles []string, per
 	return false, nil
 }
 
+// RolesTakePermission reports whether a write that takes the central roles
+// `taken` from userID in mode and gives `given` leaves the person without
+// permission: a taken role grants it, and neither a given role nor another
+// role the person keeps does.
+func RolesTakePermission(ctx context.Context, q Querier, mode string, userID int64,
+	taken, given []string, permission string,
+) (bool, error) {
+	takes, err := RolesGrant(ctx, q, mode, taken, permission)
+	if err != nil || !takes {
+		return false, err
+	}
+	gives, err := RolesGrant(ctx, q, mode, given, permission)
+	if err != nil || gives {
+		return false, err
+	}
+	var kept bool
+	if err := q.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM public.auth_core__user_role assignment
+    JOIN public.auth_core__role role ON role.id = assignment.role_id AND role.mode = $2
+    JOIN public.auth_core__role_permission grant_row
+      ON grant_row.role_id = role.id AND grant_row.permission = $4
+    WHERE assignment.user_id = $1 AND NOT (role.name = ANY($3::text[])))`,
+		userID, mode, taken, permission).Scan(&kept); err != nil {
+		return false, fmt.Errorf("read the roles the person keeps: %w", err)
+	}
+	return !kept, nil
+}
+
 /* ── the reads ─────────────────────────────────────────────────────────── */
 
 // ReviewItem is one row of elitea_auth.admin_elevation_items. A zero value
@@ -490,6 +520,11 @@ type RevertEntry struct {
 // RevertList answers a page of the revert list, unhandled entries first, then
 // oldest first, and the total. open limits it to the unhandled entries.
 func RevertList(ctx context.Context, q Querier, open bool, limit, offset int) ([]RevertEntry, int, error) {
+	// Without the admin audit table no entry was ever opened (openRevertList).
+	present, err := relationPresent(ctx, q, "centry.audit_events")
+	if err != nil || !present {
+		return nil, 0, err
+	}
 	rows, err := q.Query(ctx, `
 SELECT `+reviewItemColumns+`, elevation.user_id,
        COALESCE(change.timestamp, item.created_at), COALESCE(change.user_id, 0), COALESCE(change.http_method, ''),

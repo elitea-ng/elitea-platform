@@ -58,6 +58,42 @@ func EndSessionElevations(ctx context.Context, tx pgx.Tx, appender securityaudit
 		ElevationEnd{Reason: reason, At: at})
 }
 
+// LockSessionElevations takes the row locks of the open elevations bound to
+// the browser sessions a revocation is about to end (the session id
+// sessionID, or every session of userID when sessionID is empty), BEFORE the
+// session rows are updated. The reconciler locks an elevation row and then
+// updates its sealed session row, so a revocation that locked the session
+// first could deadlock with it; taking the elevation first is the same
+// order. A failure is logged, never returned: a logout is never refused for
+// the ledger's sake (R2.11), and EndSessionElevations runs anyway.
+func LockSessionElevations(ctx context.Context, tx pgx.Tx, sessionID string, userID int64) {
+	if tx == nil || (sessionID == "" && userID <= 0) {
+		return
+	}
+	if present, err := relationPresent(ctx, tx, "elitea_auth.admin_elevations"); err != nil || !present {
+		if err != nil {
+			slog.ErrorContext(ctx, "the elevation ledger could not be looked up", "err", err)
+		}
+		return
+	}
+	// A savepoint, so a failed lock leaves the revocation's transaction
+	// usable.
+	err := withSavepoint(ctx, tx, func(sp pgx.Tx) error {
+		_, err := sp.Exec(ctx, `
+SELECT elevation.id
+FROM elitea_auth.admin_elevations elevation
+JOIN elitea_auth.browser_sessions session ON session.ref = elevation.browser_session_ref
+WHERE elevation.ended_at IS NULL AND session.revoked_at IS NULL
+  AND (($1 <> '' AND session.id = $1) OR ($1 = '' AND session.user_id = $2))
+ORDER BY elevation.id
+FOR UPDATE OF elevation`, sessionID, userID)
+		return err
+	})
+	if err != nil {
+		slog.ErrorContext(ctx, "the elevations of the revoked sessions could not be locked first", "err", err)
+	}
+}
+
 // EndPersonElevations ends every open elevation of the person userID, with
 // reason, on tx; actorUserID is who suspended or deleted them (0 for an
 // identity provider push). It answers how many it ended; a failure is

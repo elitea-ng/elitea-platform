@@ -128,6 +128,7 @@ func (s *PostgresStore) Revoke(ctx context.Context, id string, revokedAt time.Ti
 	// transaction, with the end reason `logout` (ADR-0059 R2.11). Only THAT
 	// session's elevation: another session of the same person keeps its own.
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		adminaccess.LockSessionElevations(ctx, tx, id, 0)
 		refs, err := revokeReturningRefs(ctx, tx, `
 		UPDATE elitea_auth.browser_sessions
 		SET revoked_at = $2,
@@ -156,6 +157,7 @@ func (s *PostgresStore) RevokeAllForUser(
 	// `session_revoked` (ADR-0059 R2.11).
 	var revoked int64
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		adminaccess.LockSessionElevations(ctx, tx, "", userID)
 		refs, err := revokeReturningRefs(ctx, tx, `
 		UPDATE elitea_auth.browser_sessions
 		SET revoked_at = $2,
