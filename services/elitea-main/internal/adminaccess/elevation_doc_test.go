@@ -58,6 +58,13 @@ func TestTheBreakGlassPageStatesTheElevationValuesOfTheActionTable(t *testing.T)
 	}
 	got := strings.TrimSpace(text[start+len(elevationTableStart) : end])
 	if want := strings.TrimSpace(elevationTable()); got != want {
+		if os.Getenv("UPDATE_GOLDEN") == "1" {
+			updated := text[:start+len(elevationTableStart)] + "\n\n" + want + "\n\n" + text[end:]
+			if err := os.WriteFile(breakGlassPage, []byte(updated), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
 		t.Fatalf("the elevation table of %s is not the action table's; replace it with:\n\n%s", breakGlassPage, want)
 	}
 }

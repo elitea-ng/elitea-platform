@@ -122,6 +122,12 @@ import type {
   ElevationRequestCreate,
   ElevationRequestDecidedResponse,
   ElevationRequestExpiredResponse,
+  ElevationRevertHandled,
+  ElevationRevertList,
+  ElevationRevertRefusedResponse,
+  ElevationReview,
+  ElevationReviewInput,
+  ElevationReviewRefusedResponse,
   EntitlementGrantList,
   ErrorResponse,
   ExecutionSuspension,
@@ -133,6 +139,7 @@ import type {
   ExternalAgentIdentityCreate,
   ExternalAgentIdentityDriftResponse,
   ExternalAgentIdentityListResponse,
+  GetElevationReviewParams,
   GetUserProjectPermissionsParams,
   GlobalUserInviteRefusal,
   GlobalUserInviteRequest,
@@ -156,6 +163,7 @@ import type {
   ListCredentialInventoryParams,
   ListCredentialReferencesParams,
   ListCredentialUseGrantsParams,
+  ListElevationRevertsParams,
   ListElevationsParams,
   ListExecutionSuspensionsParams,
   ListExternalAgentIdentitiesParams,
@@ -7178,6 +7186,1170 @@ export function useDenyElevationRequest<
   const queryOptions = getDenyElevationRequestQueryOptions(
     elevationID,
     elevationDenial,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getElevationReviewResponse200 = {
+  data: ElevationReview;
+  status: 200;
+};
+
+export type getElevationReviewResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type getElevationReviewResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getElevationReviewResponse403 = {
+  data: ElevationReviewRefusedResponse;
+  status: 403;
+};
+
+export type getElevationReviewResponse404 = {
+  data: ElevationNotFoundResponse;
+  status: 404;
+};
+
+export type getElevationReviewResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type getElevationReviewResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getElevationReviewResponseSuccess =
+  getElevationReviewResponse200 & {
+    headers: Headers;
+  };
+export type getElevationReviewResponseError = (
+  | getElevationReviewResponse400
+  | getElevationReviewResponse401
+  | getElevationReviewResponse403
+  | getElevationReviewResponse404
+  | getElevationReviewResponse500
+  | getElevationReviewResponse503
+) & {
+  headers: Headers;
+};
+
+export type getElevationReviewResponse =
+  getElevationReviewResponseSuccess | getElevationReviewResponseError;
+
+export const getGetElevationReviewUrl = (
+  elevationID: string,
+  params?: GetElevationReviewParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/elevations/${elevationID}/review?${stringifiedParams}`
+    : `/admin/access/elevations/${elevationID}/review`;
+};
+
+/**
+ * The review after use (ADR-0059 decision 5, R2.9a): the elevation,
+ * the reviewers recorded when it ended, the changes made under it
+ * (its admin audit rows, flagged rows first, then by time, paged), the
+ * changes to a reviewer while the review was pending, the attestation
+ * once it is written, and the revert list an `unauthorized` outcome
+ * opened.
+ *
+ * For a holder of `access.breakglass.review`, in a browser session (a
+ * token, a native session, a run token and a sealed session are
+ * refused with `elevation_credential_refused`). The holder, the
+ * requester and the approver of the elevation are refused with
+ * `elevation_reviewer_involved`. `can_review` is true for a reviewer
+ * recorded at the end while the review is pending: eligibility is
+ * that record, not the current roles.
+ * @summary The review of one elevation
+ */
+export const getElevationReview = async (
+  elevationID: string,
+  params?: GetElevationReviewParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getElevationReviewResponse> => {
+  return eliteaFetch<getElevationReviewResponse>(
+    getGetElevationReviewUrl(elevationID, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetElevationReviewQueryKey = (
+  elevationID: string,
+  params?: GetElevationReviewParams,
+) => {
+  return [
+    `/admin/access/elevations/${elevationID}/review`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getGetElevationReviewQueryOptions = <
+  TData = Awaited<ReturnType<typeof getElevationReview>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  params?: GetElevationReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getElevationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetElevationReviewQueryKey(elevationID, params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getElevationReview>>
+  > = ({ signal }) =>
+    getElevationReview(elevationID, params, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: elevationID !== null && elevationID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getElevationReview>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetElevationReviewQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getElevationReview>>
+>;
+export type GetElevationReviewQueryError =
+  | ElevationRefusal
+  | N401Response
+  | ElevationReviewRefusedResponse
+  | ElevationNotFoundResponse
+  | N500Response
+  | ErrorResponse;
+
+export function useGetElevationReview<
+  TData = Awaited<ReturnType<typeof getElevationReview>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  params: undefined | GetElevationReviewParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getElevationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getElevationReview>>,
+          TError,
+          Awaited<ReturnType<typeof getElevationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetElevationReview<
+  TData = Awaited<ReturnType<typeof getElevationReview>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  params?: GetElevationReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getElevationReview>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getElevationReview>>,
+          TError,
+          Awaited<ReturnType<typeof getElevationReview>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetElevationReview<
+  TData = Awaited<ReturnType<typeof getElevationReview>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  params?: GetElevationReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getElevationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The review of one elevation
+ */
+
+export function useGetElevationReview<
+  TData = Awaited<ReturnType<typeof getElevationReview>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  params?: GetElevationReviewParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getElevationReview>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetElevationReviewQueryOptions(
+    elevationID,
+    params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type reviewElevationResponse200 = {
+  data: ElevationReview;
+  status: 200;
+};
+
+export type reviewElevationResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type reviewElevationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type reviewElevationResponse403 = {
+  data: ElevationReviewRefusedResponse;
+  status: 403;
+};
+
+export type reviewElevationResponse404 = {
+  data: ElevationNotFoundResponse;
+  status: 404;
+};
+
+export type reviewElevationResponse409 = {
+  data: ElevationRefusal;
+  status: 409;
+};
+
+export type reviewElevationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type reviewElevationResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type reviewElevationResponseSuccess = reviewElevationResponse200 & {
+  headers: Headers;
+};
+export type reviewElevationResponseError = (
+  | reviewElevationResponse400
+  | reviewElevationResponse401
+  | reviewElevationResponse403
+  | reviewElevationResponse404
+  | reviewElevationResponse409
+  | reviewElevationResponse500
+  | reviewElevationResponse503
+) & {
+  headers: Headers;
+};
+
+export type reviewElevationResponse =
+  reviewElevationResponseSuccess | reviewElevationResponseError;
+
+export const getReviewElevationUrl = (elevationID: string) => {
+  return `/admin/access/elevations/${elevationID}/review`;
+};
+
+/**
+ * The attestation (ADR-0059 decision 5, R2.9a): an outcome,
+ * `justified` or `unauthorized`, and a note. It moves the elevation
+ * from `review_pending` to `reviewed` and changes no platform state.
+ * The `reviewed` security event commits with it and carries the
+ * outcome, never the note.
+ *
+ * `unauthorized` opens a revert list of the flagged changes for the
+ * platform administrators (see `listElevationReverts`) and notifies as
+ * an activation does. The review of a sealed elevation says whether a
+ * replacement credential was issued (`replacement_issued`, required
+ * there and refused anywhere else).
+ *
+ * Only a reviewer recorded when the elevation ended writes it
+ * (`elevation_reviewer_not_eligible`), never the holder, the requester
+ * or the approver (`elevation_reviewer_involved`). Under an elevation
+ * the write is refused (`elevation_restricted`). The answer is the
+ * review as `getElevationReview` reads it.
+ * @summary Record the review of an elevation
+ */
+export const reviewElevation = async (
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<reviewElevationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<reviewElevationResponse>(
+    getReviewElevationUrl(elevationID),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(elevationReviewInput),
+    },
+  );
+};
+
+export const getReviewElevationQueryKey = (
+  elevationID: string,
+  elevationReviewInput?: ElevationReviewInput,
+) => {
+  return [
+    "POST",
+    `/admin/access/elevations/${elevationID}/review`,
+    elevationReviewInput,
+  ] as const;
+};
+
+export const getReviewElevationQueryOptions = <
+  TData = Awaited<ReturnType<typeof reviewElevation>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reviewElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getReviewElevationQueryKey(elevationID, elevationReviewInput);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof reviewElevation>>> = ({
+    signal,
+  }) =>
+    reviewElevation(elevationID, elevationReviewInput, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: elevationID !== null && elevationID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof reviewElevation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ReviewElevationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof reviewElevation>>
+>;
+export type ReviewElevationQueryError =
+  | ElevationRefusal
+  | N401Response
+  | ElevationReviewRefusedResponse
+  | ElevationNotFoundResponse
+  | N500Response
+  | ErrorResponse;
+
+export function useReviewElevation<
+  TData = Awaited<ReturnType<typeof reviewElevation>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reviewElevation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reviewElevation>>,
+          TError,
+          Awaited<ReturnType<typeof reviewElevation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReviewElevation<
+  TData = Awaited<ReturnType<typeof reviewElevation>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reviewElevation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof reviewElevation>>,
+          TError,
+          Awaited<ReturnType<typeof reviewElevation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useReviewElevation<
+  TData = Awaited<ReturnType<typeof reviewElevation>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reviewElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record the review of an elevation
+ */
+
+export function useReviewElevation<
+  TData = Awaited<ReturnType<typeof reviewElevation>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationReviewRefusedResponse
+    | ElevationNotFoundResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  elevationID: string,
+  elevationReviewInput: ElevationReviewInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof reviewElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getReviewElevationQueryOptions(
+    elevationID,
+    elevationReviewInput,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listElevationRevertsResponse200 = {
+  data: ElevationRevertList;
+  status: 200;
+};
+
+export type listElevationRevertsResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type listElevationRevertsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listElevationRevertsResponse403 = {
+  data: ElevationRevertRefusedResponse;
+  status: 403;
+};
+
+export type listElevationRevertsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type listElevationRevertsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type listElevationRevertsResponseSuccess =
+  listElevationRevertsResponse200 & {
+    headers: Headers;
+  };
+export type listElevationRevertsResponseError = (
+  | listElevationRevertsResponse400
+  | listElevationRevertsResponse401
+  | listElevationRevertsResponse403
+  | listElevationRevertsResponse500
+  | listElevationRevertsResponse503
+) & {
+  headers: Headers;
+};
+
+export type listElevationRevertsResponse =
+  listElevationRevertsResponseSuccess | listElevationRevertsResponseError;
+
+export const getListElevationRevertsUrl = (
+  params?: ListElevationRevertsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/admin/access/reverts?${stringifiedParams}`
+    : `/admin/access/reverts`;
+};
+
+/**
+ * The changes of elevations reviewed as `unauthorized`, one entry per
+ * flagged change, unhandled entries first, then oldest first (ADR-0059
+ * decision 5, R2.9a). A queue for the platform administrators: the
+ * platform reverts nothing by itself.
+ *
+ * For a holder of `access.breakglass.manage`, in a browser session.
+ * @summary The revert list
+ */
+export const listElevationReverts = async (
+  params?: ListElevationRevertsParams,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listElevationRevertsResponse> => {
+  return eliteaFetch<listElevationRevertsResponse>(
+    getListElevationRevertsUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListElevationRevertsQueryKey = (
+  params?: ListElevationRevertsParams,
+) => {
+  return [`/admin/access/reverts`, ...(params ? [params] : [])] as const;
+};
+
+export const getListElevationRevertsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listElevationReverts>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  params?: ListElevationRevertsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listElevationReverts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListElevationRevertsQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listElevationReverts>>
+  > = ({ signal }) =>
+    listElevationReverts(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listElevationReverts>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListElevationRevertsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listElevationReverts>>
+>;
+export type ListElevationRevertsQueryError =
+  | ElevationRefusal
+  | N401Response
+  | ElevationRevertRefusedResponse
+  | N500Response
+  | ErrorResponse;
+
+export function useListElevationReverts<
+  TData = Awaited<ReturnType<typeof listElevationReverts>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  params: undefined | ListElevationRevertsParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listElevationReverts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listElevationReverts>>,
+          TError,
+          Awaited<ReturnType<typeof listElevationReverts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListElevationReverts<
+  TData = Awaited<ReturnType<typeof listElevationReverts>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  params?: ListElevationRevertsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listElevationReverts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listElevationReverts>>,
+          TError,
+          Awaited<ReturnType<typeof listElevationReverts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListElevationReverts<
+  TData = Awaited<ReturnType<typeof listElevationReverts>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  params?: ListElevationRevertsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listElevationReverts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary The revert list
+ */
+
+export function useListElevationReverts<
+  TData = Awaited<ReturnType<typeof listElevationReverts>>,
+  TError =
+    | ElevationRefusal
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | N500Response
+    | ErrorResponse,
+>(
+  params?: ListElevationRevertsParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listElevationReverts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListElevationRevertsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type markElevationRevertHandledResponse200 = {
+  data: ElevationRevertHandled;
+  status: 200;
+};
+
+export type markElevationRevertHandledResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type markElevationRevertHandledResponse403 = {
+  data: ElevationRevertRefusedResponse;
+  status: 403;
+};
+
+export type markElevationRevertHandledResponse404 = {
+  data: ElevationRefusal;
+  status: 404;
+};
+
+export type markElevationRevertHandledResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type markElevationRevertHandledResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type markElevationRevertHandledResponseSuccess =
+  markElevationRevertHandledResponse200 & {
+    headers: Headers;
+  };
+export type markElevationRevertHandledResponseError = (
+  | markElevationRevertHandledResponse401
+  | markElevationRevertHandledResponse403
+  | markElevationRevertHandledResponse404
+  | markElevationRevertHandledResponse500
+  | markElevationRevertHandledResponse503
+) & {
+  headers: Headers;
+};
+
+export type markElevationRevertHandledResponse =
+  | markElevationRevertHandledResponseSuccess
+  | markElevationRevertHandledResponseError;
+
+export const getMarkElevationRevertHandledUrl = (itemID: string) => {
+  return `/admin/access/reverts/${itemID}/handled`;
+};
+
+/**
+ * Marks one entry of the revert list handled, once: a second call
+ * changes nothing and answers `changed: false` (ADR-0059 R2.9a). For a
+ * holder of `access.breakglass.manage`, in a browser session; refused
+ * under an elevation (`elevation_restricted`). No body.
+ * @summary Mark a revert entry handled
+ */
+export const markElevationRevertHandled = async (
+  itemID: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<markElevationRevertHandledResponse> => {
+  return eliteaFetch<markElevationRevertHandledResponse>(
+    getMarkElevationRevertHandledUrl(itemID),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getMarkElevationRevertHandledQueryKey = (itemID: string) => {
+  return ["POST", `/admin/access/reverts/${itemID}/handled`] as const;
+};
+
+export const getMarkElevationRevertHandledQueryOptions = <
+  TData = Awaited<ReturnType<typeof markElevationRevertHandled>>,
+  TError =
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | ElevationRefusal
+    | N500Response
+    | ErrorResponse,
+>(
+  itemID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markElevationRevertHandled>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getMarkElevationRevertHandledQueryKey(itemID);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof markElevationRevertHandled>>
+  > = ({ signal }) =>
+    markElevationRevertHandled(itemID, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: itemID !== null && itemID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof markElevationRevertHandled>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type MarkElevationRevertHandledQueryResult = NonNullable<
+  Awaited<ReturnType<typeof markElevationRevertHandled>>
+>;
+export type MarkElevationRevertHandledQueryError =
+  | N401Response
+  | ElevationRevertRefusedResponse
+  | ElevationRefusal
+  | N500Response
+  | ErrorResponse;
+
+export function useMarkElevationRevertHandled<
+  TData = Awaited<ReturnType<typeof markElevationRevertHandled>>,
+  TError =
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | ElevationRefusal
+    | N500Response
+    | ErrorResponse,
+>(
+  itemID: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markElevationRevertHandled>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markElevationRevertHandled>>,
+          TError,
+          Awaited<ReturnType<typeof markElevationRevertHandled>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkElevationRevertHandled<
+  TData = Awaited<ReturnType<typeof markElevationRevertHandled>>,
+  TError =
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | ElevationRefusal
+    | N500Response
+    | ErrorResponse,
+>(
+  itemID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markElevationRevertHandled>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof markElevationRevertHandled>>,
+          TError,
+          Awaited<ReturnType<typeof markElevationRevertHandled>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useMarkElevationRevertHandled<
+  TData = Awaited<ReturnType<typeof markElevationRevertHandled>>,
+  TError =
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | ElevationRefusal
+    | N500Response
+    | ErrorResponse,
+>(
+  itemID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markElevationRevertHandled>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Mark a revert entry handled
+ */
+
+export function useMarkElevationRevertHandled<
+  TData = Awaited<ReturnType<typeof markElevationRevertHandled>>,
+  TError =
+    | N401Response
+    | ElevationRevertRefusedResponse
+    | ElevationRefusal
+    | N500Response
+    | ErrorResponse,
+>(
+  itemID: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof markElevationRevertHandled>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getMarkElevationRevertHandledQueryOptions(
+    itemID,
     options,
   );
 

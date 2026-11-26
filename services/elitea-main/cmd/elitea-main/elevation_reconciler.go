@@ -46,6 +46,13 @@ func startElevationReconciler(ctx context.Context, pool *pgxpool.Pool, logger *s
 	if err != nil {
 		return fmt.Errorf("compose the elevation reconciler: %w", err)
 	}
+	reconciler.WithReviewTimes(func(ctx context.Context) (time.Duration, time.Duration, error) {
+		settings, err := platformconfig.LoadBreakGlassSettings(ctx, pool)
+		if err != nil {
+			return 0, 0, err
+		}
+		return settings.ReviewOnline, settings.ReviewSealed, nil
+	})
 	runElevationReconciler(ctx, routines.NewStore(pool), reconciler.Pass, logger)
 	return nil
 }
@@ -60,7 +67,7 @@ func runElevationReconciler(ctx context.Context, backend routines.Backend,
 		Def: routines.Definition{
 			ID:              adminaccess.ElevationReconcilerRoutineID,
 			Owner:           routines.OwnerMain,
-			Description:     "Records break-glass elevations that ran out as expired and moves them to review, and expires elevation requests nobody answered.",
+			Description:     "Records break-glass elevations that ran out as expired and moves them to review, raises overdue reviews, and expires elevation requests nobody answered.",
 			DefaultSchedule: adminaccess.ElevationReconcilerDefaultSchedule,
 			MinInterval:     15 * time.Second,
 		},
@@ -71,9 +78,11 @@ func runElevationReconciler(ctx context.Context, backend routines.Backend,
 		defer close(done)
 		loop.Run(ctx, func(ctx context.Context) (string, error) {
 			result, err := pass(ctx)
-			if result.Expired > 0 || result.RequestsExpired > 0 {
+			if result.Expired > 0 || result.RequestsExpired > 0 || result.Orphaned > 0 ||
+				result.Overdue > 0 || result.Unreviewed > 0 {
 				logger.Info("elevation reconciler pass",
-					"expired", result.Expired, "requests_expired", result.RequestsExpired)
+					"expired", result.Expired, "requests_expired", result.RequestsExpired,
+					"orphaned", result.Orphaned, "review_overdue", result.Overdue, "unreviewed", result.Unreviewed)
 			}
 			if err != nil {
 				logger.Error("elevation reconciler pass failed", "err", err)
