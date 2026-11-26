@@ -1315,7 +1315,20 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the end, the attestation, the revert list and the notes; append-only
 	// but for marking a revert entry handled (issue 2523, ADR-0059 R2.9a). No
 	// permission.
-	require.EqualValues(t, 283, Head(shared))
+	//
+	// 284: shared/0284_admin_provisional_grants.sql, the roles and project
+	// memberships an elevated person gave to someone else
+	// (elitea_auth.admin_provisional_grants): in effect while the elevation
+	// is active, standing only when its review confirms them; append-only but
+	// for the confirmation (issues 2526 and 2606, ADR-0059 R2.12a/b). No
+	// permission.
+	//
+	// 285: shared/0285_admin_elevation_notes.sql, the operator notes and the
+	// acknowledgement of an elevation nobody independent could review
+	// (admin_elevation_items.note_source and .acknowledgement, one
+	// acknowledgement per elevation) (issue 2604, ADR-0059 R2.9c). No
+	// permission.
+	require.EqualValues(t, 285, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

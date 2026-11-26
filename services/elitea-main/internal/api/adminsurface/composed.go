@@ -331,6 +331,8 @@ func ElevationRequestRoutes() []Route {
 		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/review"},
 		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/reverts"},
 		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/reverts/{itemID}/handled"},
+		// The acknowledgement of an elevation nobody could review (R2.9c).
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/acknowledge"},
 	}
 }
 

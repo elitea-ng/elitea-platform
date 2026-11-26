@@ -239,8 +239,17 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 	// One role is given if the user does not hold it yet, with one history
 	// row in this transaction (issue 2499). Every other role of the user
 	// stays: a person holds several administration roles (issue 2574).
+	// Under an elevation the role is provisional (ADR-0059 R2.12a,
+	// assignCentralRoles).
 	origin := grantOrigin(r, caller)
-	if _, err := rolegrants.Grant(ctx, transaction, int64(userID), mode, role, origin); err != nil {
+	var given []string
+	if !alreadyHeld {
+		given = []string{role}
+	}
+	provisional, err := assignCentralRoles(ctx, transaction, caller, centralAssignment{
+		userID: userID, mode: mode, given: given,
+	}, origin)
+	if err != nil {
 		// No matching role means the deployment does not define it in that
 		// mode.
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
@@ -262,6 +271,12 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
+	// A provisional role is recorded too, with the source `provisional`.
+	if err := h.appendProvisionalRoles(ctx, transaction, r, caller, userID, provisional); err != nil {
+		slog.ErrorContext(ctx, "admin: the provisional role could not be recorded", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
+		return
+	}
 	// A critical change under an elevation is announced in this
 	// transaction (ADR-0059 R2.8b).
 	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {
@@ -274,9 +289,12 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
+	// `provisional` says the role was given under the caller's elevation: in
+	// effect while it is active, standing only once its review confirms it.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true,
-		"id": assignmentID(userID, mode, role),
+		"ok":          true,
+		"id":          assignmentID(userID, mode, role),
+		"provisional": len(provisional) > 0,
 	})
 }
 

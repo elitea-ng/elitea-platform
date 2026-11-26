@@ -15270,12 +15270,60 @@ components:
           type: array
           items: { $ref: '#/components/schemas/UserRecord' }
         total: { type: integer }
+        provisional:
+          type: array
+          description: >
+            ADR-0059 R2.12b: the people given a membership of the project
+            under an elevation that is still active, marked, apart from the
+            members (not paged, not in `total`). They hold it until that
+            elevation ends; only its review makes it a membership.
+          items: { $ref: '#/components/schemas/ProvisionalMember' }
       description: >
         Users response map, internal/api/v2/eliteacore/handler.go's Users.
         NOTE (issue #130): this used to be the response of POST/PUT/DELETE too —
         the router mounted all four verbs on the same listing handler, so every
         write echoed the member list and changed nothing. The write verbs now
         have their own handlers and their own response shapes below.
+
+    ProvisionalMember:
+      type: object
+      required: [id, email, name, roles, elevation_id, granted_by, provisional]
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/users_write_provisional.go
+        (provisionalMember). One person given project roles under an
+        elevation that is still active (ADR-0059 R2.12b).
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+          description: The project role names given provisionally.
+        elevation_id: { type: string, format: uuid }
+        granted_by:
+          type: integer
+          format: int64
+          description: The elevated person who gave them.
+        provisional: { type: boolean }
+
+    UserRolesUpdateResult:
+      type: object
+      required: [msg]
+      description: >
+        NOTE(W2): internal/api/v2/eliteacore/users_write.go (usersUpdate).
+        The `msg` acknowledgement of MessageResponse, and whether a role was
+        given provisionally.
+      properties:
+        msg: { type: string }
+        provisional:
+          type: boolean
+          description: >
+            ADR-0059 R2.12b: true when a role the user did not hold was
+            given under the caller's elevation. It is provisional: in effect
+            while that elevation is active, standing only once the
+            elevation's review confirms it. A role taken away is taken at
+            once.
 
     UserInviteRequest:
       type: object
@@ -15324,6 +15372,13 @@ components:
             not tell them apart and showed one toast for a whole batch. `status`
             keeps its two original values, so this field is additive: an old
             client reads the response exactly as before.
+        provisional:
+          type: boolean
+          description: >
+            ADR-0059 R2.12b: true when the membership was given under the
+            caller's elevation. It is provisional: in effect while that
+            elevation is active, not a member row, standing only once the
+            elevation's review confirms it.
       description: >
         One element of the per-address array the legacy runtime's invite
         returns. The response carries one of these per requested address, and
@@ -20390,8 +20445,11 @@ components:
             `elevation_approver_not_eligible` (403),
             `elevation_reviewer_involved` (403), `elevation_reviewer_not_eligible`
             (403), `elevation_not_reviewable` (409), `revert_not_found`
-            (404), or `elevation_restricted` (403, ADR-0059 R2.8a: an
-            elevation may not answer, ask or review).
+            (404), `elevation_not_acknowledgeable` (409, R2.9c: only an
+            `unreviewed_no_reviewer` elevation is acknowledged),
+            `elevation_acknowledged` (409, acknowledged already), or
+            `elevation_restricted` (403, ADR-0059 R2.8a: an elevation may
+            not answer, ask or review).
 
     ElevationReviewInput:
       type: object
@@ -20414,6 +20472,86 @@ components:
           description: >
             Whether a replacement sealed credential was issued. Required for
             the review of a sealed elevation, refused for any other.
+        confirm_grant_ids:
+          type: array
+          description: >
+            ADR-0059 R2.12: the provisional grants of the elevation (its
+            `provisional_grants`) the reviewer confirms. Each becomes a
+            standing assignment written by the reviewer with the source
+            `review`. Only with the outcome `justified`: with `unauthorized`
+            it is a 400. An id that is not an unconfirmed grant of this
+            elevation is a 400, and nothing is written.
+          items: { type: string, format: uuid }
+
+    ElevationProvisionalGrant:
+      type: object
+      required: [id, kind, person, granted_by, role, project_id, project_role, granted_at, confirmed_at, confirmed_by]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go (provisionalGrantView).
+        A role or a project membership the holder gave to someone else
+        under the elevation (ADR-0059 R2.12a/b). It was in effect only while
+        the elevation was active; it is standing only once a justified
+        review confirms it.
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          description: "`role` (an administration role) or `membership` (a project role)."
+        person: { $ref: '#/components/schemas/ElevationPerson' }
+        granted_by: { $ref: '#/components/schemas/ElevationPerson' }
+        role:
+          type: string
+          nullable: true
+          description: The administration role of a `role` grant.
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: The project of a `membership` grant.
+        project_role:
+          type: string
+          nullable: true
+          description: The project role of a `membership` grant.
+        granted_at: { type: string, format: date-time }
+        confirmed_at: { type: string, format: date-time, nullable: true }
+        confirmed_by:
+          allOf:
+            - $ref: '#/components/schemas/ElevationPerson'
+          nullable: true
+
+    ElevationAcknowledgeInput:
+      type: object
+      required: [note]
+      additionalProperties: false
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/acknowledge.go
+        (acknowledgeBody). The note of an acknowledgement.
+      properties:
+        note:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: >
+            What is known about the elevation nobody independent could
+            review. Kept in the record only; the security event carries its
+            id and length, never its text.
+
+    ElevationAcknowledged:
+      type: object
+      required: [elevation_id, note_id, state, acknowledged]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/acknowledge.go
+        (acknowledgedView).
+      properties:
+        elevation_id: { type: string, format: uuid }
+        note_id:
+          type: string
+          format: uuid
+          description: The note that is the acknowledgement.
+        state:
+          type: string
+          description: The elevation's state, unchanged (`unreviewed_no_reviewer`).
+        acknowledged: { type: boolean }
 
     ElevationReviewAttestation:
       type: object
@@ -20502,7 +20640,7 @@ components:
 
     ElevationReview:
       type: object
-      required: [elevation, reviewers, can_review, review, reviewer_changes, changes, reverts]
+      required: [elevation, reviewers, can_review, review, reviewer_changes, changes, reverts, provisional_grants]
       description: >
         NOTE(W2): internal/api/v2/adminaccess/reviews.go:219-227
         (reviewView).
@@ -20526,6 +20664,13 @@ components:
         reverts:
           type: array
           items: { $ref: '#/components/schemas/ElevationRevert' }
+        provisional_grants:
+          type: array
+          description: >
+            The roles and memberships the holder gave to someone else under
+            the elevation (ADR-0059 R2.12), oldest first; confirm them with
+            `confirm_grant_ids`.
+          items: { $ref: '#/components/schemas/ElevationProvisionalGrant' }
 
     ElevationRevertList:
       type: object
@@ -22286,6 +22431,13 @@ components:
         id:
           type: string
           description: The composite id of the assignment that now exists.
+        provisional:
+          type: boolean
+          description: >
+            ADR-0059 R2.12a: true when the role was given under the caller's
+            elevation. It is provisional: in effect while that elevation is
+            active, not in this listing, standing only once the elevation's
+            review confirms it.
 
     ModeRoleRemoveResult:
       type: object
@@ -22426,6 +22578,20 @@ components:
           description: >
             `set_admin_role` only: the account's administration roles after
             the request, sorted.
+        provisional:
+          type: boolean
+          description: >
+            `set_admin_role` only (ADR-0059 R2.12a): true when a role was
+            given under the caller's elevation. Such a role is provisional:
+            in effect while that elevation is active, never a standing
+            assignment, standing only once the elevation's review confirms
+            it.
+        provisional_role_names:
+          type: array
+          items: { type: string }
+          description: >
+            `set_admin_role` only: the roles of `role_names` given
+            provisionally, sorted; `[]` for a standing change.
 
     AdminRoleRefusal:
       type: object
@@ -23849,6 +24015,13 @@ components:
         msg:
           type: string
           description: The same outcome in English, for a log pane.
+        provisional:
+          type: boolean
+          description: >
+            ADR-0059 R2.12b: true when the membership was given under the
+            caller's elevation. It is provisional: in effect while that
+            elevation is active, never a row of the project's members,
+            standing only once the elevation's review confirms it.
 
     BulkInviteSummary:
       type: object
@@ -26835,7 +27008,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageResponse'
+                $ref: '#/components/schemas/UserRolesUpdateResult'
+              example:
+                msg: roles updated
+                provisional: false
         '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
@@ -28238,6 +28414,17 @@ paths:
                       entity_name: primary
                       flagged: true
                 reverts: []
+                provisional_grants:
+                  - id: 0193a1c4-9b2e-7d01-8c11-4a5e6f7a8b9c
+                    kind: role
+                    person: { id: 15, name: Pat Partner, email: pat@example.com }
+                    granted_by: { id: 12, name: Rui Responder, email: rui@example.com }
+                    role: admin
+                    project_id: null
+                    project_role: null
+                    granted_at: '2026-11-25T10:20:00Z'
+                    confirmed_at: null
+                    confirmed_by: null
         '400':
           description: The limit or the offset is not valid (`elevation_request_invalid`).
           content:
@@ -28274,6 +28461,13 @@ paths:
         or the approver (`elevation_reviewer_involved`). Under an elevation
         the write is refused (`elevation_restricted`). The answer is the
         review as `getElevationReview` reads it.
+
+        A justified review confirms the provisional grants it names in
+        `confirm_grant_ids` (ADR-0059 R2.12): each becomes a standing role
+        or membership, written by the reviewer with the source `review`.
+        Any grant it does not confirm, and every grant of an `unauthorized`
+        review, stays as it is: in effect for no one, since its elevation
+        has ended.
       tags: [admin]
       parameters:
         - $ref: '#/components/parameters/ElevationID'
@@ -28286,6 +28480,7 @@ paths:
             example:
               outcome: justified
               note: The routing change matches the incident ticket.
+              confirm_grant_ids: [0193a1c4-9b2e-7d01-8c11-4a5e6f7a8b9c]
       responses:
         '200':
           description: The review with its attestation
@@ -28329,12 +28524,24 @@ paths:
                   total: 0
                   rows: []
                 reverts: []
+                provisional_grants:
+                  - id: 0193a1c4-9b2e-7d01-8c11-4a5e6f7a8b9c
+                    kind: role
+                    person: { id: 15, name: Pat Partner, email: pat@example.com }
+                    granted_by: { id: 12, name: Rui Responder, email: rui@example.com }
+                    role: admin
+                    project_id: null
+                    project_role: null
+                    granted_at: '2026-11-25T10:20:00Z'
+                    confirmed_at: '2026-11-25T12:00:00Z'
+                    confirmed_by: { id: 14, name: Sam Auditor, email: sam@example.com }
         '400':
           description: >
             The outcome is not `justified` or `unauthorized`, the note is
-            longer than 4000 characters, or `replacement_issued` is missing
-            on a sealed elevation or given on another
-            (`elevation_request_invalid`).
+            longer than 4000 characters, `replacement_issued` is missing
+            on a sealed elevation or given on another, `confirm_grant_ids`
+            comes with `unauthorized`, or names a grant that is not an
+            unconfirmed one of this elevation (`elevation_request_invalid`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ElevationRefusal' }
@@ -28358,6 +28565,91 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/{elevationID}/acknowledge:
+    post:
+      operationId: acknowledgeElevation
+      summary: Acknowledge an elevation nobody could review
+      description: |
+        ADR-0059 decision 5, "Notes" (R2.9c): a global administrator
+        acknowledges an elevation whose review reached
+        `unreviewed_no_reviewer` (nobody independent could review it by its
+        deadline) with a note, so the access posture stops listing it. The
+        note is stored as the acknowledgement, once per elevation. The
+        elevation's state does not change: the record keeps saying that no
+        independent review happened. The `note_added` security event
+        carries the note's id and length, never its text.
+
+        For a STANDING holder of `admin.auth.users.super_admin`, in a
+        browser session: an elevation never supplies the permission
+        (`elevation_restricted`), and a token, a native session, a run
+        token and a sealed session are refused
+        (`elevation_credential_refused`). An operator attaches a note
+        without acknowledging with `elitea-main break-glass note`.
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/ElevationID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ElevationAcknowledgeInput'
+            example:
+              note: The holder was the only administrator on call; the change matches INC-4711.
+      responses:
+        '200':
+          description: The acknowledgement
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationAcknowledged'
+              example:
+                elevation_id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                note_id: 0193a1c5-1d2e-7f30-9a41-5b6c7d8e9f01
+                state: unreviewed_no_reviewer
+                acknowledged: true
+        '400':
+          description: The note is missing, empty or longer than 4000 characters (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: 'an acknowledgement needs a note: what is known about the elevation nobody could review'
+                code: elevation_request_invalid
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >
+            Not a standing global administrator, under an elevation
+            (`elevation_restricted`), or not a browser session
+            (`elevation_credential_refused`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: the acknowledgement takes a browser session only
+                code: elevation_credential_refused
+        '404': { $ref: '#/components/responses/ElevationNotFound' }
+        '409':
+          description: >
+            The elevation is not `unreviewed_no_reviewer`
+            (`elevation_not_acknowledgeable`), or it was acknowledged
+            already (`elevation_acknowledged`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: the elevation was acknowledged already
+                code: elevation_acknowledged
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation acknowledgement is not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: the elevation acknowledgement is not configured
+                code: elevation_request_invalid
 
   /admin/access/reverts:
     get:
@@ -28555,6 +28847,7 @@ paths:
               example:
                 ok: true
                 id: '11:administration:llm_manager'
+                provisional: false
         '400': { $ref: '#/components/responses/ReasonInvalid' }
         '401': { $ref: '#/components/responses/401' }
         '403':

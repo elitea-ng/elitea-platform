@@ -56,6 +56,7 @@ import (
 	"net/mail"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -91,6 +92,10 @@ type inviteResult struct {
 	// `status` keeps its two legacy values, so an old client reads this response
 	// exactly as before. New clients branch on this field.
 	Outcome string `json:"outcome"`
+	// Provisional says the membership was given under the caller's
+	// elevation (ADR-0059 R2.12b): in effect while it is active, written to
+	// the project only once its review confirms it.
+	Provisional bool `json:"provisional"`
 }
 
 // The four values of inviteResult.Outcome. Each one is a state an operator acts
@@ -286,12 +291,20 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 	defer release()
 	// One refusal for the whole batch: every address gets the same roles, so
 	// a role the caller may not give is refused for all of them alike.
-	if refusal := h.checkMembershipChange(r, hold, membershipChange{
+	change := membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs,
 		invited: body.Emails,
-	}); refusal != nil {
+	}
+	caller, refusal := h.checkMembershipChange(r, hold, change)
+	if refusal != nil {
 		adminaccess.Write(w, r, refusal)
 		return
+	}
+	// Under an elevation, through the central route, the membership is
+	// provisional (ADR-0059 R2.12b).
+	var provisional *adminaccess.Caller
+	if provisionalMembership(caller, change) {
+		provisional = &caller
 	}
 
 	results := make([]inviteResult, 0, len(body.Emails))
@@ -310,7 +323,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 			continue
 		}
 
-		userID, alreadyMember, err := h.inviteOne(r, projectID, email, roleIDs, mode, len(body.Emails) > 1)
+		userID, alreadyMember, err := h.inviteOne(r, projectID, email, roleIDs, mode, len(body.Emails) > 1, provisional)
 		switch {
 		case err != nil:
 			hasErrors = true
@@ -336,6 +349,7 @@ func (h *Handler) usersCreate(w http.ResponseWriter, r *http.Request, mode strin
 				Email:               email,
 				ID:                  strconv.Itoa(userID),
 				InvitationDelivered: delivered,
+				Provisional:         provisional != nil,
 				Outcome:             inviteOutcomeInvited,
 			})
 		}
@@ -378,8 +392,14 @@ func (h *Handler) deliverProjectInvitation(r *http.Request, projectID int, email
 // project_membership security audit event in the same transaction
 // (users_write_events.go); bulk is whether the request names more than one
 // address.
+//
+// provisional is the elevated caller of a central write (ADR-0059 R2.12b),
+// nil otherwise: the account is created as for any invite, and the roles are
+// provisional grants of the caller's elevation, not rows of
+// auth_core__project_user_role.
 func (h *Handler) inviteOne(
 	r *http.Request, projectID int, email string, roleIDs []int, mode string, bulk bool,
+	provisional *adminaccess.Caller,
 ) (userID int, alreadyMember bool, err error) {
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
@@ -416,12 +436,20 @@ func (h *Handler) inviteOne(
 	if err != nil {
 		return 0, false, err
 	}
-	for _, roleID := range roleIDs {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
-			 VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
-			projectID, userID, roleID); err != nil {
+	if provisional != nil {
+		if err := adminaccess.GiveProvisionalMembership(ctx, tx, *provisional, int64(projectID), int64(userID),
+			roleIDs, time.Now()); err != nil {
 			return 0, false, err
+		}
+		membership.gave(*provisional, userID, roleIDs)
+	} else {
+		for _, roleID := range roleIDs {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
+				 VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
+				projectID, userID, roleID); err != nil {
+				return 0, false, err
+			}
 		}
 	}
 	if err := h.appendChanges(ctx, tx, r, membership, []int{userID}); err != nil {
@@ -568,9 +596,11 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 		return
 	}
-	if refusal := h.checkMembershipChange(r, tx, membershipChange{
+	change := membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, assigned: roleIDs, targets: userIDs,
-	}); refusal != nil {
+	}
+	caller, refusal := h.checkMembershipChange(r, tx, change)
+	if refusal != nil {
 		adminaccess.Write(w, r, refusal)
 		return
 	}
@@ -580,21 +610,26 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		return
 	}
 
+	// Under an elevation, through the central route, the roles given are
+	// provisional (ADR-0059 R2.12b): a role the member does not hold yet is a
+	// provisional grant of the caller's elevation, and a role taken away is a
+	// standing removal, flagged for the review.
+	elevated := provisionalMembership(caller, change)
+	provisional := false
 	for _, userID := range userIDs {
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM auth_core__project_user_role WHERE project_id = $1 AND user_id = $2`,
-			projectID, userID); err != nil {
+		var err error
+		if elevated {
+			var given []int
+			given, err = replaceMemberRolesProvisionally(ctx, tx, caller, projectID, userID, roleIDs)
+			membership.gave(caller, userID, given)
+			provisional = provisional || len(given) > 0
+		} else {
+			err = replaceMemberRoles(ctx, tx, projectID, userID, roleIDs)
+		}
+		if err != nil {
+			slog.ErrorContext(ctx, "a membership change could not be written", "project_id", projectID, "err", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 			return
-		}
-		for _, roleID := range roleIDs {
-			if _, err := tx.Exec(ctx,
-				`INSERT INTO auth_core__project_user_role (project_id, user_id, role_id)
-				 VALUES ($1, $2, $3) ON CONFLICT (project_id, user_id, role_id) DO NOTHING`,
-				projectID, userID, roleID); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
-				return
-			}
 		}
 	}
 
@@ -608,7 +643,7 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to update user roles"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"msg": "roles updated"})
+	writeJSON(w, http.StatusOK, map[string]any{"msg": "roles updated", "provisional": provisional})
 }
 
 // deleteUserIDs reads the `id[]` query key. The client sends ONE occurrence
@@ -732,7 +767,7 @@ func (h *Handler) usersDelete(w http.ResponseWriter, r *http.Request, mode strin
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove users"})
 		return
 	}
-	if refusal := h.checkMembershipChange(r, tx, membershipChange{
+	if _, refusal := h.checkMembershipChange(r, tx, membershipChange{
 		projectID: projectID, asMember: mode != userWriteModeAdministration, targets: userIDs,
 	}); refusal != nil {
 		adminaccess.Write(w, r, refusal)

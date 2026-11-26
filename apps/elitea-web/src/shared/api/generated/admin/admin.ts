@@ -114,6 +114,8 @@ import type {
   DelegationReview,
   DelegationScanResult,
   Elevation,
+  ElevationAcknowledgeInput,
+  ElevationAcknowledged,
   ElevationAnswerRefusedResponse,
   ElevationDenial,
   ElevationList,
@@ -242,6 +244,7 @@ import type {
   UserProjectPermissionsUpdate,
   UserProjectRoleMap,
   UserRolesUpdateRequest,
+  UserRolesUpdateResult,
   VerifyAuditChainParams,
   WorkerEgressHostsResponse,
 } from "../model";
@@ -2394,7 +2397,7 @@ export function useUserCreate<
 }
 
 export type userUpdateResponse200 = {
-  data: MessageResponse;
+  data: UserRolesUpdateResult;
   status: 200;
 };
 
@@ -7585,6 +7588,13 @@ export const getReviewElevationUrl = (elevationID: string) => {
  * or the approver (`elevation_reviewer_involved`). Under an elevation
  * the write is refused (`elevation_restricted`). The answer is the
  * review as `getElevationReview` reads it.
+ *
+ * A justified review confirms the provisional grants it names in
+ * `confirm_grant_ids` (ADR-0059 R2.12): each becomes a standing role
+ * or membership, written by the reviewer with the source `review`.
+ * Any grant it does not confirm, and every grant of an `unauthorized`
+ * review, stays as it is: in effect for no one, since its elevation
+ * has ended.
  * @summary Record the review of an elevation
  */
 export const reviewElevation = async (
@@ -7825,6 +7835,306 @@ export function useReviewElevation<
   const queryOptions = getReviewElevationQueryOptions(
     elevationID,
     elevationReviewInput,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type acknowledgeElevationResponse200 = {
+  data: ElevationAcknowledged;
+  status: 200;
+};
+
+export type acknowledgeElevationResponse400 = {
+  data: ElevationRefusal;
+  status: 400;
+};
+
+export type acknowledgeElevationResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type acknowledgeElevationResponse403 = {
+  data: ElevationRefusal;
+  status: 403;
+};
+
+export type acknowledgeElevationResponse404 = {
+  data: ElevationNotFoundResponse;
+  status: 404;
+};
+
+export type acknowledgeElevationResponse409 = {
+  data: ElevationRefusal;
+  status: 409;
+};
+
+export type acknowledgeElevationResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type acknowledgeElevationResponse503 = {
+  data: ElevationRefusal;
+  status: 503;
+};
+
+export type acknowledgeElevationResponseSuccess =
+  acknowledgeElevationResponse200 & {
+    headers: Headers;
+  };
+export type acknowledgeElevationResponseError = (
+  | acknowledgeElevationResponse400
+  | acknowledgeElevationResponse401
+  | acknowledgeElevationResponse403
+  | acknowledgeElevationResponse404
+  | acknowledgeElevationResponse409
+  | acknowledgeElevationResponse500
+  | acknowledgeElevationResponse503
+) & {
+  headers: Headers;
+};
+
+export type acknowledgeElevationResponse =
+  acknowledgeElevationResponseSuccess | acknowledgeElevationResponseError;
+
+export const getAcknowledgeElevationUrl = (elevationID: string) => {
+  return `/admin/access/elevations/${elevationID}/acknowledge`;
+};
+
+/**
+ * ADR-0059 decision 5, "Notes" (R2.9c): a global administrator
+ * acknowledges an elevation whose review reached
+ * `unreviewed_no_reviewer` (nobody independent could review it by its
+ * deadline) with a note, so the access posture stops listing it. The
+ * note is stored as the acknowledgement, once per elevation. The
+ * elevation's state does not change: the record keeps saying that no
+ * independent review happened. The `note_added` security event
+ * carries the note's id and length, never its text.
+ *
+ * For a STANDING holder of `admin.auth.users.super_admin`, in a
+ * browser session: an elevation never supplies the permission
+ * (`elevation_restricted`), and a token, a native session, a run
+ * token and a sealed session are refused
+ * (`elevation_credential_refused`). An operator attaches a note
+ * without acknowledging with `elitea-main break-glass note`.
+ * @summary Acknowledge an elevation nobody could review
+ */
+export const acknowledgeElevation = async (
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<acknowledgeElevationResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<acknowledgeElevationResponse>(
+    getAcknowledgeElevationUrl(elevationID),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(elevationAcknowledgeInput),
+    },
+  );
+};
+
+export const getAcknowledgeElevationQueryKey = (
+  elevationID: string,
+  elevationAcknowledgeInput?: ElevationAcknowledgeInput,
+) => {
+  return [
+    "POST",
+    `/admin/access/elevations/${elevationID}/acknowledge`,
+    elevationAcknowledgeInput,
+  ] as const;
+};
+
+export const getAcknowledgeElevationQueryOptions = <
+  TData = Awaited<ReturnType<typeof acknowledgeElevation>>,
+  TError =
+    ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response,
+>(
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof acknowledgeElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getAcknowledgeElevationQueryKey(elevationID, elevationAcknowledgeInput);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof acknowledgeElevation>>
+  > = ({ signal }) =>
+    acknowledgeElevation(elevationID, elevationAcknowledgeInput, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: elevationID !== null && elevationID !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof acknowledgeElevation>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AcknowledgeElevationQueryResult = NonNullable<
+  Awaited<ReturnType<typeof acknowledgeElevation>>
+>;
+export type AcknowledgeElevationQueryError =
+  ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response;
+
+export function useAcknowledgeElevation<
+  TData = Awaited<ReturnType<typeof acknowledgeElevation>>,
+  TError =
+    ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response,
+>(
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof acknowledgeElevation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof acknowledgeElevation>>,
+          TError,
+          Awaited<ReturnType<typeof acknowledgeElevation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAcknowledgeElevation<
+  TData = Awaited<ReturnType<typeof acknowledgeElevation>>,
+  TError =
+    ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response,
+>(
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof acknowledgeElevation>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof acknowledgeElevation>>,
+          TError,
+          Awaited<ReturnType<typeof acknowledgeElevation>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useAcknowledgeElevation<
+  TData = Awaited<ReturnType<typeof acknowledgeElevation>>,
+  TError =
+    ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response,
+>(
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof acknowledgeElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Acknowledge an elevation nobody could review
+ */
+
+export function useAcknowledgeElevation<
+  TData = Awaited<ReturnType<typeof acknowledgeElevation>>,
+  TError =
+    ElevationRefusal | N401Response | ElevationNotFoundResponse | N500Response,
+>(
+  elevationID: string,
+  elevationAcknowledgeInput: ElevationAcknowledgeInput,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof acknowledgeElevation>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getAcknowledgeElevationQueryOptions(
+    elevationID,
+    elevationAcknowledgeInput,
     options,
   );
 

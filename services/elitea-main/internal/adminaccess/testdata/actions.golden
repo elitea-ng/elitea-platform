@@ -5,6 +5,7 @@ GET	/api/v2/admin/access/elevations	-	none	false	allow	never
 POST	/api/v2/admin/access/elevations	-	none	false	deny	never
 GET	/api/v2/admin/access/elevations/mine	-	none	false	allow	never
 GET	/api/v2/admin/access/elevations/pending	-	none	false	allow	never
+POST	/api/v2/admin/access/elevations/{elevationID}/acknowledge	-	none	false	deny	never
 POST	/api/v2/admin/access/elevations/{elevationID}/approve	-	none	false	deny	never
 POST	/api/v2/admin/access/elevations/{elevationID}/deny	-	none	false	deny	never
 GET	/api/v2/admin/access/elevations/{elevationID}/review	-	none	false	allow	never

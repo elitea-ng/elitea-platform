@@ -56,7 +56,7 @@ func applyAccessTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	for _, name := range []string{"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql",
 		"0141_native_auth.sql", "0269_admin_elevations.sql", "0280_admin_elevation_requests.sql",
-		"0283_admin_elevation_items.sql"} {
+		"0283_admin_elevation_items.sql", "0284_admin_provisional_grants.sql"} {
 		file, err := migrations.Files.ReadFile("shared/" + name)
 		if err != nil {
 			t.Fatalf("read shared %s: %v", name, err)

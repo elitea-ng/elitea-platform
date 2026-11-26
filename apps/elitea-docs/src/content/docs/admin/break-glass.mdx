@@ -142,7 +142,7 @@ Every elevation is reviewed after it ends, by someone who was not involved. The 
 - `justified`: the use was right.
 - `unauthorized`: the use was not. The same people as an elevation start are told (see [Who is told](#who-is-told)), and a revert list of the elevation's flagged changes is opened.
 
-The review of an elevation after a sealed sign-in also says whether a replacement credential was issued (`replacement_issued`). The `admin.elevation.reviewed` security event is written in the same transaction; it carries the outcome, never the note. A second review of the same elevation answers `409 elevation_not_reviewable`.
+A `justified` review may also confirm the roles and memberships the holder gave to other people (`confirm_grant_ids`; see [What an elevated person gives is provisional](#what-an-elevated-person-gives-is-provisional)). The review of an elevation after a sealed sign-in also says whether a replacement credential was issued (`replacement_issued`). The `admin.elevation.reviewed` security event is written in the same transaction; it carries the outcome, never the note. A second review of the same elevation answers `409 elevation_not_reviewable`.
 
 **A reviewer cannot be removed and waited out.** While the review is pending, taking `access.breakglass.review` from one of its reviewers, suspending or deleting them needs `admin.auth.users.super_admin` (`403 elevation_pending_reviewer` otherwise). The change is listed in the review (`reviewer_changes`), and the person stays a reviewer of it.
 
@@ -156,6 +156,15 @@ A review is due within the review time of the **Break-glass** settings: 72 hours
 <Tip>
 Give the Security auditor role to at least one person who will not use break-glass, so that every elevation has a reviewer. With only administrators, an elevation one administrator approved for another has nobody independent to review it, and it ends as `unreviewed_no_reviewer`.
 </Tip>
+
+### Notes and the acknowledgement
+
+An elevation that ended as `unreviewed_no_reviewer` keeps saying so: nothing turns it into a review. Two things can still be added to its record:
+
+- **A note from the operator.** A person with access to the workload attaches a note to any elevation, in any state, with `elitea-main break-glass note <elevation id>` (see [the break-glass runbook](/deployment/break-glass-runbook#add-a-note-to-an-elevation)). The note names no platform account.
+- **The acknowledgement.** A global administrator, through a **standing** role that holds `admin.auth.users.super_admin`, acknowledges an `unreviewed_no_reviewer` elevation with a note: `POST /api/v2/admin/access/elevations/{elevationID}/acknowledge` with `{"note": "..."}`, from a browser session. It is accepted once per elevation (`409 elevation_acknowledged` after that), and only in that state (`409 elevation_not_acknowledgeable` otherwise). An elevation never supplies the permission (`403 elevation_restricted`), and a token cannot acknowledge. It records that the gap is known and who knows it; the elevation's state does not change.
+
+The note's text stays in the elevation's record. Its `admin.elevation.note_added` security event carries the note's id and its length, never the text; an acknowledgement adds the reason `acknowledgement`.
 
 ### The revert list
 
@@ -184,6 +193,7 @@ The table lists every action whose value is not `allow`, reads included (reading
 | Action | Route | Under an elevation |
 |---|---|---|
 | `-` | `POST /api/v2/admin/access/elevations` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/elevations/{elevationID}/acknowledge` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/approve` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/deny` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/review` | refused (`deny`) |
@@ -246,6 +256,18 @@ Some limits are about people, not actions, so they hold on routes the table allo
 
 - **The people who can stop and review the elevation stay.** An elevated session cannot demote, suspend or delete a holder of `access.breakglass.approve` or `access.breakglass.review` (`403` with the code `elevation_protected_person`). This covers both role assignment routes (the Users page and **Modes**), user suspension and user deletion. Who holds the two permissions is read from standing roles.
 - **Not the own roles, not the own eligibility.** An elevated person cannot give or take any of the own roles, and so cannot change the own `access.breakglass.request`, at either level (`403 role_self_assignment`). The exemption a standing global administrator has is read from standing roles only: an elevation at the `super_admin` level never carries it.
+
+### What an elevated person gives is provisional
+
+An elevated person could make an elevation permanent by giving a standing role or a project membership to someone else. So what an elevated session gives to another person is **provisional**: it is recorded against the elevation, never as a standing assignment.
+
+- **Which writes.** An administration role given on the Users page (`set_admin_role`) or on **Modes**, and a project membership given through the administration routes: a bulk invite, or an invite or a role edit from the central **Users** page of a project (`/admin/users/administration/{projectID}`). What decides is the route, not whether the elevated person is a member of the project: the same write from the project's own member page, under the project's own permission, is a standing write. The response says so: `provisional: true` (and `provisional_role_names` for `set_admin_role`). This applies to a standing global administrator's elevated session too. A role or a membership **taken away** under an elevation is taken at once, and flagged for the review.
+- **While the elevation is active.** The person holds the role or the membership, for every request, and nowhere else: one second after the elevation ends or expires it grants nothing. No job has to run. A provisional role counts as a permission that came from an elevation: the [limits above](#what-an-elevation-cannot-do) apply to its holder, and what that person gives on is provisional too. A suspended project grants nothing, provisional or not.
+- **Never standing.** A provisionally granted person is never treated as holding the role through a standing role: not exempt from the role rules, not an approver, not a reviewer.
+- **Where it shows.** The project's member listing returns provisional members apart from its rows (`provisional`), with the elevation that gave them. The review of the elevation lists every provisional grant (`provisional_grants`).
+- **Recorded at once.** Each provisional gift writes its `admin.access.changed` security event in the same transaction, with the source `provisional` and the elevation's id: `before` is the person's standing set and `after` is that set with the gift.
+- **The review decides.** A `justified` review confirms the grants the reviewer names in `confirm_grant_ids`: each becomes a standing role or membership, written by the reviewer with the source `review` in the role grant history and in its `admin.access.changed` event. A reviewer cannot confirm a grant given to themselves (`403 elevation_reviewer_involved`). An `unauthorized` review confirms none (a confirmation with it is `400`), and an elevation that ended as `unreviewed_no_reviewer` has none confirmed. A grant that is not confirmed stays in the record and grants nothing.
+- **Before the migration.** Until the shared migrations have created the table, a provisional write is refused and nothing is given; the service looks for the table every minute and needs no restart.
 
 ### A critical change is announced at once
 

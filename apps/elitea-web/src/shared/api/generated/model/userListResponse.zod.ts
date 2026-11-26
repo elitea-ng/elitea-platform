@@ -41,12 +41,19 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ProvisionalMember } from "./provisionalMember.zod";
 import { UserRecord } from "./userRecord.zod";
 
 export const UserListResponse = zod
   .object({
     rows: zod.array(UserRecord),
     total: zod.int(),
+    provisional: zod
+      .array(ProvisionalMember)
+      .optional()
+      .describe(
+        "ADR-0059 R2.12b: the people given a membership of the project under an elevation that is still active, marked, apart from the members (not paged, not in `total`). They hold it until that elevation ends; only its review makes it a membership.\n",
+      ),
   })
   .describe(
     "Users response map, internal/api/v2/eliteacore/handler.go's Users. NOTE (issue #130): this used to be the response of POST/PUT/DELETE too — the router mounted all four verbs on the same listing handler, so every write echoed the member list and changed nothing. The write verbs now have their own handlers and their own response shapes below.\n",

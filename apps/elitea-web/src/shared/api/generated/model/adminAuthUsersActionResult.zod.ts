@@ -62,6 +62,18 @@ export const AdminAuthUsersActionResult = zod
       .describe(
         "`set_admin_role` only: the account's administration roles after the request, sorted.\n",
       ),
+    provisional: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`set_admin_role` only (ADR-0059 R2.12a): true when a role was given under the caller's elevation. Such a role is provisional: in effect while that elevation is active, never a standing assignment, standing only once the elevation's review confirms it.\n",
+      ),
+    provisional_role_names: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "`set_admin_role` only: the roles of `role_names` given provisionally, sorted; `[]` for a standing change.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/admin/users.go:370 (delete) and users.go:516-518 (set_admin_role).\n",

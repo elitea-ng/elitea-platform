@@ -15,6 +15,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
 )
 
 // ErrPermissionDenied is the refusal sentinel of the auth.PermissionResolver
@@ -276,6 +277,87 @@ func (r *PostgresResolver) administrationResolution(
 	if resolution, err = r.withElevation(ctx, resolution, userID); err != nil {
 		return auth.PermissionResolution{}, err
 	}
+	if resolution, err = r.withProvisionalRoles(ctx, resolution, userID); err != nil {
+		return auth.PermissionResolution{}, err
+	}
+	return resolution, nil
+}
+
+// withProvisionalRoles adds to a browser session's resolution the
+// administration roles other people gave this person under an elevation that
+// is still active (ADR-0059 decision 5, "A role given under an elevation is
+// provisional"; story R2.12a): the rows of provisionalgrants.RoleRows, read at
+// the resolver's clock, so the grant stops the moment its elevation ends with
+// no job running.
+//
+// A provisional permission is resolved as what it is, a permission of
+// someone else's elevation: it is added to ElevatedPermissions (unless the
+// standing set holds it too) and the granting elevation to Elevations. So
+// what an elevation cannot do binds the grantee as it binds the grantor (the
+// restriction rule reads ElevatedPermissions), the grantee's flagged changes
+// carry that elevation's id into its review, and a role the grantee gives on
+// is provisional too. Role names stay the standing ones.
+//
+// Only the full resolution of a browser session calls it (session or form,
+// with a server-side row): the standing-set call never does, so a
+// provisionally granted person is never exempt and never counts as an
+// approver or a reviewer.
+func (r *PostgresResolver) withProvisionalRoles(
+	ctx context.Context,
+	resolution auth.PermissionResolution,
+	userID int64,
+) (auth.PermissionResolution, error) {
+	if !provisionalgrants.Enabled() {
+		return resolution, nil
+	}
+	rows, err := r.store.Query(ctx, `
+SELECT grant_row.elevation_id, grant_row.level, grant_row.path, role_grant.permission
+FROM `+provisionalgrants.RoleRows("$3")+` AS grant_row
+JOIN public.auth_core__role AS role
+  ON role.name = grant_row.role_name AND role.mode = $2
+LEFT JOIN public.auth_core__role_permission AS role_grant ON role_grant.role_id = role.id
+WHERE grant_row.user_id = $1`,
+		userID, auth.PermissionModeAdministration, r.clock().UTC())
+	if err != nil {
+		return auth.PermissionResolution{}, fmt.Errorf("resolve the provisional roles: %w", err)
+	}
+	defer rows.Close()
+	// The person's own elevations stay first, in the resolver's order, so
+	// ElevationID (and the elevation a provisional write of the person binds
+	// to) is the person's own; the grantors' elevations follow, by id.
+	own := resolution.Elevations
+	var grantors []auth.ElevationGrant
+	granted := append([]string(nil), resolution.ElevatedPermissions...)
+	found := false
+	for rows.Next() {
+		var elevation auth.ElevationGrant
+		var permission *string
+		if err := rows.Scan(&elevation.ID, &elevation.Level, &elevation.Path, &permission); err != nil {
+			return auth.PermissionResolution{}, fmt.Errorf("scan a provisional role: %w", err)
+		}
+		found = true
+		if !slices.ContainsFunc(own, func(e auth.ElevationGrant) bool { return e.ID == elevation.ID }) {
+			grantors = append(grantors, elevation)
+		}
+		if permission != nil {
+			granted = append(granted, *permission)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return auth.PermissionResolution{}, fmt.Errorf("read the provisional roles: %w", err)
+	}
+	if !found {
+		return resolution, nil
+	}
+	resolution.Permissions, resolution.ElevatedPermissions = UnionElevation(resolution.StandingPermissions(), granted)
+	slices.SortFunc(grantors, func(a, b auth.ElevationGrant) int { return strings.Compare(a.ID, b.ID) })
+	grantors = slices.CompactFunc(grantors, func(a, b auth.ElevationGrant) bool { return a.ID == b.ID })
+	elevations := append(append([]auth.ElevationGrant(nil), own...), grantors...)
+	ids := make([]string, 0, len(elevations))
+	for _, elevation := range elevations {
+		ids = append(ids, elevation.ID)
+	}
+	resolution.Elevations, resolution.ElevationIDs, resolution.ElevationID = elevations, ids, ids[0]
 	return resolution, nil
 }
 
@@ -661,6 +743,16 @@ WITH assigned_roles AS (
      AND project_role.project_id = assignment.project_id
     WHERE assignment.project_id = $1
       AND assignment.user_id = $2
+    UNION
+    -- A membership given under an elevation that is still active (ADR-0059
+    -- R2.12b) counts as an assigned role, the default fallback included.
+    SELECT project_role.id, project_role.name
+    FROM `+provisionalgrants.MembershipRows("$3")+` AS provisional
+    JOIN public.auth_core__project_role AS project_role
+      ON project_role.id = provisional.project_role_id
+     AND project_role.project_id = provisional.project_id
+    WHERE provisional.project_id = $1
+      AND provisional.user_id = $2
 ), project_permissions AS (
     SELECT DISTINCT project_grant.permission
     FROM assigned_roles
@@ -682,7 +774,7 @@ WITH assigned_roles AS (
 )
 SELECT DISTINCT permission
 FROM effective_permissions
-ORDER BY permission`, projectID, userID)
+ORDER BY permission`, projectID, userID, r.clock().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("resolve legacy project permissions: %w", err)
 	}
@@ -709,6 +801,18 @@ WITH assigned_roles AS (
       ON project.id = assignment.project_id
      AND project.suspended = false
     WHERE assignment.user_id = $1
+    UNION
+    -- A membership given under an elevation that is still active (ADR-0059
+    -- R2.12b), with the same suspended-project rule.
+    SELECT provisional.project_id, project_role.id, project_role.name
+    FROM `+provisionalgrants.MembershipRows("$2")+` AS provisional
+    JOIN public.auth_core__project_role AS project_role
+      ON project_role.id = provisional.project_role_id
+     AND project_role.project_id = provisional.project_id
+    JOIN centry.project AS project
+      ON project.id = provisional.project_id
+     AND project.suspended = false
+    WHERE provisional.user_id = $1
 ), project_permissions AS (
     SELECT DISTINCT assigned_roles.project_id, project_grant.permission
     FROM assigned_roles
@@ -734,7 +838,7 @@ WITH assigned_roles AS (
 )
 SELECT DISTINCT permission
 FROM effective_permissions
-ORDER BY permission`, userID)
+ORDER BY permission`, userID, r.clock().UTC())
 	if err != nil {
 		return nil, fmt.Errorf("resolve legacy membership permissions: %w", err)
 	}

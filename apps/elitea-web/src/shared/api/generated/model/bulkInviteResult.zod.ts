@@ -72,6 +72,12 @@ export const BulkInviteResult = zod
         'The machine-readable reason. The legacy runtime returned one English log blob for the whole batch, so a console could not tell "added" from "was already a member" without matching on prose.\n',
       ),
     msg: zod.string().describe("The same outcome in English, for a log pane."),
+    provisional: zod
+      .boolean()
+      .optional()
+      .describe(
+        "ADR-0059 R2.12b: true when the membership was given under the caller's elevation. It is provisional: in effect while that elevation is active, never a row of the project's members, standing only once the elevation's review confirms it.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/admin/invites_bulk.go:121-129. One (user, project) pair's outcome.\n",

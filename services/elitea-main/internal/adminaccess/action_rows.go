@@ -40,6 +40,9 @@ const (
 	ElevationReviewPattern = adminPrefix + "/access/elevations/{elevationID}/review"
 	RevertsPattern         = adminPrefix + "/access/reverts"
 	RevertHandledPattern   = adminPrefix + "/access/reverts/{itemID}/handled"
+	// ElevationAcknowledgePattern acknowledges an elevation nobody
+	// independent could review (R2.9c).
+	ElevationAcknowledgePattern = adminPrefix + "/access/elevations/{elevationID}/acknowledge"
 )
 
 // IdentityProviderSavePattern is the identity provider save, whose handler
@@ -181,6 +184,10 @@ func actionRows() []Action {
 		post(ElevationReviewPattern, AccessBreakglassReview).elevation(deny).tokenNever(),
 		read(RevertsPattern, AccessBreakglassManage).tokenNever(),
 		post(RevertHandledPattern, AccessBreakglassManage).elevation(deny).tokenNever(),
+		// The acknowledgement of an elevation nobody independent could
+		// review (R2.9c): a standing global administrator only, so `deny`
+		// under an elevation (which can supply super_admin), and no token.
+		post(ElevationAcknowledgePattern, SuperAdminPermission).elevation(deny).tokenNever(),
 
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),

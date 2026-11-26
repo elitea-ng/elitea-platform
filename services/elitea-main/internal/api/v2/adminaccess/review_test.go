@@ -9,6 +9,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ type fakeReviews struct {
 	reviews   []registry.ElevationReview
 	marked    []uuid.UUID
 	reverts   []registry.RevertEntry
+	grants    []registry.ProvisionalGrant
 }
 
 func (f *fakeReviews) Elevation(_ context.Context, id uuid.UUID) (registry.ElevationRecord, error) {
@@ -44,6 +46,10 @@ func (f *fakeReviews) Items(context.Context, uuid.UUID) ([]registry.ReviewItem, 
 
 func (f *fakeReviews) Changes(context.Context, uuid.UUID, int, int) ([]registry.ElevationAuditRow, int, error) {
 	return nil, 0, nil
+}
+
+func (f *fakeReviews) ProvisionalGrants(context.Context, uuid.UUID) ([]registry.ProvisionalGrant, error) {
+	return f.grants, nil
 }
 
 // Review applies the rules the ledger applies that the handler relies on.
@@ -196,6 +202,54 @@ func TestATerminalReviewIsRefused(t *testing.T) {
 	rec := call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"justified"}`)
 	if rec.Code != http.StatusConflict || refusalCode(t, rec) != console.CodeElevationNotReviewable {
 		t.Fatalf("a review of an unreviewed_no_reviewer elevation: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A confirmation of a provisional grant (R2.12a) goes with the outcome
+// justified only: with unauthorized it is refused before the ledger, and the
+// holder and the approver cannot confirm at all. The review lists the grants.
+func TestAConfirmationNeedsAJustifiedReviewByAnUninvolvedReviewer(t *testing.T) {
+	t.Parallel()
+	store := pendingReview()
+	grant := uuid.New()
+	store.grants = []registry.ProvisionalGrant{{
+		ID: grant, ElevationID: store.elevation.ID, Kind: registry.ProvisionalKindRole, UserID: bystander,
+		GrantedBy: requester, RoleName: registry.RoleAdmin, CreatedAt: requestClock.Add(-100 * time.Minute),
+	}}
+	d := requestDirectory()
+	d.users[requester] = append(d.users[requester], registry.RoleSecurityAuditor)
+	d.users[approver] = append(d.users[approver], registry.RoleSecurityAuditor)
+	h := reviewRouter(store, d)
+	path := "/access/elevations/" + store.elevation.ID.String() + "/review"
+	confirm := `,"confirm_grant_ids":["` + grant.String() + `"]}`
+
+	rec := call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"unauthorized"`+confirm)
+	if rec.Code != http.StatusBadRequest || refusalCode(t, rec) != console.CodeElevationRequestInvalid {
+		t.Fatalf("a confirmation with unauthorized: %d %s, want 400 %s", rec.Code, rec.Body, console.CodeElevationRequestInvalid)
+	}
+	if len(store.reviews) != 0 {
+		t.Fatalf("a refused confirmation reached the ledger: %+v", store.reviews)
+	}
+	for _, person := range []int64{requester, approver} {
+		rec := call(t, h, browser(person), http.MethodPost, path, `{"outcome":"justified"`+confirm)
+		if rec.Code != http.StatusForbidden || refusalCode(t, rec) != console.CodeElevationReviewerInvolved {
+			t.Errorf("a confirmation by %d: %d %s, want 403 %s", person, rec.Code, rec.Body, console.CodeElevationReviewerInvolved)
+		}
+	}
+	rec = call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"justified","confirm_grant_ids":["nope"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a malformed grant id: %d %s, want 400", rec.Code, rec.Body)
+	}
+	rec = call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"justified"`+confirm)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the auditor's confirmation: %d %s", rec.Code, rec.Body)
+	}
+	last := store.reviews[len(store.reviews)-1]
+	if last.ReviewerUserID != auditor || !slices.Equal(last.Confirm, []uuid.UUID{grant}) {
+		t.Fatalf("the confirmation passed on: %+v", last)
+	}
+	if !strings.Contains(rec.Body.String(), `"provisional_grants":[{"id":"`+grant.String()+`"`) {
+		t.Fatalf("the review does not list the grant: %s", rec.Body)
 	}
 }
 
