@@ -63,6 +63,8 @@ import { HandoffBanner } from './HandoffControls';
 import { CloudLeadNotice } from './CloudLeadNotice';
 import { RunInCloudNotice } from './RunInCloudNotice';
 import { TeamThreadNotice } from './TeamThreadNotice';
+import { ExchangeStrip, exchangeOf } from './ExchangeStrip';
+import { useComposerTeam } from './WorkspaceToChip';
 import { firstError, SessionNotices } from './sessionParts';
 import { useProjectSkills, type ComposerSkill } from './useAgentSkills';
 import type { CloudChat } from './useCloudChat';
@@ -163,9 +165,11 @@ function turnUsages(turn: WorkspaceTurn, recorded: readonly { turnId: string; us
 const NO_USAGE: NonNullable<Usage>[] = [];
 
 /** The queue (and its refusals) always; while a local turn runs, Send steers it; after it, the texts that did not start a turn. */
-function steeringProps(steering: Steering): Pick<WorkspaceComposerProps, 'onSteer' | 'queue' | 'unsent'> {
-  if (steering.active) return { onSteer: steering.steer, queue: steering };
-  return steering.unsent === null ? { queue: steering } : { queue: steering, unsent: steering.unsent };
+function steeringProps(steering: Steering, agent: { readonly name: string } | undefined): Pick<WorkspaceComposerProps, 'onSteer' | 'queue' | 'unsent'> {
+  // A message of several agents: the queued messages name the agent that reads them (ADR-0061 decision 2c).
+  const queue = agent === undefined ? steering : { ...steering, agentName: agent.name };
+  if (steering.active) return { onSteer: steering.steer, queue };
+  return steering.unsent === null ? { queue } : { queue, unsent: steering.unsent };
 }
 
 /** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
@@ -277,7 +281,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     busy: turn.busy,
     onSend: sendHere,
     onStop: () => void turn.cancel(),
-    ...steeringProps(steering),
+    ...steeringProps(steering, turn.view.agent),
   };
   const bound = sendBinding(cloudMode, cloud, composerPipeline, here);
   useDoubleEscape(bound.busy, bound.onStop);
@@ -295,6 +299,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
   const modelNotice = cloudMode ? null : model.notice;
+  const team = useComposerTeam(projectId, conversationId, local, session.selection.agentId);
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
@@ -304,6 +309,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <CloudLeadNotice projectId={projectId} conversationId={conversationId} local={local} />
       <TeamThreadNotice team={session.selection.team} local={local} />
+      <ExchangeStrip exchange={exchangeOf(turn, team.agents)} ipc={ipc} />
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
         ipc={ipc}
@@ -333,6 +339,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
         onDraftChange={onDraftChange}
+        {...team}
         {...bound}
         onSend={workIn.send}
       />

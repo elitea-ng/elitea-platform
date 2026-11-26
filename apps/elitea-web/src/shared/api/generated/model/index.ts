@@ -141,6 +141,7 @@ export * from "./agentRiskTier.zod";
 export * from "./agentSchemaResponse.zod";
 export * from "./agentScorecard.zod";
 export * from "./agentSoulV1.zod";
+export * from "./agentStateActivity.zod";
 export * from "./agentTeam.zod";
 export * from "./agentTeamFromConversation.zod";
 export * from "./agentTeamList.zod";

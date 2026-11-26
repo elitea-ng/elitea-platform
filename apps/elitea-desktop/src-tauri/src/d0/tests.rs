@@ -496,11 +496,25 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
     assert_eq!(started.execution_id, EXECUTION);
     let events = until_done(&h).await;
 
-    // Event sequencing: one turn id, gapless sequence, phases in order.
+    // Event sequencing: one turn id, gapless sequence (the derived
+    // `agent_state` events included), phases in order.
     assert!(events.iter().all(|e| e.turn_id == started.turn_id));
-    for (index, event) in events.iter().enumerate() {
+    for (index, event) in h.emitter.raw().iter().enumerate() {
         assert_eq!(event.seq, index as u64, "{:?}", h.emitter.kinds());
     }
+    // The agent's avatar state follows the turn (ADR-0061 decision 4b).
+    let states: Vec<Value> = h
+        .emitter
+        .states()
+        .iter()
+        .map(|s| s["state"].clone())
+        .collect();
+    assert_eq!(states.first(), Some(&json!("thinking")), "{states:?}");
+    assert!(
+        states.contains(&json!("working")) && states.contains(&json!("waiting")),
+        "{states:?}"
+    );
+    assert_eq!(states.last(), Some(&json!("success")), "{states:?}");
     let compact: Vec<String> = events
         .iter()
         .map(|e| match e.kind {
@@ -10118,15 +10132,21 @@ async fn a_steering_message_reaches_the_next_model_request_of_the_turn() {
     );
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h, &started.turn_id).await;
+    let raw: Vec<AgentEvent> = h
+        .emitter
+        .raw()
+        .into_iter()
+        .filter(|e| e.turn_id == started.turn_id)
+        .collect();
+    for (index, event) in raw.iter().enumerate() {
+        assert_eq!(event.seq, index as u64, "{:?}", h.emitter.kinds());
+    }
     let events: Vec<AgentEvent> = h
         .emitter
         .all()
         .into_iter()
         .filter(|e| e.turn_id == started.turn_id)
         .collect();
-    for (index, event) in events.iter().enumerate() {
-        assert_eq!(event.seq, index as u64, "{:?}", h.emitter.kinds());
-    }
     let compact: Vec<&str> = events.iter().map(|e| e.kind).collect();
     let at = |name: &str| compact.iter().position(|kind| *kind == name).unwrap();
     assert!(at("steer_queued") < at("tool_call"), "{compact:?}");

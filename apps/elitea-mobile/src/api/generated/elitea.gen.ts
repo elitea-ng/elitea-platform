@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.66
+ * client contract:    1.67
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -4696,7 +4696,7 @@ export interface components {
             /** @description Client contract 1.36. Applications computer use never reads or acts on, by bundle id or prefix, whatever the allow list says. The app always adds its own platform list (itself, password managers, terminals, Screen Time, the login window and the security panes of System Settings), which no policy removes. Same bounds. */
             computer_use_apps_deny?: string[];
             /**
-             * @description Client contract 1.66 (ADR-0061 decision 5b). A person may mark one desktop folder trusted ("no sandbox"): its commands then run as the person's own processes, still under approvals, the person's rules and `command_deny`. Default true, but effective only while `max_sandbox_mode` is `full-access` and `network` and `shell` are true. When the policy stops allowing it, the desktop suspends every trusted folder until the person confirms again. Absent reads as false on the desktop.
+             * @description Client contract 1.67 (ADR-0061 decision 5b). A person may mark one desktop folder trusted ("no sandbox"): its commands then run as the person's own processes, still under approvals, the person's rules and `command_deny`. Default true, but effective only while `max_sandbox_mode` is `full-access` and `network` and `shell` are true. When the policy stops allowing it, the desktop suspends every trusted folder until the person confirms again. Absent reads as false on the desktop.
              * @example true
              */
             folder_trust?: boolean;

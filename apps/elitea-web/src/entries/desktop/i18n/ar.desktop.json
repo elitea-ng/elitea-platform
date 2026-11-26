@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "دون بيئة معزولة، في مجلد موثوق (sandbox: host)",
   "workspace.rules.hostHelp": "في المجلد الموثوق يعمل الأمر باسمك دون سؤال. في مكان آخر، أو أثناء إيقاف الثقة مؤقتًا، لا تفعل القاعدة شيئًا ويُسأل عن الأمر.",
   "workspace.rules.needsTrust": "يتطلب الثقة",
-  "workspace.rules.needsTrustHelp": "حُفظت هذه القاعدة في مجلد موثوق. لا تنطبق إلا ما دام المجلد موثوقًا، ولا تفعل شيئًا حتى ذلك الحين."
+  "workspace.rules.needsTrustHelp": "حُفظت هذه القاعدة في مجلد موثوق. لا تنطبق إلا ما دام المجلد موثوقًا، ولا تفعل شيئًا حتى ذلك الحين.",
+  "workspace.approval.agent": "{{name}} يسأل",
+  "workspace.composer.agents": "الوكلاء في هذه المحادثة",
+  "workspace.exchange.label": "وكلاء يجيبون بالتناوب",
+  "workspace.exchange.next": "التالي:",
+  "workspace.exchange.now": "الآن: {{name}}",
+  "workspace.exchange.skip": "تخطي {{name}}",
+  "workspace.exchange.skippedRest": "لقد تخطيت الوكلاء المتبقين.",
+  "workspace.exchange.stop": "إيقاف التبادل",
+  "workspace.exchange.stopped": "لقد أوقفت التبادل.",
+  "workspace.participants.cloud": "السحابة",
+  "workspace.participants.local": "محلي",
+  "workspace.participants.title": "المشاركون",
+  "workspace.steer.to": "إلى {{name}}: {{text}}"
 }

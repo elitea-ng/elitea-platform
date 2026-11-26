@@ -139,4 +139,6 @@ export interface ParticipantsProps {
   readonly newConversationSelectedManager?: string;
   /** The desktop inspector hosts the panel: native captions for the title and the sections (`ParticipantsWrapperProps.appearance`). */
   readonly inspector?: boolean;
+  /** Where the panel shows: the chat (default), or a Local work thread's inspector, which lists its agents only (ADR-0061 decision 2a). */
+  readonly context?: 'chat' | 'local_work';
 }

@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Без пісочниці, у довіреній теці (sandbox: host)",
   "workspace.rules.hostHelp": "У довіреній теці команда виконується від вашого імені без запиту. Деінде або поки довіру призупинено, правило нічого не робить, і команда запитується.",
   "workspace.rules.needsTrust": "Потрібна довіра",
-  "workspace.rules.needsTrustHelp": "Це правило запам’ятано в довіреній теці. Воно діє лише, поки тека довірена, а доти нічого не робить."
+  "workspace.rules.needsTrustHelp": "Це правило запам’ятано в довіреній теці. Воно діє лише, поки тека довірена, а доти нічого не робить.",
+  "workspace.approval.agent": "{{name}} питає",
+  "workspace.composer.agents": "Агенти в цьому треді",
+  "workspace.exchange.label": "Агенти відповідають по черзі",
+  "workspace.exchange.next": "Далі:",
+  "workspace.exchange.now": "Зараз: {{name}}",
+  "workspace.exchange.skip": "Пропустити {{name}}",
+  "workspace.exchange.skippedRest": "Ви пропустили решту агентів.",
+  "workspace.exchange.stop": "Зупинити обмін",
+  "workspace.exchange.stopped": "Ви зупинили обмін.",
+  "workspace.participants.cloud": "Хмара",
+  "workspace.participants.local": "Локально",
+  "workspace.participants.title": "Учасники",
+  "workspace.steer.to": "Для {{name}}: {{text}}"
 }

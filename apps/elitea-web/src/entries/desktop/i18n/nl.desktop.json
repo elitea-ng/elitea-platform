@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Zonder sandbox, in een vertrouwde map (sandbox: host)",
   "workspace.rules.hostHelp": "In een vertrouwde map draait de opdracht als jou zonder te vragen. Elders, of zolang het vertrouwen is gepauzeerd, doet de regel niets en wordt de opdracht gevraagd.",
   "workspace.rules.needsTrust": "Vereist vertrouwen",
-  "workspace.rules.needsTrustHelp": "Deze regel is onthouden in een vertrouwde map. Hij geldt alleen zolang de map wordt vertrouwd en doet tot dan niets."
+  "workspace.rules.needsTrustHelp": "Deze regel is onthouden in een vertrouwde map. Hij geldt alleen zolang de map wordt vertrouwd en doet tot dan niets.",
+  "workspace.approval.agent": "{{name}} vraagt",
+  "workspace.composer.agents": "Agents in deze thread",
+  "workspace.exchange.label": "Agents antwoorden om de beurt",
+  "workspace.exchange.next": "Volgende:",
+  "workspace.exchange.now": "Nu: {{name}}",
+  "workspace.exchange.skip": "{{name}} overslaan",
+  "workspace.exchange.skippedRest": "Je hebt de overige agents overgeslagen.",
+  "workspace.exchange.stop": "Uitwisseling stoppen",
+  "workspace.exchange.stopped": "Je hebt de uitwisseling gestopt.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Lokaal",
+  "workspace.participants.title": "Deelnemers",
+  "workspace.steer.to": "Aan {{name}}: {{text}}"
 }

@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "בלי ארגז חול, בתיקייה מהימנה (sandbox: host)",
   "workspace.rules.hostHelp": "בתיקייה מהימנה הפקודה רצה בשמך בלי לשאול. במקום אחר, או כשהאמון מושהה, הכלל אינו עושה דבר והפקודה נשאלת.",
   "workspace.rules.needsTrust": "דורש אמון",
-  "workspace.rules.needsTrustHelp": "הכלל הזה נשמר בתיקייה מהימנה. הוא חל רק כל עוד התיקייה מהימנה, ועד אז אינו עושה דבר."
+  "workspace.rules.needsTrustHelp": "הכלל הזה נשמר בתיקייה מהימנה. הוא חל רק כל עוד התיקייה מהימנה, ועד אז אינו עושה דבר.",
+  "workspace.approval.agent": "{{name}} שואל",
+  "workspace.composer.agents": "סוכנים בשרשור הזה",
+  "workspace.exchange.label": "סוכנים עונים לפי התור",
+  "workspace.exchange.next": "הבא:",
+  "workspace.exchange.now": "עכשיו: {{name}}",
+  "workspace.exchange.skip": "דילוג על {{name}}",
+  "workspace.exchange.skippedRest": "דילגת על שאר הסוכנים.",
+  "workspace.exchange.stop": "עצירת ההחלפה",
+  "workspace.exchange.stopped": "עצרת את ההחלפה.",
+  "workspace.participants.cloud": "ענן",
+  "workspace.participants.local": "מקומי",
+  "workspace.participants.title": "משתתפים",
+  "workspace.steer.to": "אל {{name}}: {{text}}"
 }

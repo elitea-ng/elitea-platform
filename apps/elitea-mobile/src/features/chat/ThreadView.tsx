@@ -101,6 +101,7 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn, type StopOptions } from '@/features/chat/turnController';
 import { useAvatarClock } from '@/features/chat/AgentMotion';
+import { liveActivityLabel } from '@/features/chat/liveActivity';
 import { useDataSaver } from '@/lib/dataSaver';
 import {
   MESSAGE_CLASS,
@@ -879,6 +880,10 @@ export function ThreadView({
     liveParticipant === primaryParticipant
       ? targetName
       : (participantName((detail?.participants ?? []).find((p) => Number(p.id) === liveParticipant)) ?? targetName);
+  // ADR-0061 decision 4c: "Running jira_get_issue", "Waiting for you" next to the live reply's avatar.
+  const liveActivity = liveActivityLabel(avatarStates, liveParticipant, avatarNow, (id) =>
+    participantName((detail?.participants ?? []).find((p) => Number(p.id) === id)) ?? undefined,
+  );
   const pauseCard =
     pause && !(live && (live.turn.phase === 'sending' || live.turn.phase === 'streaming')) ? (
       <PauseCard
@@ -925,6 +930,8 @@ export function ThreadView({
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
           // The update replaces the whole meta: no lead control without the meta that was read.
           conversationMeta={isOfflineCopy(detail) || detail?.meta == null ? undefined : detail.meta}
+          // ADR-0061 Parity: a Local work thread's team, read-only, with where each agent runs.
+          teamView={localWork.thread !== null}
           onAgentDelegations={
             delegationAvailable
               ? (agentId, name) => {
@@ -1059,6 +1066,7 @@ export function ThreadView({
                           onOpenTool={setOpenStep}
                           usageAvailable={contract13}
                           guardrailStopped={guardrail?.notices.some(explainsFailure) ?? false}
+                          activity={liveActivity}
                         />
                       );
                     case 'guardrail':

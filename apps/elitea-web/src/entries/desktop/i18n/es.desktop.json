@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Sin sandbox, en una carpeta de confianza (sandbox: host)",
   "workspace.rules.hostHelp": "En una carpeta de confianza, el comando se ejecuta como tú sin preguntar. En otro lugar, o mientras la confianza esté en pausa, la regla no hace nada y el comando se pregunta.",
   "workspace.rules.needsTrust": "Requiere confianza",
-  "workspace.rules.needsTrustHelp": "Esta regla se recordó en una carpeta de confianza. Solo se aplica mientras la carpeta sea de confianza y hasta entonces no hace nada."
+  "workspace.rules.needsTrustHelp": "Esta regla se recordó en una carpeta de confianza. Solo se aplica mientras la carpeta sea de confianza y hasta entonces no hace nada.",
+  "workspace.approval.agent": "{{name}} pregunta",
+  "workspace.composer.agents": "Agentes de este hilo",
+  "workspace.exchange.label": "Agentes respondiendo por turnos",
+  "workspace.exchange.next": "Siguiente:",
+  "workspace.exchange.now": "Ahora: {{name}}",
+  "workspace.exchange.skip": "Omitir a {{name}}",
+  "workspace.exchange.skippedRest": "Omitiste los agentes restantes.",
+  "workspace.exchange.stop": "Detener intercambio",
+  "workspace.exchange.stopped": "Detuviste el intercambio.",
+  "workspace.participants.cloud": "Nube",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participantes",
+  "workspace.steer.to": "Para {{name}}: {{text}}"
 }

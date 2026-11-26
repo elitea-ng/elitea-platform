@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "سینڈ باکس کے بغیر، قابلِ اعتماد فولڈر میں (sandbox: host)",
   "workspace.rules.hostHelp": "قابلِ اعتماد فولڈر میں کمانڈ پوچھے بغیر آپ کے نام سے چلتی ہے۔ کہیں اور، یا اعتماد موقوف ہونے کے دوران، اصول کچھ نہیں کرتا اور کمانڈ پوچھی جاتی ہے۔",
   "workspace.rules.needsTrust": "اعتماد درکار ہے",
-  "workspace.rules.needsTrustHelp": "یہ اصول ایک قابلِ اعتماد فولڈر میں یاد رکھا گیا۔ یہ صرف تب لاگو ہوتا ہے جب فولڈر قابلِ اعتماد ہو، اور تب تک کچھ نہیں کرتا۔"
+  "workspace.rules.needsTrustHelp": "یہ اصول ایک قابلِ اعتماد فولڈر میں یاد رکھا گیا۔ یہ صرف تب لاگو ہوتا ہے جب فولڈر قابلِ اعتماد ہو، اور تب تک کچھ نہیں کرتا۔",
+  "workspace.approval.agent": "{{name}} پوچھ رہا ہے",
+  "workspace.composer.agents": "اس تھریڈ کے ایجنٹ",
+  "workspace.exchange.label": "باری باری جواب دینے والے ایجنٹ",
+  "workspace.exchange.next": "اگلا:",
+  "workspace.exchange.now": "ابھی: {{name}}",
+  "workspace.exchange.skip": "{{name}} کو چھوڑیں",
+  "workspace.exchange.skippedRest": "آپ نے باقی ایجنٹ چھوڑ دیے۔",
+  "workspace.exchange.stop": "تبادلہ روکیں",
+  "workspace.exchange.stopped": "آپ نے تبادلہ روک دیا۔",
+  "workspace.participants.cloud": "کلاؤڈ",
+  "workspace.participants.local": "مقامی",
+  "workspace.participants.title": "شرکاء",
+  "workspace.steer.to": "{{name}} کے لیے: {{text}}"
 }

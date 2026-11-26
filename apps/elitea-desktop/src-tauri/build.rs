@@ -45,6 +45,8 @@ fn main() {
             "agent_prewarm",
             "turn_commit_retry",
             "agent_turn_cancel",
+            "agent_exchange_stop",
+            "agent_exchange_skip",
             "agent_turn_resume",
             "agent_turn_status",
             "agent_turn_steer",

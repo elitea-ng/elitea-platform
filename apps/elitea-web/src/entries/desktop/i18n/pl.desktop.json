@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Bez piaskownicy, w zaufanym folderze (sandbox: host)",
   "workspace.rules.hostHelp": "W zaufanym folderze polecenie działa jako Ty bez pytania. Gdzie indziej lub gdy zaufanie jest wstrzymane, reguła nic nie robi, a polecenie wymaga zgody.",
   "workspace.rules.needsTrust": "Wymaga zaufania",
-  "workspace.rules.needsTrustHelp": "Ta reguła została zapamiętana w zaufanym folderze. Obowiązuje tylko, dopóki folder jest zaufany, a do tego czasu nic nie robi."
+  "workspace.rules.needsTrustHelp": "Ta reguła została zapamiętana w zaufanym folderze. Obowiązuje tylko, dopóki folder jest zaufany, a do tego czasu nic nie robi.",
+  "workspace.approval.agent": "{{name}} pyta",
+  "workspace.composer.agents": "Agenci w tym wątku",
+  "workspace.exchange.label": "Agenci odpowiadają po kolei",
+  "workspace.exchange.next": "Następni:",
+  "workspace.exchange.now": "Teraz: {{name}}",
+  "workspace.exchange.skip": "Pomiń {{name}}",
+  "workspace.exchange.skippedRest": "Pominięto pozostałych agentów.",
+  "workspace.exchange.stop": "Zatrzymaj wymianę",
+  "workspace.exchange.stopped": "Zatrzymano wymianę.",
+  "workspace.participants.cloud": "Chmura",
+  "workspace.participants.local": "Lokalnie",
+  "workspace.participants.title": "Uczestnicy",
+  "workspace.steer.to": "Do {{name}}: {{text}}"
 }

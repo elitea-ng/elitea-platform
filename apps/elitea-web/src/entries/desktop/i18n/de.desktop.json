@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Ohne Sandbox, in einem vertrauenswürdigen Ordner (sandbox: host)",
   "workspace.rules.hostHelp": "In einem vertrauenswürdigen Ordner läuft der Befehl als Sie, ohne zu fragen. Anderswo oder solange das Vertrauen pausiert ist, bewirkt die Regel nichts und der Befehl wird abgefragt.",
   "workspace.rules.needsTrust": "Benötigt Vertrauen",
-  "workspace.rules.needsTrustHelp": "Diese Regel wurde in einem vertrauenswürdigen Ordner gespeichert. Sie gilt nur, solange dem Ordner vertraut wird, und bewirkt bis dahin nichts."
+  "workspace.rules.needsTrustHelp": "Diese Regel wurde in einem vertrauenswürdigen Ordner gespeichert. Sie gilt nur, solange dem Ordner vertraut wird, und bewirkt bis dahin nichts.",
+  "workspace.approval.agent": "{{name}} fragt",
+  "workspace.composer.agents": "Agenten in diesem Thread",
+  "workspace.exchange.label": "Agenten antworten nacheinander",
+  "workspace.exchange.next": "Als Nächstes:",
+  "workspace.exchange.now": "Jetzt: {{name}}",
+  "workspace.exchange.skip": "{{name}} überspringen",
+  "workspace.exchange.skippedRest": "Sie haben die übrigen Agenten übersprungen.",
+  "workspace.exchange.stop": "Austausch beenden",
+  "workspace.exchange.stopped": "Sie haben den Austausch beendet.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Lokal",
+  "workspace.participants.title": "Teilnehmer",
+  "workspace.steer.to": "An {{name}}: {{text}}"
 }

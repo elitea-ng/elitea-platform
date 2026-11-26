@@ -82,8 +82,24 @@ fi
 # A writable image with room for Finder's .DS_Store; HFS+, whose aliases Finder resolves
 # for the background picture.
 megabytes=$(( $(du -sm "$stage" | cut -f1) + 32 ))
-hdiutil create -quiet -srcfolder "$stage" -volname "$vol" -fs HFS+ -fsargs "-c c=64,a=16,e=16" \
-  -format UDRW -size "${megabytes}m" "$work/rw.dmg"
+# `hdiutil create` fails now and then on a hosted runner ("Resource busy" while it
+# copies the source folder in), and `-quiet` closes stderr, so such a failure said
+# nothing. Its output goes to a log instead, it is tried three times, and the last
+# attempt's log is shown when all fail.
+created=""
+for attempt in 1 2 3; do
+  rm -f "$work/rw.dmg"
+  if hdiutil create -srcfolder "$stage" -volname "$vol" -fs HFS+ -fsargs "-c c=64,a=16,e=16" \
+    -format UDRW -size "${megabytes}m" "$work/rw.dmg" > "$work/create.log" 2>&1; then
+    created=1; break
+  fi
+  echo "hdiutil create failed (attempt $attempt of 3): $(tr '\n' ' ' < "$work/create.log")" >&2
+  sleep $(( attempt * 5 ))
+done
+if [ -z "$created" ]; then
+  cat "$work/create.log" >&2
+  echo "::error::hdiutil could not create the writable image in 3 attempts" >&2; exit 1
+fi
 attach_out="$(hdiutil attach -readwrite -noverify -noautoopen "$work/rw.dmg")"
 # The whole disk (/dev/diskN, the first line), not the HFS slice: detaching it
 # detaches the image, so `hdiutil convert` below never meets a busy file.

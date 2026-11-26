@@ -94,13 +94,13 @@ export const LocalTurnWorkReport = zod
       .min(localTurnWorkReportHostCommandsMin)
       .optional()
       .describe(
-        "Client contract 1.66 (ADR-0061 decision 5i). How many of the turn's commands ran outside the OS sandbox in a trusted folder. Absent when none. When above 0 the stored `local_work` carries `ran_outside_sandbox: true`. As everything here, what the client reports; the server cannot verify it.",
+        "Client contract 1.67 (ADR-0061 decision 5i). How many of the turn's commands ran outside the OS sandbox in a trusted folder. Absent when none. When above 0 the stored `local_work` carries `ran_outside_sandbox: true`. As everything here, what the client reports; the server cannot verify it.",
       ),
     trusted: zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.66. The turn's folder was trusted (and not suspended) when the turn ran. Absent when it was not.",
+        "Client contract 1.67. The turn's folder was trusted (and not suspended) when the turn ran. Absent when it was not.",
       ),
   })
   .describe(

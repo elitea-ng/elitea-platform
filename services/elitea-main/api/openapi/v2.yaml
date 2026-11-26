@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.66"
+  x-elitea-client-contract: "1.67"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -3483,8 +3483,10 @@ components:
         change, without an SSE id, so it never moves the client's resume
         cursor. A stream resumed with a Last-Event-ID starts with one
         `agent_state`, the participant's state at the cursor. `idle` is the state before a
-        run's first frame. A pause of a sub-agent is `waiting`, its other
-        frames `working`. Not terminal.
+        run's first frame. A pause of a sub-agent is `waiting` on a person,
+        its other frames `waiting` on an agent (contract 1.66; `working`
+        before). Contract 1.66 (ADR-0061 decision 4a): a change of the
+        state OR of its `activity` writes a frame. Not terminal.
       allOf:
         - $ref: '#/components/schemas/ClientFrameEnvelope'
         - type: object
@@ -3495,10 +3497,70 @@ components:
               enum: [idle, thinking, speaking, working, waiting, success, error, waking]
               description: >-
                 `thinking` before the model answers or after a tool,
-                `speaking` while text streams, `working` in a tool or a
-                sub-agent, `waiting` on a person (an approval, a question, an
-                authorization), `success` and `error` at the end, `waking`
-                when a continuation resumes a paused answer.
+                `speaking` while text streams, `working` in a tool,
+                `waiting` on a person (an approval, a question, an
+                authorization) or on a sub-agent, `success` and `error` at
+                the end, `waking` when a continuation resumes a paused answer.
+            activity:
+              $ref: '#/components/schemas/AgentStateActivity'
+
+    AgentStateActivity:
+      type: object
+      description: >-
+        Contract 1.66 (ADR-0061 decision 4a): what the agent does in its
+        state, present only when there is something to say. It never
+        carries tool arguments or command text. A client that does not know
+        it shows the state alone.
+      example:
+        tool: jira_get_issue
+        tool_kind: read
+      properties:
+        tool:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9_.:-]+$'
+          description: >-
+            With `working`: the tool's display name, from the tool call's
+            `tool_name` only, every other character replaced by `_` and cut
+            to 64 characters.
+          example: jira_get_issue
+        tool_kind:
+          type: string
+          description: >-
+            The tool's category in tool-categories-v1.json (`read`, `write`,
+            `delete`, `external_send`, `payment` or `code_execution`), only
+            when the contract lists the tool.
+          example: read
+        program:
+          type: string
+          maxLength: 64
+          pattern: '^[A-Za-z0-9_.:-]+$'
+          description: >-
+            The desktop host's local events only: the program a command
+            runs (the basename of its first word), never the command line.
+            Main never sends it.
+          example: cargo
+        waiting_on:
+          type: string
+          description: >-
+            With `waiting`: `person` (an approval, a question, an
+            authorization) or `agent` (a sub-agent or a consulted agent
+            runs).
+          example: person
+        peer_participant_id:
+          type: integer
+          format: int64
+          description: >-
+            The participant waited on, consulted or handed to, when it is
+            one of the thread's.
+          example: 88
+        handoff_to:
+          type: array
+          items: { type: integer, format: int64 }
+          description: >-
+            On the frame that ends a turn with a hand-off: the participants
+            the agent handed the floor to.
+          example: [88]
 
     ClientFrameToolMetadata:
       type: object
@@ -7103,7 +7165,7 @@ components:
           enum: [host]
           example: host
           description: >-
-            Client contract 1.66 (ADR-0061 decision 5i). `host` when the
+            Client contract 1.67 (ADR-0061 decision 5i). `host` when the
             command ran outside the OS sandbox in a trusted folder; absent for
             a sandboxed command. Any other value is dropped.
     LocalTurnWorkReport:
@@ -7151,7 +7213,7 @@ components:
           minimum: 0
           example: 2
           description: >-
-            Client contract 1.66 (ADR-0061 decision 5i). How many of the turn's
+            Client contract 1.67 (ADR-0061 decision 5i). How many of the turn's
             commands ran outside the OS sandbox in a trusted folder. Absent
             when none. When above 0 the stored `local_work` carries
             `ran_outside_sandbox: true`. As everything here, what the client
@@ -7160,7 +7222,7 @@ components:
           type: boolean
           example: true
           description: >-
-            Client contract 1.66. The turn's folder was trusted (and not
+            Client contract 1.67. The turn's folder was trusted (and not
             suspended) when the turn ran. Absent when it was not.
     LocalTurnCommitRequest:
       type: object
@@ -22972,7 +23034,7 @@ components:
           type: boolean
           example: true
           description: >-
-            Client contract 1.66 (ADR-0061 decision 5b). A person may mark one
+            Client contract 1.67 (ADR-0061 decision 5b). A person may mark one
             desktop folder trusted ("no sandbox"): its commands then run as the
             person's own processes, still under approvals, the person's rules
             and `command_deny`. Default true, but effective only while

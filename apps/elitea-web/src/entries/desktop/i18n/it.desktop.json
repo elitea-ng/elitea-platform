@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Senza sandbox, in una cartella attendibile (sandbox: host)",
   "workspace.rules.hostHelp": "In una cartella attendibile il comando viene eseguito come te senza chiedere. Altrove, o mentre la fiducia è sospesa, la regola non fa nulla e il comando viene chiesto.",
   "workspace.rules.needsTrust": "Richiede fiducia",
-  "workspace.rules.needsTrustHelp": "Questa regola è stata memorizzata in una cartella attendibile. Si applica solo finché la cartella è attendibile e fino ad allora non fa nulla."
+  "workspace.rules.needsTrustHelp": "Questa regola è stata memorizzata in una cartella attendibile. Si applica solo finché la cartella è attendibile e fino ad allora non fa nulla.",
+  "workspace.approval.agent": "{{name}} chiede",
+  "workspace.composer.agents": "Agenti in questo thread",
+  "workspace.exchange.label": "Agenti che rispondono a turno",
+  "workspace.exchange.next": "Prossimi:",
+  "workspace.exchange.now": "Ora: {{name}}",
+  "workspace.exchange.skip": "Salta {{name}}",
+  "workspace.exchange.skippedRest": "Hai saltato gli agenti rimanenti.",
+  "workspace.exchange.stop": "Interrompi lo scambio",
+  "workspace.exchange.stopped": "Hai interrotto lo scambio.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Locale",
+  "workspace.participants.title": "Partecipanti",
+  "workspace.steer.to": "A {{name}}: {{text}}"
 }

@@ -1,7 +1,7 @@
 # Local turn commit: commands that ran outside the sandbox (#3060, ADR-0061)
 
 **What changed.** A desktop local turn's commit report (`local_work`,
-`LocalTurnWorkReport`, client contract 1.66) may carry `host_commands` (how
+`LocalTurnWorkReport`, client contract 1.67) may carry `host_commands` (how
 many of the turn's commands ran outside the OS sandbox in a trusted folder)
 and `trusted` (the folder was trusted when the turn ran), and each reported
 command may carry `execution: host`. Main stores them on the answer's

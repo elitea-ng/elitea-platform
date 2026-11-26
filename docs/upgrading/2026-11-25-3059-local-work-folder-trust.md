@@ -3,7 +3,7 @@
 **What changed.** The native client policy's **Local work** section gains
 `local_work_folder_trust` (**Allow Trusted Folders (No Sandbox)**), a boolean
 that defaults to **on**. It is delivered to the desktop app as
-`local_work.folder_trust` (client contract 1.66). With it, a person can mark
+`local_work.folder_trust` (client contract 1.67). With it, a person can mark
 one desktop folder trusted: that folder's commands run as the person's own
 processes, outside the OS sandbox, still under approvals, the person's rules
 and `local_work_command_deny`. Trust is per folder, granted by the person

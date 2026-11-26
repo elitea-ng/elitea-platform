@@ -14,7 +14,7 @@ import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
-import { steeringCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
+import { exchangeCommands, steeringCommands, type ExchangeCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, threadSkillCommands, type ThreadForkCommands, type ThreadSkillCommands } from './threadForkIpc';
 import type { FloorDoneFields, UnattendedEvent, UnattendedStatusFields } from './unattendedIpc';
 import type { UsagePayload, UsageTotalPayload } from './turnUsage';
@@ -270,7 +270,7 @@ export function toWorkspaceIpcError(error: unknown): WorkspaceIpcError {
   return new WorkspaceIpcError('unknown', error instanceof Error ? error.message : 'Something went wrong.');
 }
 
-export interface WorkspaceIpc extends ThreadForkCommands, ThreadSkillCommands, SteeringCommands {
+export interface WorkspaceIpc extends ThreadForkCommands, ThreadSkillCommands, SteeringCommands, ExchangeCommands {
   open(): Promise<Workspace | null>;
   list(): Promise<Workspace[]>;
   remove(id: string): Promise<void>;
@@ -360,7 +360,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     deleteThreadHistory: async (workspaceId, conversationId) =>
       (await invoke<{ deleted: number }>('thread_history_delete', { workspace_id: workspaceId, conversation_id: conversationId })).deleted,
     ...threadForkCommands(invoke), ...threadSkillCommands(invoke),
-    ...steeringCommands(invoke),
+    ...steeringCommands(invoke), ...exchangeCommands(invoke),
     onEvent: (handler) => listen(AGENT_EVENT_CHANNEL, (payload) => handler(payload as AgentEvent)),
   };
 }

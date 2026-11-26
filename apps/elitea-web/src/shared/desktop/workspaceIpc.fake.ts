@@ -72,6 +72,9 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     /** `agent_turn_steer` calls, then `agent_turn_steer_update` calls (`text` `null`: removed), in order. */
     steers: { turnId: string; text: string }[];
     steerUpdates: { turnId: string; steerId: string; text: string | null }[];
+    /** `agent_exchange_stop` turn ids and `agent_exchange_skip` calls, in order (ADR-0061 decision 2c). */
+    exchangeStops: string[];
+    exchangeSkips: { turnId: string; participantId: number }[];
   };
   /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
@@ -120,7 +123,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const history = new Map<string, StoredTurn[]>();
   const threadPins = new Map<string, ListedThreadSkill[]>();
   const historyKey = (workspaceId: string, conversationId: string): string => `${workspaceId}\u0000${conversationId}`;
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], pins: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], prewarmed: [], commitRetries: [], resumed: [], cancelled: [], approvals: [], restores: [], fileQueries: [], forks: [], pins: [], attachedFiles: [], attachedBytes: [], removedAttachments: [], steers: [], steerUpdates: [], exchangeStops: [], exchangeSkips: [] };
   let attachments = 0;
   const attached = (name: string, mime: string): AttachedImage => {
     attachments += 1;
@@ -220,6 +223,14 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     updateSteer(turnId, steerId, text) {
       calls.steerUpdates.push({ turnId, steerId, text });
       return failure('updateSteer') ?? Promise.resolve();
+    },
+    stopExchange(turnId) {
+      calls.exchangeStops.push(turnId);
+      return Promise.resolve();
+    },
+    skipInExchange(turnId, participantId) {
+      calls.exchangeSkips.push({ turnId, participantId });
+      return Promise.resolve([]);
     },
     turnStatus(turnId) {
       const failed = failure('turnStatus');

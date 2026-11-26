@@ -107,7 +107,7 @@ const (
 	KeyNativeLocalWorkBrowserHTTP           = "local_work_browser_http"
 	KeyNativeLocalWorkBrowserPrivateNetwork = "local_work_browser_private_network"
 	// KeyNativeLocalWorkFolderTrust lets a person mark one desktop folder
-	// trusted ("no sandbox", ADR-0061 decision 5b, client contract 1.66): its
+	// trusted ("no sandbox", ADR-0061 decision 5b, client contract 1.67): its
 	// commands then run as the person's own processes, under approvals. On by
 	// default, but effective only while local_work_max_sandbox_mode is
 	// full-access and local_work_network and local_work_shell are on; the

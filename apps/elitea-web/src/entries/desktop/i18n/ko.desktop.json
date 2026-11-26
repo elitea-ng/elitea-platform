@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "샌드박스 없음, 신뢰할 수 있는 폴더에서(sandbox: host)",
   "workspace.rules.hostHelp": "신뢰할 수 있는 폴더에서는 묻지 않고 사용자 본인으로 명령을 실행합니다. 다른 곳이거나 신뢰가 일시 중지된 동안에는 규칙이 아무것도 하지 않고 명령을 확인합니다.",
   "workspace.rules.needsTrust": "신뢰 필요",
-  "workspace.rules.needsTrustHelp": "이 규칙은 신뢰할 수 있는 폴더에서 기억되었습니다. 폴더를 신뢰하는 동안에만 적용되며 그 전까지는 아무것도 하지 않습니다."
+  "workspace.rules.needsTrustHelp": "이 규칙은 신뢰할 수 있는 폴더에서 기억되었습니다. 폴더를 신뢰하는 동안에만 적용되며 그 전까지는 아무것도 하지 않습니다.",
+  "workspace.approval.agent": "{{name}}의 요청",
+  "workspace.composer.agents": "이 스레드의 에이전트",
+  "workspace.exchange.label": "차례로 답하는 에이전트",
+  "workspace.exchange.next": "다음:",
+  "workspace.exchange.now": "지금: {{name}}",
+  "workspace.exchange.skip": "{{name}} 건너뛰기",
+  "workspace.exchange.skippedRest": "나머지 에이전트를 건너뛰었습니다.",
+  "workspace.exchange.stop": "교환 중지",
+  "workspace.exchange.stopped": "교환을 중지했습니다.",
+  "workspace.participants.cloud": "클라우드",
+  "workspace.participants.local": "로컬",
+  "workspace.participants.title": "참여자",
+  "workspace.steer.to": "{{name}}에게: {{text}}"
 }

@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Sem sandbox, em uma pasta confiável (sandbox: host)",
   "workspace.rules.hostHelp": "Em uma pasta confiável, o comando é executado como você sem perguntar. Em outro lugar, ou enquanto a confiança estiver pausada, a regra não faz nada e o comando é perguntado.",
   "workspace.rules.needsTrust": "Requer confiança",
-  "workspace.rules.needsTrustHelp": "Esta regra foi lembrada em uma pasta confiável. Ela só vale enquanto a pasta for confiável e, até lá, não faz nada."
+  "workspace.rules.needsTrustHelp": "Esta regra foi lembrada em uma pasta confiável. Ela só vale enquanto a pasta for confiável e, até lá, não faz nada.",
+  "workspace.approval.agent": "{{name}} pergunta",
+  "workspace.composer.agents": "Agentes nesta conversa",
+  "workspace.exchange.label": "Agentes respondendo em sequência",
+  "workspace.exchange.next": "Próximos:",
+  "workspace.exchange.now": "Agora: {{name}}",
+  "workspace.exchange.skip": "Pular {{name}}",
+  "workspace.exchange.skippedRest": "Você pulou os agentes restantes.",
+  "workspace.exchange.stop": "Parar troca",
+  "workspace.exchange.stopped": "Você parou a troca.",
+  "workspace.participants.cloud": "Nuvem",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participantes",
+  "workspace.steer.to": "Para {{name}}: {{text}}"
 }

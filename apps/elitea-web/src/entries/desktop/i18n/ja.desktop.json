@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "サンドボックスなし、信頼済みフォルダーで（sandbox: host）",
   "workspace.rules.hostHelp": "信頼済みフォルダーでは、コマンドは確認なしであなたとして実行されます。それ以外の場所や信頼の一時停止中は、ルールは何もせず、コマンドは確認されます。",
   "workspace.rules.needsTrust": "信頼が必要",
-  "workspace.rules.needsTrustHelp": "このルールは信頼済みフォルダーで記憶されました。フォルダーが信頼されている間だけ適用され、それまでは何もしません。"
+  "workspace.rules.needsTrustHelp": "このルールは信頼済みフォルダーで記憶されました。フォルダーが信頼されている間だけ適用され、それまでは何もしません。",
+  "workspace.approval.agent": "{{name}} からの確認",
+  "workspace.composer.agents": "このスレッドのエージェント",
+  "workspace.exchange.label": "順番に回答するエージェント",
+  "workspace.exchange.next": "次:",
+  "workspace.exchange.now": "現在: {{name}}",
+  "workspace.exchange.skip": "{{name}} をスキップ",
+  "workspace.exchange.skippedRest": "残りのエージェントをスキップしました。",
+  "workspace.exchange.stop": "やり取りを停止",
+  "workspace.exchange.stopped": "やり取りを停止しました。",
+  "workspace.participants.cloud": "クラウド",
+  "workspace.participants.local": "ローカル",
+  "workspace.participants.title": "参加者",
+  "workspace.steer.to": "{{name}} 宛て: {{text}}"
 }

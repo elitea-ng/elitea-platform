@@ -338,6 +338,7 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
         activeParticipant={activeParticipant}
         projectId={projectId}
         isMcpVisible={isMcpVisible}
+        localWork={localWork !== undefined}
         handlers={{
           onSelectParticipant: handleChangeParticipant,
           onDeleteParticipant: handleDeleteParticipant,

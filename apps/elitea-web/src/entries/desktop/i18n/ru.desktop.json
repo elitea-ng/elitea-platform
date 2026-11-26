@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "Без песочницы, в доверенной папке (sandbox: host)",
   "workspace.rules.hostHelp": "В доверенной папке команда выполняется от вашего имени без запроса. В другом месте или пока доверие приостановлено правило ничего не делает, и команда запрашивается.",
   "workspace.rules.needsTrust": "Нужно доверие",
-  "workspace.rules.needsTrustHelp": "Это правило запомнено в доверенной папке. Оно действует, только пока папка доверенная, а до тех пор ничего не делает."
+  "workspace.rules.needsTrustHelp": "Это правило запомнено в доверенной папке. Оно действует, только пока папка доверенная, а до тех пор ничего не делает.",
+  "workspace.approval.agent": "{{name}} спрашивает",
+  "workspace.composer.agents": "Агенты в этом треде",
+  "workspace.exchange.label": "Агенты отвечают по очереди",
+  "workspace.exchange.next": "Далее:",
+  "workspace.exchange.now": "Сейчас: {{name}}",
+  "workspace.exchange.skip": "Пропустить {{name}}",
+  "workspace.exchange.skippedRest": "Вы пропустили остальных агентов.",
+  "workspace.exchange.stop": "Остановить обмен",
+  "workspace.exchange.stopped": "Вы остановили обмен.",
+  "workspace.participants.cloud": "Облако",
+  "workspace.participants.local": "Локально",
+  "workspace.participants.title": "Участники",
+  "workspace.steer.to": "Для {{name}}: {{text}}"
 }

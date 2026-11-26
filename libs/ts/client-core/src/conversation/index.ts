@@ -14,6 +14,7 @@ export {
 export {
   ONE_SHOT_MS,
   activeAnimatedParticipant,
+  activityOf,
   agentStateOf,
   applyAgentStateFrame,
   avatarMotion,
@@ -57,7 +58,14 @@ export {
   type DefaultAvatarRole,
   type DefaultAvatarShape,
 } from './defaultAvatars';
-export { MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';
+export {
+  ACTIVITY_LABELS_EN,
+  MAX_ACTIVITY_LABEL,
+  activityLabel,
+  type ActivityLabels,
+  type ParticipantName,
+} from './activityLabel';
+export { HANDOFF_MS, MOTION_EASING, MOTION_KIND, MOTION_SPEC, MOTION_TONE, type MotionKind, type MotionSpec, type MotionTone } from './motionSpec';
 export {
   DEFAULT_FLOOR,
   FLOOR_POLICY,

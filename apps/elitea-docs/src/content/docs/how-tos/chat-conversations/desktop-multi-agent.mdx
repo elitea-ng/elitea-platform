@@ -33,6 +33,34 @@ A saved [team](/how-tos/agents-pipelines/agent-teams) can run a Local work threa
 
 When you send the thread to the cloud, the cloud continues on the agent the floor routes to: the lead, or without a lead the agent of the last local turn. A message you write to the thread while it is in the cloud is routed the same way, and **@Name** addresses an agent there too.
 
+## The Participants tab
+
+The thread's agents have a tab of their own in the inspector, **Participants**. With two or more agents it is the first tab; with one agent it comes after the others.
+
+Each agent row shows:
+
+- where the agent runs: **Local** (on this computer, with the folder) or **Cloud** (the conversation's text only);
+- **Lead** on the thread's lead;
+- what the agent is doing right now, for example **Thinking**, **Running cargo** or **Waiting for you** (see [See who is working](#see-who-is-working)).
+
+The row's **⋮** menu has:
+
+| Item | What it does |
+| --- | --- |
+| **Make lead** / **Clear lead** | Makes the agent the lead, or clears the lead. Shown with two or more agents. |
+| **Address** | Puts **@Name** into the composer. |
+| **Run here** / **Run in the cloud** | Moves the agent to this computer or to the cloud for its next answer. Not available while the thread is in the cloud. |
+| **Edit agent** | Opens the agent. |
+| **Remove from thread** | Takes the agent out of the thread. Removing the lead also clears the lead. |
+
+A Local work thread holds agents only: the tab shows no toolkit, pipeline or MCP sections.
+
+## Address an agent
+
+Type **@** in the composer. In a thread with two or more agents, the menu lists the thread's agents first, each marked **Local** or **Cloud**, then the folder's files. Picking an agent puts **@Name** into your message; picking a file adds it as before.
+
+Above the message box, **To: Name** shows who answers the message you are typing: the first agent it names, else the lead (**To: Reviewer (lead)**), else the composer's agent. Open it and pick another agent to address the message to that agent. With one agent there is no **To:**.
+
 ## Address a message
 
 Write **@Name** in your message for each agent it is for, for example:
@@ -55,6 +83,40 @@ When the lead runs in the cloud, the composer says so above the message box: **T
 If the lead changes while you write, the app sends your message to the new lead. It reads the thread's agents and lead again at most every 30 seconds, and right after you add an agent.
 
 The composer stays busy until the last addressed agent has answered. If you send a new message before then, the agents still waiting for the earlier message do not answer it: the thread says **A newer message took the floor**.
+
+## Watch and step in
+
+While the agents of a message answer one after another, a strip above the composer, and at the top of the **Participants** tab, shows the order: **Now: Coder · Next: Reviewer, Docs Writer**.
+
+- **Stop exchange** stops the agent that is answering, and none of the agents after it answers. The thread says **You stopped the exchange.**
+- **×** on an agent under **Next** skips that agent; the one after it answers instead. Skipping every agent left ends the exchange: **You skipped the remaining agents.**
+- A message you write while an agent works goes to that agent, and the queue says so: **To Coder: …**.
+- An approval names the agent whose turn asks, for example **Coder asks**.
+
+## See who is working
+
+Each agent row in the **Participants** tab shows what the agent does:
+
+| Label | What the agent does |
+| --- | --- |
+| **Thinking** | The model is working on its next step. |
+| **Writing** | It is writing its answer. |
+| **Running _tool_** | It runs a tool or command, for example **Running cargo**. Only the program's name shows, never the command line. |
+| **Waiting for you** | It waits for your approval or answer. |
+| **Waiting for _agent_** | It waits for another agent. |
+| **Handed to _agent_** | Its turn ended by handing the work on. |
+| **Resuming** | It picks its work up again. |
+| **Done** / **Error** | Its turn ended. |
+
+Only the agent that is working right now has a moving avatar; the others keep a still badge. The thread's title bar also names the active agent and its label. When you turn on **Reduce motion** in your system settings, no avatar moves and no hand-off animation plays; the labels still change.
+
+Screen readers announce each change politely, at most once a second for each agent, for example "Reviewer: Running jira_get_issue".
+
+## Viewing a team thread on the web and mobile
+
+A Local work thread opened in the web app or the mobile app is read-only. Its participants list shows each agent with **Local** or **Cloud** and **Lead** on the lead, without the menu: you change the lead or where an agent runs in the desktop app. The cloud agents' live labels show there as in a chat.
+
+An answer whose turn ran a command outside the sandbox is marked **Ran outside the sandbox**. The marker appears only on answers the desktop app reported that way.
 
 ## On this computer or in the cloud
 

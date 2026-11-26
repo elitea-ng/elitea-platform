@@ -328,7 +328,7 @@ type CommandRecord struct {
 	Command  string `json:"command"`
 	ExitCode *int   `json:"exit_code,omitempty"`
 	// Execution is ExecutionHost when the command ran outside the OS sandbox
-	// in a trusted folder (ADR-0061 decision 5i, client contract 1.66); ""
+	// in a trusted folder (ADR-0061 decision 5i, client contract 1.67); ""
 	// for a sandboxed one. omitempty keeps older digests unchanged.
 	Execution string `json:"execution,omitempty"`
 }
@@ -350,7 +350,7 @@ type LocalWorkReport struct {
 	MemoriesDeleted []int64 `json:"memories_deleted,omitempty"`
 	// HostCommands is how many commands ran outside the OS sandbox in a
 	// trusted folder, and Trusted whether the folder was trusted when the
-	// turn ran (ADR-0061 decision 5i, client contract 1.66). omitempty keeps
+	// turn ran (ADR-0061 decision 5i, client contract 1.67). omitempty keeps
 	// the commit digest of a report without them unchanged.
 	HostCommands int  `json:"host_commands,omitempty"`
 	Trusted      bool `json:"trusted,omitempty"`

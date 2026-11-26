@@ -133,7 +133,7 @@ pub struct LocalWorkPolicy {
     /// load. Link-local and the other forbidden ranges never do.
     pub browser_private_network: bool,
     /// `local_work_folder_trust` (ADR-0061 decision 5b, client contract
-    /// 1.66): a person may mark a folder trusted, so its commands run on the
+    /// 1.67): a person may mark a folder trusted, so its commands run on the
     /// host outside the sandbox. It matters only with a `full-access`
     /// ceiling, the network and the shell ([`Self::folder_trust_blocks`]).
     /// The server sends `true` by default; off when absent.

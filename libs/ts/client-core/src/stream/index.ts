@@ -10,12 +10,15 @@ export {
   STEERING_STATE,
   TOOL_CALL_TYPES,
   TURN_FAILURE_TYPES,
+  WAITING_ON,
   parseEventData,
+  type AgentActivity,
   type AgentState,
   type EventData,
   type FrameType,
   type SteeringDropReason,
   type SteeringState,
+  type WaitingOn,
 } from './frameTypes';
 export {
   MAX_STEERING_BYTES,

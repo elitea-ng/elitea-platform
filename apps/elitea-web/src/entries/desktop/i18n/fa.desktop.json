@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "بدون سندباکس، در پوشهٔ مورد اعتماد (sandbox: host)",
   "workspace.rules.hostHelp": "در پوشهٔ مورد اعتماد، فرمان بدون پرسیدن به نام شما اجرا می‌شود. جای دیگر، یا وقتی اعتماد متوقف است، قاعده کاری نمی‌کند و فرمان پرسیده می‌شود.",
   "workspace.rules.needsTrust": "نیازمند اعتماد",
-  "workspace.rules.needsTrustHelp": "این قاعده در یک پوشهٔ مورد اعتماد به خاطر سپرده شد. فقط تا وقتی پوشه مورد اعتماد است اعمال می‌شود و تا آن زمان کاری نمی‌کند."
+  "workspace.rules.needsTrustHelp": "این قاعده در یک پوشهٔ مورد اعتماد به خاطر سپرده شد. فقط تا وقتی پوشه مورد اعتماد است اعمال می‌شود و تا آن زمان کاری نمی‌کند.",
+  "workspace.approval.agent": "{{name}} می‌پرسد",
+  "workspace.composer.agents": "عامل‌های این رشته",
+  "workspace.exchange.label": "عامل‌هایی که به نوبت پاسخ می‌دهند",
+  "workspace.exchange.next": "بعدی:",
+  "workspace.exchange.now": "اکنون: {{name}}",
+  "workspace.exchange.skip": "رد کردن {{name}}",
+  "workspace.exchange.skippedRest": "عامل‌های باقی‌مانده را رد کردید.",
+  "workspace.exchange.stop": "توقف تبادل",
+  "workspace.exchange.stopped": "تبادل را متوقف کردید.",
+  "workspace.participants.cloud": "ابر",
+  "workspace.participants.local": "محلی",
+  "workspace.participants.title": "شرکت‌کنندگان",
+  "workspace.steer.to": "به {{name}}: {{text}}"
 }

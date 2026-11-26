@@ -3,9 +3,8 @@
  * Enter sends, Shift+Enter breaks the line, Send turns into Stop while a
  * turn runs) with two menus of its own.
  *
- * - "@" looks up the workspace's files and folders on the host
- *   (`workspace_files`) and inserts the picked one as an `@path` token; the
- *   picked paths still in the text go to the host as the turn's `mentions`.
+ * - "@" lists the thread's agents first (two or more; `@Name`, ADR-0061 decision 2b), then the folder's files and
+ *   folders (`workspace_files`, an `@path` token); the picked paths still in the text go to the host as `mentions`.
  * - "/" as the first word lists the local commands (`/new`, `/plan`, …);
  *   picking one clears it from the input and hands it to the page. Below
  *   them, in sections of their own, the custom commands (the workspace's,
@@ -41,10 +40,6 @@
  */
 import { useEffect, useMemo, useRef, useState, type ComponentRef, type KeyboardEvent, type ReactNode } from 'react';
 
-import { useQuery } from '@tanstack/react-query';
-
-import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
@@ -63,6 +58,8 @@ import type { SkillPinControls } from './useThreadSkillPins';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
+import { agentToken, mentionItems, ToSlot, useAddressRequests, useMentionMenu } from './useComposerMentions';
+import type { ThreadAgent } from './useEnsureConversation';
 import { WorkspaceSendControl } from './WorkspaceSendControl';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
@@ -70,8 +67,6 @@ import { t } from '@/shared/i18n';
 type ComposerHandle = ComponentRef<typeof NewChatInput>;
 type Token = ReturnType<typeof composer.activeToken>;
 type SlashEntry = ReturnType<typeof composer.slashMenu>[number];
-
-const FILE_LIMIT = 50;
 
 const NO_AGENT_EDITOR = {
   activeParticipant: undefined,
@@ -142,6 +137,9 @@ export interface WorkspaceComposerProps {
   unsent?: UnsentSteers | undefined;
   /** The input became non-empty or empty (and again when this callback changes): the idle-compaction hold (`useIdleHold`). */
   onDraftChange?: ((hasDraft: boolean) => void) | undefined;
+  /** The thread's agents, first in the "@" menu with two or more (ADR-0061 decision 2b); the To chip above (`renderTo`) reads the text. */
+  agents?: readonly ThreadAgent[] | undefined;
+  renderTo?: ((draft: string) => ReactNode) | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
@@ -211,7 +209,10 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const locked = props.readOnly === true;
   const steering = steersNow(busy, props.onSteer);
   const [hasDraft, setHasDraft] = useState(false);
+  // The text, for the To chip (`renderTo`).
+  const [draft, setDraft] = useState('');
   const inputRef = useRef<ComposerHandle>(null);
+  useAddressRequests(props.conversationId, inputRef);
   const [token, setToken] = useState<Token>(null);
   const [dismissed, setDismissed] = useState<Token>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -225,36 +226,38 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   useEffect(() => onDraftChange?.(hasDraft), [hasDraft, onDraftChange]);
 
   const open = token !== null && !sameToken(token, dismissed) ? token : null;
-  const files = useQuery({
-    queryKey: ['workspace', 'files', workspaceId, open?.kind === 'file' ? open.query : ''],
-    queryFn: () => ipc.files(workspaceId, open?.query ?? '', FILE_LIMIT),
-    enabled: open?.kind === 'file',
-    staleTime: 5_000,
-    placeholderData: (previous) => previous,
-  });
+  const mentions = useMentionMenu(ipc, workspaceId, open, props.agents);
 
   const { rows: pinRows, error: pinError } = useSkillPinRows(props.skillPins);
   const slash = useMemo(() => (open?.kind === 'command' ? composer.slashMenu(open.query, customCommands, skills) : []), [open, customCommands, skills]);
   const items: SuggestionItem[] = useMemo(() => {
     if (open?.kind === 'command') return [...slash.map((entry) => slashItem(entry, pinRows)), ...(pinRows === undefined ? [] : staleSkillItems(pinRows))];
-    if (open?.kind === 'file') {
-      return (files.data ?? []).map((f) => ({
-        key: `${f.kind}:${f.path}`,
-        label: f.kind === 'dir' ? `${f.path}/` : f.path,
-        icon: f.kind === 'dir' ? <FolderOutlinedIcon fontSize="small" /> : <InsertDriveFileOutlinedIcon fontSize="small" />,
-      }));
-    }
-    return [];
-  }, [open, slash, files.data, pinRows]);
+    return open?.kind === 'file' ? mentionItems(mentions) : [];
+  }, [open, slash, mentions, pinRows]);
   const menuOpen = open !== null && items.length > 0;
   const highlighted = Math.min(activeIndex, Math.max(items.length - 1, 0));
 
   const track = (value: string): void => {
     setHasDraft(value.trim() !== '');
+    setDraft(value);
     const caret = inputRef.current?.getCursorPosition() ?? value.length;
     const next = composer.activeToken(value, caret);
     if (!sameToken(next, token)) setActiveIndex(0);
     setToken(next);
+  };
+
+  // "@": an agent inserts the text Main routes on (`addressedTo`), as typing it would; a file its `@path`.
+  const pickMention = (at: NonNullable<Token>, index: number): void => {
+    const handle = inputRef.current;
+    const agent = mentions.agents[index];
+    const file = mentions.files[index - mentions.agents.length];
+    const text = agent !== undefined || file === undefined ? null : composer.mentionText(file.path, file.kind);
+    if (agent !== undefined) handle?.replaceRange(at.start, at.end, agentToken(agent));
+    if (text !== null) {
+      handle?.replaceRange(at.start, at.end, `${text} `);
+      setPicked((current) => (current.includes(text.slice(1)) ? current : [...current, text.slice(1)]));
+    }
+    setToken(null);
   };
 
   const pick = (index: number): void => {
@@ -277,12 +280,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       onCommand(entry.command.id);
       return;
     }
-    const file = files.data?.[index];
-    if (file === undefined) return;
-    const text = composer.mentionText(file.path, file.kind);
-    handle?.replaceRange(open.start, open.end, `${text} `);
-    setPicked((current) => (current.includes(text.slice(1)) ? current : [...current, text.slice(1)]));
-    setToken(null);
+    pickMention(open, index);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
@@ -313,6 +311,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const clearInput = (): void => {
     inputRef.current?.reset();
     setHasDraft(false);
+    setDraft('');
     setPicked([]);
     setToken(null);
   };
@@ -373,6 +372,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       <SkillPinError message={pinError} />
       <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
       <SteeringQueue queue={props.queue} input={inputRef} onRestored={() => setHasDraft(true)} />
+      <ToSlot render={props.renderTo} draft={draft} />
       <NewChatInput
         ref={inputRef}
         // Stop is drawn by `WorkspaceSendControl`, in Send's place: the input draws no Stop of its own.

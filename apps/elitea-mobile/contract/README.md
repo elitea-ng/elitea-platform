@@ -179,11 +179,17 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.67
+
+| Area | What |
+|---|---|
+| Trusted folders (ADR-0061, #3059 #3060) | `local_work.folder_trust` in the client policy and `host_commands`, `trusted` and `execution: host` in the local turn commit report are desktop-only. The app needs nothing new: it never commits a local turn. The "Ran outside the sandbox" marker on a viewed Local work turn reads the answer meta's `local_work.ran_outside_sandbox` (issue 3069). A server before 1.67 sends neither. |
+
 ## Client contract 1.66
 
 | Area | What |
 |---|---|
-| Trusted folders (ADR-0061, #3059 #3060) | `local_work.folder_trust` in the client policy and `host_commands`, `trusted` and `execution: host` in the local turn commit report are desktop-only. The app needs nothing new: it never commits a local turn. The "Ran outside the sandbox" marker on a viewed Local work turn reads the answer meta's `local_work.ran_outside_sandbox` (issue 3069). A server before 1.66 sends neither. |
+| Agent activity (ADR-0061 decision 4a, #3068) | An `agent_state` frame may carry `activity`: `tool` (a sanitised tool name, at most 64 characters, never arguments) and `tool_kind` with `working`, `waiting_on` (`person` or `agent`) with `waiting`, and later `peer_participant_id` and `handoff_to`. A sub-agent's frames now move the caller to `waiting` on an agent instead of `working`, and a change of activity alone writes a frame. The app reads it through client-core; a build that does not shows the state alone. A server before 1.66 sends no `activity`. |
 
 ## Client contract 1.65
 

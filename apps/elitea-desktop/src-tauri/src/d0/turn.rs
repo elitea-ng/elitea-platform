@@ -1183,6 +1183,8 @@ pub struct AgentHost {
     /// yet: the resume loop takes their records although the host still
     /// knows the turn ([`Self::resume_after_send`]).
     resume_after_send: Mutex<std::collections::HashSet<String>>,
+    /// The person's Stop and Skip of routed messages (ADR-0061 decision 2c).
+    exchanges: super::exchange::Exchanges,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1433,6 +1435,7 @@ impl AgentHost {
             resume_wake: tokio::sync::Notify::new(),
             resume_offers: Mutex::new(std::collections::HashSet::new()),
             resume_after_send: Mutex::new(std::collections::HashSet::new()),
+            exchanges: super::exchange::Exchanges::default(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
             trust: std::sync::OnceLock::new(),
@@ -3306,6 +3309,16 @@ impl AgentHost {
         session
             .lsp()
             .configure(self.lsp_settings(&request.workspace_id));
+        // Whose turn this is: its events report that agent's avatar state
+        // from `status` `running` on (ADR-0061 decision 4b).
+        if let Some(participant_id) = started.participant_id.or_else(|| {
+            started
+                .floor
+                .as_ref()
+                .and_then(|floor| floor.targets.get(floor.position).copied())
+        }) {
+            events.set_participant(participant_id);
+        }
         events.running(&project.paths(), &turn_model(&admitted));
         if let Some(turn) = &request.unattended {
             events.unattended(&unattended::running_status(
@@ -3315,7 +3328,15 @@ impl AgentHost {
             ));
         }
 
-        if let Some(fields) = floor::status(&started) {
+        if let Some(mut fields) = floor::status(&started) {
+            // The turns still queued after this one, as the person left
+            // them (ADR-0061 decision 2c): the UI's "Next".
+            if let Some(floor) = &started.floor {
+                let remaining = self
+                    .exchanges
+                    .begin(events.turn_id(), floor, events.clone());
+                fields["floor"]["exchange"] = json!(remaining);
+            }
             events.unattended(&fields);
         }
 
@@ -3421,6 +3442,15 @@ impl AgentHost {
                     "changed_files": changes.len(),
                 }),
             );
+            // A Stop of the exchange cancelled it: the message's other
+            // agents do not answer (ADR-0061 decision 2c).
+            if self.exchanges.take_announcement(events.turn_id()) {
+                floor::stopped(
+                    &events,
+                    super::exchange::STOPPED_BY_PERSON,
+                    super::exchange::STOPPED_MESSAGE,
+                );
+            }
             // A cancelled turn commits nothing: the chain ends here, and
             // nothing is left to resume.
             self.forget_resume(&request.workspace_id, events.turn_id());
@@ -3670,11 +3700,23 @@ impl AgentHost {
         // A goal check may continue the chain: the UI stays busy for it too.
         // The message's next agent (ADR-0050 decision 7f): started once this
         // commit lands; the UI stays busy for it as for a chain.
-        let floor_next = if failure.is_none() && !handed_off {
+        // The person may have skipped the next agent, or stopped the
+        // exchange (ADR-0061 decision 2c).
+        let routed_next = if failure.is_none() && !handed_off {
             floor::next(&request, &started, &conversation_uuid)
         } else {
             None
         };
+        let had_next = routed_next.is_some();
+        let floor_next = routed_next.and_then(|next| self.exchanges.advance(next));
+        // The person stopped the exchange before this turn's end.
+        let floor_next_stopped = floor_next.is_none()
+            && started
+                .floor
+                .as_ref()
+                .is_some_and(|floor| self.exchanges.stopped(&floor.question_id));
+        // The person skipped every agent that was still to answer.
+        let floor_next_skipped = had_next && floor_next.is_none() && !floor_next_stopped;
         let continuing = matches!(chain_step, Some(ChainStep::Continue))
             || goal_step.is_some()
             || floor_next.is_some();
@@ -3920,6 +3962,21 @@ impl AgentHost {
         // commit follows in the conversation's lane, and `commit_failed`
         // reports one that did not land.
         done_entry.finish(&done_events, done);
+        // A Stop that came too late to cancel the run: the message's other
+        // agents do not answer (ADR-0061 decision 2c).
+        if floor_next_stopped && self.exchanges.take_announcement(done_events.turn_id()) {
+            floor::stopped(
+                &done_events,
+                super::exchange::STOPPED_BY_PERSON,
+                super::exchange::STOPPED_MESSAGE,
+            );
+        } else if floor_next_skipped {
+            floor::stopped(
+                &done_events,
+                super::exchange::SKIPPED_BY_PERSON,
+                super::exchange::ALL_SKIPPED_MESSAGE,
+            );
+        }
         let _ = done_sent.send(());
     }
 
@@ -4039,23 +4096,53 @@ impl AgentHost {
     ) -> futures::future::BoxFuture<'static, ()> {
         async move {
             let _awake = awake;
+            // The person's Stop or Skips since the previous turn's `done`
+            // (ADR-0061 decision 2c).
+            let question = next.question_id.clone();
+            let Some(next) = self.exchanges.advance(next) else {
+                // Said once per Stop (the cancelled turn may have said it).
+                let notice = if !self.exchanges.stopped(&question) {
+                    Some((
+                        super::exchange::SKIPPED_BY_PERSON,
+                        super::exchange::ALL_SKIPPED_MESSAGE,
+                    ))
+                } else if self.exchanges.take_announcement(previous.turn_id()) {
+                    Some((
+                        super::exchange::STOPPED_BY_PERSON,
+                        super::exchange::STOPPED_MESSAGE,
+                    ))
+                } else {
+                    None
+                };
+                if let Some((code, message)) = notice {
+                    floor::stopped(&previous, code, message);
+                }
+                return;
+            };
             let started = match self.floor_request(&next).await {
                 Ok(request) => self.start(request).await,
                 Err(error) => Err(error),
             };
             match started {
-                Ok(started) => previous.send(
-                    "turn_continued",
-                    json!({
-                        "next_turn_id": started.turn_id,
-                        "execution_id": started.execution_id,
-                        "continuation_index": next.position,
-                        "kind": floor::CONTINUED_KIND,
-                        "participant_id": next.participant_id,
-                        "agent_name": next.name,
-                        "executor": if next.cloud { "cloud" } else { "local" },
-                    }),
-                ),
+                Ok(started) => {
+                    let stopped = self.exchanges.adopt(&question, &started.turn_id);
+                    previous.send(
+                        "turn_continued",
+                        json!({
+                            "next_turn_id": started.turn_id,
+                            "execution_id": started.execution_id,
+                            "continuation_index": next.position,
+                            "kind": floor::CONTINUED_KIND,
+                            "participant_id": next.participant_id,
+                            "agent_name": next.name,
+                            "executor": if next.cloud { "cloud" } else { "local" },
+                        }),
+                    );
+                    // A Stop raced the start: the new turn ends at once.
+                    if stopped {
+                        let _ = self.cancel(&started.turn_id);
+                    }
+                }
                 Err(error) => {
                     log::info!(
                         "the next agent of a message did not start: {}",
@@ -5466,6 +5553,42 @@ impl AgentHost {
                 }
             }
         }
+    }
+
+    /// Stop the exchange `turn_id` belongs to (ADR-0061 decision 2c): the
+    /// exchange's running turn is cancelled, and the host starts no later
+    /// turn of its message; `floor_stopped` (`stopped_by_person`) says so
+    /// once. A turn in no exchange is just cancelled.
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` for a turn in no exchange that the host does not know.
+    pub fn exchange_stop(&self, turn_id: &str) -> Result<(), TurnError> {
+        match self.exchanges.stop(turn_id) {
+            // The turn may be past its run already: its commit or the next
+            // start then honours the Stop.
+            Some(stopped) => {
+                let _ = self.cancel(&stopped.turn_id);
+                Ok(())
+            }
+            None => self.cancel(turn_id),
+        }
+    }
+
+    /// Skip `participant_id`, an agent still queued in the exchange of
+    /// `turn_id`: the host starts the one after it instead. The agents
+    /// still queued; the exchange's current turn says so in an `exchange`
+    /// event.
+    ///
+    /// # Errors
+    ///
+    /// `exchange_unknown` or `exchange_not_queued`.
+    pub fn exchange_skip(&self, turn_id: &str, participant_id: i64) -> Result<Vec<i64>, TurnError> {
+        let (remaining, events) = self.exchanges.skip(turn_id, participant_id)?;
+        if let Some(events) = events {
+            events.send("exchange", json!({ "remaining": remaining }));
+        }
+        Ok(remaining)
     }
 
     /// `agent_turn_cancel`: stop a running turn; it then commits nothing.

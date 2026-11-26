@@ -9,7 +9,7 @@ import (
 )
 
 // hostReportCommit is a commit whose report has a sandboxed command only, as
-// every client before contract 1.66 sends it.
+// every client before contract 1.67 sends it.
 func hostReportCommit() CommitRequest {
 	code := 0
 	return CommitRequest{
@@ -82,7 +82,7 @@ func TestBoundReportWithoutHostFieldsIsUnchanged(t *testing.T) {
 }
 
 // TestCommitDigestWithoutHostFieldsIsPinned: the digest of a report without
-// the 1.66 fields is the one the code before them computed (pinned from that
+// the 1.67 fields is the one the code before them computed (pinned from that
 // code), so a replayed commit of an older client still matches.
 func TestCommitDigestWithoutHostFieldsIsPinned(t *testing.T) {
 	request := hostReportCommit()
@@ -92,7 +92,7 @@ func TestCommitDigestWithoutHostFieldsIsPinned(t *testing.T) {
 	}
 	const pinned = "992b8776ee2a61ec357c8f7bbdae15022605c463d7c8c64fa393f94395a3617f"
 	if got := hex.EncodeToString(digest[:]); got != pinned {
-		t.Fatalf("digest = %s, want the pre-1.66 %s", got, pinned)
+		t.Fatalf("digest = %s, want the pre-1.67 %s", got, pinned)
 	}
 	request.Report.HostCommands = 2
 	if moved, _ := commitDigest(request); moved == digest {

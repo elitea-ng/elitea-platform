@@ -193,7 +193,7 @@ export const LocalWorkPolicy = zod
       .boolean()
       .optional()
       .describe(
-        "Client contract 1.66 (ADR-0061 decision 5b). A person may mark one desktop folder trusted (\"no sandbox\"): its commands then run as the person's own processes, still under approvals, the person's rules and `command_deny`. Default true, but effective only while `max_sandbox_mode` is `full-access` and `network` and `shell` are true. When the policy stops allowing it, the desktop suspends every trusted folder until the person confirms again. Absent reads as false on the desktop.",
+        "Client contract 1.67 (ADR-0061 decision 5b). A person may mark one desktop folder trusted (\"no sandbox\"): its commands then run as the person's own processes, still under approvals, the person's rules and `command_deny`. Default true, but effective only while `max_sandbox_mode` is `full-access` and `network` and `shell` are true. When the policy stops allowing it, the desktop suspends every trusted folder until the person confirms again. Absent reads as false on the desktop.",
       ),
   })
   .describe(

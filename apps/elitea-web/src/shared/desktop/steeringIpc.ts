@@ -30,3 +30,22 @@ export function steeringCommands(invoke: Invoke): SteeringCommands {
     updateSteer: (turnId, steerId, text) => invoke<void>('agent_turn_steer_update', { turn_id: turnId, steer_id: steerId, text }),
   };
 }
+
+/**
+ * Watching and stepping into an exchange (ADR-0061 decision 2c, IPC.md "Several agents in a thread"): the host keeps
+ * the routed order of a person's message; these only tell it to stop the rest or to drop one agent of it.
+ */
+export interface ExchangeCommands {
+  /** `agent_exchange_stop`: cancel the running turn of the exchange and start none of the agents still queued. */
+  stopExchange(turnId: string): Promise<void>;
+  /** `agent_exchange_skip`: drop `participantId` from the agents still queued; resolves with the ones that remain. */
+  skipInExchange(turnId: string, participantId: number): Promise<number[]>;
+}
+
+export function exchangeCommands(invoke: Invoke): ExchangeCommands {
+  return {
+    stopExchange: (turnId) => invoke<void>('agent_exchange_stop', { turn_id: turnId }),
+    skipInExchange: async (turnId, participantId) =>
+      (await invoke<{ remaining: number[] }>('agent_exchange_skip', { turn_id: turnId, participant_id: participantId })).remaining,
+  };
+}

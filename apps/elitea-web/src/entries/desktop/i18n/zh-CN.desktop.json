@@ -1084,5 +1084,18 @@
   "workspace.rules.host": "无沙盒，在受信任文件夹中（sandbox: host）",
   "workspace.rules.hostHelp": "在受信任文件夹中，命令以你的身份运行且不询问。在其他位置或信任暂停期间，规则不起作用，命令需要询问。",
   "workspace.rules.needsTrust": "需要信任",
-  "workspace.rules.needsTrustHelp": "此规则是在受信任文件夹中记住的。它仅在该文件夹受信任期间生效，在此之前不起作用。"
+  "workspace.rules.needsTrustHelp": "此规则是在受信任文件夹中记住的。它仅在该文件夹受信任期间生效，在此之前不起作用。",
+  "workspace.approval.agent": "{{name}} 请求",
+  "workspace.composer.agents": "此会话中的智能体",
+  "workspace.exchange.label": "依次回答的智能体",
+  "workspace.exchange.next": "下一个:",
+  "workspace.exchange.now": "当前: {{name}}",
+  "workspace.exchange.skip": "跳过 {{name}}",
+  "workspace.exchange.skippedRest": "你已跳过其余智能体。",
+  "workspace.exchange.stop": "停止交流",
+  "workspace.exchange.stopped": "你已停止交流。",
+  "workspace.participants.cloud": "云端",
+  "workspace.participants.local": "本地",
+  "workspace.participants.title": "参与者",
+  "workspace.steer.to": "致 {{name}}: {{text}}"
 }

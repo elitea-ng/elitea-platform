@@ -53,7 +53,7 @@ export const LocalTurnCommand = zod.object({
     .enum(["host"])
     .optional()
     .describe(
-      "Client contract 1.66 (ADR-0061 decision 5i). `host` when the command ran outside the OS sandbox in a trusted folder; absent for a sandboxed command. Any other value is dropped.",
+      "Client contract 1.67 (ADR-0061 decision 5i). `host` when the command ran outside the OS sandbox in a trusted folder; absent for a sandboxed command. Any other value is dropped.",
     ),
 });
 

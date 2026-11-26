@@ -1252,5 +1252,18 @@
   "workspace.rules.host": "Without a sandbox, in a trusted folder (sandbox: host)",
   "workspace.rules.hostHelp": "In a trusted folder the command runs as you without asking. Elsewhere, or while trust is paused, the rule does nothing and the command is asked.",
   "workspace.rules.needsTrust": "Needs trust",
-  "workspace.rules.needsTrustHelp": "This rule was remembered in a trusted folder. It applies only while the folder is trusted, and does nothing until then."
+  "workspace.rules.needsTrustHelp": "This rule was remembered in a trusted folder. It applies only while the folder is trusted, and does nothing until then.",
+  "workspace.approval.agent": "{{name}} asks",
+  "workspace.composer.agents": "Agents in this thread",
+  "workspace.exchange.label": "Agents answering in turn",
+  "workspace.exchange.next": "Next:",
+  "workspace.exchange.now": "Now: {{name}}",
+  "workspace.exchange.skip": "Skip {{name}}",
+  "workspace.exchange.skippedRest": "You skipped the remaining agents.",
+  "workspace.exchange.stop": "Stop exchange",
+  "workspace.exchange.stopped": "You stopped the exchange.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participants",
+  "workspace.steer.to": "To {{name}}: {{text}}"
 }

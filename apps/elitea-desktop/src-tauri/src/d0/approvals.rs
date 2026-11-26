@@ -290,6 +290,7 @@ impl ApprovalChannel for UiPrompt {
                             "approval_closed",
                             json!({ "request_id": request_id, "reason": TIMEOUT_ACTION }),
                         );
+                        binding.events.approval_answered(false);
                         binding.recorder.hitl_exchange(exchange_of(
                             &request,
                             &request_id,
@@ -310,6 +311,8 @@ impl ApprovalChannel for UiPrompt {
             decision,
             UiDecision::AllowOnce | UiDecision::AllowAlways | UiDecision::AllowThread
         );
+        // The wait is over: the avatar goes back to work, or thinks again.
+        binding.events.approval_answered(approved);
         let feedback = decision.feedback();
         let mut exchange = exchange_of(
             &request,
@@ -867,6 +870,43 @@ mod tests {
         let exchanges = binding.recorder.hitl_exchanges();
         assert_eq!(exchanges[0]["decision"], "approve");
         assert_eq!(exchanges[0]["tool_run_id"], "call-1");
+    }
+
+    /// ADR-0061 decision 4b: the agent waits on the person while the card is
+    /// open, and goes back to the tool it asked for once it is allowed.
+    #[tokio::test]
+    async fn an_allowed_approval_puts_the_avatar_back_to_work() {
+        let emitter = Arc::new(VecEmitter::default());
+        let broker = Arc::new(ApprovalBroker::default());
+        let prompt = Arc::new(UiPrompt::new(broker.clone()));
+        let binding = binding(&emitter);
+        binding.events.set_participant(77);
+        binding.events.send(
+            "tool_call",
+            json!({"call_id": "call-1", "tool": "run_command", "args_summary": "cargo test"}),
+        );
+        prompt.bind(Some(binding.clone()));
+        let asking = tokio::spawn({
+            let prompt = prompt.clone();
+            async move {
+                prompt
+                    .request(command_request(&["approve", "reject"]))
+                    .await
+            }
+        });
+        let request_id = loop {
+            if let Some(event) = emitter.all().iter().find(|e| e.kind == "approval_request") {
+                break event.payload["request_id"].as_str().unwrap().to_owned();
+            }
+            tokio::task::yield_now().await;
+        };
+        assert!(broker.respond(&request_id, UiDecision::AllowOnce));
+        asking.await.unwrap().unwrap();
+        let states: Vec<Value> = emitter.states();
+        let last = states.last().expect("a state");
+        assert_eq!(states[states.len() - 2]["state"], "waiting");
+        assert_eq!(last["state"], "working");
+        assert_eq!(last["activity"]["program"], "cargo");
     }
 
     /// Answers every card with `decision`; returns the outcome and the card.
