@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.67"
+  x-elitea-client-contract: "1.68"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -6702,9 +6702,12 @@ components:
         a routed message of this caller whose first turn is committed (409
         `floor_turn_refused`), and one whose message is no longer the
         thread's newest (409 `floor_turn_superseded`): drop the message's
-        remaining agents. Never with `addressed_to` or `unattended`.
+        remaining agents. Never with `addressed_to` or `unattended`. From
+        client contract 1.68 (ADR-0061 decision 3c) a turn names either
+        `position` (a routed agent) or `hand_id` (a hand-off a local agent's
+        handLocalFloor queued), never both.
         NOTE(W2): internal/api/v2/localturns/route.go:117 (`floorTurnBody`).
-      required: [question_id, position]
+      required: [question_id]
       properties:
         question_id:
           type: string
@@ -6714,7 +6717,19 @@ components:
           type: integer
           minimum: 1
           maximum: 15
-          description: The target's index in `floor.targets`.
+          description: The target's index in `floor.targets`; absent with `hand_id`.
+        hand_id:
+          type: string
+          format: uuid
+          description: >-
+            Client contract 1.68. A queued hand-off (`handed_to[].hand_id` of
+            handLocalFloor): send it once the handing turn is committed, with
+            `participant_id` the agent it was handed to. Main admits it only
+            for that agent, only once, and only while the message is the
+            thread's newest (409 `floor_turn_refused`, `floor_turn_superseded`).
+            The start answers `hand_off`, whose `user_input` is the turn's
+            model input; the commit stores the hand-off message as the
+            question, whatever `user_message` says.
     LocalTurnFloorStarted:
       type: object
       description: >-
@@ -6755,6 +6770,14 @@ components:
           description: The persona's display name, else the participant's name; may be empty.
         executor:
           $ref: '#/components/schemas/LocalTurnExecutor'
+        application_id:
+          type: integer
+          format: int64
+          description: >-
+            Client contract 1.68. The agent's application in the turn's
+            project; absent for another project's agent. The desktop tells
+            by it which nested agent of an agent is a member of the thread
+            (a consult, ADR-0061 decision 3e).
     LocalTurnExecutor:
       type: string
       enum: [local, cloud]
@@ -7061,6 +7084,162 @@ components:
           $ref: '#/components/schemas/LocalTurnExecutor'
         floor:
           $ref: '#/components/schemas/LocalTurnFloorStarted'
+        hand_off:
+          $ref: '#/components/schemas/LocalTurnHandOffStarted'
+    LocalTurnHandOffStarted:
+      type: object
+      description: >-
+        Client contract 1.68 (ADR-0061 decision 3c). The hand-off a handed
+        turn (`floor_turn.hand_id`) starts. NOTE(W2):
+        internal/api/v2/localturns/route.go:161 (`handOffStarted`).
+      required: [hand_id, from_participant_id, from_name, message, user_input, agents]
+      properties:
+        hand_id: { type: string, format: uuid }
+        from_participant_id:
+          type: integer
+          format: int64
+          description: The agent that handed the floor.
+        from_name:
+          type: string
+          description: Its name in the thread; may be empty.
+        message:
+          type: string
+          description: The handing agent's message, as stored for the side row.
+        user_input:
+          type: string
+          description: >-
+            The turn's model input: the message framed as data from another
+            agent (the cloud's untrusted preamble and a fenced copy of the
+            message). The desktop sends it to the model as it is and never
+            builds it.
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalTurnFloorAgent'
+          description: The thread's agent participants, in participant order.
+    LocalTurnHandFloorRequest:
+      type: object
+      description: >-
+        Client contract 1.68 (ADR-0061 decision 3c). The worker's hand_floor
+        body. NOTE(W2): internal/api/v2/localturns/handfloor.go:47
+        (`handBody`). One JSON value of at most 16 KiB.
+      required: [participant_ids, message]
+      properties:
+        participant_ids:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items: { type: integer, format: int64, minimum: 1 }
+          description: The agents of the thread to hand the floor to, in order.
+        message:
+          type: string
+          description: >-
+            What the handing agent wants from them, at most 4,000 bytes after
+            trimming. A longer or empty message is answered in `message`, not
+            refused.
+        consults:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/LocalTurnHandFloorConsult'
+          description: >-
+            The consults the person's message ran so far on the desktop (ADR-0061
+            decision 3e), each one hop toward the message's limit and one
+            exchange of its pair. Main counts the longer of this list and the
+            consults already committed for the message.
+    LocalTurnHandFloorConsult:
+      type: object
+      description: >-
+        Client contract 1.68. One consult: the consulting and the consulted
+        agent. NOTE(W2): internal/api/v2/localturns/handfloor.go:50.
+      required: [from, to]
+      properties:
+        from: { type: integer, format: int64, minimum: 1 }
+        to: { type: integer, format: int64, minimum: 1 }
+    LocalTurnHandFloorResult:
+      type: object
+      description: >-
+        Client contract 1.68. The worker's hand_floor answer
+        (`elitea.runtime.hand-floor.v1`) with each queued turn's
+        `hand_id`; the desktop gives it to the model as the tool result.
+        NOTE(W2): internal/api/v2/localturns/handfloor.go:61 (`handFloor`).
+      required: [schema_version, handed_to, stopped, message]
+      properties:
+        schema_version:
+          type: string
+          description: Always `elitea.runtime.hand-floor.v1`.
+        handed_to:
+          type: array
+          items:
+            $ref: '#/components/schemas/LocalTurnHandedAgent'
+          description: The agents queued, in the order they answer; empty when none is.
+        stopped:
+          type: string
+          description: >-
+            The loop guard that stopped the exchange (`agent_hops`,
+            `consecutive_turns` or `pair_exchanges`), now or earlier; empty
+            when none did. On a new stop Main posts the guard's system
+            message in the thread and skips every queued hand-off.
+        message:
+          type: string
+          description: The text the model reads.
+    LocalTurnHandedAgent:
+      type: object
+      description: "Client contract 1.68. One agent handed the floor. NOTE(W2): internal/api/v2/localturns/handfloor.go:95."
+      required: [participant_id, name, hand_id]
+      properties:
+        participant_id: { type: integer, format: int64 }
+        name: { type: string }
+        hand_id:
+          type: string
+          format: uuid
+          description: Send it as `floor_turn.hand_id` to start the agent's turn.
+    LocalTurnHandSkipRequest:
+      type: object
+      description: >-
+        Client contract 1.68 (ADR-0061 decision 2c). NOTE(W2):
+        internal/api/v2/localturns/handfloor.go:56 (`skipBody`).
+      required: [hand_ids, code]
+      properties:
+        hand_ids:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        code:
+          type: string
+          enum: [stopped_by_person, skipped_by_person]
+          description: The person stopped the exchange, or skipped these agents.
+    LocalTurnHandSkipped:
+      type: object
+      description: "Client contract 1.68. NOTE(W2): internal/api/v2/localturns/handfloor.go:130."
+      required: [skipped]
+      properties:
+        skipped:
+          type: array
+          items: { type: string, format: uuid }
+          description: The named hand-offs that were still queued and are now skipped.
+    LocalTurnConsult:
+      type: object
+      description: >-
+        Client contract 1.68 (ADR-0061 decision 3e). One consult of a member
+        of the thread the turn ran locally. NOTE(W2):
+        internal/application/localturn/consult.go:36 (`Consult`).
+      required: [participant_id, question]
+      properties:
+        participant_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The consulted agent, a local agent of the thread other than the turn's own; any other is left out.
+        question:
+          type: string
+          minLength: 1
+          description: The task the turn's agent gave it, at most 32 KiB.
+        reply:
+          type: string
+          description: Its answer, at most 16 KiB.
     LocalTurnComputerUse:
       type: object
       description: >-
@@ -7372,6 +7551,21 @@ components:
             stored as sent after a shape and size check
             (internal/application/localturn/localturn.go:558
             `validContextSummary`).
+        consults:
+          type: array
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/LocalTurnConsult'
+          description: >-
+            Client contract 1.68 (ADR-0061 decision 3e). The thread members
+            the turn consulted locally, in call order. Main writes each as two
+            side messages before the answer: the question by the turn's agent
+            and the reply by the consulted agent, with cause `delegation`.
+            A consult of no local agent of the thread (outside it, the
+            turn's own agent, a cloud member) is left out and the answer is
+            still stored; a consult in a cloud agent's turn answers 400
+            `invalid_local_turn`. Part of the commit's identity: a retried
+            commit sends the same list.
     LocalTurnCommitted:
       type: object
       description: >-
@@ -7408,7 +7602,8 @@ components:
         `chain_not_found`, `run_brief_unavailable` and `run_brief_failed`, and
         from client contract 1.47 `agent_target_required`,
         `addressee_not_in_conversation`, `floor_turn_refused` and
-        `floor_turn_superseded`. NOTE(W2):
+        `floor_turn_superseded`, and from client contract 1.68
+        `local_turn_not_live`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
       required: [error]
       properties:
@@ -36297,6 +36492,198 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
 
+  /elitea_core/local_turn_hand_floor/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The calling agent's live local turn (startLocalTurn's `execution_id`).
+    post:
+      operationId: handLocalFloor
+      summary: Hand the floor of a desktop thread to other agents
+      description: |
+        Client contract 1.68 (ADR-0061 decision 3c). The desktop's
+        `hand_floor` tool: the agent of a live local turn hands the floor to
+        other agents of its thread. Main decides, with the cloud's own
+        guards and texts: the calling agent is the turn's, never the body's;
+        the exchange is the person's message's routed agents, its hand-offs
+        and its consults; at most 6 agent-to-agent hops, 2 turns of one
+        agent and 3 exchanges of one pair per message. The handed agents
+        are queued in order (`handed_to[].hand_id`), and the desktop starts
+        each, after this turn's commit, with `floor_turn.hand_id`. A refused
+        hand-off (no agent, the caller itself, an agent outside the thread, a
+        message over 4,000 bytes) and a guard's stop are answers the model
+        reads, not errors; on a stop Main posts the guard's system message
+        once and skips the queued hand-offs.
+
+        Only the credential that started the turn, while it is not committed
+        and not past its deadline. A cloud agent of the thread is a leaf: its
+        turn cannot hand the floor (409 `floor_turn_refused`).
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalTurnHandFloorRequest'
+            example:
+              participant_ids: [88]
+              message: Can you take lint-web? I will finish the API part.
+              consults:
+                - { from: 77, to: 99 }
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: Main's decision, for the model.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnHandFloorResult'
+              example:
+                schema_version: elitea.runtime.hand-floor.v1
+                handed_to:
+                  - { participant_id: 88, name: CI Doctor, hand_id: 5d6f0c1e-4c2a-4c1b-9a51-0c2d1d6b2a29 }
+                stopped: ""
+                message: Handed the floor. They answer after your turn, in order. Finish your answer to the person now.
+        '400':
+          description: A malformed body or execution id (`invalid_local_turn`), or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a session caller
+            (`local_turn_requires_token`), or local work turned off by policy
+            (`local_work_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: No such turn for this caller and credential (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '409':
+          description: >-
+            The turn is committed or past its deadline (`local_turn_not_live`),
+            is no agent turn of a routed message of several agents or is a
+            cloud agent's (`floor_turn_refused`), or a newer person's message
+            started in the thread (`floor_turn_superseded`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 16 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The policy or the store cannot be read right now (`local_turn_unavailable`); retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+  /elitea_core/local_turn_hand_floor_skip/prompt_lib/{project_id}/{question_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: question_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The person's message (its first turn's `question_id`).
+    post:
+      operationId: skipLocalFloorHands
+      summary: Skip queued hand-offs of a desktop thread's message
+      description: |
+        Client contract 1.68 (ADR-0061 decision 2c). The person's Stop
+        exchange (`stopped_by_person`) and Skip (`skipped_by_person`) over
+        hand-offs Main queued for the message: the named hand-offs that are
+        still queued are skipped and never start. Only the caller who sent
+        the message.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalTurnHandSkipRequest'
+            example:
+              hand_ids: [5d6f0c1e-4c2a-4c1b-9a51-0c2d1d6b2a29]
+              code: stopped_by_person
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The hand-offs skipped.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnHandSkipped'
+              example:
+                skipped: [5d6f0c1e-4c2a-4c1b-9a51-0c2d1d6b2a29]
+        '400':
+          description: A malformed body, id or code (`invalid_local_turn`), or an `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a session caller
+            (`local_turn_requires_token`), or local work turned off by policy
+            (`local_work_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: No such message of this caller (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 16 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The policy or the store cannot be read right now (`local_turn_unavailable`); retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
   /elitea_core/workspace_handoff_policy/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

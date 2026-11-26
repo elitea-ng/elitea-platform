@@ -55,10 +55,19 @@ export const LocalTurnFloorTurn = zod
       .int()
       .min(1)
       .max(localTurnFloorTurnPositionMax)
-      .describe("The target's index in `floor.targets`."),
+      .optional()
+      .describe(
+        "The target's index in `floor.targets`; absent with `hand_id`.",
+      ),
+    hand_id: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Client contract 1.68. A queued hand-off (`handed_to[].hand_id` of handLocalFloor): send it once the handing turn is committed, with `participant_id` the agent it was handed to. Main admits it only for that agent, only once, and only while the message is the thread's newest (409 `floor_turn_refused`, `floor_turn_superseded`). The start answers `hand_off`, whose `user_input` is the turn's model input; the commit stores the hand-off message as the question, whatever `user_message` says.",
+      ),
   })
   .describe(
-    "Client contract 1.47 (ADR-0050 decision 7f). A later agent's turn of a message Main routed: send it, with a new `question_id`, after the message's earlier turns are committed, one at a time in `LocalTurnStarted.floor.targets` order, with `participant_id` the target at `position`. The turn answers the person's own question; its commit writes no question of its own, so `user_message` is not stored. Main refuses a turn that is not the target at that position of a routed message of this caller whose first turn is committed (409 `floor_turn_refused`), and one whose message is no longer the thread's newest (409 `floor_turn_superseded`): drop the message's remaining agents. Never with `addressed_to` or `unattended`. NOTE(W2): internal/api/v2/localturns/route.go:117 (`floorTurnBody`).",
+    "Client contract 1.47 (ADR-0050 decision 7f). A later agent's turn of a message Main routed: send it, with a new `question_id`, after the message's earlier turns are committed, one at a time in `LocalTurnStarted.floor.targets` order, with `participant_id` the target at `position`. The turn answers the person's own question; its commit writes no question of its own, so `user_message` is not stored. Main refuses a turn that is not the target at that position of a routed message of this caller whose first turn is committed (409 `floor_turn_refused`), and one whose message is no longer the thread's newest (409 `floor_turn_superseded`): drop the message's remaining agents. Never with `addressed_to` or `unattended`. From client contract 1.68 (ADR-0061 decision 3c) a turn names either `position` (a routed agent) or `hand_id` (a hand-off a local agent's handLocalFloor queued), never both. NOTE(W2): internal/api/v2/localturns/route.go:117 (`floorTurnBody`).",
   );
 
 export type LocalTurnFloorTurn = zod.input<typeof LocalTurnFloorTurn>;

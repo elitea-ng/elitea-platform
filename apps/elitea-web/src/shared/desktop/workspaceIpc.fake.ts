@@ -74,7 +74,7 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     steerUpdates: { turnId: string; steerId: string; text: string | null }[];
     /** `agent_exchange_stop` turn ids and `agent_exchange_skip` calls, in order (ADR-0061 decision 2c). */
     exchangeStops: string[];
-    exchangeSkips: { turnId: string; participantId: number }[];
+    exchangeSkips: { turnId: string; participantId: number; handId?: string }[];
   };
   /** What `turn_changes` answers; `latest` defaults to true, `undone` to false. */
   setChanges(turnId: string, changes: Pick<TurnChanges, 'files'> & Partial<TurnChanges>): void;
@@ -228,8 +228,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       calls.exchangeStops.push(turnId);
       return Promise.resolve();
     },
-    skipInExchange(turnId, participantId) {
-      calls.exchangeSkips.push({ turnId, participantId });
+    skipInExchange(turnId, participantId, handId) {
+      calls.exchangeSkips.push({ turnId, participantId, ...(handId === undefined ? {} : { handId }) });
       return Promise.resolve([]);
     },
     turnStatus(turnId) {

@@ -35,6 +35,8 @@ export interface SubAgentLane {
   briefRefs?: NonNullable<SubAgentStartedPayload['brief_refs']>;
   /** A cloud child (ADR-0050 decision 4): the lane says it is a temporary participant. */
   temporary?: boolean;
+  /** A nested agent of a Local work turn that runs as a cloud child turn, without the folder (ADR-0061 decision 3e). */
+  cloud?: true;
   status: SubAgentStatus;
   /** Its own tool rows and text, in order. */
   items: TranscriptItem[];
@@ -106,6 +108,7 @@ function onStarted<V extends LaneView>(view: V, event: EventOf<'subagent_started
     ...(profileDigest === undefined ? {} : { profileDigest }),
     ...(briefDigest === undefined ? {} : { briefDigest }),
     ...(briefRefs === undefined ? {} : { briefRefs }),
+    ...(event.payload.executor === 'cloud' ? { cloud: true as const } : {}),
   };
   return { ...view, subAgents: [...lanes, lane] };
 }

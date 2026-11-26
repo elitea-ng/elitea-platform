@@ -109,7 +109,7 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 	// transaction's connection too (withStartTx): a start never holds one
 	// connection while it waits for a second.
 	record, err = record.Admit(withStartTx(ctx, tx), func() (localturn.ConversationFloor, error) {
-		return readLocalTurnFloor(ctx, tx, schema, record.ActorUserID, record.ConversationUUID)
+		return readLocalTurnFloor(ctx, tx, schema, record.ProjectID, record.ActorUserID, record.ConversationUUID)
 	})
 	if err != nil {
 		return localturn.StartedTurn{}, err
@@ -169,10 +169,15 @@ RETURNING execution_id, response_message_id::text, target_participant_id, expire
 		if storedQuestion != nil {
 			turn.FloorQuestionID = *storedQuestion
 		}
+		// A handed turn takes its hand-off (ADR-0061 decision 3c).
+		if floor.hand != nil {
+			err = startLocalHand(ctx, tx, floor.hand.HandID, turn.ExecutionID)
+		}
 	}
 	if err != nil {
 		return localturn.StartedTurn{}, err
 	}
+	turn.HandOff = floor.hand
 	// The unattended chain (ADR-0045 decision 4), in the start's
 	// transaction: a refused continuation starts no turn.
 	if created && record.Grant != nil {
@@ -346,6 +351,19 @@ FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.Acto
 	// A later agent of a routed message answers the person's own question
 	// (ADR-0050 decision 7c): no question of its own is written.
 	laterFloorTurn := floorOf != nil && floorAt > 0
+	// A handed turn's question is its hand-off (ADR-0061 decision 3c).
+	hand, err := readLocalHandOf(ctx, tx, record.ExecutionID)
+	if err != nil {
+		return localturn.CommittedTurn{}, err
+	}
+	// The routed message the turn belongs to, for its consults' records.
+	messageQuestion := questionID
+	switch {
+	case floorOf != nil:
+		messageQuestion = *floorOf
+	case hand != nil:
+		messageQuestion = hand.question
+	}
 	if laterFloorTurn {
 		turn.QuestionMessageID = *floorOf
 	}
@@ -405,6 +423,11 @@ WHERE question.uuid = $1::uuid AND question.conversation_id = $2
 		if err != nil {
 			return localturn.CommittedTurn{}, fmt.Errorf("local turn: read the routed question: %w", err)
 		}
+	} else if hand != nil {
+		questionGroup, questionAt, err = insertLocalHandQuestion(ctx, tx, schema, target, questionID, record.QuestionMeta, hand)
+		if err != nil {
+			return localturn.CommittedTurn{}, err
+		}
 	} else {
 		// The person's message is addressed to every routed agent; the
 		// trigger derives {target} when it is not routed.
@@ -438,6 +461,12 @@ RETURNING id, created_at`, schema),
 		if err := insertLocalTurnSteering(ctx, tx, schema, target, questionAt, turn.ResponseMessageID, content); err != nil {
 			return localturn.CommittedTurn{}, err
 		}
+	}
+
+	// The consults the turn ran (ADR-0061 decision 3e), before its answer.
+	if err := writeLocalConsults(ctx, tx, schema, target, executor, questionAt, record.Consults,
+		messageQuestion, record.ExecutionID); err != nil {
+		return localturn.CommittedTurn{}, err
 	}
 
 	// A cloud agent's answer says so (ADR-0050 decision 7f): the desktop

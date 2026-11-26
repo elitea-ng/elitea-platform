@@ -33,6 +33,8 @@ package turntaking
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 )
 
 // MetaKey is the conversation meta key of the floor settings.
@@ -283,6 +285,10 @@ type Turn struct {
 type Exchange struct {
 	First int64
 	Turns []Turn
+	// Consults are the agent-to-agent consults the message ran so far
+	// (ADR-0061 decision 3e): each counts one hop and one exchange of its
+	// pair, never a turn of the consulted agent. A cloud exchange has none.
+	Consults []Turn
 }
 
 // Decision is the outcome of one hand_floor call.
@@ -328,6 +334,12 @@ func Hand(exchange Exchange, from int64, targets []int64, agents []int64) (Decis
 		if turn.From > 0 {
 			hops++
 			pairs[pairKey(turn.From, turn.To)]++
+		}
+	}
+	for _, consult := range exchange.Consults {
+		if consult.From > 0 && consult.To > 0 {
+			hops++
+			pairs[pairKey(consult.From, consult.To)]++
 		}
 	}
 	var decision Decision
@@ -390,6 +402,76 @@ func nameOr(name string) string {
 		return "two agents"
 	}
 	return name
+}
+
+// Agent is one agent of the conversation, as a hand-off decision names it.
+type Agent struct {
+	ParticipantID int64
+	Name          string
+}
+
+// HandOutcome is one hand_floor call decided: what the model reads and what
+// the store writes. The cloud's claim-bound listener and the desktop's
+// handLocalFloor both answer it (ADR-0061 decision 3c), so a local exchange
+// and a cloud one decide alike.
+type HandOutcome struct {
+	// Handed are the agents queued, in order; empty when none is.
+	Handed []int64
+	// Stopped names the guard that stopped the exchange (now or earlier);
+	// empty when none did.
+	Stopped string
+	// Message is the text the model reads.
+	Message string
+	// StopText is the system message a NEW stop posts; empty otherwise (an
+	// exchange a guard stopped earlier posts nothing again).
+	StopText string
+}
+
+// DecideHand decides one hand_floor call from `from` on an exchange.
+// stopped is the guard that already stopped the exchange, else "".
+func DecideHand(exchange Exchange, stopped string, agents []Agent, from int64, targets []int64, message string) HandOutcome {
+	if stopped != "" {
+		return HandOutcome{Stopped: stopped,
+			Message: "The loop guard already stopped this exchange. Answer the person yourself."}
+	}
+	switch {
+	case message == "":
+		return HandOutcome{Message: "The hand-off was not made: say what you need from the other agents in message."}
+	case len(message) > MaxHandMessageBytes || !utf8.ValidString(message) || strings.ContainsRune(message, 0):
+		return HandOutcome{Message: fmt.Sprintf("The hand-off was not made: message is longer than %d bytes.", MaxHandMessageBytes)}
+	}
+	names := make(map[int64]string, len(agents))
+	ids := make([]int64, 0, len(agents))
+	for _, agent := range agents {
+		names[agent.ParticipantID] = agent.Name
+		ids = append(ids, agent.ParticipantID)
+	}
+	decision, err := Hand(exchange, from, targets, ids)
+	var invalid *InvalidHandError
+	if errors.As(err, &invalid) {
+		return HandOutcome{Message: invalidHandText(invalid.Code)}
+	}
+	if err != nil {
+		return HandOutcome{Message: "The hand-off was not made."}
+	}
+	if decision.Stopped != "" {
+		text := StopText(decision.Stopped, decision.Limit, names[decision.At], [2]string{names[from], names[decision.At]})
+		return HandOutcome{Stopped: decision.Stopped, Message: text + " Answer the person yourself.", StopText: text}
+	}
+	return HandOutcome{Handed: decision.Handed,
+		Message: "Handed the floor. They answer after your turn, in order. Finish your answer to the person now."}
+}
+
+func invalidHandText(code string) string {
+	switch code {
+	case StopEmpty:
+		return "The hand-off was not made: name at least one agent."
+	case StopTooMany:
+		return fmt.Sprintf("The hand-off was not made: name at most %d agents.", MaxHandTargets)
+	case StopSelf:
+		return "The hand-off was not made: you cannot hand the floor to yourself."
+	}
+	return "The hand-off was not made: name only agents of this conversation, each once."
 }
 
 // UntrustedPreamble frames a peer's hand-off text for the agent that

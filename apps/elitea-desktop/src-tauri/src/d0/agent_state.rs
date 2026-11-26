@@ -211,7 +211,11 @@ pub fn derive(kind: &str, payload: &Value) -> Option<Derived> {
         },
         // A continuation of this agent's own chain. A floor continuation
         // names the NEXT agent, whose own turn reports its state.
-        "turn_continued" if text("kind") != Some(super::floor::CONTINUED_KIND) => {
+        // A hand-off's receiver reports from its own turn too.
+        "turn_continued"
+            if text("kind") != Some(super::floor::CONTINUED_KIND)
+                && text("kind") != Some(super::floor::HANDED_KIND) =>
+        {
             Some(Derived::bare(state::WAKING))
         }
         "thinking_delta" | "tool_result" | "subagent_finished" => {
@@ -250,6 +254,16 @@ pub fn derive(kind: &str, payload: &Value) -> Option<Derived> {
                 ..Activity::default()
             },
         }),
+        // A local consult (#3065): the caller waits on the callee.
+        "consult_started" => Some(Derived {
+            state: state::WAITING,
+            activity: Activity {
+                waiting_on: Some("agent"),
+                peer_participant_id: payload.get("callee").and_then(Value::as_i64),
+                ..Activity::default()
+            },
+        }),
+        "consult_finished" => Some(Derived::bare(state::THINKING)),
         "subagent_started" => Some(Derived {
             state: state::WAITING,
             activity: Activity {
@@ -279,9 +293,18 @@ pub struct AvatarTracker {
     before_wait: Option<Derived>,
     /// The turn failed: its closing `done` does not make it a success.
     errored: bool,
+    /// The agents this turn handed the floor to (`floor_handed`, #3064):
+    /// its closing frame names them.
+    handoff_to: Vec<i64>,
 }
 
 impl AvatarTracker {
+    /// The participant whose turn this is, once known.
+    #[must_use]
+    pub const fn participant(&self) -> Option<i64> {
+        self.participant_id
+    }
+
     /// The participant whose turn this is, once Main named it.
     pub fn set_participant(&mut self, participant_id: i64) {
         if participant_id > 0 {
@@ -293,7 +316,29 @@ impl AvatarTracker {
     /// or activity changed, and only once the turn's participant is known.
     pub fn observe(&mut self, kind: &str, payload: &Value) -> Option<Value> {
         self.participant_id?;
-        let derived = derive(kind, payload)?;
+        if kind == "floor_handed" {
+            let to = payload.get("to").and_then(Value::as_array);
+            self.handoff_to.extend(
+                to.into_iter()
+                    .flatten()
+                    .filter_map(|peer| peer.get("participant_id").and_then(Value::as_i64)),
+            );
+            return None;
+        }
+        let mut derived = derive(kind, payload)?;
+        // The handing agent's closing frame: it waits on the agents it
+        // handed the floor to (a frame of its own, before their turn).
+        if derived.state == state::SUCCESS && !self.handoff_to.is_empty() {
+            derived = Derived {
+                state: state::WAITING,
+                activity: Activity {
+                    waiting_on: Some("agent"),
+                    peer_participant_id: self.handoff_to.first().copied(),
+                    handoff_to: Some(self.handoff_to.clone()),
+                    ..Activity::default()
+                },
+            };
+        }
         // A failed turn still sends its `done`: it stays an error.
         if self.errored && derived.state == state::SUCCESS {
             return None;
@@ -339,6 +384,40 @@ impl AvatarTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hand-off's turn ends naming its receivers; a consult's caller waits
+    /// on the callee, then thinks again (ADR-0061 decision 3, #3064 #3065).
+    #[test]
+    fn a_hand_off_and_a_consult_name_the_peer() {
+        let mut tracker = AvatarTracker::default();
+        tracker.set_participant(77);
+        let waiting = tracker
+            .observe("consult_started", &json!({"caller": 77, "callee": 99}))
+            .expect("a frame");
+        assert_eq!(
+            waiting,
+            json!({"participant_id": 77, "state": "waiting",
+                   "activity": {"waiting_on": "agent", "peer_participant_id": 99}})
+        );
+        let back = tracker
+            .observe("consult_finished", &json!({"callee": 99, "ok": true}))
+            .expect("a frame");
+        assert_eq!(back["state"], "thinking");
+        assert!(
+            tracker
+                .observe("floor_handed", &json!({"to": [{"participant_id": 88}]}))
+                .is_none()
+        );
+        let done = tracker
+            .observe("done", &json!({"commit": "pending"}))
+            .expect("a frame");
+        assert_eq!(
+            done,
+            json!({"participant_id": 77, "state": "waiting", "activity": {
+                "waiting_on": "agent", "peer_participant_id": 88, "handoff_to": [88]}})
+        );
+        assert!(derive("turn_continued", &json!({"kind": "hand"})).is_none());
+    }
 
     const FIXTURE: &str =
         include_str!("../../../../../libs/proto/contracts/agent-state-activity-v1.json");

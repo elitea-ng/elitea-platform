@@ -24,6 +24,9 @@ export const participantItemStyles = (theme: { vars: { shape: { radiusMd: string
   }),
   nameWrapper: {
     flex: 1,
+    // A flex item's min-width defaults to its content: the name never gave way, and a row with a live label plus the
+    // Lead chip pushed the chip and the menu out of the panel (issue 3067's visual baseline).
+    minWidth: 0,
     maxWidth: 'calc(100% - 2.125rem)',
     display: 'flex',
     flexDirection: 'row',

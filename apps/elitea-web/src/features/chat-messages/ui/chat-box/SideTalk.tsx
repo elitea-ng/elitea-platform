@@ -125,3 +125,16 @@ export function renderFolded(entry: FoldedEntry<IndexedRow>, renderRow: (message
     </Box>
   );
 }
+
+/**
+ * Side talk and platform lines outside the chat's list (a Local work turn's hand-off and consults, ADR-0061
+ * decisions 3d and 3e): the rows folded and drawn as the chat draws them. A row of another class is not drawn.
+ */
+export function SideTalkRows({ rows, testId }: { readonly rows: readonly ChatMessage[]; readonly testId?: string }): ReactNode {
+  if (rows.length === 0) return null;
+  return (
+    <Box component="ul" data-testid={testId} sx={{ margin: 0, padding: 0, display: 'flex', flexDirection: 'column' }}>
+      {foldTranscript(rows).map((entry) => renderFolded(entry, () => null))}
+    </Box>
+  );
+}

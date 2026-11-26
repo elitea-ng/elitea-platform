@@ -1195,7 +1195,6 @@
   "workspace.team.noMembers": "No agents",
   "workspace.team.leadNotice": "Team {{team}}: a message that names no agent goes to {{lead}} (lead); write @Name to address another member.",
   "workspace.team.addressedNotice": "Team {{team}}: write @Name to address a member; a message that names no agent goes to the agent that answered last ({{lead}} at first).",
-  "workspace.team.folderNotice": "Every member works on this computer with this folder and its tools. An agent a member calls as a tool runs in the cloud and does not get the folder.",
   "workspace.team.notListed": "An agent is not listed here",
   "desktop.trust.advanced": "Advanced options",
   "desktop.trust.askEvery": "Ask for every command",
@@ -1265,5 +1264,10 @@
   "workspace.participants.cloud": "Cloud",
   "workspace.participants.local": "Local",
   "workspace.participants.title": "Participants",
-  "workspace.steer.to": "To {{name}}: {{text}}"
+  "workspace.steer.to": "To {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} asked {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(in the cloud, without the folder)",
+  "workspace.consult.failed": "No reply: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Cloud · no folder",
+  "workspace.team.folderNoticeLocal": "Every member works on this computer with this folder and its tools, also when another member asks it or hands it the floor. Only an agent that cannot run on this computer runs in the cloud without the folder."
 }

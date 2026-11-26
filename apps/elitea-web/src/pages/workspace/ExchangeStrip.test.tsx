@@ -71,9 +71,39 @@ describe('the exchange strip (issue 3058)', () => {
     const ipc = fakeIpc();
     renderWithTheme(<ExchangeStrip exchange={{ turnId: 't1', now: 'Mira', next: [{ participantId: 2, name: 'CI Doctor' }, { participantId: 3, name: 'Docs Writer' }] }} ipc={ipc} />);
     fireEvent.click(screen.getAllByTestId('workspace-exchange-skip')[0]!);
-    expect(ipc.skipInExchange).toHaveBeenCalledWith('t1', 2);
+    expect(ipc.skipInExchange).toHaveBeenCalledWith('t1', 2, undefined);
     fireEvent.click(screen.getByTestId('workspace-exchange-stop'));
     expect(ipc.stopExchange).toHaveBeenCalledWith('t1');
+  });
+
+  it('names the hand-off of a handed agent when Skip drops it (ADR-0061 decision 3d)', () => {
+    const view = replayView([running('t1', 1, 'Mira', 0, [2]), event('t1', 2, { kind: 'exchange', payload: { remaining: [2], queue: [{ participant_id: 2, hand_id: 'hand-1' }] } })]);
+    const exchange = exchangeOf({ turnId: 't1', view }, AGENTS);
+    expect(exchange?.next).toEqual([{ participantId: 2, name: 'CI Doctor', handId: 'hand-1' }]);
+    const ipc = fakeIpc();
+    renderWithTheme(<ExchangeStrip exchange={exchange} ipc={ipc} />);
+    fireEvent.click(screen.getByTestId('workspace-exchange-skip'));
+    expect(ipc.skipInExchange).toHaveBeenCalledWith('t1', 2, 'hand-1');
+  });
+
+  it('gives an agent queued twice a chip per place, each Skip naming its own hand-off, and keeps no stale one', () => {
+    const queued = event('t1', 2, { kind: 'exchange', payload: { remaining: [2, 3, 2], queue: [{ participant_id: 2, hand_id: 'hand-1' }, { participant_id: 3 }, { participant_id: 2, hand_id: 'hand-2' }] } });
+    const exchange = exchangeOf({ turnId: 't1', view: replayView([running('t1', 1, 'Mira', 0, [2, 3, 2]), queued]) }, AGENTS);
+    expect(exchange?.next.map((agent) => agent.handId)).toEqual(['hand-1', undefined, 'hand-2']);
+    const ipc = fakeIpc();
+    renderWithTheme(<ExchangeStrip exchange={exchange} ipc={ipc} />);
+    fireEvent.click(screen.getAllByTestId('workspace-exchange-skip')[0]!);
+    expect(ipc.skipInExchange).toHaveBeenCalledWith('t1', 2, 'hand-1');
+
+    // After that Skip the host's queue is the rest: the first hand-off is gone, not remembered.
+    const after = event('t1', 3, { kind: 'exchange', payload: { remaining: [3, 2], queue: [{ participant_id: 3 }, { participant_id: 2, hand_id: 'hand-2' }] } });
+    const rest = exchangeOf({ turnId: 't1', view: replayView([running('t1', 1, 'Mira', 0, [2, 3, 2]), queued, after]) }, AGENTS);
+    expect(rest?.next).toEqual([{ participantId: 3, name: 'Docs Writer' }, { participantId: 2, name: 'CI Doctor', handId: 'hand-2' }]);
+  });
+
+  it('reads the queue of the running status', () => {
+    const status = event('t1', 1, { kind: 'status', payload: { phase: 'running', floor: { position: 0, targets: 2, participant_id: 1, agent_name: 'Mira', executor: 'local', exchange: [2], queue: [{ participant_id: 2, hand_id: 'hand-9' }] } } });
+    expect(exchangeOf({ turnId: 't1', view: replayView([status]) }, AGENTS)?.next).toEqual([{ participantId: 2, name: 'CI Doctor', handId: 'hand-9' }]);
   });
 
   it('folds the host\'s agent_state and exchange events into the turn', () => {

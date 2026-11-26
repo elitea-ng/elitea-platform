@@ -56,15 +56,15 @@ VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, conversationID, id, parti
 	coder, reviewer := ids["coder"], ids["reviewer"]
 
 	repo := NewLocalTurnsRepo(pool)
-	floor, err := readLocalTurnFloor(ctx, pool, "p_1", user, conversationUUID)
+	floor, err := readLocalTurnFloor(ctx, pool, "p_1", 1, user, conversationUUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(floor.Agents) != 2 || floor.Agents[0] != (localturn.FloorAgent{ParticipantID: coder, Name: "Coder", Executor: "local"}) ||
-		floor.Agents[1] != (localturn.FloorAgent{ParticipantID: reviewer, Name: "Reviewer", Executor: "cloud"}) {
+	if len(floor.Agents) != 2 || floor.Agents[0] != (localturn.FloorAgent{ParticipantID: coder, Name: "Coder", Executor: "local", ApplicationID: 5}) ||
+		floor.Agents[1] != (localturn.FloorAgent{ParticipantID: reviewer, Name: "Reviewer", Executor: "cloud", ApplicationID: 7}) {
 		t.Fatalf("floor agents = %+v", floor.Agents)
 	}
-	if _, err := readLocalTurnFloor(ctx, pool, "p_1", user+1, conversationUUID); !errors.Is(err, localturn.ErrNotFound) {
+	if _, err := readLocalTurnFloor(ctx, pool, "p_1", 1, user+1, conversationUUID); !errors.Is(err, localturn.ErrNotFound) {
 		t.Fatalf("a stranger's floor read = %v, want ErrNotFound", err)
 	}
 

@@ -23,7 +23,8 @@ import type { ThreadAgent } from './useEnsureConversation';
 export interface ExchangeView {
   readonly turnId: string;
   readonly now: string;
-  readonly next: readonly { readonly participantId: number; readonly name: string }[];
+  /** `handId`: the hand-off that queued the agent (ADR-0061 decision 3d), which its Skip names. */
+  readonly next: readonly { readonly participantId: number; readonly name: string; readonly handId?: string }[];
 }
 
 /** What the strip shows for the turn on screen, or `undefined` when no exchange runs. */
@@ -35,7 +36,9 @@ export function exchangeOf(turn: Pick<WorkspaceTurn, 'turnId' | 'view'>, agents:
   if (turn.view.done !== undefined && turn.view.done.continuing !== true) return undefined;
   if (turn.view.floorStopped !== undefined) return undefined;
   const nameOf = (id: number): string => agents.find((row) => row.participantId === id)?.name ?? t('chat.presence.anotherAgent', 'another agent');
-  return { turnId: turn.turnId, now: agent.name, next: remaining.map((id) => ({ participantId: id, name: nameOf(id) })) };
+  // The host's queue, each entry with its own hand-off; an older host sends only the ids.
+  const queue = agent.queue ?? remaining.map((participantId) => ({ participantId }));
+  return { turnId: turn.turnId, now: agent.name, next: queue.map((item) => ({ ...item, name: nameOf(item.participantId) })) };
 }
 
 export interface ExchangeStripProps {
@@ -48,7 +51,7 @@ export function ExchangeStrip({ exchange, ipc }: ExchangeStripProps): ReactNode 
   if (exchange === undefined) return null;
   const fail = (cause: unknown) => { setError(cause instanceof Error ? cause.message : String(cause)); };
   const stop = () => { setError(null); ipc.stopExchange(exchange.turnId).catch(fail); };
-  const skip = (participantId: number) => { setError(null); ipc.skipInExchange(exchange.turnId, participantId).catch(fail); };
+  const skip = (participantId: number, handId: string | undefined) => { setError(null); ipc.skipInExchange(exchange.turnId, participantId, handId).catch(fail); };
   return (
     <Box
       data-testid="workspace-exchange-strip"
@@ -67,15 +70,16 @@ export function ExchangeStrip({ exchange, ipc }: ExchangeStripProps): ReactNode 
     >
       <Typography variant="labelSmall" data-testid="workspace-exchange-now">{t('workspace.exchange.now', 'Now: {{name}}', { name: exchange.now })}</Typography>
       <Typography variant="labelSmall" color="text.secondary">{t('workspace.exchange.next', 'Next:')}</Typography>
-      {exchange.next.map((agent) => (
+      {exchange.next.map((agent, index) => (
         <Chip
-          key={agent.participantId}
+          // An agent may be queued twice: the place in the queue tells the chips apart.
+          key={`${String(index)}:${String(agent.participantId)}`}
           size="small"
           variant="outlined"
           label={agent.name}
           data-testid="workspace-exchange-next"
           data-participant-id={agent.participantId}
-          onDelete={() => skip(agent.participantId)}
+          onDelete={() => skip(agent.participantId, agent.handId)}
           deleteIcon={<CloseIcon aria-label={t('workspace.exchange.skip', 'Skip {{name}}', { name: agent.name })} data-testid="workspace-exchange-skip" />}
         />
       ))}

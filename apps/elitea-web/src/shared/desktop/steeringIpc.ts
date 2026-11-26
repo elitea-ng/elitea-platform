@@ -38,14 +38,17 @@ export function steeringCommands(invoke: Invoke): SteeringCommands {
 export interface ExchangeCommands {
   /** `agent_exchange_stop`: cancel the running turn of the exchange and start none of the agents still queued. */
   stopExchange(turnId: string): Promise<void>;
-  /** `agent_exchange_skip`: drop `participantId` from the agents still queued; resolves with the ones that remain. */
-  skipInExchange(turnId: string, participantId: number): Promise<number[]>;
+  /**
+   * `agent_exchange_skip`: drop `participantId` from the agents still queued; resolves with the ones that remain.
+   * `handId`: the hand-off that queued it (ADR-0061 decision 3d), so the host skips that hand-off with Main.
+   */
+  skipInExchange(turnId: string, participantId: number, handId?: string): Promise<number[]>;
 }
 
 export function exchangeCommands(invoke: Invoke): ExchangeCommands {
   return {
     stopExchange: (turnId) => invoke<void>('agent_exchange_stop', { turn_id: turnId }),
-    skipInExchange: async (turnId, participantId) =>
-      (await invoke<{ remaining: number[] }>('agent_exchange_skip', { turn_id: turnId, participant_id: participantId })).remaining,
+    skipInExchange: async (turnId, participantId, handId) =>
+      (await invoke<{ remaining: number[] }>('agent_exchange_skip', { turn_id: turnId, participant_id: participantId, ...(handId === undefined ? {} : { hand_id: handId }) })).remaining,
   };
 }

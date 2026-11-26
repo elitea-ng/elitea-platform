@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Нет агентов",
   "workspace.team.leadNotice": "Команда {{team}}: сообщение, в котором не назван агент, получает {{lead}} (ведущий); напишите @Имя, чтобы обратиться к другому участнику.",
   "workspace.team.addressedNotice": "Команда {{team}}: напишите @Имя, чтобы обратиться к участнику; сообщение, в котором не назван агент, получает агент, ответивший последним (сначала {{lead}}).",
-  "workspace.team.folderNotice": "Каждый участник работает на этом компьютере с этой папкой и её инструментами. Агент, которого участник вызывает как инструмент, работает в облаке и не получает папку.",
   "workspace.team.notListed": "Агента нет в этом списке",
   "desktop.trust.advanced": "Дополнительные параметры",
   "desktop.trust.askEvery": "Спрашивать перед каждой командой",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Облако",
   "workspace.participants.local": "Локально",
   "workspace.participants.title": "Участники",
-  "workspace.steer.to": "Для {{name}}: {{text}}"
+  "workspace.steer.to": "Для {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} спросил {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(в облаке, без папки)",
+  "workspace.consult.failed": "Нет ответа: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Облако · без папки",
+  "workspace.team.folderNoticeLocal": "Каждый участник работает на этом компьютере с этой папкой и её инструментами, в том числе когда другой участник спрашивает его или передаёт ему слово. Только агент, который не может работать на этом компьютере, работает в облаке без папки."
 }

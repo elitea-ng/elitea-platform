@@ -52,6 +52,12 @@ export const LocalTurnFloorAgent = zod
         "The persona's display name, else the participant's name; may be empty.",
       ),
     executor: LocalTurnExecutor,
+    application_id: zod
+      .int()
+      .optional()
+      .describe(
+        "Client contract 1.68. The agent's application in the turn's project; absent for another project's agent. The desktop tells by it which nested agent of an agent is a member of the thread (a consult, ADR-0061 decision 3e).",
+      ),
   })
   .describe(
     "Client contract 1.47. One agent participant of a desktop thread. NOTE(W2): internal/api/v2/localturns/route.go:130 (`floorStarted`).",

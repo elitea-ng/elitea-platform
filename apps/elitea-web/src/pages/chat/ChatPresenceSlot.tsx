@@ -76,7 +76,8 @@ export function usePresenceSlot(conversation: PresenceConversation | undefined, 
       if (row === undefined) return readOnly ? null : lead?.(props);
       if (readOnly) return <ParticipantRowControls row={row} />;
       // The wrapper never shrinks (as the lead control alone never did): with a long agent name a shrinking wrapper let
-      // the lead menu button slide under the row's hover actions, where it could not be clicked. The label caps itself.
+      // the lead menu button slide under the row's hover actions, where it could not be clicked. The label caps itself
+      // short enough to leave the name room.
       return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }} data-testid="participant-presence-lead">
           <ParticipantRowControls row={{ ...row, isLead: false }} presenceOnly />

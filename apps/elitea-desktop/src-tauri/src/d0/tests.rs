@@ -11678,3 +11678,11 @@ async fn revoking_an_app_reaches_every_folder_and_reports_the_one_that_failed() 
 /// Several agents in one thread (ADR-0050 decision 7f, #1806).
 #[path = "floor_tests.rs"]
 mod floor_tests;
+
+/// A local agent hands the floor (ADR-0061 decision 3d, #3064).
+#[path = "hand_floor_tests.rs"]
+mod hand_floor_tests;
+
+/// Local consults (ADR-0061 decision 3e, #3065).
+#[path = "consult_tests.rs"]
+mod consult_tests;

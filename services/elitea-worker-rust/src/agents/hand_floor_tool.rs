@@ -12,14 +12,14 @@
 //! Every failure is a tool RESULT the model reads, never a failed turn.
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use adk_rust::tool::BasicToolset;
 use adk_rust::{Tool, ToolContext, Toolset};
 use async_trait::async_trait;
+use elitea_agent_runtime::hand_floor;
 use elitea_agent_runtime::host::HostErrorCode;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::request::{AgentFloor, AgentFloorPeer};
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
@@ -27,12 +27,8 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::host_error;
 use crate::transport::runtime_context::HandFloorRequest;
 
-pub(crate) const TOOLSET_NAME: &str = "turn_taking";
-pub(crate) const HAND_FLOOR: &str = "hand_floor";
-/// The most agents one hand-off names.
-const MAX_HAND_OFF_PEERS: usize = 4;
-/// The longest hand-off message, in bytes.
-const MAX_MESSAGE_BYTES: usize = 4_000;
+pub(crate) const TOOLSET_NAME: &str = hand_floor::TOOLSET_NAME;
+pub(crate) const HAND_FLOOR: &str = hand_floor::HAND_FLOOR;
 
 /// The toolset for `floor`, or `None` when there is nobody to hand it to.
 #[must_use]
@@ -53,73 +49,30 @@ pub(crate) fn toolset(
     Some(Arc::new(BasicToolset::new(TOOLSET_NAME, vec![tool])))
 }
 
+/// The description the desktop host gives the same peers (ADR-0061
+/// decision 3d): both call the shared function.
 fn describe(peers: &[AgentFloorPeer]) -> String {
-    let mut description = String::from(
-        "Hand the floor to other agents in this conversation. They answer after your turn ends, in order. Use it only when another agent is better placed to do part of the work; do not hand the floor back and forth. A loop guard stops the exchange after a few hand-offs.\n\nThe agents you can hand the floor to:",
-    );
-    for peer in peers {
-        let _ = write!(
-            description,
-            "\n- {} ({}) — participant {}",
-            peer.name, peer.role, peer.participant_id
-        );
-    }
-    description
+    hand_floor::describe(
+        &peers
+            .iter()
+            .map(|peer| hand_floor::Peer {
+                participant_id: peer.participant_id,
+                name: peer.name.clone(),
+                role: peer.role.clone(),
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn error(code: &str, message: &str) -> Value {
-    json!({"status": "error", "code": code, "message": message})
+    hand_floor::error(code, message)
 }
 
-/// The arguments, checked against this turn's peers.
+/// The arguments, checked against this turn's peers (the shared check).
 fn validate(arguments: &Value, peers: &HashSet<i64>) -> Result<HandFloorRequest, Value> {
-    let invalid = |message: &str| error("invalid_argument", message);
-    let Some(object) = arguments.as_object() else {
-        return Err(invalid("The arguments must be an object."));
-    };
-    if object
-        .keys()
-        .any(|key| key != "participant_ids" && key != "message")
-    {
-        return Err(invalid("Only participant_ids and message are accepted."));
-    }
-    let Some(ids) = object.get("participant_ids").and_then(Value::as_array) else {
-        return Err(invalid(
-            "participant_ids must be a list of participant ids.",
-        ));
-    };
-    if ids.is_empty() || ids.len() > MAX_HAND_OFF_PEERS {
-        return Err(invalid("participant_ids must name one to four agents."));
-    }
-    let mut seen = HashSet::with_capacity(ids.len());
-    let mut participant_ids = Vec::with_capacity(ids.len());
-    for id in ids {
-        let Some(id) = id.as_i64() else {
-            return Err(invalid("participant_ids must be integers."));
-        };
-        if !peers.contains(&id) {
-            return Err(invalid(
-                "Every participant id must be one of the agents listed in this tool's description.",
-            ));
-        }
-        if !seen.insert(id) {
-            return Err(invalid("participant_ids must not repeat an agent."));
-        }
-        participant_ids.push(id);
-    }
-    let message = object
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    if message.is_empty() || message.len() > MAX_MESSAGE_BYTES {
-        return Err(invalid(
-            "message must say what you want them to do, in at most 4000 bytes.",
-        ));
-    }
-    Ok(HandFloorRequest {
-        participant_ids,
-        message: message.to_owned(),
+    hand_floor::validate(arguments, peers).map(|args| HandFloorRequest {
+        participant_ids: args.participant_ids,
+        message: args.message,
     })
 }
 
@@ -149,26 +102,7 @@ impl Tool for HandFloorTool {
     }
 
     fn parameters_schema(&self) -> Option<Value> {
-        Some(json!({
-            "type": "object",
-            "properties": {
-                "participant_ids": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "minItems": 1,
-                    "maxItems": MAX_HAND_OFF_PEERS,
-                    "uniqueItems": true
-                },
-                "message": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": MAX_MESSAGE_BYTES,
-                    "description": "What you want them to do."
-                }
-            },
-            "required": ["participant_ids", "message"],
-            "additionalProperties": false
-        }))
+        Some(hand_floor::parameters_schema())
     }
 
     async fn execute(

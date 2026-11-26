@@ -1,11 +1,14 @@
 /**
  * The avatars the workspace pages give a transcript's sub-agent lanes
  * (`TurnTranscript`'s `subAgentAvatar`): `AgentAvatar` lives in
- * `features/chat-messages`, which `features/workspace` may not import.
+ * `features/chat-messages`, which `features/workspace` may not import. The
+ * turn's side talk (`TurnTranscript`'s `sideTalk`) is that kind of slot too.
  */
 import { AgentAvatar } from '@/features/chat-messages';
 
 import type { SubAgentLane } from './cloudTranscriptModel';
+
+export { TurnSideTalk } from './TurnSideTalk';
 
 /**
  * A cloud child: the dashed ring of an ephemeral participant (ADR-0050

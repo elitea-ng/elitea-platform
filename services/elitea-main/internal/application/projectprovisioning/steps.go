@@ -486,6 +486,12 @@ DELETE FROM elitea_runtime.execution_jobs
 WHERE resource_project_id = $1 OR projection_project_id = $1`,
 		},
 		{
+			// A desktop thread's queued hand-offs (shared/0282); they
+			// cascade from the project too.
+			table:     "elitea_runtime.local_floor_hands",
+			statement: `DELETE FROM elitea_runtime.local_floor_hands WHERE project_id = $1`,
+		},
+		{
 			// A desktop local turn (shared/0155): no worker job, no children.
 			table:     "elitea_runtime.local_turn_executions",
 			statement: `DELETE FROM elitea_runtime.local_turn_executions WHERE project_id = $1`,

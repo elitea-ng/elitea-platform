@@ -8,14 +8,17 @@
  *
  * A message addressed to several agents (ADR-0050 decision 7f) goes on the same way: once an agent's commit lands, the
  * host starts the next agent's turn (`turn_continued` kind `floor`), or says `floor_stopped` when it does not answer.
+ * A hand-off goes on the same way (kind `hand`, ADR-0061 decision 3d); its side rows are `teamTalkEvents.ts`.
  */
 import { goalCheckOfChainEnd, readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
-import type { AgentExecutor, ChainEndedPayload, ContinuationKind, TurnFloorStatus, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
+import type { AgentExecutor, ChainEndedPayload, ContinuationKind, ExchangeQueueItem, TurnFloorStatus, UnattendedGrant } from '@/shared/desktop/unattendedIpc';
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
+
+import { applyTeamTalkEvent, isTeamTalkEvent, type SideTalkItem } from './teamTalkEvents';
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
-export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'> | EventOf<'resume_offered'> | EventOf<'floor_stopped'> | EventOf<'agent_state'> | EventOf<'exchange'>;
+export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'> | EventOf<'resume_offered'> | EventOf<'floor_stopped'> | EventOf<'agent_state'> | EventOf<'exchange'> | TalkEvent;
 
 /** The agent that answers a turn of a message addressed to several (`status` `running`'s `floor`). */
 interface TurnAgentView {
@@ -28,6 +31,8 @@ interface TurnAgentView {
   targets: number;
   /** The agents still to answer after this one, in the host's order, skips removed (ADR-0061 decision 2c). */
   exchange?: number[];
+  /** The agents still to answer with the hand-off that queued each, as the host last sent them (each Skip names its own). */
+  queue?: { participantId: number; handId?: string }[];
 }
 
 /** The part of a turn's view that the chain sets. */
@@ -43,7 +48,9 @@ export interface ChainView {
   /** The agent that answers this turn, when the message went to several. */
   agent?: TurnAgentView;
   /** The message's next agent does not answer (`floor_stopped`): a newer message took the floor, or its start failed. */
-  floorStopped?: { code: string; message: string };
+  floorStopped?: { code: string; message: string; guard?: boolean };
+  /** Agents talking to each other in this turn: its hand-off and its consults (ADR-0061 decisions 3d, 3e). */
+  sideTalk?: SideTalkItem[];
   /** This turn is the last of its chain. */
   chainEnded?: ChainEndedPayload;
   /** The chain's run brief (its first turn only). */
@@ -56,7 +63,7 @@ export interface ChainView {
 
 export function isChainEvent(event: AgentEvent): event is ChainEvent {
   const kinds: readonly AgentEvent['kind'][] = ['turn_continued', 'chain_ended', 'run_brief', 'goal_checked', 'resume_offered', 'floor_stopped', 'agent_state', 'exchange'];
-  return kinds.includes(event.kind);
+  return kinds.includes(event.kind) || isTeamTalkEvent(event);
 }
 
 function continuedTo(payload: EventOf<'turn_continued'>['payload']): NonNullable<ChainView['continuedTo']> {
@@ -69,7 +76,7 @@ function continuedTo(payload: EventOf<'turn_continued'>['payload']): NonNullable
 }
 
 export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent): V {
-  if (isLiveEvent(event)) return applyLiveEvent(view, event);
+  if (isBesideEvent(event)) return applyBesideEvent(view, event);
   switch (event.kind) {
     case 'chain_ended': {
       // The full check of `goal_checked` wins over the short form the chain end repeats.
@@ -94,6 +101,17 @@ export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent)
   }
 }
 
+type TalkEvent = Parameters<typeof applyTeamTalkEvent>[1];
+
+/** The live-only events and the agents' side talk: not the chain's own. */
+function isBesideEvent(event: ChainEvent): event is LiveEvent | TalkEvent {
+  return isLiveEvent(event) || isTeamTalkEvent(event);
+}
+
+function applyBesideEvent<V extends ChainView>(view: V, event: LiveEvent | TalkEvent): V {
+  return isTeamTalkEvent(event) ? applyTeamTalkEvent(view, event) : applyLiveEvent(view, event);
+}
+
 type LiveEvent = EventOf<'agent_state'> | EventOf<'exchange'>;
 
 function isLiveEvent(event: ChainEvent): event is LiveEvent {
@@ -103,7 +121,16 @@ function isLiveEvent(event: ChainEvent): event is LiveEvent {
 /** The host's live-only events (ADR-0061): the agent's state, and the exchange's queue after a skip. Never recorded. */
 function applyLiveEvent<V extends ChainView>(view: V, event: LiveEvent): V {
   if (event.kind === 'agent_state') return { ...view, agentState: event.payload };
-  return view.agent === undefined ? view : { ...view, agent: { ...view.agent, exchange: event.payload.remaining } };
+  if (view.agent === undefined) return view;
+  // The host's queue replaces the last one whole: nothing carries over from an earlier event.
+  const { queue: _before, ...agent } = view.agent;
+  return { ...view, agent: { ...agent, exchange: event.payload.remaining, ...queueOf(event.payload.queue) } };
+}
+
+/** The host's queue on the view (absent when the host sent none). */
+function queueOf(wire: readonly ExchangeQueueItem[] | null | undefined): Pick<TurnAgentView, 'queue'> {
+  if (wire === undefined || wire === null) return {};
+  return { queue: wire.map((item) => ({ participantId: item.participant_id, ...(item.hand_id === undefined ? {} : { handId: item.hand_id }) })) };
 }
 
 /**
@@ -116,7 +143,7 @@ export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true 
 }
 
 function agentOf(floor: TurnFloorStatus): TurnAgentView {
-  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets, ...(floor.exchange === undefined ? {} : { exchange: floor.exchange }) };
+  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets, ...(floor.exchange === undefined ? {} : { exchange: floor.exchange }), ...queueOf(floor.queue) };
 }
 
 /** The unattended fields of a `status` event, when it has them. */

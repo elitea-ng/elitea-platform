@@ -974,9 +974,12 @@ pub fn agent_exchange_skip(
     state: State<'_, LocalState>,
     turn_id: String,
     participant_id: i64,
+    hand_id: Option<String>,
 ) -> Result<ExchangeQueue, IpcError> {
     Ok(ExchangeQueue {
-        remaining: state.agents.exchange_skip(&turn_id, participant_id)?,
+        remaining: state
+            .agents
+            .exchange_skip(&turn_id, participant_id, hand_id.as_deref())?,
     })
 }
 

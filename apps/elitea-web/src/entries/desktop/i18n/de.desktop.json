@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Keine Agenten",
   "workspace.team.leadNotice": "Team {{team}}: Eine Nachricht, die keinen Agenten nennt, geht an {{lead}} (Lead); schreiben Sie @Name, um ein anderes Mitglied anzusprechen.",
   "workspace.team.addressedNotice": "Team {{team}}: Schreiben Sie @Name, um ein Mitglied anzusprechen; eine Nachricht, die keinen Agenten nennt, geht an den Agenten, der zuletzt geantwortet hat (anfangs {{lead}}).",
-  "workspace.team.folderNotice": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen. Ein Agent, den ein Mitglied als Werkzeug aufruft, läuft in der Cloud und erhält den Ordner nicht.",
   "workspace.team.notListed": "Ein Agent ist hier nicht aufgeführt",
   "desktop.trust.advanced": "Erweiterte Optionen",
   "desktop.trust.askEvery": "Bei jedem Befehl fragen",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Cloud",
   "workspace.participants.local": "Lokal",
   "workspace.participants.title": "Teilnehmer",
-  "workspace.steer.to": "An {{name}}: {{text}}"
+  "workspace.steer.to": "An {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} fragte {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(in der Cloud, ohne den Ordner)",
+  "workspace.consult.failed": "Keine Antwort: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Cloud · kein Ordner",
+  "workspace.team.folderNoticeLocal": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen, auch wenn ein anderes Mitglied es fragt oder ihm das Wort übergibt. Nur ein Agent, der nicht auf diesem Computer laufen kann, läuft in der Cloud ohne den Ordner."
 }

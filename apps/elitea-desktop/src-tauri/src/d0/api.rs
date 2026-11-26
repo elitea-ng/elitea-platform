@@ -252,6 +252,11 @@ pub struct LocalTurnStarted {
     /// agents (ADR-0050 decision 7f, contract 1.47); absent otherwise.
     #[serde(default)]
     pub floor: Option<FloorStarted>,
+    /// A turn another agent handed the floor to (ADR-0061 decision 3c,
+    /// contract 1.68): Main's framed input and the handing agent; absent
+    /// otherwise.
+    #[serde(default)]
+    pub hand_off: Option<HandOffStarted>,
 }
 
 impl LocalTurnStarted {
@@ -260,6 +265,69 @@ impl LocalTurnStarted {
     pub fn runs_in_cloud(&self) -> bool {
         self.executor.as_deref() == Some(EXECUTOR_CLOUD)
     }
+
+    /// The thread's agents, from the routed order or the hand-off.
+    #[must_use]
+    pub fn thread_agents(&self) -> &[FloorAgent] {
+        if let Some(floor) = &self.floor {
+            return &floor.agents;
+        }
+        self.hand_off
+            .as_ref()
+            .map_or(&[][..], |hand| hand.agents.as_slice())
+    }
+
+    /// The person's message this turn belongs to: the routed message's
+    /// question, or the one the hand-off continues (`hand_question`, the
+    /// request's `floor_turn.question_id`).
+    #[must_use]
+    pub fn message_question<'a>(&'a self, hand_question: Option<&'a str>) -> Option<&'a str> {
+        self.floor
+            .as_ref()
+            .map(|floor| floor.question_id.as_str())
+            .or_else(|| self.hand_off.as_ref().and(hand_question))
+    }
+}
+
+/// `LocalTurnStarted.hand_off` (ADR-0061 decision 3c).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct HandOffStarted {
+    pub hand_id: String,
+    pub from_participant_id: i64,
+    #[serde(default)]
+    pub from_name: String,
+    /// The handing agent's message, as Main stored it.
+    #[serde(default)]
+    pub message: String,
+    /// The model's input: Main's untrusted preamble and the fenced message.
+    /// The host never builds it.
+    pub user_input: String,
+    /// The thread's agents.
+    #[serde(default)]
+    pub agents: Vec<FloorAgent>,
+}
+
+/// One agent `handLocalFloor` queued, in Main's order.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct HandedTo {
+    pub participant_id: i64,
+    #[serde(default)]
+    pub name: String,
+    pub hand_id: String,
+}
+
+/// `handLocalFloor`'s answer (the worker's `RuntimeHandFloorResult` shape
+/// with the queued hands' ids).
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+pub struct HandFloorAnswer {
+    #[serde(default)]
+    pub handed_to: Vec<HandedTo>,
+    /// The loop guard that stopped the exchange; empty when none did.
+    #[serde(default)]
+    pub stopped: String,
+    /// What the model reads.
+    #[serde(default)]
+    pub message: String,
 }
 
 /// `LocalTurnStarted.executor` of a cloud agent.
@@ -308,6 +376,11 @@ pub struct FloorAgent {
     pub name: String,
     #[serde(default)]
     pub executor: String,
+    /// The agent's application in this project (contract 1.68), to tell a
+    /// nested-agent tool that is a thread member; absent for another
+    /// project's agent or an older platform.
+    #[serde(default)]
+    pub application_id: Option<i64>,
 }
 
 /// An agent participant of a conversation, by participant id: what a later
@@ -985,6 +1058,68 @@ impl PlatformApi {
                 "/api/v2/elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}"
             ),
             Some(body),
+            &[],
+        )
+        .await?
+        .into_ok()
+    }
+
+    /// `handLocalFloor` (ADR-0061 decision 3c, contract 1.68): the live
+    /// turn `execution_id` hands the floor; `body` is the tool's checked
+    /// arguments plus the message's consult pairs. The answer as Main wrote
+    /// it (the model reads it) and its typed form.
+    ///
+    /// # Errors
+    ///
+    /// Refused (409 `local_turn_not_live`, `floor_turn_superseded`,
+    /// `floor_turn_refused` …) or failed.
+    pub async fn hand_local_floor(
+        &self,
+        project_id: i64,
+        execution_id: &str,
+        body: &Value,
+    ) -> Result<(Value, HandFloorAnswer), ApiError> {
+        let raw: Value = self
+            .send(
+                Method::POST,
+                &format!(
+                    "/api/v2/elitea_core/local_turn_hand_floor/prompt_lib/{project_id}/{}",
+                    path_segment(execution_id)?
+                ),
+                Some(body),
+                &[],
+            )
+            .await?
+            .into_ok()?;
+        let typed = serde_json::from_value(raw.clone()).map_err(|_| {
+            ApiError::local(
+                "invalid_response",
+                "the platform's answer did not have the expected shape",
+            )
+        })?;
+        Ok((raw, typed))
+    }
+
+    /// `skipLocalFloorHands` (ADR-0061 decision 2c): the person stopped or
+    /// skipped the queued hand-offs `hand_ids` of the message `question_id`.
+    ///
+    /// # Errors
+    ///
+    /// Refused or failed.
+    pub async fn skip_local_floor_hands(
+        &self,
+        project_id: i64,
+        question_id: &str,
+        hand_ids: &[String],
+        code: &str,
+    ) -> Result<Value, ApiError> {
+        self.send(
+            Method::POST,
+            &format!(
+                "/api/v2/elitea_core/local_turn_hand_floor_skip/prompt_lib/{project_id}/{}",
+                path_segment(question_id)?
+            ),
+            Some(&serde_json::json!({ "hand_ids": hand_ids, "code": code })),
             &[],
         )
         .await?

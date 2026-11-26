@@ -93,6 +93,20 @@ While the agents of a message answer one after another, a strip above the compos
 - A message you write while an agent works goes to that agent, and the queue says so: **To Coder: …**.
 - An approval names the agent whose turn asks, for example **Coder asks**.
 
+## Agents hand off to each other
+
+An agent of a team thread can hand the work to other agents of the thread: the lead asks the reviewer to check its change, the reviewer hands back with a question. The thread shows the hand-off as a side message from the agent that handed it, with both avatars, and the agent it was handed to answers next. The strip above the composer adds it under **Next**, so **Stop exchange** and **×** stop a hand-off as they stop any other agent.
+
+A hand-off is another agent's message, not yours. The agent that receives it reads it as information from a colleague, never as your instruction, and every command it asks for is checked as usual. In a trusted folder, a handed turn always asks before a command, even when the thread runs with **Bypass approvals**: another agent cannot widen what a command may do.
+
+The same limits as in a cloud conversation stop an exchange that goes in circles: at most 6 hand-offs and consults for one of your messages, 2 turns of one agent and 3 exchanges between the same two agents. When a limit is reached the thread says **Loop guard stopped the exchange**, no further hand-off runs, and the agent answers you itself.
+
+An agent that runs in the cloud answers when it is handed the work, but it cannot hand the work on or consult another agent.
+
+## Agents consult each other
+
+An agent may ask another agent of the thread a question in the middle of its own turn, for example the coder asks the reviewer whether a change is safe before it goes on. The consulted agent runs on this computer, in the thread's folder, under the same approvals and limits as a sub-agent. The question and the answer show as side messages between the two agents, and both avatars show who is waiting on whom. A consult counts toward the thread's hand-off limits.
+
 ## See who is working
 
 Each agent row in the **Participants** tab shows what the agent does:
@@ -131,5 +145,5 @@ An agent that runs in the cloud never gets your folder, its files, `AGENTS.md` o
 The agents of a thread each keep their own session: an agent reads the others' answers as theirs, never as its own.
 
 <Note>
-A message addressed to several agents does not run to completion on its own: each agent answers once. Agents do not yet hand the floor to each other in a desktop thread; that works in cloud conversations.
+A message addressed to several agents does not run to completion on its own: each agent answers once, plus the turns other agents hand it.
 </Note>

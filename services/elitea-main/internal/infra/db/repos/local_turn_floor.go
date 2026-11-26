@@ -23,7 +23,7 @@ import (
 // (readConversationFloor), with the executor of each mapping. A floor block
 // that does not parse is the default floor.
 func readLocalTurnFloor(
-	ctx context.Context, queryer floorQueryer, schema string, actorUserID int64, conversationUUID string,
+	ctx context.Context, queryer floorQueryer, schema string, projectID, actorUserID int64, conversationUUID string,
 ) (localturn.ConversationFloor, error) {
 	var raw []byte
 	err := queryer.QueryRow(ctx, fmt.Sprintf(`
@@ -56,20 +56,23 @@ SELECT participant.id,
        COALESCE(NULLIF(btrim(mapping.persona ->> 'display_name'), ''),
                 NULLIF(btrim(participant.meta ->> 'name'), ''),
                 NULLIF(btrim(participant.entity_meta ->> 'name'), ''), ''),
-       CASE WHEN mapping.entity_settings ->> 'executor' = 'cloud' THEN 'cloud' ELSE 'local' END
+       CASE WHEN mapping.entity_settings ->> 'executor' = 'cloud' THEN 'cloud' ELSE 'local' END,
+       CASE WHEN participant.entity_meta ->> 'id' ~ '^[1-9][0-9]{0,8}$'
+             AND participant.entity_meta ->> 'project_id' = ($2::bigint)::text
+            THEN (participant.entity_meta ->> 'id')::bigint ELSE 0 END
 FROM %[1]s.chat_conversations AS conversation
 JOIN %[1]s.chat_participant_mapping AS mapping ON mapping.conversation_id = conversation.id
 JOIN %[1]s.chat_participants AS participant
   ON participant.id = mapping.participant_id AND participant.entity_name = 'application'
 WHERE conversation.uuid = $1::uuid
-ORDER BY participant.id`, schema), conversationUUID)
+ORDER BY participant.id`, schema), conversationUUID, projectID)
 	if err != nil {
 		return localturn.ConversationFloor{}, fmt.Errorf("local turn floor: read the agents: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var agent localturn.FloorAgent
-		if err := rows.Scan(&agent.ParticipantID, &agent.Name, &agent.Executor); err != nil {
+		if err := rows.Scan(&agent.ParticipantID, &agent.Name, &agent.Executor, &agent.ApplicationID); err != nil {
 			return localturn.ConversationFloor{}, fmt.Errorf("local turn floor: scan an agent: %w", err)
 		}
 		floor.Agents = append(floor.Agents, agent)
@@ -102,6 +105,8 @@ type localTurnFloorFields struct {
 	questionID *string
 	position   int
 	targets    []int32
+	// hand is the queued hand-off a handed turn starts (admitLocalHand).
+	hand *localturn.HandOff
 }
 
 // admitLocalTurnFloor answers the floor columns of a start: the routed
@@ -122,7 +127,15 @@ func admitLocalTurnFloor(
 			return localTurnFloorFields{}, localturn.ErrInvalid
 		}
 		question := record.QuestionID
+		// A person's new message: the earlier messages' queued hand-offs
+		// do not run (ADR-0061 decision 2c).
+		if err := supersedeLocalHands(ctx, tx, record.ProjectID, record.ConversationUUID, question); err != nil {
+			return localTurnFloorFields{}, err
+		}
 		return localTurnFloorFields{questionID: &question, targets: targets}, nil
+	}
+	if record.FloorTurn.HandID != "" {
+		return admitLocalHand(ctx, tx, record, actor, targetID)
 	}
 	var (
 		targets   []int32

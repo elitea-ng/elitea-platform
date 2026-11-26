@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "لا يوجد وكلاء",
   "workspace.team.leadNotice": "الفريق {{team}}: الرسالة التي لا تسمّي وكيلًا تذهب إلى {{lead}} (القائد)؛ اكتب @الاسم لمخاطبة عضو آخر.",
   "workspace.team.addressedNotice": "الفريق {{team}}: اكتب @الاسم لمخاطبة عضو؛ الرسالة التي لا تسمّي وكيلًا تذهب إلى الوكيل الذي أجاب أخيرًا ({{lead}} في البداية).",
-  "workspace.team.folderNotice": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته. الوكيل الذي يستدعيه عضو كأداة يعمل في السحابة ولا يحصل على المجلد.",
   "workspace.team.notListed": "أحد الوكلاء غير مدرج هنا",
   "desktop.trust.advanced": "خيارات متقدمة",
   "desktop.trust.askEvery": "السؤال عن كل أمر",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "السحابة",
   "workspace.participants.local": "محلي",
   "workspace.participants.title": "المشاركون",
-  "workspace.steer.to": "إلى {{name}}: {{text}}"
+  "workspace.steer.to": "إلى {{name}}: {{text}}",
+  "workspace.consult.asked": "سأل {{caller}} {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(في السحابة، بدون المجلد)",
+  "workspace.consult.failed": "لا يوجد رد: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "السحابة · بدون مجلد",
+  "workspace.team.folderNoticeLocal": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته، وكذلك عندما يسأله عضو آخر أو يسلّمه الدور. فقط الوكيل الذي لا يمكنه العمل على هذا الكمبيوتر يعمل في السحابة بدون المجلد."
 }

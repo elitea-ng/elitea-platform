@@ -65,6 +65,12 @@ func composeLocalTurns(
 	if err != nil {
 		return nil, err
 	}
+	// Agents hand the floor to each other (ADR-0061 decision 3c).
+	hands, err := localturn.NewHands(repo, policy)
+	if err != nil {
+		return nil, err
+	}
+	route.WithHands(hands)
 	if runBriefs != nil {
 		// The desktop run brief and goal check (ADR-0045 decision 11).
 		route.WithRunBriefs(runBriefs)

@@ -42,7 +42,22 @@
 //! any agent runs, and the UI reads the thread again and sends it to the
 //! routed agent. The host never runs an agent Main did not route to.
 //!
-//! The agent-to-agent hand-off (`hand_floor`) stays with the cloud for now.
+//! HAND-OFFS (ADR-0061 decision 3d, #3064). A local agent's turn in a
+//! thread with another agent is offered `hand_floor` ([`super::hand_floor`]):
+//! Main decides and queues the hand-off (`handLocalFloor`). After the
+//! handing turn's commit lands, the host starts the turns Main queued, one
+//! at a time and in Main's order, after any routed agent still to answer
+//! ([`super::exchange::Exchanges::next_hand`]), each with
+//! `floor_turn.hand_id`. The receiver's input is Main's framed text
+//! (`LocalTurnStarted.hand_off.user_input`: the untrusted preamble and the
+//! message), never one the host builds. A hand-off turn never inherits
+//! Bypass or an unattended grant (an agent started it, not the person),
+//! keeps the message's plan mode, and starts with the taint gate closed
+//! (decision 5f). A cloud receiver runs as a cloud agent's turn does (the
+//! conversation's text and the hand-off message, never the workspace); a
+//! cloud member never hands off (a leaf in v1). The UI hears `floor_handed`
+//! on the handing turn and `turn_continued` (kind [`HANDED_KIND`]) when the
+//! receiver starts; a loop guard's stop is a `floor_stopped` with `guard`.
 
 use serde_json::{Value, json};
 
@@ -65,6 +80,28 @@ pub const MAX_CLOUD_INPUT_BYTES: usize = 120 * 1024;
 
 /// `turn_continued`'s `kind` for the next agent of a routed message.
 pub const CONTINUED_KIND: &str = "floor";
+
+/// `turn_continued`'s `kind` for a turn another agent handed the floor to.
+pub const HANDED_KIND: &str = "hand";
+
+/// The start's `user_input` of a hand-off turn: Main ignores it (it stores
+/// the handing agent's message) and answers the model's input itself.
+pub const HAND_NOTE: &str = "Another agent of this thread handed you the floor.";
+
+/// The longest hand-off or consult text an event carries, in characters.
+pub const EXCERPT_CHARS: usize = 280;
+
+/// `text` cut to [`EXCERPT_CHARS`] characters for an event.
+#[must_use]
+pub fn excerpt(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= EXCERPT_CHARS {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(EXCERPT_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
 
 fn invalid(message: &str) -> TurnError {
     TurnError::new("invalid_request", message)
@@ -94,7 +131,13 @@ pub fn check_request(request: &TurnRequest) -> Result<(), TurnError> {
     if let Some(turn) = &request.floor_turn
         && (!request.addressed_to.is_empty()
             || request.unattended.is_some()
-            || turn.position == 0
+            // A hand-off names its hand (position 0), a routed turn its
+            // position, never both.
+            || (turn.position == 0) == turn.hand_id.is_none()
+            || turn
+                .hand_id
+                .as_deref()
+                .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
             || turn.position >= MAX_ADDRESSED
             || uuid::Uuid::parse_str(&turn.question_id).is_err())
     {
@@ -249,6 +292,40 @@ pub struct FloorNext {
     pub plan_mode: bool,
     /// The message's default-version reads, shared by its hops.
     pub defaults: super::turn::DefaultVersions,
+    /// The hand-off Main queued for this turn (#3064); `None` for a routed
+    /// agent.
+    pub hand_id: Option<String>,
+    /// The agent that handed the floor, for a hand-off.
+    pub from: Option<i64>,
+}
+
+impl FloorNext {
+    /// The message's next turn with no agent picked yet: what a queued
+    /// hand-off ([`super::exchange::Exchanges::next_hand`]) fills in. A
+    /// hand-off never carries Bypass: an agent started it, not the person.
+    #[must_use]
+    pub fn template(request: &TurnRequest, question_id: &str, conversation_uuid: &str) -> Self {
+        Self {
+            question_id: question_id.to_owned(),
+            position: 0,
+            participant_id: 0,
+            name: String::new(),
+            cloud: false,
+            workspace_id: request.workspace_id.clone(),
+            project_id: request.project_id,
+            conversation_id: request.conversation_id.clone(),
+            conversation_uuid: conversation_uuid.to_owned(),
+            bypass: false,
+            plan_mode: request.plan_mode,
+            defaults: request
+                .floor_turn
+                .as_ref()
+                .map(|turn| turn.defaults.clone())
+                .unwrap_or_default(),
+            hand_id: None,
+            from: None,
+        }
+    }
 }
 
 /// The next agent after the turn that `started` answered, when Main routed
@@ -286,6 +363,8 @@ pub fn next(
             .as_ref()
             .map(|turn| turn.defaults.clone())
             .unwrap_or_default(),
+        hand_id: None,
+        from: None,
     })
 }
 
@@ -306,6 +385,16 @@ pub fn stopped(events: &super::events::TurnEvents, code: &str, message: &str) {
     events.send("floor_stopped", json!({ "code": code, "message": message }));
 }
 
+/// `floor_stopped` from Main's loop guard (`agent_hops`,
+/// `consecutive_turns`, `pair_exchanges`): `guard` tells the UI it was the
+/// guard, not the person or a failure.
+pub fn guard_stopped(events: &super::events::TurnEvents, code: &str, message: &str) {
+    events.send(
+        "floor_stopped",
+        json!({ "code": code, "message": message, "guard": true }),
+    );
+}
+
 /// `floor_stopped` (`commit_failed`): the previous answer was not saved (its
 /// commit failed or stopped unexpectedly), so the message's other agents do
 /// not answer.
@@ -320,7 +409,37 @@ pub fn commit_failed(events: &super::events::TurnEvents) {
 /// The `floor` fields of a turn's `status` `running`: which agent of the
 /// message answers, and where it runs.
 #[must_use]
-pub fn status(started: &super::api::LocalTurnStarted) -> Option<Value> {
+pub fn status(
+    started: &super::api::LocalTurnStarted,
+    turn: Option<&super::turn::FloorTurn>,
+) -> Option<Value> {
+    // A hand-off's turn (#3064): which hand it runs, and who handed it.
+    if let (Some(hand), None) = (&started.hand_off, &started.floor) {
+        turn?;
+        let participant = started.participant_id?;
+        let name = hand
+            .agents
+            .iter()
+            .find(|agent| agent.participant_id == participant)
+            .map(|agent| agent.name.as_str())
+            .unwrap_or_default();
+        // The host started it, not the person: history shows its input as
+        // the handing agent's message, never as the person's prompt.
+        return Some(json!({
+            "continued_automatically": true,
+            "continuation_kind": "hand",
+            "host_prompt": hand.message,
+            "floor": {
+                "position": 0,
+                "hand_id": hand.hand_id,
+                "from_participant_id": hand.from_participant_id,
+                "from_name": hand.from_name,
+                "participant_id": participant,
+                "agent_name": name,
+                "executor": if started.runs_in_cloud() { "cloud" } else { "local" },
+            }
+        }));
+    }
     let floor = started.floor.as_ref()?;
     let participant = floor.targets.get(floor.position).copied()?;
     Some(json!({

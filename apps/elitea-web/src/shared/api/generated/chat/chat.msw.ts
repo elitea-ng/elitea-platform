@@ -72,6 +72,8 @@ import type {
   LocalChildTurnStarted,
   LocalChildTurnState,
   LocalTurnCommitted,
+  LocalTurnHandFloorResult,
+  LocalTurnHandSkipped,
   LocalTurnScreenshotStored,
   LocalTurnStarted,
   MemoryEntry,
@@ -2251,6 +2253,32 @@ export const getStartLocalTurnResponseMock = (
         participant_id: faker.number.int(),
         name: faker.string.alpha({ length: { min: 10, max: 20 } }),
         executor: faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+        application_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
+      })),
+    },
+    undefined,
+  ]),
+  hand_off: faker.helpers.arrayElement([
+    {
+      hand_id: faker.string.uuid(),
+      from_participant_id: faker.number.int(),
+      from_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      message: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      user_input: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      agents: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        participant_id: faker.number.int(),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        executor: faker.helpers.arrayElement(Object.values(LocalTurnExecutor)),
+        application_id: faker.helpers.arrayElement([
+          faker.number.int(),
+          undefined,
+        ]),
       })),
     },
     undefined,
@@ -2314,6 +2342,24 @@ export const getUploadLocalTurnScreenshotResponseMock = (
   filepath: faker.string.alpha({ length: { min: 10, max: 20 } }),
   file_size: faker.number.int(),
   ...overrideResponse,
+});
+
+export const getHandLocalFloorResponseMock = (): LocalTurnHandFloorResult => ({
+  schema_version: "elitea.runtime.hand-floor.v1",
+  handed_to: [
+    {
+      participant_id: 88,
+      name: "CI Doctor",
+      hand_id: "5d6f0c1e-4c2a-4c1b-9a51-0c2d1d6b2a29",
+    },
+  ],
+  stopped: "",
+  message:
+    "Handed the floor. They answer after your turn, in order. Finish your answer to the person now.",
+});
+
+export const getSkipLocalFloorHandsResponseMock = (): LocalTurnHandSkipped => ({
+  skipped: ["5d6f0c1e-4c2a-4c1b-9a51-0c2d1d6b2a29"],
 });
 
 export const getGetWorkspaceHandoffPolicyResponseMock = (
@@ -4803,6 +4849,58 @@ export const getUploadLocalTurnScreenshotMockHandler = (
   );
 };
 
+export const getHandLocalFloorMockHandler = (
+  overrideResponse?:
+    | LocalTurnHandFloorResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalTurnHandFloorResult> | LocalTurnHandFloorResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_turn_hand_floor/prompt_lib/:projectId/:executionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getHandLocalFloorResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getSkipLocalFloorHandsMockHandler = (
+  overrideResponse?:
+    | LocalTurnHandSkipped
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<LocalTurnHandSkipped> | LocalTurnHandSkipped),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/local_turn_hand_floor_skip/prompt_lib/:projectId/:questionId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getSkipLocalFloorHandsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetWorkspaceHandoffPolicyMockHandler = (
   overrideResponse?:
     | WorkspaceHandoffPolicy
@@ -6218,6 +6316,8 @@ export const getChatMock = () => [
   getCheckRunGoalMockHandler(),
   getCommitLocalTurnMockHandler(),
   getUploadLocalTurnScreenshotMockHandler(),
+  getHandLocalFloorMockHandler(),
+  getSkipLocalFloorHandsMockHandler(),
   getGetWorkspaceHandoffPolicyMockHandler(),
   getListRunGuardrailNoticesMockHandler(),
   getBeginWorkspaceHandoffMockHandler(),

@@ -1304,7 +1304,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// of the access notice outbox: a row with no recipient person, for the
 	// five events the webhook reports (issue 2598, ADR-0059 R2.5b). No
 	// permission.
-	require.EqualValues(t, 281, Head(shared))
+	//
+	// 282: shared/0282_local_floor_hands.sql, the hand-offs a local turn's
+	// hand_floor call queues (elitea_runtime.local_floor_hands) and the guard
+	// that stopped a routed message (local_turn_executions.floor_stopped)
+	// (issue 3063, ADR-0061 decision 3c). No permission.
+	require.EqualValues(t, 282, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -5,6 +5,7 @@
  * ADR-0045 decision 11). Kept beside `workspaceIpc.ts`. The wire shapes are
  * the host's (snake_case); the brief and the check are Main's (contract #1564).
  */
+import type { TeamTalkEvent } from './teamTalkIpc';
 
 /** The chain limits of a grant. An absent field takes the platform default (20 continuations, the per-run cap x10, 12 h). */
 export interface UnattendedChain {
@@ -43,7 +44,7 @@ type ChainLimit = 'continuations' | 'spend' | 'deadline';
  * Why the host continued the chain: the step limit, the 512 tool-call cap, a goal check that found the goal not met, or
  * an app restart while the chain ran (`resume`, ADR-0045 decision 7).
  */
-export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met' | 'resume' | 'floor';
+export type ContinuationKind = 'step_limit' | 'tool_call_cap' | 'goal_not_met' | 'resume' | 'floor' | 'hand';
 
 /** Where an agent of a thread runs (ADR-0050 decision 7f): here with the workspace, or in the cloud with the text only. */
 export type AgentExecutor = 'local' | 'cloud';
@@ -55,12 +56,17 @@ interface TurnContinuedPayload {
   continuation_index: number;
   /** An unattended chain's root; absent for kind `floor`. */
   chain_root_execution_id?: string;
-  /** `floor`: the next agent of a message addressed to several (ADR-0050 decision 7f), not a chain's continuation. */
+  /**
+   * `floor`: the next agent of a message addressed to several (ADR-0050 decision 7f), not a chain's continuation;
+   * `hand`: an agent another agent handed the floor to (ADR-0061 decision 3d).
+   */
   kind?: ContinuationKind;
-  /** Kind `floor`: the agent that answers next, and where it runs. */
+  /** Kinds `floor` and `hand`: the agent that answers next, and where it runs. */
   participant_id?: number;
   agent_name?: string;
   executor?: AgentExecutor;
+  /** Kind `hand`: the hand-off Main queued. */
+  hand_id?: string;
   /** The host continued the chain after an app restart (with `kind` `resume`), on the turn that ran when the app stopped. */
   resumed_after_restart?: boolean;
 }
@@ -140,11 +146,33 @@ export type UnattendedEvent =
   /** On a turn that ran when the app stopped, after the next start, when the host does not continue it by itself: offer Continue. */
   | { kind: 'resume_offered'; payload: { workspace_id: string; conversation_id: string | number } }
   /** On a turn whose `done` named a `floor_next` (ADR-0050 decision 7f): that agent does not answer (`floor_turn_superseded`: a newer message took the floor). */
-  | { kind: 'floor_stopped'; payload: { code: string; message: string } }
+  | { kind: 'floor_stopped'; payload: FloorStoppedPayload }
   /** The answering agent's avatar state changed (ADR-0061 decision 4b): the `agent_state` frame's shape, derived by the host. */
   | { kind: 'agent_state'; payload: { participant_id: number; state: string; activity?: unknown } }
   /** The agents still to answer the routed message, after a Skip (ADR-0061 decision 2c); the host keeps the order. */
-  | { kind: 'exchange'; payload: { remaining: number[] } };
+  | { kind: 'exchange'; payload: { remaining: number[]; queue?: ExchangeQueueItem[] | null } }
+  /** Agents talking to each other (ADR-0061 decision 3, `teamTalkIpc.ts`): a hand-off, a consult. */
+  | TeamTalkEvent;
+
+/**
+ * `floor_stopped`: the message's next agent does not answer. `guard`: Main's loop guard stopped the exchange
+ * (`agent_hops`, `consecutive_turns`, `pair_exchanges`; ADR-0061 decision 3f), `message` its system line.
+ */
+interface FloorStoppedPayload {
+  code: string;
+  message: string;
+  guard?: boolean;
+}
+
+/**
+ * One agent still to answer, in the host's order (`exchange.queue`, `status.floor.queue`): an agent may be queued more
+ * than once. `hand_id`: the hand-off that queued it (ADR-0061 decision 3d), which a Skip of it names; absent for an
+ * agent the person's message addressed.
+ */
+export interface ExchangeQueueItem {
+  participant_id: number;
+  hand_id?: string;
+}
 
 /** The fields a `status` `running` of an unattended turn adds. */
 export interface UnattendedStatusFields {
@@ -163,7 +191,7 @@ export interface UnattendedStatusFields {
 /** What `done` adds when the message goes to another agent next (ADR-0050 decision 7f). */
 export interface FloorDoneFields {
   /** The message's next agent, started once this turn's commit lands. */
-  floor_next?: { participant_id: number; agent_name: string; position: number };
+  floor_next?: { participant_id: number; agent_name: string; position?: number; hand_id?: string };
 }
 
 /** `status` `running`'s `floor`: this turn's agent of the message's order (`position` from 0 of `targets` agents). */
@@ -175,4 +203,6 @@ export interface TurnFloorStatus {
   executor: AgentExecutor;
   /** The agents still to answer the message after this one, skips removed (ADR-0061 decision 2c); absent from an older host. */
   exchange?: number[];
+  /** The same agents with the hand-off that queued each; `null` or absent from a host without hand-offs. */
+  queue?: ExchangeQueueItem[] | null;
 }

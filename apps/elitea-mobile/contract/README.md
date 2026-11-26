@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.68
+
+| Area | What |
+|---|---|
+| Local hand-offs and consults (ADR-0061, #3063 #3065) | `handLocalFloor`, `skipLocalFloorHands`, `floor_turn.hand_id`, the start's `hand_off`, `LocalTurnFloorAgent.application_id` and the commit's `consults` are desktop-only: the app never runs a local turn. A viewed Local work thread shows the stored hand-off (cause `agent_mention`) and consult (cause `delegation`) messages as side talk with the existing classes (issue 3069). A server before 1.68 stores neither. |
+
 ## Client contract 1.67
 
 | Area | What |

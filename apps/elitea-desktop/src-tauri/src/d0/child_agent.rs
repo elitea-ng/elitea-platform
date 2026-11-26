@@ -83,6 +83,8 @@ pub struct ChildAgentContext {
     pub events: Arc<TurnEvents>,
     pub poll: PollPolicy,
     started: AtomicUsize,
+    /// The turn's local consults (#3065), in a thread with other agents.
+    consults: std::sync::OnceLock<Arc<super::consult::LocalConsults>>,
 }
 
 impl ChildAgentContext {
@@ -93,7 +95,21 @@ impl ChildAgentContext {
             events,
             poll,
             started: AtomicUsize::new(0),
+            consults: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Run nested-agent calls as local consults where they may (set once,
+    /// when the turn's tools are known).
+    ///
+    /// # Errors
+    ///
+    /// The consults were set already.
+    pub fn set_consults(
+        &self,
+        consults: Arc<super::consult::LocalConsults>,
+    ) -> Result<(), Arc<super::consult::LocalConsults>> {
+        self.consults.set(consults)
     }
 }
 
@@ -167,6 +183,25 @@ impl Tool for CloudChildAgentTool {
                 "invalid_arguments",
                 &format!("`task` is longer than {MAX_TASK_CHARS} characters"),
             ));
+        }
+        // A thread member, or a nested agent the desktop may run, answers
+        // here with the folder (#3065); any other runs in the cloud.
+        if let Some(consults) = self.context.consults.get() {
+            use super::consult::Consulted;
+            return Ok(match consults.consult(&self.spec, task).await {
+                Consulted::Result(result) => result,
+                Consulted::Cloud => {
+                    let result =
+                        call(&self.context, &self.spec, ctx.function_call_id(), task).await;
+                    let ok = result.get("status").and_then(Value::as_str) == Some("ok");
+                    let reply = result
+                        .get(if ok { "result" } else { "message" })
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    consults.finished_event(&self.spec, reply, ok, false);
+                    result
+                }
+            });
         }
         Ok(call(&self.context, &self.spec, ctx.function_call_id(), task).await)
     }
@@ -304,6 +339,8 @@ async fn call_bounded(
             "parent_call_id": call_id,
             "ordinal": ordinal + 1,
             "label": spec.name,
+            // A cloud child turn: no folder (ADR-0061 decision 3e).
+            "executor": "cloud",
         }),
     );
     let body = json!({

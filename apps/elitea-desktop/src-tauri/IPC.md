@@ -446,7 +446,7 @@ failed tool's `tool_result` event carries its `code` (without the
 | `agent_prewarm` | `{project_id, application_id, version_id, conversation_id?}` | `{version: boolean, participant: boolean}` — what a turn to that agent version (and conversation) would find cached now. The UI calls it when the composer gets focus with an agent selected: the host reads the version and the conversation's answering participant ahead (only what it has not cached), starts no execution and never reads the memory recall. Rejects `invalid_request`, `local_work_disabled`, `not_signed_in`; a failed read is only not cached. |
 | `agent_turn_resume` | `{turn_id}` | `{turn_id, execution_id}` — continues a turn that ran when the app stopped (`StoredTurn.resumable`, **Resume after restart** below): the host starts the turn that continues it, as `agent_turn_start` would, and the new turn's events come under the new `turn_id`. Rejects `resume_unknown` (no resume record of the signed-in account for that turn, or it is past its chain's deadline), `resume_invalid` (the record cannot make a turn), or what `agent_turn_start` rejects. Only the platform's refusal of the continuation (409 `chain_limit_reached` or `chain_ended`, 422 `unattended_grant_refused` or `unattended_grants_off`, 404 `chain_not_found`) deletes the record; any other error (a 401, 429 or 5xx, no network, `workspace_busy`) keeps it for another try. |
 | `agent_exchange_stop` | `{turn_id}` (any turn of the exchange) | `null`: the exchange's running turn is cancelled (it commits nothing) and no later agent of the message starts; `floor_stopped` `stopped_by_person` follows once (**Several agents in a thread**, "Watching and stepping in"). A turn in no exchange is cancelled as `agent_turn_cancel` does, with its refusals. |
-| `agent_exchange_skip` | `{turn_id, participant_id}` | `{remaining: number[]}`: the agents still queued, in order; the exchange's current turn sends `exchange` `{remaining}`. Rejects `exchange_unknown` (the turn is in no exchange) and `exchange_not_queued` (the agent is not queued: it runs, ran, or was skipped). |
+| `agent_exchange_skip` | `{turn_id, participant_id, hand_id?}` (`hand_id`: skip that queued hand-off, recorded by Main `skipped_by_person`) | `{remaining: number[]}`: the agents still queued, in order; the exchange's current turn sends `exchange` `{remaining}`. Rejects `exchange_unknown` (the turn is in no exchange) and `exchange_not_queued` (the agent is not queued: it runs, ran, or was skipped). |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent, updated when the commit after it settles (`committed`, `commit`). `committing` is the moment between the run's end and `done`. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
@@ -1057,10 +1057,80 @@ so a lead thread's chain stays on its agent.
   next agent not skipped, at its own position (Main admits any later
   position whose target matches). When every agent left was skipped, the
   turn says `floor_stopped` `skipped_by_person` with "You skipped the
-  remaining agents." The queue is a list of items so the local hand-offs of
-  ADR-0061 decision 3 (#3064) can add Main-queued turns that Stop and Skip
-  act on the same way.
-- Agent-to-agent hand-off (`hand_floor`) is not offered to a desktop turn.
+  remaining agents." The queue also holds the hand-offs Main queued (below):
+  `status` `running`'s `floor.queue` and the `exchange` event's `queue` list
+  every queued item as `{participant_id, hand_id?}`, and their `hands` only
+  the queued hand-offs, `{participant_id, hand_id}` (`exchange` and
+  `remaining` stay the participant ids). A Stop or a Skip of a queued
+  hand-off is also recorded by Main (`skipLocalFloorHands`, `code`
+  `stopped_by_person` or `skipped_by_person`). An exchange runs at most 30
+  minutes from its first turn: past it no later turn starts, its queued
+  hand-offs are skipped, and the turn that ran last says `floor_stopped`
+  `{code: "exchange_timed_out", message: "The exchange stopped after 30
+  minutes. Send a new message to go on."}`.
+- **Hand-offs** (ADR-0061 decision 3d, #3064; `src/d0/hand_floor.rs`). A
+  LOCAL agent's turn in a thread with another agent is offered `hand_floor`
+  (the cloud worker's tool: the same name, description, schema and argument
+  check, `elitea_agent_runtime::hand_floor`), plan mode included; never a
+  cloud member's turn (cloud members are leaves) nor an unattended run. A
+  checked call goes to `handLocalFloor` with the message's local consult
+  pairs (`consults`); Main's answer is the tool's result, and every failure
+  is a tool result. A successful call sends `floor_handed` `{from,
+  from_name, to: [{participant_id, name, hand_id}], message_excerpt}` (≤ 280
+  characters) on the handing turn, whose closing `agent_state` frame (an
+  event of its own, sent with its `done`, before the receiver's
+  `turn_continued`) is `{state: "waiting", activity: {waiting_on: "agent",
+  peer_participant_id, handoff_to}}`. A loop guard's stop sends `floor_stopped` `{code:
+  "agent_hops" | "consecutive_turns" | "pair_exchanges", message, guard:
+  true}` (Main's stop text) and nothing more starts. After the handing turn's
+  commit lands, and after any routed agent still to answer, the host starts
+  the queued hand-offs one at a time in Main's order: `done.floor_next`
+  carries `hand_id`, and `turn_continued` `{kind: "hand", next_turn_id,
+  execution_id, participant_id, agent_name, executor, hand_id,
+  from_participant_id}`. The receiver's start sends `floor_turn {question_id,
+  hand_id}`; its model reads Main's `hand_off.user_input` verbatim (the host
+  never frames it). A handed turn never runs in Bypass or unattended, keeps
+  the message's plan mode, and starts behind the taint gate (a host command
+  in a trusted folder is asked; Bypass never answers it); its
+  `approval_request` names the asking agent (`participant_id`, on every
+  turn whose agent is known). A cloud receiver gets the conversation's text
+  and the framed message, never the workspace. `status` `running`'s `floor`
+  on a handed turn is `{position: 0, hand_id, from_participant_id,
+  from_name, participant_id, agent_name, executor, exchange, queue, hands}`,
+  beside `continued_automatically: true`, `continuation_kind: "hand"` and
+  `host_prompt` (the handing agent's message): the host started it, so
+  history never shows its model input as the person's prompt. A handing
+  turn that fails, is cancelled, goes to the cloud or is not saved, or a
+  hand-off whose start is refused, starts none of the hand-offs still
+  queued: Main records them `stopped_by_person` and the turn sends an
+  `exchange` event with the emptied queue.
+- **Local consults** (ADR-0061 decisions 3e/3f, #3065; `src/d0/consult.rs`).
+  In a thread with other agents, a local agent's nested-agent
+  (`application`) tool call runs the callee on this computer when the
+  desktop may run it (not a pipeline, no withheld secret, no project MCP
+  server; checked once per turn), whether it is a thread member (its
+  application is a `floor.agents[].application_id`) or another nested agent
+  of the caller's version (a member whose executor is `cloud` is always
+  consulted in the cloud, never with the folder). The callee runs in the caller's session (its
+  folder, sandbox, rules, approvals and checkpoint, on the caller's model,
+  quiet), with the caller's local and index tools and the caller's remote
+  tools its definition also names (toolkit type and tool name); never
+  `hand_floor`, a nested agent, a sub-agent, the browser or the computer.
+  The taint gate closes before it runs, and Bypass never carries into it
+  (the session runs it in Build). Its answer is the tool result, framed as
+  another agent's text (`agent_reply` block under the thread's nonce). A
+  callee the desktop may not run is a cloud child turn as before; its
+  `subagent_started` carries `executor: "cloud"`. A turn runs at most 3
+  consults and a message 8; past them the call is refused as a tool result
+  (`consult_limit`). The caller's turn sends `consult_started` `{caller,
+  callee, callee_name, question_excerpt, local}` and `consult_finished`
+  `{caller, callee, callee_name, reply_excerpt, ok, local}` (excerpts ≤ 280
+  characters; `callee` is `null` for a nested agent that is no thread
+  member), and its avatar waits on the callee (`waiting_on: "agent"`,
+  `peer_participant_id`). A thread member's local consult is recorded in the
+  commit's `consults` (`{participant_id, question ≤ 32 KiB, reply ≤ 16
+  KiB}`, at most 3) and goes with the next `handLocalFloor` as a `{from, to}`
+  pair. A thread of one agent keeps the cloud child turns unchanged.
 
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved

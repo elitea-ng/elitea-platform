@@ -256,8 +256,11 @@ pub struct TurnRequest {
 pub struct FloorTurn {
     /// The person's message (its first turn's `question_id`).
     pub question_id: String,
-    /// The agent's index in the routed order, from 1.
+    /// The agent's index in the routed order, from 1; 0 on a hand-off.
     pub position: usize,
+    /// The hand-off Main queued that this turn runs (contract 1.68,
+    /// #3064); sent instead of `position`.
+    pub hand_id: Option<String>,
     /// The default versions read so far for this message (see
     /// [`DefaultVersions`]); not sent.
     pub defaults: DefaultVersions,
@@ -667,7 +670,10 @@ async fn start_turn(
         body["addressed_to"] = json!(addressed);
     }
     if let Some(turn) = &request.floor_turn {
-        body["floor_turn"] = json!({ "question_id": turn.question_id, "position": turn.position });
+        body["floor_turn"] = match &turn.hand_id {
+            Some(hand_id) => json!({ "question_id": turn.question_id, "hand_id": hand_id }),
+            None => json!({ "question_id": turn.question_id, "position": turn.position }),
+        };
     }
     Ok(api
         .start_turn(request.project_id, &answering.conversation_uuid, &body)
@@ -749,6 +755,19 @@ fn check_routed(
         return Err(TurnError::new(
             "floor_routed_elsewhere",
             "This message goes to another agent of the thread (its lead, or an agent it names) first. Send it again, or address the agents you want.",
+        ));
+    }
+    // A hand-off's start answers that hand-off, and only a hand-off's does:
+    // its model input is Main's framed message (#3064).
+    let asked = request
+        .floor_turn
+        .as_ref()
+        .and_then(|turn| turn.hand_id.as_deref());
+    let answered = started.hand_off.as_ref().map(|hand| hand.hand_id.as_str());
+    if asked != answered {
+        return Err(TurnError::new(
+            "floor_turn_refused",
+            "The platform did not start the hand-off this turn runs.",
         ));
     }
     if started.runs_in_cloud() != request.cloud {
@@ -1183,8 +1202,10 @@ pub struct AgentHost {
     /// yet: the resume loop takes their records although the host still
     /// knows the turn ([`Self::resume_after_send`]).
     resume_after_send: Mutex<std::collections::HashSet<String>>,
-    /// The person's Stop and Skip of routed messages (ADR-0061 decision 2c).
-    exchanges: super::exchange::Exchanges,
+    /// The person's Stop and Skip of routed messages (ADR-0061 decision 2c),
+    /// and the hand-offs Main queued (#3064): the `hand_floor` tool queues
+    /// them.
+    exchanges: Arc<super::exchange::Exchanges>,
     /// Extra toolsets every turn offers (tests: tools that record when they
     /// run).
     #[cfg(test)]
@@ -1435,7 +1456,7 @@ impl AgentHost {
             resume_wake: tokio::sync::Notify::new(),
             resume_offers: Mutex::new(std::collections::HashSet::new()),
             resume_after_send: Mutex::new(std::collections::HashSet::new()),
-            exchanges: super::exchange::Exchanges::default(),
+            exchanges: Arc::new(super::exchange::Exchanges::default()),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
             trust: std::sync::OnceLock::new(),
@@ -2653,8 +2674,12 @@ impl AgentHost {
             request.project_id,
             policy,
             &AnsweringParticipant {
-                // A later agent's commit adds only its answer.
-                answer_only: request.floor_turn.is_some(),
+                // A later agent's commit adds only its answer; a hand-off's
+                // adds the handing agent's message too (Main writes it).
+                answer_only: request
+                    .floor_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.hand_id.is_none()),
                 ..answering.clone()
             },
             question_id,
@@ -3220,6 +3245,15 @@ impl AgentHost {
         if started.unattended.is_none() {
             request.unattended = None;
         }
+        // A turn another agent handed the floor to (ADR-0061 decision 3c):
+        // the model reads Main's framed hand-off (its untrusted preamble and
+        // the fenced message), never text the host builds; it never runs in
+        // Bypass or unattended (an agent started it, not the person).
+        if let Some(hand) = &started.hand_off {
+            request.prompt.clone_from(&hand.user_input);
+            request.bypass = false;
+            request.unattended = None;
+        }
         // The grant id Main admitted is the chain's (a retried start used a
         // new one); the continuations carry it.
         if let (Some(turn), Some(chain)) =
@@ -3328,14 +3362,28 @@ impl AgentHost {
             ));
         }
 
-        if let Some(mut fields) = floor::status(&started) {
+        if let Some(mut fields) = floor::status(&started, request.floor_turn.as_ref()) {
             // The turns still queued after this one, as the person left
             // them (ADR-0061 decision 2c): the UI's "Next".
-            if let Some(floor) = &started.floor {
-                let remaining = self
-                    .exchanges
-                    .begin(events.turn_id(), floor, events.clone());
+            let remaining = if let Some(floor) = &started.floor {
+                Some(
+                    self.exchanges
+                        .begin(events.turn_id(), floor, events.clone()),
+                )
+            } else if let (Some(hand), Some(turn)) = (&started.hand_off, &request.floor_turn) {
+                Some(self.exchanges.begin_hand(
+                    events.turn_id(),
+                    &turn.question_id,
+                    &hand.agents,
+                    events.clone(),
+                ))
+            } else {
+                None
+            };
+            if let Some(remaining) = remaining {
                 fields["floor"]["exchange"] = json!(remaining);
+                fields["floor"]["queue"] = self.exchanges.queue_of(events.turn_id());
+                fields["floor"]["hands"] = self.exchanges.hands_of(events.turn_id());
             }
             events.unattended(&fields);
         }
@@ -3450,6 +3498,15 @@ impl AgentHost {
                     super::exchange::STOPPED_BY_PERSON,
                     super::exchange::STOPPED_MESSAGE,
                 );
+            }
+            // Nor do the hand-offs it queued (#3064).
+            if let Some(question) = started.message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            ) {
+                self.drop_hands(question, request.project_id, None, &events);
             }
             // A cancelled turn commits nothing: the chain ends here, and
             // nothing is left to resume.
@@ -3618,6 +3675,7 @@ impl AgentHost {
             local_work: recorder.work_report(sandbox_mode.as_str()),
             context_summary: turn_context.take_summary(),
             chain_outcome: None,
+            consults: turn_context.take_consults(),
         };
         // The workspace stays held by the commit (below) until it settles:
         // a handoff, restore or removal is refused until the last turn is
@@ -3708,13 +3766,45 @@ impl AgentHost {
             None
         };
         let had_next = routed_next.is_some();
-        let floor_next = routed_next.and_then(|next| self.exchanges.advance(next));
+        let mut floor_next = routed_next.and_then(|next| self.exchanges.advance(next));
+        // The message this turn answers: the routed one, or the one a
+        // hand-off continues.
+        let message = started
+            .message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            )
+            .map(str::to_owned);
+        // Then the hand-offs Main queued (#3064), one at a time and in
+        // Main's order, once no routed agent is left.
+        if floor_next.is_none()
+            && failure.is_none()
+            && !handed_off
+            && request.unattended.is_none()
+            && let Some(question) = &message
+        {
+            floor_next = self.exchanges.next_hand(FloorNext::template(
+                &request,
+                question,
+                &conversation_uuid,
+            ));
+        }
+        // A turn that failed or went to the cloud starts none of the
+        // hand-offs queued for its message.
+        if floor_next.is_none()
+            && (failure.is_some() || handed_off)
+            && let Some(question) = &message
+        {
+            self.drop_hands(question, request.project_id, None, &events);
+        }
+        let hand_message = message.clone();
         // The person stopped the exchange before this turn's end.
         let floor_next_stopped = floor_next.is_none()
-            && started
-                .floor
-                .as_ref()
-                .is_some_and(|floor| self.exchanges.stopped(&floor.question_id));
+            && message
+                .as_deref()
+                .is_some_and(|question| self.exchanges.stopped(question));
         // The person skipped every agent that was still to answer.
         let floor_next_skipped = had_next && floor_next.is_none() && !floor_next_stopped;
         let continuing = matches!(chain_step, Some(ChainStep::Continue))
@@ -3730,6 +3820,9 @@ impl AgentHost {
                 "agent_name": next.name,
                 "position": next.position,
             });
+            if let Some(hand_id) = &next.hand_id {
+                done["floor_next"]["hand_id"] = json!(hand_id);
+            }
         }
         if handed_off {
             done["handed_off"] = json!(true);
@@ -3911,6 +4004,13 @@ impl AgentHost {
                             awake.again(),
                         ));
                     } else {
+                        // Not saved: none of the message's hand-offs start.
+                        host.drop_hands(
+                            &next.question_id,
+                            next.project_id,
+                            next.hand_id.clone(),
+                            &events,
+                        );
                         floor::commit_failed(&events);
                     }
                 }
@@ -3933,6 +4033,9 @@ impl AgentHost {
                 // A `done` that said the run or the message goes on is
                 // answered: the UI stops waiting for a next turn (#1886).
                 if floor_owed && !floor_settled.load(std::sync::atomic::Ordering::SeqCst) {
+                    if let Some(question) = &hand_message {
+                        host.drop_hands(question, project_id, None, &events);
+                    }
                     floor::commit_failed(&events);
                 }
                 if chain_owed
@@ -4099,7 +4202,39 @@ impl AgentHost {
             // The person's Stop or Skips since the previous turn's `done`
             // (ADR-0061 decision 2c).
             let question = next.question_id.clone();
+            let hand_id = next.hand_id.clone();
+            // The exchange's wall clock (ADR-0061 decision 3f): past it, no
+            // later turn starts, and the queued hand-offs are skipped.
+            if self.exchanges.expired(&question) && !self.exchanges.stopped(&question) {
+                let mut hands = self.exchanges.stop_question(&question);
+                hands.extend(hand_id);
+                super::hand_floor::skip_hands(
+                    self.api.clone(),
+                    next.project_id,
+                    question,
+                    hands,
+                    super::exchange::STOPPED_BY_PERSON,
+                );
+                floor::stopped(
+                    &previous,
+                    super::exchange::EXCHANGE_TIMED_OUT,
+                    super::exchange::TIMED_OUT_MESSAGE,
+                );
+                return;
+            }
+            let project_id = next.project_id;
             let Some(next) = self.exchanges.advance(next) else {
+                // A reserved hand-off that will not start now: Main records
+                // it skipped.
+                if let Some(hand_id) = hand_id {
+                    super::hand_floor::skip_hands(
+                        self.api.clone(),
+                        project_id,
+                        question.clone(),
+                        vec![hand_id],
+                        super::exchange::STOPPED_BY_PERSON,
+                    );
+                }
                 // Said once per Stop (the cancelled turn may have said it).
                 let notice = if !self.exchanges.stopped(&question) {
                     Some((
@@ -4126,18 +4261,21 @@ impl AgentHost {
             match started {
                 Ok(started) => {
                     let stopped = self.exchanges.adopt(&question, &started.turn_id);
-                    previous.send(
-                        "turn_continued",
-                        json!({
-                            "next_turn_id": started.turn_id,
-                            "execution_id": started.execution_id,
-                            "continuation_index": next.position,
-                            "kind": floor::CONTINUED_KIND,
-                            "participant_id": next.participant_id,
-                            "agent_name": next.name,
-                            "executor": if next.cloud { "cloud" } else { "local" },
-                        }),
-                    );
+                    let mut continued = json!({
+                        "next_turn_id": started.turn_id,
+                        "execution_id": started.execution_id,
+                        "continuation_index": next.position,
+                        "kind": floor::CONTINUED_KIND,
+                        "participant_id": next.participant_id,
+                        "agent_name": next.name,
+                        "executor": if next.cloud { "cloud" } else { "local" },
+                    });
+                    if let Some(hand_id) = &next.hand_id {
+                        continued["kind"] = json!(floor::HANDED_KIND);
+                        continued["hand_id"] = json!(hand_id);
+                        continued["from_participant_id"] = json!(next.from);
+                    }
+                    previous.send("turn_continued", continued);
                     // A Stop raced the start: the new turn ends at once.
                     if stopped {
                         let _ = self.cancel(&started.turn_id);
@@ -4148,6 +4286,8 @@ impl AgentHost {
                         "the next agent of a message did not start: {}",
                         log_reason(&error.code, error.status)
                     );
+                    // Nor do the hand-offs queued after it.
+                    self.drop_hands(&question, project_id, next.hand_id.clone(), &previous);
                     floor::stopped(&previous, &error.code, &error.message);
                 }
             }
@@ -4174,11 +4314,18 @@ impl AgentHost {
             conversation_id: next.conversation_id.clone(),
             application_id: target.application_id,
             version_id: target.version_id,
-            prompt: floor::FLOOR_NOTE.to_owned(),
+            // A hand-off's input is Main's (`hand_off.user_input`, read at
+            // the start); the start's own is ignored.
+            prompt: if next.hand_id.is_some() {
+                floor::HAND_NOTE.to_owned()
+            } else {
+                floor::FLOOR_NOTE.to_owned()
+            },
             // The message's plan mode carries to a later local agent: it
             // must not get the workspace's write tools the person withheld.
             plan_mode: next.plan_mode && !target.cloud,
-            bypass: next.bypass && !target.cloud && !next.plan_mode,
+            // Never on a hand-off: an agent asked for it, not the person.
+            bypass: next.bypass && !target.cloud && !next.plan_mode && next.hand_id.is_none(),
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
@@ -4192,7 +4339,12 @@ impl AgentHost {
             participant_id: Some(next.participant_id),
             floor_turn: Some(FloorTurn {
                 question_id: next.question_id.clone(),
-                position: next.position,
+                position: if next.hand_id.is_some() {
+                    0
+                } else {
+                    next.position
+                },
+                hand_id: next.hand_id.clone(),
                 defaults: next.defaults.clone(),
             }),
             cloud: target.cloud,
@@ -4242,10 +4394,14 @@ impl AgentHost {
             PollPolicy::for_retry(self.deps.retry),
         );
         let name = started
-            .floor
-            .as_ref()
-            .zip(started.participant_id)
-            .map(|(floor, id)| floor.name_of(id).to_owned())
+            .participant_id
+            .and_then(|id| {
+                started
+                    .thread_agents()
+                    .iter()
+                    .find(|agent| agent.participant_id == id)
+            })
+            .map(|agent| agent.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "Cloud agent".to_owned());
         let spec = definition::ChildAgentSpec {
@@ -5253,6 +5409,45 @@ impl AgentHost {
             planner: Some(planner.clone()),
             child: None,
         };
+        // Local consults (ADR-0061 decision 3e, #3065): in a thread with
+        // other agents, a nested-agent call runs the callee here, with the
+        // folder and the caller's tools; a thread of one agent keeps the
+        // cloud child turns.
+        if let Some(caller) = started.participant_id
+            && let Some(question) = started.message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            )
+            && started
+                .thread_agents()
+                .iter()
+                .any(|agent| agent.participant_id != caller)
+            && !admitted.child_agents.is_empty()
+        {
+            let _ = children_remote.set_consults(Arc::new(super::consult::LocalConsults::new(
+                api.clone(),
+                request.project_id,
+                caller,
+                question.to_owned(),
+                started.thread_agents().to_vec(),
+                self.exchanges.clone(),
+                events.clone(),
+                transport.clone(),
+                child_model.clone(),
+                toolsets.clone(),
+                remote_specs.clone(),
+                remote.clone(),
+                ToolObserver {
+                    planner: None,
+                    ..observer.clone()
+                },
+                workspace.session.clone(),
+                nonce.clone(),
+                turn_context.consults(),
+            )));
+        }
         // Sub-agents: the turn's model, quiet, and its local and index tools
         // (never the remote toolkits, nor the person's MCP servers: a child
         // is not asked about, and its tools are only the read-only built-in
@@ -5408,6 +5603,46 @@ impl AgentHost {
             },
             false,
         )) as Arc<dyn Toolset>);
+        // `hand_floor` (ADR-0061 decision 3d, #3064): a local agent of a
+        // thread with another agent may hand it the floor; an unattended
+        // run's chain continues instead.
+        if request.unattended.is_none()
+            && let Some(from) = started.participant_id
+            && let Some(question) = started.message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            )
+            && let Some(toolset) = super::hand_floor::toolset(
+                super::hand_floor::HandFloorContext {
+                    api: api.clone(),
+                    project_id: request.project_id,
+                    execution_id: started.execution_id.clone(),
+                    question_id: question.to_owned(),
+                    from,
+                    from_name: started
+                        .thread_agents()
+                        .iter()
+                        .find(|agent| agent.participant_id == from)
+                        .map(|agent| agent.name.clone())
+                        .unwrap_or_default(),
+                    exchanges: self.exchanges.clone(),
+                    events: events.clone(),
+                },
+                started.thread_agents(),
+            )
+        {
+            builder = builder.toolset(Arc::new(ObservedToolset::new(
+                toolset,
+                ToolObserver {
+                    session: None,
+                    planner: None,
+                    ..observer.clone()
+                },
+                false,
+            )) as Arc<dyn Toolset>);
+        }
         #[cfg(test)]
         for toolset in self.test_toolsets.lock().expect("lock").iter() {
             builder = builder.toolset(Arc::new(ObservedToolset::new(
@@ -5568,11 +5803,60 @@ impl AgentHost {
             // The turn may be past its run already: its commit or the next
             // start then honours the Stop.
             Some(stopped) => {
+                // The hand-offs Main queued will not start: Main records
+                // them stopped by the person (#3064).
+                super::hand_floor::skip_hands(
+                    self.api.clone(),
+                    stopped.project_id,
+                    stopped.question_id.clone(),
+                    stopped.hands.clone(),
+                    super::exchange::STOPPED_BY_PERSON,
+                );
                 let _ = self.cancel(&stopped.turn_id);
                 Ok(())
             }
             None => self.cancel(turn_id),
         }
+    }
+
+    /// Age the exchange of `question` by `by` (tests of its wall clock).
+    #[cfg(test)]
+    pub fn age_exchange(&self, question: &str, by: Duration) {
+        self.exchanges.age(question, by);
+    }
+
+    /// The queued hand-offs of the message `question` will not start (the
+    /// handing turn failed, was cancelled, or a later turn did not start):
+    /// Main records them `stopped_by_person`, with `extra` (a hand-off
+    /// reserved already), and `events` says the queue changed.
+    fn drop_hands(
+        &self,
+        question: &str,
+        project_id: i64,
+        extra: Option<String>,
+        events: &TurnEvents,
+    ) {
+        let mut hands = self.exchanges.drain_hands(question);
+        hands.extend(extra);
+        if hands.is_empty() {
+            return;
+        }
+        super::hand_floor::skip_hands(
+            self.api.clone(),
+            project_id,
+            question.to_owned(),
+            hands,
+            super::exchange::STOPPED_BY_PERSON,
+        );
+        let turn_id = events.turn_id();
+        events.send(
+            "exchange",
+            json!({
+                "remaining": self.exchanges.remaining_of(turn_id),
+                "queue": self.exchanges.queue_of(turn_id),
+                "hands": self.exchanges.hands_of(turn_id),
+            }),
+        );
     }
 
     /// Skip `participant_id`, an agent still queued in the exchange of
@@ -5583,12 +5867,33 @@ impl AgentHost {
     /// # Errors
     ///
     /// `exchange_unknown` or `exchange_not_queued`.
-    pub fn exchange_skip(&self, turn_id: &str, participant_id: i64) -> Result<Vec<i64>, TurnError> {
-        let (remaining, events) = self.exchanges.skip(turn_id, participant_id)?;
-        if let Some(events) = events {
-            events.send("exchange", json!({ "remaining": remaining }));
+    pub fn exchange_skip(
+        &self,
+        turn_id: &str,
+        participant_id: i64,
+        hand_id: Option<&str>,
+    ) -> Result<Vec<i64>, TurnError> {
+        let skipped = self.exchanges.skip(turn_id, participant_id, hand_id)?;
+        if let Some((hand_id, question)) = skipped.hand {
+            super::hand_floor::skip_hands(
+                self.api.clone(),
+                skipped.project_id,
+                question,
+                vec![hand_id],
+                super::exchange::SKIPPED_BY_PERSON,
+            );
         }
-        Ok(remaining)
+        if let Some(events) = skipped.events {
+            events.send(
+                "exchange",
+                json!({
+                    "remaining": skipped.remaining,
+                    "queue": self.exchanges.queue_of(turn_id),
+                    "hands": self.exchanges.hands_of(turn_id),
+                }),
+            );
+        }
+        Ok(skipped.remaining)
     }
 
     /// `agent_turn_cancel`: stop a running turn; it then commits nothing.
@@ -7040,6 +7345,11 @@ struct CommitBody {
     /// turn, the one the host does not continue.
     #[serde(skip_serializing_if = "Option::is_none")]
     chain_outcome: Option<ChainOutcome>,
+    /// The turn's local consults of thread members (ADR-0061 decision 3e,
+    /// #3065), at most `consult::MAX_PER_TURN`; part of the commit's digest,
+    /// so a retry sends the same list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    consults: Vec<Value>,
 }
 
 impl CommitBody {

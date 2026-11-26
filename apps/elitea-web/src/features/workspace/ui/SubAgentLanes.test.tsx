@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import type { TurnView } from '../model/turnReducer';
+import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
+
+import { replayView, type TurnView } from '../model/turnReducer';
 import { TurnTranscript } from './TurnTranscript';
 
 const view = (status: 'running' | 'completed'): TurnView => ({
@@ -90,5 +92,16 @@ describe('SubAgentLanes for a cloud temporary child (client contract 1.48)', () 
   it('a local child shows no badge', () => {
     renderWithTheme(<TurnTranscript view={view('running')} busy />);
     expect(screen.queryByTestId('subagent-temporary')).toBeNull();
+  });
+
+  it('a nested agent the host runs as a cloud child turn says it has no folder (ADR-0061 decision 3e)', () => {
+    const base = replayView([
+      { turn_id: 't', seq: 1, kind: 'tool_call', payload: { call_id: 'c1', tool: 'spawn_agent', args_summary: 'Ask Scribe', remote: false } },
+      { turn_id: 't', seq: 2, kind: 'subagent_started', payload: { agent_id: 'a_1', parent_call_id: 'c1', ordinal: 1, executor: 'cloud' } },
+    ] as AgentEvent[]);
+    renderWithTheme(<TurnTranscript view={base} busy />);
+    expect(screen.getByTestId('subagent-cloud-no-folder')).toHaveTextContent('Cloud · no folder');
+    renderWithTheme(<TurnTranscript view={view('running')} busy />);
+    expect(screen.getAllByTestId('subagent-cloud-no-folder')).toHaveLength(1);
   });
 });

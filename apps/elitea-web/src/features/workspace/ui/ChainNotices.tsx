@@ -79,7 +79,8 @@ function ChainEnded({ ended, onContinue }: { ended: ChainEndedPayload; onContinu
 /** The stop notices of a turn. Continue shows once: on the tool-call stop, else on a chain that waits. A goal check comes before the chain's end. */
 /** The message's next agent did not answer (ADR-0050 decision 7f): a newer message took the floor, or its start failed. */
 function FloorStopped({ stopped }: { stopped: TurnView['floorStopped'] }): React.JSX.Element | null {
-  if (stopped === undefined) return null;
+  // A loop guard's stop (ADR-0061 decision 3f) is a platform line: the page draws it with the turn's side talk.
+  if (stopped === undefined || stopped.guard === true) return null;
   // The person pressed Stop exchange (`stopped_by_person`) or skipped every agent left (`skipped_by_person`, ADR-0061
   // decision 2c): a system line, not a warning.
   if (stopped.code === 'stopped_by_person' || stopped.code === 'skipped_by_person') {
