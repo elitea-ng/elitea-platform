@@ -19,16 +19,18 @@ import { t } from '@/shared/i18n';
 
 import { requestAddress, useThreadFloor } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
+import type { ThreadFloor } from './useSendPrompt';
 
 const NO_AGENTS: readonly ThreadAgent[] = [];
 
 /** The composer's agents and To chip for a local thread (`conversationId` `''`: none, a new thread or the cloud copy). */
-export function useComposerTeam(projectId: number, conversationId: string, local: boolean, agentId: string): { agents: readonly ThreadAgent[]; renderTo?: (draft: string) => ReactNode } {
+export function useComposerTeam(projectId: number, conversationId: string, local: boolean, agentId: string): { agents: readonly ThreadAgent[]; floor?: ThreadFloor; renderTo?: (draft: string) => ReactNode } {
   const floor = useThreadFloor(projectId, local ? conversationId : '');
   if (floor === undefined) return { agents: NO_AGENTS };
   const sticky = floor.agents.find((agent) => String(agent.applicationId) === agentId)?.participantId ?? 0;
   return {
     agents: floor.agents,
+    floor,
     renderTo: (draft) => (
       <WorkspaceToChip draft={draft} agents={floor.agents} meta={floor.meta} fallbackParticipantId={sticky} onAddress={(agent) => requestAddress(conversationId, agent.name)} />
     ),

@@ -81,6 +81,8 @@ interface ThreadCompanion {
   agentType: string;
   /** Runs in the cloud with the conversation's text only (participant `executor: cloud`), never the workspace. */
   cloud: boolean;
+  /** The version's name, when known (an agent added from the sidebar; a team's member names none). */
+  versionName?: string;
 }
 
 export interface AgentSelection {
@@ -104,6 +106,11 @@ export interface AgentSelection {
   /** Add `id` to the thread, on its first version; `cloud`: it runs in the cloud. Absent = not offered. */
   addCompanion?: (id: string, cloud: boolean) => void;
   removeCompanion?: (id: string) => void;
+  /**
+   * Before the thread's first send (#3081): the companion `id` becomes the composer's agent (the one a message that
+   * names no agent goes to, the team's lead), and the composer's agent one of the companions, on this computer.
+   */
+  makeLead?: (id: string) => void;
   /** The project's saved teams, as the picker lists them; absent = none offered. */
   teams?: readonly TeamChoice[];
   /** The team the thread is run by (a new thread, or the one its first send created); absent = none. */
@@ -140,6 +147,12 @@ function teamVersion(team: WorkTeam | undefined, agentId: string, versions: read
 /** A team's other members as the thread's companions: on the team's version, on this computer. */
 function teamCompanions(team: WorkTeam): ThreadCompanion[] {
   return team.others.map((member) => ({ agentId: String(member.applicationId), name: member.name, versionId: member.versionId, agentType: '', cloud: false }));
+}
+
+/** `team` led by its member `next` (#3081): the former lead joins the others, first. */
+function swapLead(team: WorkTeam, next: ThreadCompanion): WorkTeam {
+  const member = team.others.find((m) => String(m.applicationId) === next.agentId) ?? { applicationId: Number(next.agentId), versionId: next.versionId, name: next.name };
+  return { ...team, primary: member, others: [team.primary, ...team.others.filter((m) => m !== member)] };
 }
 
 /** The first version of an agent, read when the person adds it to a thread. */
@@ -237,13 +250,27 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
       if (agent === undefined || project === '') return;
       void firstVersion(project, id).then((version) => {
         if (version === undefined) return;
-        const companion: ThreadCompanion = { agentId: id, name: agent.name, versionId: version.id, agentType: version.agentType, cloud };
+        const companion: ThreadCompanion = { agentId: id, name: agent.name, versionId: version.id, agentType: version.agentType, cloud, versionName: version.name };
         setCompanions((current) => [...current.filter((c) => c.agentId !== id), companion]);
       });
     },
     [agents, project],
   );
   const removeCompanion = useCallback((id: string) => setCompanions((current) => current.filter((c) => c.agentId !== id)), []);
+  const makeLead = useCallback(
+    (id: string) => {
+      const next = companions.find((c) => c.agentId === id);
+      const lead = agents.find((a) => a.id === agentId);
+      if (next === undefined || lead === undefined || conversationId !== '') return;
+      const version = versions.find((v) => String(v.id) === versionId);
+      const former: ThreadCompanion = { agentId, name: lead.name, versionId: Number(versionId), agentType: version?.agentType ?? '', cloud: false, ...(version === undefined ? {} : { versionName: version.name }) };
+      setCompanions((current) => [former, ...current.filter((c) => c.agentId !== id)]);
+      setTeam((current) => (current === undefined ? undefined : swapLead(current, next)));
+      setAgentId(id);
+      setVersionId(String(next.versionId));
+    },
+    [companions, agents, agentId, versionId, versions, conversationId],
+  );
   // A team always starts a new thread (chat cannot add a team to a conversation either).
   const selectTeam = useCallback(
     (id: number) => {
@@ -301,6 +328,7 @@ export function useAgentSelection(workspaceId: string, projectId: number | null)
     companions,
     addCompanion,
     removeCompanion,
+    makeLead,
     teams,
     ...(team === undefined ? {} : { team }),
     selectTeam,

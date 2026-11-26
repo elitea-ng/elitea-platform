@@ -1,12 +1,14 @@
 /**
  * The composer footer's controls — where a native chat/IDE app keeps them,
  * each drawn as a native pop-up button (`ComposerPicker`, rows from
- * `native-menu`): the agent (and its version) as one picker, and where the
- * thread runs (this computer, or the cloud) with the actions that move it.
+ * `native-menu`): who the message goes to (`AgentChip`, which opens the
+ * thread's Participants tab, #3081), and where the thread runs (this
+ * computer, or the cloud) with the actions that move it.
  */
 import type { Ref } from 'react';
 
 import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import AltRouteOutlinedIcon from '@mui/icons-material/AltRouteOutlined';
 import CloudUploadOutlinedIcon from '@mui/icons-material/CloudUploadOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -18,147 +20,106 @@ import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
+import { addressedTo } from '@elitea/client-core/conversation';
 import type { WorkIn } from '@/features/workspace-worktrees';
 import type { HandoffExecutor } from '@/shared/desktop/handoffIpc';
+import { useSidePanelSlot } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
 import { ComposerMoreMenu, ComposerPicker } from '@/shared/ui/native-composer';
-import { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowHint, MenuRowIcon, MenuRowText, NativeSubmenu } from '@/shared/ui/native-menu';
+import { MenuDivider, MenuHeader, MenuNote, MenuRow, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
+import { participantsTabId, pendingAgents } from './ThreadAgentsPanel';
 import type { AgentSelection } from './useAgentSelection';
-import type { TeamChoice, TeamUnavailable } from './workTeams';
+import type { ThreadAgent } from './useEnsureConversation';
 import type { ThreadHandoff } from './useThreadHandoff';
+import { toTarget } from './WorkspaceToChip';
 
-/** A row with a check on the chosen one. */
-function ChoiceRow({ chosen, label, onClick }: { chosen: boolean; label: string; onClick: () => void }): React.JSX.Element {
-  return (
-    <MenuRow selected={chosen} onClick={onClick}>
-      <MenuRowIcon>{chosen && <CheckOutlinedIcon />}</MenuRowIcon>
-      <MenuRowText>{label}</MenuRowText>
-    </MenuRow>
-  );
+/** What the chip needs of a thread that exists: its agents and `meta` (the lead), as Main routes a message. */
+interface ChipFloor {
+  readonly agents: readonly ThreadAgent[];
+  readonly meta: unknown;
+}
+
+/** "To: Name" or "To: Name (lead)". */
+function toLabel(name: string, lead: boolean): string {
+  return lead ? t('widgets.chatBox.floorTarget.lead', 'To: {{name}} (lead)', { name }) : t('widgets.chatBox.floorTarget.label', 'To: {{name}}', { name });
+}
+
+/** Who the message being typed goes to in a new thread of several agents: the first one it names, else the composer's agent. */
+function pendingTarget(selection: AgentSelection, draft: string): string | undefined {
+  const pending = pendingAgents(selection, []);
+  if (pending.length < 2) return undefined;
+  const addressable = pending.map((agent, index) => ({ participantId: index + 1, name: agent.name }));
+  const first = addressedTo(draft, addressable)[0];
+  const addressed = first === undefined ? undefined : pending[first - 1];
+  if (addressed !== undefined) return toLabel(addressed.name, false);
+  return toLabel(pending[0]?.name ?? '', selection.team?.lead === true);
 }
 
 /**
- * "Add to thread ›" (ADR-0050 decision 7f): the project's other agents, each added to run on this computer or in the
- * cloud; the ones added are checked, and clicking one again takes it out. A message names who it is for with "@Name".
+ * The chip's text (#3081): who the message being typed goes to, by the rule Main routes on (`toTarget`: the first
+ * agent it names, else the lead, else the composer's agent), with the team's name; with one agent, the agent and its
+ * version ("Coder · base").
  */
-function companionRows(selection: AgentSelection, pick: (action: () => void) => () => void): React.JSX.Element[] {
-  const { addCompanion, removeCompanion } = selection;
-  if (addCompanion === undefined || removeCompanion === undefined) return [];
-  const others = selection.agents.filter((a) => a.id !== selection.agentId && selection.pipelineIds?.has(a.id) !== true);
-  if (others.length === 0) return [];
-  const added = selection.companions ?? [];
-  const submenu = (cloud: boolean): React.JSX.Element => (
-    <NativeSubmenu
-      key={cloud ? 'add-cloud' : 'add-local'}
-      testId={cloud ? 'agent-add-cloud' : 'agent-add-local'}
-      label={cloud ? t('workspace.floor.addCloud', 'Add a cloud agent') : t('workspace.floor.addLocal', 'Add an agent')}
-    >
-      {() =>
-        others.map((a) => {
-          const chosen = added.some((c) => c.agentId === a.id && c.cloud === cloud);
-          return (
-            <MenuRow key={a.id} selected={chosen} data-testid={`agent-add-${cloud ? 'cloud' : 'local'}-${a.id}`} onClick={pick(() => (chosen ? removeCompanion(a.id) : addCompanion(a.id, cloud)))}>
-              <MenuRowIcon>{chosen && <CheckOutlinedIcon />}</MenuRowIcon>
-              <MenuRowText>{a.name}</MenuRowText>
-            </MenuRow>
-          );
-        })
-      }
-    </NativeSubmenu>
-  );
-  return [
-    <MenuDivider key="floor-divider" />,
-    <MenuHeader key="floor-header">{t('workspace.floor.header', 'Also in this thread')}</MenuHeader>,
-    submenu(false),
-    submenu(true),
-    ...(added.length === 0 ? [] : [<MenuNote key="floor-note">{t('workspace.floor.note', 'Write @Name to address an agent; the cloud ones get the conversation text only.')}</MenuNote>]),
-  ];
-}
-
-/** Why a team cannot run a thread here, as its row says. */
-function unavailableText(reason: TeamUnavailable): string {
-  switch (reason) {
-    case 'other_project':
-      return t('workspace.team.otherProject', 'Agents of another project');
-    case 'not_listed':
-      return t('workspace.team.notListed', 'An agent is not listed here');
-    case 'pipeline':
-      return t('workspace.team.pipeline', 'Has a pipeline');
-    case 'no_members':
-      return t('workspace.team.noMembers', 'No agents');
-  }
-}
-
-/** One team of "Run as a team ›": checked when it runs the thread; a team that cannot run here is disabled and says why. */
-function TeamRow({ choice, chosen, onPick }: { choice: TeamChoice; chosen: boolean; onPick: () => void }): React.JSX.Element {
-  const runnable = 'team' in choice;
-  return (
-    <MenuRow selected={chosen} disabled={!runnable} data-testid={`agent-team-${String(choice.id)}`} onClick={runnable ? onPick : undefined}>
-      <MenuRowIcon>{chosen && <CheckOutlinedIcon />}</MenuRowIcon>
-      <MenuRowText>{choice.name}</MenuRowText>
-      {!runnable && <MenuRowHint>{unavailableText(choice.unavailable)}</MenuRowHint>}
-    </MenuRow>
-  );
-}
-
-/**
- * "Run as a team ›" (ADR-0050 decision 8, #3053): the project's saved teams. Picking one starts a new thread run by
- * the team: its lead (or first member) is the composer's agent, the others join the thread, all on this computer.
- */
-function teamRows(selection: AgentSelection, pick: (action: () => void) => () => void): React.JSX.Element[] {
-  const { teams, selectTeam } = selection;
-  if (teams === undefined || teams.length === 0 || selectTeam === undefined) return [];
-  return [
-    <MenuDivider key="team-divider" />,
-    <NativeSubmenu key="team" testId="agent-team" label={t('workspace.team.menu', 'Run as a team')} hint={selection.team?.name ?? ''}>
-      {() => [
-        ...teams.map((choice) => <TeamRow key={choice.id} choice={choice} chosen={selection.team?.id === choice.id} onPick={pick(() => selectTeam(choice.id))} />),
-        <MenuNote key="team-note">{t('workspace.team.note', 'Starts a new thread with the team’s agents and lead. They all work on this computer with this folder.')}</MenuNote>,
-      ]}
-    </NativeSubmenu>,
-  ];
-}
-
-/** The agent menu's rows: the agents, then "Version ›", whose versions open beside it on hover, then the thread's other agents, then the teams. */
-function AgentMenu({ selection, close }: { selection: AgentSelection; close: () => void }): React.JSX.Element[] {
-  const version = selection.versions.find((v) => String(v.id) === selection.versionId);
-  const pick = (action: () => void) => (): void => {
-    close();
-    action();
-  };
-  return [
-    <MenuHeader key="header">{t('workspace.agent', 'Agent')}</MenuHeader>,
-    ...selection.agents.map((a) => <ChoiceRow key={a.id} chosen={a.id === selection.agentId} label={a.name} onClick={pick(() => selection.selectAgent(a.id))} />),
-    <MenuDivider key="divider" />,
-    <NativeSubmenu key="version" label={t('workspace.version', 'Version')} hint={version?.name ?? ''} disabled={selection.versions.length === 0}>
-      {() => selection.versions.map((v) => <ChoiceRow key={v.id} chosen={String(v.id) === selection.versionId} label={v.name} onClick={pick(() => selection.selectVersion(String(v.id)))} />)}
-    </NativeSubmenu>,
-    ...companionRows(selection, pick),
-    ...teamRows(selection, pick),
-  ];
-}
-
-/** The chip's text: the agent and version, the thread's other agents, and the team that runs the thread. */
-export function agentChipLabel(selection: AgentSelection): string {
+export function agentChipLabel(selection: AgentSelection, draft = '', floor?: ChipFloor): string {
   const agent = selection.agents.find((a) => a.id === selection.agentId);
+  const sticky = floor?.agents.find((a) => String(a.applicationId) === selection.agentId)?.participantId ?? 0;
+  const target = floor === undefined ? undefined : toTarget(draft, floor.agents, floor.meta, sticky);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
-  const base = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
-  const others = selection.companions ?? [];
-  const label = others.length === 0 ? base : `${base} + ${others.map((c) => c.name).join(', ')}`;
-  return selection.team === undefined ? label : `${selection.team.name}: ${label}`;
+  const single = agent === undefined ? t('workspace.agent', 'Agent') : version === undefined ? agent.name : `${agent.name} · ${version.name}`;
+  const pending = floor === undefined ? pendingTarget(selection, draft) : undefined;
+  const label = target === undefined ? (pending ?? single) : toLabel(target.agent.name, target.isLead);
+  return selection.team === undefined ? label : `${selection.team.name} · ${label}`;
 }
 
-/** "developer · base ⌄": the agent and its version. `disabledHint`: why it cannot change (a thread in the cloud). */
-export function AgentChip({ selection, agentRef, disabledHint }: { selection: AgentSelection; agentRef?: Ref<HTMLDivElement> | undefined; disabledHint?: string | undefined }): React.JSX.Element | null {
+/** How many agents the thread has with the next message: the Participants tab is `team` with two or more. */
+function agentCount(selection: AgentSelection, floor: ChipFloor | undefined): number {
+  const joined = floor?.agents ?? [];
+  return joined.length + pendingAgents(selection, joined).length;
+}
+
+interface AgentChipProps {
+  readonly selection: AgentSelection;
+  /** The message being typed: an "@Name" in it is who it goes to. */
+  readonly draft?: string;
+  readonly floor?: ChipFloor | undefined;
+  readonly agentRef?: Ref<HTMLDivElement> | undefined;
+  /** Why it cannot open (a thread in the cloud). */
+  readonly disabledHint?: string | undefined;
+}
+
+/**
+ * "To: Reviewer (lead)": who the next message goes to (#3081). It opens the thread's Participants tab, where its agents
+ * are added, removed and made lead; the chip itself holds no menu.
+ */
+export function AgentChip({ selection, draft = '', floor, agentRef, disabledHint }: AgentChipProps): React.JSX.Element | null {
+  const panel = useSidePanelSlot();
   if (selection.empty) return null;
-  const label = agentChipLabel(selection);
+  const label = agentChipLabel(selection, draft, floor);
   return (
-    <Tooltip title={disabledHint ?? ''}>
-      <Box ref={agentRef} sx={{ display: 'inline-flex', minWidth: 0 }}>
-        <ComposerPicker label={t('workspace.agent', 'Agent')} value={label} testId="agent-chip" disabled={disabledHint !== undefined}>
-          {(close) => <AgentMenu selection={selection} close={close} />}
-        </ComposerPicker>
+    <Tooltip title={disabledHint ?? t('workspace.participants.open', 'Agents of this thread')}>
+      <Box ref={agentRef} component="span" sx={{ display: 'inline-flex', minWidth: 0 }}>
+        <ButtonBase
+          data-testid="agent-chip"
+          disabled={disabledHint !== undefined}
+          aria-label={`${t('workspace.agent', 'Agent')}: ${label}`}
+          onClick={() => panel?.show(participantsTabId(agentCount(selection, floor)))}
+          sx={(theme: Theme) => ({
+            minWidth: 0,
+            gap: 0.5,
+            height: '1.75rem',
+            paddingX: 0.75,
+            borderRadius: theme.vars.shape.radiusSm,
+            color: theme.vars.palette.text.secondary,
+            '& svg': { width: '1rem', height: '1rem', flexShrink: 0, color: theme.vars.palette.text.metrics },
+            '&:hover': { background: theme.vars.palette.action.hover },
+          })}
+        >
+          <GroupsOutlinedIcon aria-hidden />
+          <Typography variant="labelSmall" component="span" noWrap sx={{ minWidth: 0 }}>
+            {label}
+          </Typography>
+        </ButtonBase>
       </Box>
     </Tooltip>
   );

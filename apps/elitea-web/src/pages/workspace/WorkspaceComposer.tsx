@@ -93,8 +93,8 @@ export interface WorkspaceComposerProps {
   bypass?: boolean;
   /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange?: ((on: boolean) => void) | undefined;
-  /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
-  agentPicker?: ReactNode;
+  /** The footer's agent chip (`ComposerControls`), or one drawn for the text being typed (who it goes to, #3081). */
+  agentPicker?: ReactNode | ((draft: string) => ReactNode);
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
   /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
@@ -200,8 +200,9 @@ const takesImages = (accept: boolean | undefined, locked: boolean): boolean => a
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 /** The footer row (`composerFooter`) from the composer's props; the + that picks images (`onPick`) when they are taken. */
-function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void): React.JSX.Element {
-  return composerFooter(props, images ? <AttachImagesButton onPick={onPick} /> : null);
+function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void, draft: string): React.JSX.Element {
+  const agentPicker = typeof props.agentPicker === 'function' ? props.agentPicker(draft) : props.agentPicker;
+  return composerFooter({ ...props, agentPicker }, images ? <AttachImagesButton onPick={onPick} /> : null);
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
@@ -387,7 +388,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           // The whole row goes in the model selector's place: the part of the footer that shrinks.
-          modelSelector: footerOf(props, images, attachments.attachPicked),
+          modelSelector: footerOf(props, images, attachments.attachPicked, draft),
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <WorkspaceSendControl busy={busy} steering={steering} empty={question.trim() === ''} disabled={disabledSend} onSend={submit} onStop={onStop} />
           ),

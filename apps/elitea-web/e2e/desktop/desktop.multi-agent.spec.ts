@@ -4,7 +4,7 @@
  * (`/?harness`: the fake host and canned API, no stack, no Tauri).
  *
  * What it proves, end to end in the UI:
- *  - the composer adds a second agent to the thread as a cloud agent;
+ *  - the thread's Participants tab (opened from the composer's chip, #3081) adds a second agent as a cloud agent;
  *  - the first send adds both agents to the conversation, the cloud one with
  *    `entity_settings.executor: cloud`;
  *  - a message naming both ("@Coder … @Reviewer") starts on the first one
@@ -16,8 +16,8 @@
  *  - in a thread with a lead (#1917), a message that names no agent carries
  *    no `addressed_to` (a composer pick is not an address) and starts on the
  *    lead; a message naming an agent starts on that agent;
- *  - a thread run by a saved team (#3053) writes the team's lead and starts
- *    on it.
+ *  - a thread run by a saved team (#3053), added from the Participants tab
+ *    (#3081) and listed there, writes the team's lead and starts on it.
  *
  * The host's side — following the floor, the cloud relay with text only — is
  * D0's `floor_tests.rs`; Main's routing is `localturn/floor_test.go`.
@@ -65,10 +65,13 @@ test('a thread with a local and a cloud agent answers one message in turn', asyn
   // Coder (local) is the composer's agent; add Reviewer as a cloud agent.
   const chip = page.getByTestId('agent-chip');
   await expect(chip).toContainText('Coder', { timeout: 150_000 });
+  // The chip opens the thread's Participants tab, where agents are added (#3081).
   await chip.click();
-  await page.getByTestId('agent-add-cloud').click();
-  await page.getByTestId('agent-add-cloud-6').click();
-  await expect(chip).toContainText('Reviewer');
+  await page.getByTestId('thread-add-cloud-agent').click();
+  await page.getByTestId('thread-add-cloud-agent-option-6').click();
+  await expect(page.getByTestId('thread-pending-agent')).toHaveCount(2);
+  await expect(page.locator('[data-testid="thread-pending-agent"][data-agent-id="6"]')).toContainText('Cloud');
+  await expect(chip).toContainText('To: Coder');
 
   await page.getByRole('textbox').fill('@Coder fix the flaky test, then @Reviewer check it');
   await page.getByTestId('workspace-send-button').click();
@@ -116,10 +119,13 @@ test('in a lead thread an unaddressed message goes to the lead, an addressed one
 
   const chip = page.getByTestId('agent-chip');
   await expect(chip).toContainText('Coder', { timeout: 150_000 });
+  // The chip opens the thread's Participants tab, where agents are added (#3081).
   await chip.click();
-  await page.getByTestId('agent-add-cloud').click();
-  await page.getByTestId('agent-add-cloud-6').click();
-  await expect(chip).toContainText('Reviewer');
+  await page.getByTestId('thread-add-cloud-agent').click();
+  await page.getByTestId('thread-add-cloud-agent-option-6').click();
+  await expect(page.getByTestId('thread-pending-agent')).toHaveCount(2);
+  await expect(page.locator('[data-testid="thread-pending-agent"][data-agent-id="6"]')).toContainText('Cloud');
+  await expect(chip).toContainText('To: Coder');
 
   // The first message creates the thread with both agents.
   await page.getByRole('textbox').fill('@Coder look at the flaky test');
@@ -131,8 +137,7 @@ test('in a lead thread an unaddressed message goes to the lead, an addressed one
   // The thread gets a lead: Reviewer.
   await h.setLead(88);
 
-  // Names no agent: the lead answers it, though the composer still shows Coder.
-  await expect(chip).toContainText('Coder');
+  // Names no agent: the lead answers it, whichever agent the composer picked.
   await page.getByRole('textbox').fill('fix the flaky test');
   await page.getByTestId('workspace-send-button').click();
   await expect.poll(async () => (await h.started()).length).toBe(2);
@@ -166,12 +171,20 @@ test('a thread run by a team writes its lead and starts on it', async ({ page })
 
   const chip = page.getByTestId('agent-chip');
   await expect(chip).toContainText('Coder', { timeout: 150_000 });
+  // The chip opens the thread's Participants tab; Add team lists the teams (#3081).
   await chip.click();
-  await page.getByTestId('agent-team').click();
-  await expect(page.getByTestId('agent-team-4')).toHaveAttribute('aria-disabled', 'true');
-  await expect(page.getByTestId('agent-team-4')).toContainText('Agents of another project');
-  await page.getByTestId('agent-team-3').click();
-  await expect(chip).toContainText('Review crew: Reviewer · base + Coder');
+  await page.getByTestId('thread-add-team').click();
+  await expect(page.getByTestId('thread-add-team-option-4')).toHaveAttribute('aria-disabled', 'true');
+  await expect(page.getByTestId('thread-add-team-option-4')).toContainText('Agents of another project');
+  await page.getByTestId('thread-add-team-option-3').click();
+  // The team's agents are listed in the tab, the lead first and marked.
+  const members = page.getByTestId('thread-pending-agent');
+  await expect(members).toHaveCount(2);
+  await expect(members.nth(0)).toHaveAttribute('data-agent-id', '6');
+  await expect(members.nth(0).getByTestId('thread-pending-lead')).toBeVisible();
+  await expect(members.nth(1)).toHaveAttribute('data-agent-id', '5');
+  await expect(page.getByTestId('thread-team-name')).toContainText('Review crew');
+  await expect(chip).toContainText('Review crew · To: Reviewer (lead)');
   const notice = page.getByTestId('workspace-team-notice');
   await expect(notice).toContainText('goes to Reviewer (lead)');
   await expect(notice).toContainText('Only an agent that cannot run on this computer runs in the cloud without the folder');
@@ -212,8 +225,8 @@ test('the @ menu addresses an agent, and Stop exchange starts no later agent', a
   const chip = page.getByTestId('agent-chip');
   await expect(chip).toContainText('Coder', { timeout: 150_000 });
   await chip.click();
-  await page.getByTestId('agent-team').click();
-  await page.getByTestId('agent-team-3').click();
+  await page.getByTestId('thread-add-team').click();
+  await page.getByTestId('thread-add-team-option-3').click();
   await expect(chip).toContainText('Review crew');
   await page.getByRole('textbox').fill('look at the flaky test');
   await page.getByTestId('workspace-send-button').click();

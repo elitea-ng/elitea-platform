@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "O agente não foi criado: {{message}}",
   "workspace.noAgents.createCoding": "Criar um agente de código local",
   "workspace.agent": "Agente",
-  "workspace.version": "Versão",
   "workspace.composer.files": "Arquivos nesta pasta",
   "workspace.composer.commands": "Comandos",
   "workspace.composer.placeholder": "O que o agente deve fazer? Digite @ para adicionar um arquivo, / para comandos e skills",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Sem aprovações",
   "workspace.mode.planHint": "Planeja, não altera nada",
   "workspace.usage.context": "Contexto: {{percent}}% da janela em uso",
-  "workspace.team.menu": "Executar como equipe",
   "workspace.team.note": "Inicia uma nova conversa com os agentes e o líder da equipe. Todos trabalham neste computador com esta pasta.",
   "workspace.team.otherProject": "Agentes de outro projeto",
   "workspace.team.pipeline": "Tem um pipeline",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(na nuvem, sem a pasta)",
   "workspace.consult.failed": "Sem resposta: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Nuvem · sem pasta",
-  "workspace.team.folderNoticeLocal": "Cada membro trabalha neste computador com esta pasta e suas ferramentas, também quando outro membro o consulta ou lhe passa a vez. Somente um agente que não pode ser executado neste computador é executado na nuvem, sem a pasta."
+  "workspace.team.folderNoticeLocal": "Cada membro trabalha neste computador com esta pasta e suas ferramentas, também quando outro membro o consulta ou lhe passa a vez. Somente um agente que não pode ser executado neste computador é executado na nuvem, sem a pasta.",
+  "workspace.floor.addLocal": "Adicionar um agente",
+  "workspace.floor.addCloud": "Adicionar um agente na nuvem",
+  "workspace.floor.cloudNote": "Um agente na nuvem recebe só o texto da conversa, nunca esta pasta.",
+  "workspace.participants.change": "Alterar",
+  "workspace.participants.joining": "Entram com sua próxima mensagem",
+  "workspace.participants.noMatch": "Nenhum resultado",
+  "workspace.participants.open": "Agentes deste tópico",
+  "workspace.participants.search": "Pesquisar",
+  "workspace.participants.team": "Equipe: {{name}}",
+  "workspace.team.add": "Adicionar equipe"
 }
