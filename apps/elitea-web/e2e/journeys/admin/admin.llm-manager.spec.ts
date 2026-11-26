@@ -171,7 +171,7 @@ test('the LLM manager adds a provider, adopts a model, sets a budget and saves t
     );
     await page.getByTestId('adopt-models-submit').click();
     expect((await adopted).status(), 'the server admits the adoption on llm.catalogue.manage').toBe(201);
-    await expect(page.getByTestId('platform-models-table').getByText(modelId)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('platform-models-table').getByText(modelId, { exact: true }).first()).toBeVisible({ timeout: 20_000 });
 
     {
       // 3. Set a project budget.
