@@ -18,7 +18,7 @@ baseline = list(filter(None, yaml.safe_load_all(open(sys.argv[1]))))
 assert not any(d.get('metadata', {}).get('name') == 'elitea-code-supervisor' for d in baseline)
 assert not any(d.get('metadata', {}).get('name') == 'elitea-python-preparation-network' for d in baseline)
 docs = list(yaml.safe_load_all(open(sys.argv[2])))
-assert len(docs) == 7
+assert len(docs) == 9
 by_kind = {d['kind']: d for d in docs if d['kind'] != 'ServiceAccount'}
 ns = by_kind['Namespace']
 assert ns['metadata']['name'] == 'code-execution'
@@ -39,9 +39,16 @@ assert by_kind['Role']['rules'] == [
     dict(apiGroups=[''], resources=['pods/log'], verbs=['get']),
 ]
 assert by_kind['RoleBinding']['subjects'] == [dict(kind='ServiceAccount', name='elitea-sandbox-supervisor', namespace='platform')]
+# Code Pods verify their RuntimeClass before creation (#2968), so the one
+# cluster-scoped grant renders with the boundary itself: `get` on that one
+# RuntimeClass, bound to the supervisor.
+role = by_kind['ClusterRole']
+assert role['rules'] == [dict(apiGroups=['node.k8s.io'], resources=['runtimeclasses'],
+                              resourceNames=['gvisor'], verbs=['get'])]
+assert by_kind['ClusterRoleBinding']['subjects'] == [
+    dict(kind='ServiceAccount', name='elitea-sandbox-supervisor', namespace='platform')]
 for doc in docs:
-    assert doc['kind'] not in ['ClusterRole', 'ClusterRoleBinding']
-    if doc['kind'] not in ['Namespace', 'ServiceAccount']:
+    if doc['kind'] not in ['Namespace', 'ServiceAccount', 'ClusterRole', 'ClusterRoleBinding']:
         assert doc['metadata']['namespace'] == 'code-execution'
 PY
 for namespace in platform default kube-system ''; do
@@ -172,7 +179,7 @@ assert preparation['ServiceAccount']['metadata']['name'] == 'elitea-code'
 assert preparation['ServiceAccount']['automountServiceAccountToken'] is False
 assert preparation['Role']['rules'] == execution['Role']['rules']
 assert preparation['RoleBinding']['subjects'] == [dict(kind='ServiceAccount',name='elitea-sandbox-supervisor',namespace='platform')]
-assert not any(d['kind'] in ['ClusterRole','ClusterRoleBinding'] for d in docs)
+assert Counter(d['kind'] for d in docs)['ClusterRole'] == 1
 assert Counter(d['kind'] for d in docs)['Deployment'] == 1
 pod = next(d for d in docs if d['kind']=='Deployment')['spec']['template']['spec']
 assert len(pod['containers']) == 1

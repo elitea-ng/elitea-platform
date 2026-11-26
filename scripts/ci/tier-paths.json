@@ -186,6 +186,10 @@
         "scripts/ci/image-scan-issue.test.mjs",
         "scripts/ci/py-compat.mjs",
         "scripts/ci/testdata/trivy-*.json",
+        "scripts/ci/check-image-users.mjs",
+        "scripts/ci/check-image-users.test.mjs",
+        "apps/elitea-web/Containerfile",
+        "services/elitea-code-runner/Containerfile",
         ".github/workflows/image-matrix.yml"
       ]
     },

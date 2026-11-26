@@ -88,6 +88,7 @@ func newEntraHarness(t *testing.T, issuer func(*entratest.Server) string, custod
 	manager, _ := newTestSessions(t)
 	handler, err := NewOIDCHandler(context.Background(), nil, pool, "test-secret-key")
 	require.NoError(t, err)
+	trustEntraMock(t, handler, mock)
 	handler = handler.WithSessionManager(manager).
 		WithProviderStore(fixedProvider{provider: entraProvider(mock, issuer(mock))}, noSecret{}).
 		WithEntraGovernance(custody)
@@ -95,6 +96,15 @@ func newEntraHarness(t *testing.T, issuer func(*entratest.Server) string, custod
 		t: t, mock: mock, handler: handler,
 		ctx: oidc.ClientContext(context.Background(), mock.Client()),
 	}
+}
+
+// trustEntraMock gives the handler a guarded client that admits the mock: a
+// loopback TLS server, so the development loopback flag and its certificate.
+func trustEntraMock(t *testing.T, handler *OIDCHandler, mock *entratest.Server) {
+	t.Helper()
+	guarded := loopbackIdentityClient(t)
+	guarded.Transport.(*http.Transport).TLSClientConfig = mock.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	handler.egressClient = guarded
 }
 
 // login runs Login and returns the authorize URL and the cookies.
@@ -222,6 +232,7 @@ func TestFlagOffIgnoresTheEntraMarker(t *testing.T) {
 	manager, _ := newTestSessions(t)
 	handler, err := NewOIDCHandler(context.Background(), nil, pool, "test-secret-key")
 	require.NoError(t, err)
+	trustEntraMock(t, handler, mock)
 	provider := entraProvider(mock, mock.Issuer(entraOtherTenant))
 	handler = handler.WithSessionManager(manager).
 		WithProviderStore(fixedProvider{provider: provider}, noSecret{}).

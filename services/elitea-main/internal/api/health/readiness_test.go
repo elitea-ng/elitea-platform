@@ -22,7 +22,7 @@ func fixed(state, cause string) func(context.Context) (string, string) {
 func readinessOf(t *testing.T, checks []Check) (int, Status, string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	RoutesWithDeps(Deps{Checks: checks}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	RoutesWithDeps(Deps{Checks: checks}).ServeHTTP(rec, probeRequest("/readyz"))
 	body := rec.Body.String()
 	var status Status
 	if err := json.Unmarshal([]byte(body), &status); err != nil {
@@ -278,10 +278,18 @@ func TestReadinessDoesNotReportACancelledProbeAsAnOutage(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	request := httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(ctx)
+	request := probeRequest("/readyz").WithContext(ctx)
 	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
 	RoutesWithDeps(Deps{Checks: checks, Monitor: monitor}).ServeHTTP(httptest.NewRecorder(), request)
 	if lines := logs.lines(t); len(lines) != 0 {
 		t.Fatalf("a probe that went away was logged as an outage: %v", lines)
 	}
+}
+
+// probeRequest is a request from a probe inside the container: a loopback
+// peer with no forwarding header. /readyz and /startupz answer only those.
+func probeRequest(path string) *http.Request {
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.RemoteAddr = "127.0.0.1:41000"
+	return request
 }

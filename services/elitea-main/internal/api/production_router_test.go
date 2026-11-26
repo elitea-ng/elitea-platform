@@ -1852,6 +1852,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"DELETE /artifacts/s3/{bucket}/*",
 		"GET /.well-known/elitea-client",
 		"GET /api/docs",
+		"GET /api/docs/app.js",
 		"GET /api/openapi.json",
 		"GET /api/openapi.yaml",
 		"GET /api/v2/admin/access/elevations",

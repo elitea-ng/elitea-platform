@@ -57,8 +57,10 @@ spec:
                 "$(quote < /material/user)" \
                 "$(quote < /material/password)" > /etc/pgbouncer-userlist/userlist.txt
               chmod 600 /etc/pgbouncer-userlist/userlist.txt
+          {{- with .Values.pgbouncer.securityContext }}
           securityContext:
-            allowPrivilegeEscalation: false
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: material
               mountPath: /material
@@ -76,6 +78,10 @@ spec:
           env:
             - name: AUTH_FILE
               value: /etc/pgbouncer-userlist/userlist.txt
+          {{- with .Values.pgbouncer.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: pgbouncer
               containerPort: {{ .Values.pgbouncer.service.port }}
@@ -111,7 +117,13 @@ spec:
             - name: userlist
               mountPath: /etc/pgbouncer-userlist
               readOnly: true
+            # unix_socket_dir: the root filesystem is read-only (#2954).
+            - name: tmp
+              mountPath: /tmp
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
         - name: config
           configMap:
             name: {{ include "elitea-pgbouncer.fullname" . }}-config

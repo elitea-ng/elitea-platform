@@ -185,8 +185,10 @@ func TestBrowserComposeStacksTurnTheEdgeOn(t *testing.T) {
 		if upstream.Hostname() != webService {
 			t.Errorf("%s: %s names host %q, but the web container in this file is %q", relative, webedge.UpstreamEnv, upstream.Hostname(), webService)
 		}
-		if port := upstream.Port(); port != "" && port != "80" {
-			t.Errorf("%s: %s names port %s; the web container's nginx listens on 80 (apps/elitea-web/nginx/spa.conf)", relative, webedge.UpstreamEnv, port)
+		// The image's unprivileged nginx listens on 8080 (#2954); a compose
+		// stack reaches the container directly, with no Service to map 80.
+		if port := upstream.Port(); port != "8080" {
+			t.Errorf("%s: %s names port %q; the web container's nginx listens on 8080 (apps/elitea-web/nginx/spa.conf)", relative, webedge.UpstreamEnv, port)
 		}
 		if !publishesContainerPort(main.shortPorts(), "8080") {
 			t.Errorf("%s: elitea-main publishes no port to its :8080 listener (ports %v), so the browser has no origin", relative, main.shortPorts())

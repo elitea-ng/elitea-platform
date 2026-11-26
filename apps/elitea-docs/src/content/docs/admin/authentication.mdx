@@ -132,6 +132,16 @@ The platform requests the scopes `openid`, `profile` and `email` (a provider on 
 - In **Keycloak**, keep the `email` client scope assigned to the client. If you remove it, Keycloak refuses the authorization request with `invalid_scope`. Without the scope, the id_token also has no `email` claim, and the login is refused.
 - In Keycloak, a user whose **Email verified** flag is off gets `"email_verified": false`, so the login is always refused. Turn the flag on for the user, or let the user verify the address in Keycloak.
 
+### Identity providers on a private address
+
+The platform reaches an OIDC identity provider for discovery, for its signing keys (JWKS) and for the token exchange. Each of these requests goes through the platform's egress guard, the same one that protects webhook and MCP traffic. The guard resolves the host on every connection and connects only to the address it checked.
+
+- An identity provider on a public address needs no configuration.
+- An identity provider on a private address (an in-cluster Keycloak, an on-premises AD FS) is refused until the operator names its range or address in `ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST`, for example `10.20.0.0/16` or `10.20.0.5:8443`. A host name in that list does not permit a private address.
+- Link-local and cloud-metadata addresses are always refused. Loopback is admitted only on development stacks, with `ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK=true`.
+
+Sign-in through a refused provider is unavailable, and the elitea-main log line `OIDC discovery failed` names the refused address. A provider from the environment that is refused stops elitea-main at startup, as an unreachable issuer always has. The rule applies to the provider from the environment (`OIDC_ISSUER_URL`) and to every provider on this screen. SAML providers are not affected, because the platform never fetches SAML metadata: you paste it.
+
 ## When an OIDC login answers 409
 
 A 409 means that the login cannot use the account that the email claim names. Only an operator can resolve it. The body names the cause, and the elitea-main log has the warning `OIDC: refused a login that names two accounts` with the `sub` and the `cause`:

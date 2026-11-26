@@ -224,7 +224,7 @@ services:
       # Relay /app and /docs to the SPA container and redirect `/` to /app/
       # (internal/api/webedge). Compose only: a cluster's Gateway API
       # HTTPRoute does this routing, and the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:8080"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       # Signs personal access tokens and is the root of the run, vector and
       # publish-validation token keys. elitea-main refuses a value shorter
@@ -252,6 +252,10 @@ services:
       # Local mock (see the oidc-mock service above) — no real credentials,
       # the mock accepts any client_id/client_secret.
       OIDC_ISSUER_URL: "http://oidc.localhost:9400"
+      # Identity-provider egress guard: the mock is on the compose network, a
+      # private address. Development only.
+      ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true"
       OIDC_CLIENT_ID: "elitea-dev-client"
       OIDC_CLIENT_SECRET: "elitea-dev-secret"
       OIDC_REDIRECT_URI: "http://localhost:8080/auth/oidc/callback"
@@ -713,7 +717,7 @@ services:
     depends_on:
       - elitea-main
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

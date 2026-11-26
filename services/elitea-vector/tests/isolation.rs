@@ -407,13 +407,7 @@ async fn serve_with(
     settings: CollectionSettings,
     limits: SpaceLimits,
 ) -> SocketAddr {
-    let store = Arc::new(Store::new(
-        Qdrant::from_url(url)
-            .skip_compatibility_check()
-            .build()
-            .expect("qdrant client"),
-        settings,
-    ));
+    let store = Arc::new(Store::new(raw_qdrant(url), settings));
     let auth = Authenticator::new(introspector, HashSet::from(["dns:elitea-main".to_owned()]));
     let service = VectorService::new(auth, store).with_limits(limits);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -490,10 +484,7 @@ async fn harness_custom(
         slug: unique_slug("iso"),
         worker: client(address, &pki, &pki.worker).await,
         admin: client(address, &pki, &pki.admin).await,
-        qdrant: Qdrant::from_url(&url)
-            .skip_compatibility_check()
-            .build()
-            .expect("qdrant"),
+        qdrant: raw_qdrant(&url),
     })
 }
 
@@ -2497,9 +2488,18 @@ async fn an_unreachable_introspection_service_fails_closed() {
 
 // ── review round 1: indexes, space limits, mid-stream revocation ───────────
 
+/// Every Qdrant client of this suite, the service's included. The client's
+/// default request timeout is 5 s, and a shared CI runner's Qdrant, holding
+/// every earlier test's on-disk collections, has stalled a collection and
+/// index creation past it (one test took 18 s where its neighbours took under
+/// one). The timeout then reached the caller as UNAVAILABLE. The suite proves
+/// isolation, not latency, so it allows a stall that long.
+const QDRANT_TIMEOUT: Duration = Duration::from_secs(60);
+
 fn raw_qdrant(url: &str) -> Qdrant {
     Qdrant::from_url(url)
         .skip_compatibility_check()
+        .timeout(QDRANT_TIMEOUT)
         .build()
         .expect("qdrant")
 }

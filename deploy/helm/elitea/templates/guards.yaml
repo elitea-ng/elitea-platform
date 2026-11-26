@@ -93,9 +93,10 @@
   elitea-main's routes nor /app and /docs see them), so a plain Ingress is as
   safe as the HTTPRoute.
 
-  The browser edge's exec probes (templates/main/deployment.yaml) run
-  `elitea-main -healthcheck <path>`, which reads only the three probe paths;
-  any other path would leave the pod never Ready.
+  elitea-main's startup and readiness exec probes
+  (templates/main/deployment.yaml) run `elitea-main -healthcheck <path>`,
+  which reads only the three probe paths; any other path would leave the pod
+  never Ready.
 */ -}}
 {{- /*
   main.ingress.gke wires a GKE Ingress (BackendConfig, FrontendConfig, NEG).
@@ -109,11 +110,11 @@
 {{- if and .Values.main.ingress.certManager.issuer .Values.main.ingress.certManager.clusterIssuer }}
 {{- fail "main.ingress.certManager: set issuer or clusterIssuer, not both. cert-manager's ingress-shim reads one of them." }}
 {{- end }}
-{{- if and .Values.main.enabled (include "elitea-main.webUpstream" .) }}
+{{- if .Values.main.enabled }}
 {{- range $probe := list "startup" "readiness" }}
 {{- $path := (index $.Values.main.probes $probe).path }}
 {{- if not (has $path (list "/readyz" "/startupz" "/healthz")) }}
-{{- fail (printf "main.probes.%s.path is %q, but with web.enabled=true elitea-main is the browser edge and the %s probe runs `elitea-main -healthcheck <path>`, which reads only /readyz, /startupz or /healthz (the edge refuses /readyz and /startupz to a kubelet httpGet from the node)." $probe $path $probe) }}
+{{- fail (printf "main.probes.%s.path is %q, but the %s probe runs `elitea-main -healthcheck <path>`, which reads only /readyz, /startupz or /healthz (elitea-main answers /readyz and /startupz only inside the container, never to a kubelet httpGet from the node)." $probe $path $probe) }}
 {{- end }}
 {{- end }}
 {{- end }}

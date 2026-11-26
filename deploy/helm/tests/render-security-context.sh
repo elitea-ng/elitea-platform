@@ -13,10 +13,9 @@
 #   * the shipped defaults set allowPrivilegeEscalation=false and a
 #     RuntimeDefault seccomp profile on all three;
 #   * elitea-scheduler and otel-collector also drop ALL capabilities, run as
-#     non-root and with a read-only root filesystem; elitea-web drops ALL and
-#     adds back only the four its root nginx master needs (CHOWN,
-#     NET_BIND_SERVICE, SETGID, SETUID), and keeps a writable root filesystem
-#     (stock nginx image: it writes config.js at start);
+#     non-root and with a read-only root filesystem, and so does elitea-web
+#     (#2954: unprivileged nginx on 8080, adding no capability back, with
+#     an emptyDir at /tmp);
 #   * otelCollector.extraVolumes / extraVolumeMounts reach the pod, so a file
 #     exporter can get a writable path under the read-only root;
 #   * an operator value reaches the rendered pod, and null renders no
@@ -61,7 +60,7 @@ for d in elitea-web elitea-scheduler elitea-otel-collector; do
     "$(select_one "$out" Deployment "$d" '.spec.template.spec.securityContext.seccompProfile.type')" "RuntimeDefault"
 done
 
-for d in elitea-scheduler elitea-otel-collector; do
+for d in elitea-web elitea-scheduler elitea-otel-collector; do
   expect "$d: drops ALL capabilities" \
     "$(select_one "$out" Deployment "$d" '.spec.template.spec.containers[0].securityContext.capabilities.drop | join(",")')" "ALL"
   expect "$d: read-only root filesystem" \
@@ -70,14 +69,16 @@ for d in elitea-scheduler elitea-otel-collector; do
     "$(select_one "$out" Deployment "$d" '.spec.template.spec.securityContext.runAsNonRoot')" "true"
 done
 
-# nginx:stable-alpine: the master starts as root, so it keeps the four
-# capabilities it uses, and writes config.js into the image filesystem.
-expect "elitea-web: drops ALL capabilities" \
-  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].securityContext.capabilities.drop | join(",")')" "ALL"
-expect "elitea-web: adds back only what the nginx master needs" \
-  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].securityContext.capabilities.add | sort | join(",")')" "CHOWN,NET_BIND_SERVICE,SETGID,SETUID"
-expect "elitea-web: root filesystem stays writable" \
-  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem // "unset"')" "unset"
+# The image runs nginx as its `nginx` user on 8080 (#2954): nothing is added
+# back, and /tmp is the one writable path.
+expect "elitea-web: adds back no capability" \
+  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].securityContext.capabilities.add // "none"')" "none"
+expect "elitea-web: listens on the unprivileged port" \
+  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].ports[0].containerPort')" "8080"
+expect "elitea-web: /tmp is an emptyDir" \
+  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.volumes[] | select(.name == "tmp") | has("emptyDir")')" "true"
+expect "elitea-web: /tmp is mounted" \
+  "$(select_one "$out" Deployment elitea-web '.spec.template.spec.containers[0].volumeMounts[] | select(.name == "tmp") | .mountPath')" "/tmp"
 
 echo "== operator values"
 out="$(render --set web.securityContext.runAsUser=101 --set scheduler.podSecurityContext.fsGroup=65532)"

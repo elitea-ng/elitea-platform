@@ -103,6 +103,8 @@ func (p *fakeIdentityProvider) signInWithTarget(
 
 func storedProviderHandler(t *testing.T, pool *pgxpool.Pool, source *switchableProviderSource) *OIDCHandler {
 	t.Helper()
+	// The fake providers are loopback httptest servers.
+	t.Setenv(IdentityProviderAllowLoopbackEnv, "true")
 	handler, err := NewOIDCHandler(context.Background(), nil, pool, "test-secret-key")
 	require.NoError(t, err)
 	return handler.WithProviderStore(source, noSecrets{})

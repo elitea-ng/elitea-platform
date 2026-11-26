@@ -100,6 +100,12 @@ type OIDCHandler struct {
 	runtimeMu    sync.Mutex
 	runtimeCache map[string]*oidcRuntime
 
+	// egressClient is the guarded client every discovery, key-set and token
+	// request uses (oidc_egress.go). NewOIDCHandler builds it from the
+	// environment; a struct-literal handler builds it on first use.
+	egressMu     sync.Mutex
+	egressClient *http.Client
+
 	// attempts is the begin/callback limiter (signin_attempts.go). Nil
 	// unless WithAttemptLimiter attached one.
 	attempts *signInAttempts
@@ -127,8 +133,13 @@ func NewOIDCHandler(ctx context.Context, cfg *OIDCConfig, pool *pgxpool.Pool, se
 		secureCookies: secureCookies,
 		runtimeCache:  map[string]*oidcRuntime{},
 	}
+	client, err := IdentityProviderHTTPClientFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	handler.egressClient = client
 	if cfg != nil {
-		environment, err := newOIDCRuntimeFromEnvironment(ctx, cfg)
+		environment, err := newOIDCRuntimeFromEnvironment(ctx, client, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -449,7 +460,9 @@ func (h *OIDCHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := runtime.oauth2Cfg.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
+	// The token endpoint belongs to the identity provider too: the exchange
+	// goes through the same guarded client as discovery.
+	token, err := runtime.oauth2Cfg.Exchange(oidc.ClientContext(ctx, runtime.client), code, oauth2.VerifierOption(codeVerifier))
 	if err != nil {
 		slog.Error("OIDC token exchange failed", "err", err)
 		http.Error(w, "token exchange failed", http.StatusInternalServerError)

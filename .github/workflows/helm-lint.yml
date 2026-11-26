@@ -281,6 +281,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash deploy/helm/tests/render-security-context.sh
 
+      # #2954: every first-party container (init containers included) runs
+      # non-root, without privilege escalation, with every capability dropped
+      # and on a read-only root filesystem; each exception is listed in the
+      # test with its reason.
+      - name: Every chart container runs non-root and read-only
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-pod-security.sh
+
       # S10: the runtime plane, the worker, elitea-vector with the bundled
       # Qdrant, DeepWiki and Inventory are ON by default. The shipped defaults
       # plus only the operator's values render all of it with elitea-main's

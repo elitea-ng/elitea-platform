@@ -22,13 +22,15 @@ grep -q 'ELITEA_CLOUD_EXECUTOR_CONFIGURED: "false"' "$work/main-off.yaml"
 helm template sandbox "$chart" "${base[@]}" --set-string main.env.ELITEA_CLOUD_EXECUTOR_CONFIGURED=true \
   --show-only templates/main/configmap.yaml > "$work/main-stated.yaml"
 grep -q 'ELITEA_CLOUD_EXECUTOR_CONFIGURED: "true"' "$work/main-stated.yaml"
-# Without workspace runs: no ClusterRole.
+# Without workspace runs the ClusterRole still renders: code Pods verify the
+# same RuntimeClass before creation (#2968).
 helm template sandbox "$chart" "${base[@]}" "${boundary[@]}" \
   --show-only templates/sandbox/kubernetes-boundary.yaml > "$work/off.yaml"
 python3 - "$work/off.yaml" <<'PY'
 import sys, yaml
 docs = list(filter(None, yaml.safe_load_all(open(sys.argv[1]))))
-assert not any(d['kind'] in ['ClusterRole', 'ClusterRoleBinding'] for d in docs)
+roles = [d for d in docs if d['kind'] == 'ClusterRole']
+assert len(roles) == 1 and roles[0]['rules'][0]['resourceNames'] == ['gvisor'], roles
 PY
 
 # With workspace runs: `get` on the one RuntimeClass, bound to the supervisor.

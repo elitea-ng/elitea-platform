@@ -493,7 +493,22 @@ pgbouncer:
     limits:
       cpu: "1"
       memory: 128Mi
-  podSecurityContext: {}
+  # Hardening (#2954). The image already runs as its `postgres` user (uid 70);
+  # these values make the kubelet enforce it. pgbouncer writes only its Unix
+  # socket (unix_socket_dir = /tmp, an emptyDir) and the userlist (its own
+  # memory-backed emptyDir), so the root filesystem is read-only.
+  # securityContext applies to both the userlist init container and pgbouncer.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 70
+    runAsGroup: 70
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -2323,7 +2338,7 @@ networkPolicies:
     # .port), for example the Prometheus pods. Empty admits nobody to it.
     metricsFrom: []
   web:
-    # More peers on elitea-web's port 80 besides elitea-main, which relays every
+    # More peers on elitea-web's port 8080 besides elitea-main, which relays every
     # browser request for /app and /docs. Normally empty: a peer listed here
     # reaches the SPA without passing the edge's `/` redirect and MCP carve-out.
     extraIngressFrom: []
@@ -3918,6 +3933,17 @@ main:
     # Link-local, multicast, reserved and cloud-metadata addresses stay
     # refused whatever it says. No proxy is used. The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
     ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
+    # The egress guard of identity-provider traffic (#2970): OpenID Connect
+    # discovery, the JWKS fetch and the token exchange, for the environment
+    # provider (OIDC_ISSUER_URL) and every provider authored on the admin
+    # Authentication page. EMPTY IS FAIL-CLOSED for private addresses: an
+    # identity provider on a public address needs nothing here; one on a
+    # private address (an in-cluster or on-premises Keycloak, AD FS, ...)
+    # needs its range or IP named, e.g. "10.20.0.0/16" or "10.20.0.5:8443".
+    # Link-local, cloud-metadata, multicast and reserved addresses stay
+    # refused whatever it says, and loopback is never admitted in a cluster.
+    # No proxy is used.
+    ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: ""
 
     # --- Outbound MCP requests made by Main (Load Tools, metadata reads) ---
     #
@@ -4751,7 +4777,10 @@ web:
 
   service:
     type: ClusterIP
-    # The container's nginx listens on 80 (apps/elitea-web/nginx/spa.conf).
+    # The Service port. It targets the container's named `http` port, where
+    # the image's unprivileged nginx listens on 8080
+    # (apps/elitea-web/nginx/spa.conf), so this stays 80 unless you want
+    # elitea-main's ELITEA_WEB_UPSTREAM to name another one.
     port: 80
 
   resources:
@@ -4869,23 +4898,23 @@ web:
     # metadata server and do not need it.
     automountToken: false
 
-  # Hardening (privilege escalation on exec). The image is the stock
-  # nginx:stable-alpine (apps/elitea-web/Containerfile): its master process
-  # starts as root, binds :80 (NET_BIND_SERVICE), chowns its temp dirs under
-  # /var/cache/nginx (CHOWN) and switches its workers to the `nginx` user
-  # (SETUID/SETGID); docker-entrypoint.sh writes config.js into the image
-  # filesystem at start. So every other capability is dropped, and those four
-  # are added back; it needs no other (it signals its workers over a channel,
-  # not kill(2)). runAsNonRoot and readOnlyRootFilesystem need an
-  # unprivileged nginx image first.
+  # Hardening (#2954). The image runs nginx as its unprivileged `nginx` user
+  # (uid 101) on port 8080, with its pid file, temp files and config.js in
+  # /tmp (apps/elitea-web/Containerfile, nginx/nginx.conf); the deployment
+  # mounts an emptyDir there. So the pod runs non-root, with every capability
+  # dropped and a read-only root filesystem. An image older than this chart
+  # starts nginx as root on port 80 and fails under these values.
   podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
     seccompProfile:
       type: RuntimeDefault
   securityContext:
     allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
-      add: ["CHOWN", "NET_BIND_SERVICE", "SETGID", "SETUID"]
 
   podAnnotations: {}
   nodeSelector: {}
@@ -7896,9 +7925,12 @@ worker:
     seccompProfile:
       type: RuntimeDefault
 
+  # Read-only root filesystem (#2954): the worker writes only to its mounted
+  # directories (/tmp, the output spool, the runtime material, the workspace
+  # scratch and the extractor socket), each an emptyDir of this pod.
   securityContext:
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: false
+    readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
 
@@ -8144,9 +8176,11 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
-  # ADR-0034: the RuntimeClass workspace-run Pods run under. The supervisor
-  # reads it (a ClusterRole grants `get` on this one name) and refuses every
-  # workspace run unless its handler is runsc or gvisor (gVisor) or kata*.
+  # ADR-0034 / ADR-0011: the RuntimeClass code, workspace-run and browser
+  # Pods run under. The supervisor reads it (a ClusterRole, rendered whenever
+  # sandboxKubernetes.enabled, grants `get` on this one name) and refuses every
+  # such Pod unless its handler is runsc or gvisor (gVisor) or kata* (#2968).
+  # Code profiles in the supervisor Secret must name this same runtime_class.
   # The platform provides it, or `sandboxRuntime` below does:
   #   GKE Sandbox node pool (sandbox_config gvisor):   gvisor
   #   AKS Pod Sandboxing node pool (KataVmIsolation): kata-vm-isolation
