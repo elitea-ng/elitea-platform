@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.67",
+  "client_contract": "1.68",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -26825,10 +26825,13 @@
               "floor_turn": {
                 "type": "object",
                 "required": [
-                  "position",
                   "question_id"
                 ],
                 "properties": {
+                  "hand_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
                   "position": {
                     "type": "integer",
                     "minimum": 1,
@@ -26985,6 +26988,10 @@
                           "participant_id"
                         ],
                         "properties": {
+                          "application_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
                           "executor": {
                             "type": "string",
                             "enum": [
@@ -27016,6 +27023,67 @@
                         "type": "integer",
                         "format": "int64"
                       }
+                    }
+                  }
+                },
+                "hand_off": {
+                  "type": "object",
+                  "required": [
+                    "agents",
+                    "from_name",
+                    "from_participant_id",
+                    "hand_id",
+                    "message",
+                    "user_input"
+                  ],
+                  "properties": {
+                    "agents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "executor",
+                          "name",
+                          "participant_id"
+                        ],
+                        "properties": {
+                          "application_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "executor": {
+                            "type": "string",
+                            "enum": [
+                              "cloud",
+                              "local"
+                            ]
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "participant_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          }
+                        }
+                      }
+                    },
+                    "from_name": {
+                      "type": "string"
+                    },
+                    "from_participant_id": {
+                      "type": "integer",
+                      "format": "int64"
+                    },
+                    "hand_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "user_input": {
+                      "type": "string"
                     }
                   }
                 },
@@ -27570,6 +27638,31 @@
                   "limit_reached",
                   "waiting"
                 ]
+              },
+              "consults": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "participant_id",
+                    "question"
+                  ],
+                  "properties": {
+                    "participant_id": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "question": {
+                      "type": "string",
+                      "min_length": 1
+                    },
+                    "reply": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "max_items": 3
               },
               "context_summary": {
                 "type": "object",
@@ -28147,6 +28240,834 @@
                 },
                 "max_length": {
                   "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/local_turn_hand_floor/prompt_lib/{project_id}/{execution_id}": {
+      "operation_id": "handLocalFloor",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:execution_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "message",
+              "participant_ids"
+            ],
+            "properties": {
+              "consults": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "from",
+                    "to"
+                  ],
+                  "properties": {
+                    "from": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    },
+                    "to": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 1
+                    }
+                  }
+                },
+                "max_items": 8
+              },
+              "message": {
+                "type": "string"
+              },
+              "participant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 1
+                },
+                "min_items": 1,
+                "max_items": 4
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "handed_to",
+                "message",
+                "schema_version",
+                "stopped"
+              ],
+              "properties": {
+                "handed_to": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "hand_id",
+                      "name",
+                      "participant_id"
+                    ],
+                    "properties": {
+                      "hand_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "participant_id": {
+                        "type": "integer",
+                        "format": "int64"
+                      }
+                    }
+                  }
+                },
+                "message": {
+                  "type": "string"
+                },
+                "schema_version": {
+                  "type": "string"
+                },
+                "stopped": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/local_turn_hand_floor_skip/prompt_lib/{project_id}/{question_id}": {
+      "operation_id": "skipLocalFloorHands",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:question_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "code",
+              "hand_ids"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "skipped_by_person",
+                  "stopped_by_person"
+                ]
+              },
+              "hand_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "min_items": 1,
+                "max_items": 16
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "skipped"
+              ],
+              "properties": {
+                "skipped": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "limit": {
+                      "type": "string",
+                      "enum": [
+                        "continuations",
+                        "deadline",
+                        "spend"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "max_length": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "string",
+                  "enum": [
+                    "continuations",
+                    "deadline",
+                    "spend"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
                 }
               }
             }

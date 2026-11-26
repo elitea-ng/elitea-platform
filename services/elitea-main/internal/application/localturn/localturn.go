@@ -192,6 +192,9 @@ type StartOutcome struct {
 	// Floor is the message's routed order in a conversation with several
 	// agents; nil otherwise.
 	Floor *FloorStarted
+	// HandOff is the hand-off a handed turn starts (ADR-0061 decision 3c);
+	// nil otherwise.
+	HandOff *HandOffStarted
 }
 
 // StartRecord is what the store writes for a start.
@@ -303,6 +306,8 @@ type StartedTurn struct {
 	// Executor is where the answering participant runs: ExecutorLocal or
 	// ExecutorCloud (its mapping's entity_settings.executor).
 	Executor string
+	// HandOff is the queued hand-off the start admitted; nil otherwise.
+	HandOff *HandOff
 }
 
 // HITLExchange is one approval or question the desktop resolved during the
@@ -396,6 +401,9 @@ type CommitRequest struct {
 	// ChainOutcome is the chain's end state, sent only on the commit of the
 	// chain's last turn (ADR-0045); "" otherwise.
 	ChainOutcome string
+	// Consults are the consults of thread members the turn ran locally
+	// (ADR-0061 decision 3e, consult.go), in call order.
+	Consults []Consult
 }
 
 // CommitRecord is what the store writes for a commit.
@@ -417,6 +425,8 @@ type CommitRecord struct {
 	Exchanges []HITLExchange
 	// ChainOutcome ends the turn's chain; "" leaves it open.
 	ChainOutcome string
+	// Consults are written as side messages before the answer.
+	Consults []Consult
 }
 
 // CommittedTurn answers a commit.
@@ -576,6 +586,17 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartOutcome
 		}
 	}
 	outcome.Floor = plan.started(turn)
+	if hand := turn.HandOff; hand != nil {
+		agents := plan.agents
+		if agents == nil {
+			agents = []FloorAgent{}
+		}
+		outcome.HandOff = &HandOffStarted{
+			HandID: hand.HandID, FromParticipantID: hand.FromParticipantID, FromName: hand.FromName,
+			Message: hand.Message, UserInput: agentexecutionapp.FloorPeerUserInput(hand.FromName, hand.Message),
+			Agents: agents,
+		}
+	}
 	return outcome, nil
 }
 
@@ -642,7 +663,7 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 		SteeringMessages: request.SteeringMessages, AssistantMessage: request.AssistantMessage,
 		QuestionMeta: questionMeta, ResponseMeta: responseMeta,
 		ToolCalls: request.ToolCalls, ThinkingSteps: request.ThinkingSteps, Digest: digest,
-		Exchanges: exchanges, ChainOutcome: request.ChainOutcome,
+		Exchanges: exchanges, ChainOutcome: request.ChainOutcome, Consults: request.Consults,
 	})
 	if err != nil {
 		return CommittedTurn{}, err
@@ -712,7 +733,7 @@ func validCommit(request CommitRequest) bool {
 		!validText(request.ModelName, MaxModelNameBytes, true) ||
 		len(request.ThinkingSteps) > MaxThinkingSteps ||
 		len(request.HITLExchanges) > MaxHITLExchanges ||
-		!validSteeringMessages(request.SteeringMessages) {
+		!validSteeringMessages(request.SteeringMessages) || !validConsults(request.Consults) {
 		return false
 	}
 	if !request.AssistantIsError && request.AssistantError != "" {
@@ -1000,10 +1021,12 @@ func commitDigest(request CommitRequest) ([32]byte, error) {
 		HITLExchanges    []HITLExchange    `json:"hitl_exchanges"`
 		Report           LocalWorkReport   `json:"local_work"`
 		ChainOutcome     string            `json:"chain_outcome,omitempty"`
+		Consults         []Consult         `json:"consults,omitempty"`
 	}{
 		request.ExecutionID, request.UserMessage, request.SteeringMessages, request.AssistantMessage,
 		request.AssistantIsError, request.AssistantError, request.ModelName,
 		contextSummary(request.ContextSummary), toolCalls, steps, exchanges, report, request.ChainOutcome,
+		request.Consults,
 	})
 	if err != nil {
 		return [32]byte{}, err

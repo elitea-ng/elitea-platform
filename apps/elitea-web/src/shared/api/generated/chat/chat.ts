@@ -118,6 +118,10 @@ import type {
   LocalTurnCommitRequest,
   LocalTurnCommitted,
   LocalTurnError,
+  LocalTurnHandFloorRequest,
+  LocalTurnHandFloorResult,
+  LocalTurnHandSkipRequest,
+  LocalTurnHandSkipped,
   LocalTurnScreenshotStored,
   LocalTurnScreenshotUpload,
   LocalTurnStartRequest,
@@ -10121,6 +10125,693 @@ export function useUploadLocalTurnScreenshot<
     projectId,
     executionId,
     localTurnScreenshotUpload,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type handLocalFloorResponse200 = {
+  data: LocalTurnHandFloorResult;
+  status: 200;
+};
+
+export type handLocalFloorResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type handLocalFloorResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type handLocalFloorResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type handLocalFloorResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type handLocalFloorResponse409 = {
+  data: LocalTurnError;
+  status: 409;
+};
+
+export type handLocalFloorResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type handLocalFloorResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type handLocalFloorResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type handLocalFloorResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type handLocalFloorResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type handLocalFloorResponseSuccess = handLocalFloorResponse200 & {
+  headers: Headers;
+};
+export type handLocalFloorResponseError = (
+  | handLocalFloorResponse400
+  | handLocalFloorResponse401
+  | handLocalFloorResponse403
+  | handLocalFloorResponse404
+  | handLocalFloorResponse409
+  | handLocalFloorResponse413
+  | handLocalFloorResponse415
+  | handLocalFloorResponse426
+  | handLocalFloorResponse500
+  | handLocalFloorResponse503
+) & {
+  headers: Headers;
+};
+
+export type handLocalFloorResponse =
+  handLocalFloorResponseSuccess | handLocalFloorResponseError;
+
+export const getHandLocalFloorUrl = (
+  projectId: string,
+  executionId: string,
+) => {
+  return `/elitea_core/local_turn_hand_floor/prompt_lib/${projectId}/${executionId}`;
+};
+
+/**
+ * Client contract 1.68 (ADR-0061 decision 3c). The desktop's
+ * `hand_floor` tool: the agent of a live local turn hands the floor to
+ * other agents of its thread. Main decides, with the cloud's own
+ * guards and texts: the calling agent is the turn's, never the body's;
+ * the exchange is the person's message's routed agents, its hand-offs
+ * and its consults; at most 6 agent-to-agent hops, 2 turns of one
+ * agent and 3 exchanges of one pair per message. The handed agents
+ * are queued in order (`handed_to[].hand_id`), and the desktop starts
+ * each, after this turn's commit, with `floor_turn.hand_id`. A refused
+ * hand-off (no agent, the caller itself, an agent outside the thread, a
+ * message over 4,000 bytes) and a guard's stop are answers the model
+ * reads, not errors; on a stop Main posts the guard's system message
+ * once and skips the queued hand-offs.
+ *
+ * Only the credential that started the turn, while it is not committed
+ * and not past its deadline. A cloud agent of the thread is a leaf: its
+ * turn cannot hand the floor (409 `floor_turn_refused`).
+ * @summary Hand the floor of a desktop thread to other agents
+ */
+export const handLocalFloor = async (
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<handLocalFloorResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<handLocalFloorResponse>(
+    getHandLocalFloorUrl(projectId, executionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localTurnHandFloorRequest),
+    },
+  );
+};
+
+export const getHandLocalFloorQueryKey = (
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest?: LocalTurnHandFloorRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_turn_hand_floor/prompt_lib/${projectId}/${executionId}`,
+    localTurnHandFloorRequest,
+  ] as const;
+};
+
+export const getHandLocalFloorQueryOptions = <
+  TData = Awaited<ReturnType<typeof handLocalFloor>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof handLocalFloor>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getHandLocalFloorQueryKey(
+      projectId,
+      executionId,
+      localTurnHandFloorRequest,
+    );
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof handLocalFloor>>> = ({
+    signal,
+  }) =>
+    handLocalFloor(projectId, executionId, localTurnHandFloorRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof handLocalFloor>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type HandLocalFloorQueryResult = NonNullable<
+  Awaited<ReturnType<typeof handLocalFloor>>
+>;
+export type HandLocalFloorQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useHandLocalFloor<
+  TData = Awaited<ReturnType<typeof handLocalFloor>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof handLocalFloor>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof handLocalFloor>>,
+          TError,
+          Awaited<ReturnType<typeof handLocalFloor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHandLocalFloor<
+  TData = Awaited<ReturnType<typeof handLocalFloor>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof handLocalFloor>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof handLocalFloor>>,
+          TError,
+          Awaited<ReturnType<typeof handLocalFloor>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHandLocalFloor<
+  TData = Awaited<ReturnType<typeof handLocalFloor>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof handLocalFloor>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Hand the floor of a desktop thread to other agents
+ */
+
+export function useHandLocalFloor<
+  TData = Awaited<ReturnType<typeof handLocalFloor>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnHandFloorRequest: LocalTurnHandFloorRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof handLocalFloor>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getHandLocalFloorQueryOptions(
+    projectId,
+    executionId,
+    localTurnHandFloorRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type skipLocalFloorHandsResponse200 = {
+  data: LocalTurnHandSkipped;
+  status: 200;
+};
+
+export type skipLocalFloorHandsResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type skipLocalFloorHandsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type skipLocalFloorHandsResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type skipLocalFloorHandsResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type skipLocalFloorHandsResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type skipLocalFloorHandsResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type skipLocalFloorHandsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type skipLocalFloorHandsResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type skipLocalFloorHandsResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type skipLocalFloorHandsResponseSuccess =
+  skipLocalFloorHandsResponse200 & {
+    headers: Headers;
+  };
+export type skipLocalFloorHandsResponseError = (
+  | skipLocalFloorHandsResponse400
+  | skipLocalFloorHandsResponse401
+  | skipLocalFloorHandsResponse403
+  | skipLocalFloorHandsResponse404
+  | skipLocalFloorHandsResponse413
+  | skipLocalFloorHandsResponse415
+  | skipLocalFloorHandsResponse426
+  | skipLocalFloorHandsResponse500
+  | skipLocalFloorHandsResponse503
+) & {
+  headers: Headers;
+};
+
+export type skipLocalFloorHandsResponse =
+  skipLocalFloorHandsResponseSuccess | skipLocalFloorHandsResponseError;
+
+export const getSkipLocalFloorHandsUrl = (
+  projectId: string,
+  questionId: string,
+) => {
+  return `/elitea_core/local_turn_hand_floor_skip/prompt_lib/${projectId}/${questionId}`;
+};
+
+/**
+ * Client contract 1.68 (ADR-0061 decision 2c). The person's Stop
+ * exchange (`stopped_by_person`) and Skip (`skipped_by_person`) over
+ * hand-offs Main queued for the message: the named hand-offs that are
+ * still queued are skipped and never start. Only the caller who sent
+ * the message.
+ * @summary Skip queued hand-offs of a desktop thread's message
+ */
+export const skipLocalFloorHands = async (
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<skipLocalFloorHandsResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<skipLocalFloorHandsResponse>(
+    getSkipLocalFloorHandsUrl(projectId, questionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localTurnHandSkipRequest),
+    },
+  );
+};
+
+export const getSkipLocalFloorHandsQueryKey = (
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest?: LocalTurnHandSkipRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_turn_hand_floor_skip/prompt_lib/${projectId}/${questionId}`,
+    localTurnHandSkipRequest,
+  ] as const;
+};
+
+export const getSkipLocalFloorHandsQueryOptions = <
+  TData = Awaited<ReturnType<typeof skipLocalFloorHands>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof skipLocalFloorHands>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getSkipLocalFloorHandsQueryKey(
+      projectId,
+      questionId,
+      localTurnHandSkipRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof skipLocalFloorHands>>
+  > = ({ signal }) =>
+    skipLocalFloorHands(projectId, questionId, localTurnHandSkipRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      questionId !== null &&
+      questionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof skipLocalFloorHands>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SkipLocalFloorHandsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof skipLocalFloorHands>>
+>;
+export type SkipLocalFloorHandsQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useSkipLocalFloorHands<
+  TData = Awaited<ReturnType<typeof skipLocalFloorHands>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof skipLocalFloorHands>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof skipLocalFloorHands>>,
+          TError,
+          Awaited<ReturnType<typeof skipLocalFloorHands>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSkipLocalFloorHands<
+  TData = Awaited<ReturnType<typeof skipLocalFloorHands>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof skipLocalFloorHands>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof skipLocalFloorHands>>,
+          TError,
+          Awaited<ReturnType<typeof skipLocalFloorHands>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useSkipLocalFloorHands<
+  TData = Awaited<ReturnType<typeof skipLocalFloorHands>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof skipLocalFloorHands>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Skip queued hand-offs of a desktop thread's message
+ */
+
+export function useSkipLocalFloorHands<
+  TData = Awaited<ReturnType<typeof skipLocalFloorHands>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  questionId: string,
+  localTurnHandSkipRequest: LocalTurnHandSkipRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof skipLocalFloorHands>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getSkipLocalFloorHandsQueryOptions(
+    projectId,
+    questionId,
+    localTurnHandSkipRequest,
     options,
   );
 

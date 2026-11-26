@@ -26,8 +26,10 @@ package localturn
 // `desktop`: it is a local turn's answer). Every other agent runs on the
 // desktop with the workspace (`executor: local`, the default).
 //
-// The agent-to-agent hand-off (`hand_floor`) is not offered to a desktop
-// turn yet; the guards it needs (turntaking.Hand) stay with the cloud.
+// HAND-OFFS. A local agent may hand the floor to other agents of the thread
+// (`hand_floor`, handLocalFloor, ADR-0061 decision 3c): Main decides with
+// the cloud's guards and queues the handed agents in local_floor_hands; the
+// desktop starts each with `floor_turn.hand_id` (handoff.go).
 
 import (
 	"errors"
@@ -68,8 +70,12 @@ var (
 type FloorTurnRef struct {
 	// QuestionID is the person's message: the question id of its first turn.
 	QuestionID string
-	// Position is the target's index in the routed order, from 1.
+	// Position is the target's index in the routed order, from 1; 0 on a
+	// handed turn.
 	Position int
+	// HandID names the queued hand-off this turn starts (ADR-0061 decision
+	// 3c); "" on a routed agent's turn.
+	HandID string
 }
 
 // FloorAgent is one agent participant of a desktop thread.
@@ -79,6 +85,10 @@ type FloorAgent struct {
 	Name string
 	// Executor is ExecutorLocal or ExecutorCloud.
 	Executor string
+	// ApplicationID is the agent's application in the turn's project; 0 for
+	// another project's agent. The host tells by it which nested-agent tool
+	// of an agent is a member of the thread (ADR-0061 decision 3e).
+	ApplicationID int64
 }
 
 // ConversationFloor is a conversation's floor settings and agents.
@@ -207,8 +217,11 @@ func validFloorTurn(request StartRequest) bool {
 	if turn == nil {
 		return true
 	}
-	return ValidUUID(turn.QuestionID) && turn.QuestionID != request.QuestionID &&
-		turn.Position >= 1 && turn.Position < turntaking.MaxAddressed &&
+	// A routed agent's turn names its position; a handed turn its hand-off
+	// (ADR-0061 decision 3c), never both.
+	placed := (turn.HandID == "" && turn.Position >= 1 && turn.Position < turntaking.MaxAddressed) ||
+		(turn.Position == 0 && ValidUUID(turn.HandID))
+	return ValidUUID(turn.QuestionID) && turn.QuestionID != request.QuestionID && placed &&
 		request.ParticipantID > 0 && len(request.AddressedTo) == 0 && request.Unattended == nil
 }
 

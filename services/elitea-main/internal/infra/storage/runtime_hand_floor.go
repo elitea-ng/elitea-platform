@@ -3,9 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	agentexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/turntaking"
@@ -137,7 +135,7 @@ func (service *RuntimeHandFloorService) Hand(ctx context.Context, claim ContentC
 	var result RuntimeHandFloorResult
 	err = service.sink.HandFloorInExchange(ctx, run, func(view FloorExchangeView) (FloorHandWrite, error) {
 		var write FloorHandWrite
-		result, write = decideHandFloor(view, run.ParticipantID, request.ParticipantIDs, message)
+		result, write = DecideHandFloor(view, run.ParticipantID, request.ParticipantIDs, message)
 		return write, nil
 	})
 	if err != nil {
@@ -152,63 +150,31 @@ func (service *RuntimeHandFloorService) Hand(ctx context.Context, claim ContentC
 	return result, nil
 }
 
-// decideHandFloor is the decision of one call on a locked exchange: the
-// tool result and the write.
-func decideHandFloor(
+// DecideHandFloor is the decision of one call on a locked exchange: the
+// tool result and the write. The decision is turntaking.DecideHand, which
+// the desktop's handLocalFloor answers too (ADR-0061 decision 3c).
+func DecideHandFloor(
 	view FloorExchangeView, from int64, targets []int64, message string,
 ) (RuntimeHandFloorResult, FloorHandWrite) {
-	result := RuntimeHandFloorResult{SchemaVersion: RuntimeHandFloorSchemaVersion, HandedTo: []RuntimeHandFloorTarget{}}
-	if view.Stopped != "" {
-		result.Stopped = view.Stopped
-		result.Message = "The loop guard already stopped this exchange. Answer the person yourself."
-		return result, FloorHandWrite{}
-	}
-	switch {
-	case message == "":
-		result.Message = "The hand-off was not made: say what you need from the other agents in message."
-		return result, FloorHandWrite{}
-	case len(message) > turntaking.MaxHandMessageBytes || !utf8.ValidString(message) || strings.ContainsRune(message, 0):
-		result.Message = fmt.Sprintf("The hand-off was not made: message is longer than %d bytes.", turntaking.MaxHandMessageBytes)
-		return result, FloorHandWrite{}
-	}
+	agents := make([]turntaking.Agent, 0, len(view.Agents))
 	names := make(map[int64]string, len(view.Agents))
-	agents := make([]int64, 0, len(view.Agents))
 	for _, agent := range view.Agents {
+		agents = append(agents, turntaking.Agent{ParticipantID: agent.ParticipantID, Name: agent.Name})
 		names[agent.ParticipantID] = agent.Name
-		agents = append(agents, agent.ParticipantID)
 	}
-	decision, err := turntaking.Hand(view.Exchange, from, targets, agents)
-	var invalid *turntaking.InvalidHandError
-	if errors.As(err, &invalid) {
-		result.Message = invalidHandText(invalid.Code)
-		return result, FloorHandWrite{}
+	outcome := turntaking.DecideHand(view.Exchange, view.Stopped, agents, from, targets, message)
+	result := RuntimeHandFloorResult{
+		SchemaVersion: RuntimeHandFloorSchemaVersion, HandedTo: []RuntimeHandFloorTarget{},
+		Stopped: outcome.Stopped, Message: outcome.Message,
 	}
-	if err != nil {
-		result.Message = "The hand-off was not made."
-		return result, FloorHandWrite{}
-	}
-	if decision.Stopped != "" {
-		text := turntaking.StopText(decision.Stopped, decision.Limit, names[decision.At],
-			[2]string{names[from], names[decision.At]})
-		result.Stopped = decision.Stopped
-		result.Message = text + " Answer the person yourself."
-		return result, FloorHandWrite{Stop: decision.Stopped, StopText: text}
-	}
-	for _, id := range decision.Handed {
+	for _, id := range outcome.Handed {
 		result.HandedTo = append(result.HandedTo, RuntimeHandFloorTarget{ParticipantID: id, Name: names[id]})
 	}
-	result.Message = "Handed the floor. They answer after your turn, in order. Finish your answer to the person now."
-	return result, FloorHandWrite{Queue: decision.Handed, Message: message}
-}
-
-func invalidHandText(code string) string {
-	switch code {
-	case turntaking.StopEmpty:
-		return "The hand-off was not made: name at least one agent."
-	case turntaking.StopTooMany:
-		return fmt.Sprintf("The hand-off was not made: name at most %d agents.", turntaking.MaxHandTargets)
-	case turntaking.StopSelf:
-		return "The hand-off was not made: you cannot hand the floor to yourself."
+	switch {
+	case outcome.StopText != "":
+		return result, FloorHandWrite{Stop: outcome.Stopped, StopText: outcome.StopText}
+	case len(outcome.Handed) > 0:
+		return result, FloorHandWrite{Queue: outcome.Handed, Message: message}
 	}
-	return "The hand-off was not made: name only agents of this conversation, each once."
+	return result, FloorHandWrite{}
 }

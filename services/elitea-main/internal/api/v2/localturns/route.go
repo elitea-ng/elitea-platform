@@ -76,6 +76,8 @@ func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.Per
 	router.Method(http.MethodPost, ScreenshotPath, gate(h.uploadScreenshot))
 	router.Method(http.MethodPost, RunBriefPath, gate(h.runBrief))
 	router.Method(http.MethodPost, RunCheckPath, gate(h.runCheck))
+	router.Method(http.MethodPost, HandFloorPath, gate(h.handFloor))
+	router.Method(http.MethodPost, HandSkipPath, gate(h.skipHands))
 	return &Route{handler: router, h: h}, nil
 }
 
@@ -100,6 +102,7 @@ type handler struct {
 	useCase  UseCase
 	goals    RunBriefs
 	computer ComputerUse
+	hands    Hands
 }
 
 type startBody struct {
@@ -117,28 +120,52 @@ type startBody struct {
 type floorTurnBody struct {
 	QuestionID string `json:"question_id"`
 	Position   int    `json:"position"`
+	// HandID names a queued hand-off (ADR-0061 decision 3c, contract 1.68).
+	HandID string `json:"hand_id"`
 }
 
 func (body *floorTurnBody) ref() *localturn.FloorTurnRef {
 	if body == nil {
 		return nil
 	}
-	return &localturn.FloorTurnRef{QuestionID: body.QuestionID, Position: body.Position}
+	return &localturn.FloorTurnRef{QuestionID: body.QuestionID, Position: body.Position, HandID: body.HandID}
 }
 
 // floorStarted is LocalTurnStarted.floor.
 func floorStarted(floor localturn.FloorStarted) map[string]any {
-	agents := make([]map[string]any, 0, len(floor.Agents))
-	for _, agent := range floor.Agents {
-		agents = append(agents, map[string]any{
-			"participant_id": agent.ParticipantID, "name": agent.Name, "executor": agent.Executor,
-		})
-	}
 	return map[string]any{
 		"question_id": floor.QuestionID,
 		"position":    floor.Position,
 		"targets":     floor.Targets,
-		"agents":      agents,
+		"agents":      floorAgents(floor.Agents),
+	}
+}
+
+// floorAgents is LocalTurnFloorAgent[]: application_id only for an agent
+// of the turn's project (contract 1.68).
+func floorAgents(list []localturn.FloorAgent) []map[string]any {
+	agents := make([]map[string]any, 0, len(list))
+	for _, agent := range list {
+		entry := map[string]any{
+			"participant_id": agent.ParticipantID, "name": agent.Name, "executor": agent.Executor,
+		}
+		if agent.ApplicationID > 0 {
+			entry["application_id"] = agent.ApplicationID
+		}
+		agents = append(agents, entry)
+	}
+	return agents
+}
+
+// handOffStarted is LocalTurnStarted.hand_off (ADR-0061 decision 3c).
+func handOffStarted(hand localturn.HandOffStarted) map[string]any {
+	return map[string]any{
+		"hand_id":             hand.HandID,
+		"from_participant_id": hand.FromParticipantID,
+		"from_name":           hand.FromName,
+		"message":             hand.Message,
+		"user_input":          hand.UserInput,
+		"agents":              floorAgents(hand.Agents),
 	}
 }
 
@@ -166,6 +193,9 @@ type commitBody struct {
 	// ChainOutcome ends the turn's unattended chain (ADR-0045); only on
 	// the commit of the chain's last turn.
 	ChainOutcome string `json:"chain_outcome"`
+	// Consults are the thread members the turn consulted locally (ADR-0061
+	// decision 3e, contract 1.68).
+	Consults []localturn.Consult `json:"consults"`
 }
 
 // caller is the token principal both operations require. A local turn is a
@@ -260,6 +290,9 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 	if outcome.Floor != nil {
 		started["floor"] = floorStarted(*outcome.Floor)
 	}
+	if outcome.HandOff != nil {
+		started["hand_off"] = handOffStarted(*outcome.HandOff)
+	}
 	started["executor"] = outcome.Executor
 	// The project's computer use setting (ADR-0047 decision 9, contract 1.41).
 	started["computer_use"] = h.computerUseStarted(request.Context(), projectID)
@@ -300,7 +333,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		ContextSummary:   body.ContextSummary,
 		ToolCalls:        body.ToolCalls, ThinkingSteps: body.ThinkingSteps,
 		HITLExchanges: body.HITLExchanges, Report: report, AuditRoute: CommitPath,
-		ChainOutcome: body.ChainOutcome,
+		ChainOutcome: body.ChainOutcome, Consults: body.Consults,
 	})
 	if err != nil {
 		writeUseCaseError(request.Context(), writer, "commit", err)
@@ -345,6 +378,9 @@ func writeUseCaseError(ctx context.Context, writer http.ResponseWriter, operatio
 	case errors.Is(err, localturn.ErrFloorSuperseded):
 		desktopwire.WriteError(writer, http.StatusConflict, "floor_turn_superseded",
 			"A newer message started in this thread, so the earlier message's remaining agents do not answer.")
+	case errors.Is(err, localturn.ErrNotLive):
+		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_not_live",
+			"This local turn is committed or past its deadline, so it cannot hand the floor.")
 	case errors.Is(err, localturn.ErrConflict):
 		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_conflict",
 			"The question id is already used by another turn.")
