@@ -138,6 +138,14 @@ pub struct LocalWorkPolicy {
     /// ceiling, the network and the shell ([`Self::folder_trust_blocks`]).
     /// The server sends `true` by default; off when absent.
     pub folder_trust: bool,
+    /// `local_work_full_auto` (ADR-0061 amendment of 2026-11-26, issue
+    /// 3079, client contract 1.69): a person may run a thread in Full auto,
+    /// which answers every approval question Bypass answers and the taint
+    /// gate's too ([`crate::approvals::PermissionProfile::FullAuto`]). Off,
+    /// the mode is hidden, the host refuses a turn in it and the engine
+    /// treats it as Bypass. The server sends `true` by default; off when
+    /// absent (an older server), like every field here.
+    pub full_auto: bool,
 }
 
 /// Why the policy does not let a person trust a folder (ADR-0061 decision
@@ -186,6 +194,7 @@ impl Default for LocalWorkPolicy {
             browser_http: false,
             browser_private_network: false,
             folder_trust: false,
+            full_auto: false,
         }
     }
 }

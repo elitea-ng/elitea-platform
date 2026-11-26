@@ -117,6 +117,8 @@ pub fn record(
         version_id: request.version_id,
         mode: if request.plan_mode {
             ResumeMode::Plan
+        } else if request.full_auto {
+            ResumeMode::FullAuto
         } else if request.bypass {
             ResumeMode::Bypass
         } else {
@@ -245,7 +247,11 @@ pub fn continuation(record: &ResumeRecord) -> Result<TurnRequest, TurnError> {
         prompt,
         // An unattended turn never runs in plan mode.
         plan_mode: record.mode == ResumeMode::Plan && unattended.is_none(),
-        bypass: record.mode == ResumeMode::Bypass,
+        bypass: matches!(record.mode, ResumeMode::Bypass | ResumeMode::FullAuto),
+        // Full auto resumes only with the chain's grant (issue 3079): an
+        // attended turn resumed after a restart runs in Bypass, since the
+        // person turns Full auto on again in the composer.
+        full_auto: record.mode == ResumeMode::FullAuto && unattended.is_some(),
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,

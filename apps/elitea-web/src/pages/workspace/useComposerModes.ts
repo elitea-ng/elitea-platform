@@ -1,17 +1,21 @@
 /**
- * The local thread's modes beside the composer: Act | Plan | Bypass
- * (`useBypassMode`, kept per folder; Plan wins), and "Run to completion"
+ * The local thread's modes beside the composer: Act | Plan | Bypass | Full
+ * auto (`useBypassMode`, kept per folder; `useFullAutoMode`, this thread
+ * only and never kept; Plan wins, then Full auto), and "Run to completion"
  * (`useRunToCompletion`, kept per folder, on by default), which works with
  * each mode. In Plan mode no grant goes out: a plan proposal waits for the
  * person. Neither applies to the cloud copy or a pipeline's cloud run
  * (`local: false`). When an administrator turned grants off, the control
- * hides and no grant goes out.
+ * hides and no grant goes out; when an administrator forbids Full auto, it
+ * is not offered.
  */
 import { grantToSend, toWireGrant, useGrantsTurnedOff, type RunChoice } from '@/features/unattended';
 import type { TurnMode, TurnModeChoice } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
+import type { FullAutoSwitch } from './ModePicker';
 import { useBypassMode, type BypassMode } from './useBypassMode';
+import { useFullAutoMode, type FullAutoMode } from './useFullAutoMode';
 import { useRunToCompletion } from './useRunToCompletion';
 import type { SessionCommands } from './useSessionCommands';
 
@@ -30,17 +34,20 @@ export interface ComposerModes {
   bypass: BypassMode;
   /** The bypass notice shows (a local thread in bypass mode, not in plan mode). */
   bypassActive: boolean;
-  /** The composer's mode switch: Bypass is offered for a local thread only. */
+  fullAuto: FullAutoMode;
+  /** The composer's mode switch: Bypass and Full auto are offered for a local thread only. */
   switchProps: {
     bypass: boolean;
     onBypassChange: ((on: boolean) => void) | undefined;
+    fullAuto: FullAutoSwitch | undefined;
   };
   /** The "Run to completion" control; undefined when it does not show. */
   runToCompletion: RunToCompletionBinding | undefined;
 }
 
-function modeOf(planMode: boolean, bypass: boolean): TurnMode {
+function modeOf(planMode: boolean, fullAuto: boolean, bypass: boolean): TurnMode {
   if (planMode) return 'plan';
+  if (fullAuto) return 'full_auto';
   return bypass ? 'bypass' : 'act';
 }
 
@@ -54,19 +61,39 @@ function choiceOf(mode: TurnMode, run: RunChoice | null): TurnModeChoice {
 
 export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands): ComposerModes {
   const bypass = useBypassMode(workspaceId);
+  const rawFullAuto = useFullAutoMode(local, commands.planMode);
   const run = useRunToCompletion(workspaceId);
   const grantsOff = useGrantsTurnedOff();
-  const mode = modeOf(commands.planMode, local && bypass.on);
+  const mode = modeOf(commands.planMode, local && rawFullAuto.on, local && bypass.on);
   const offered = local && !grantsOff;
-  const onBypassChange = (next: boolean): void => bypass.request(next, () => commands.setPlanMode(false));
+  // Picking Bypass leaves Full auto once Bypass is on (a cancelled warning keeps the mode); picking Act or Plan leaves both.
+  const onBypassChange = (next: boolean): void => {
+    if (!next) rawFullAuto.request(false);
+    bypass.request(next, () => {
+      rawFullAuto.request(false);
+      commands.setPlanMode(false);
+    });
+  };
+  // Turning Full auto off (the banner) returns to Act, not to a Bypass kept for the folder.
+  const fullAuto: FullAutoMode = {
+    ...rawFullAuto,
+    request: (next, turnedOn) => {
+      if (!next && rawFullAuto.on) bypass.request(false);
+      rawFullAuto.request(next, turnedOn);
+    },
+  };
+  // Full auto turns plan mode off only once the person confirmed it.
+  const onFullAutoChange = (next: boolean): void => fullAuto.request(next, () => commands.setPlanMode(false));
   return {
     mode,
     choice: choiceOf(mode, offered ? run.choice : null),
     bypass,
     bypassActive: mode === 'bypass',
+    fullAuto,
     switchProps: {
       bypass: local && bypass.on,
       onBypassChange: local ? onBypassChange : undefined,
+      fullAuto: local && rawFullAuto.allowed ? { on: rawFullAuto.on, onChange: onFullAutoChange } : undefined,
     },
     runToCompletion: offered
       ? {

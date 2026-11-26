@@ -141,6 +141,10 @@ The apps show an **IT support** line in About and Settings, so people know whom 
 
 On the desktop app an `https://` line opens in the browser; an email address or a phone number opens Settings › Troubleshoot, where the line can be copied.
 
+### Full auto
+
+**Full auto** is a desktop Local work mode in which the agent answers every approval for the person, including the questions asked after it read outside content ([Full auto](/how-tos/chat-conversations/desktop-full-auto)). Forbid it for every device in **Admin › Configuration › Native client policy › Allow Full Auto Mode** (`local_work_full_auto`), or on a Mac through the device management: the boolean key `local_work_full_auto` set to `false` in a configuration profile with a Custom Settings (`com.apple.ManagedClient.preferences`) payload for the app's bundle identifier. Only a value the profile enforces counts. A device value can only forbid it, never allow what the policy forbids. A forbidden mode is not offered in the composer, and the app refuses a turn that asks for it. Windows and Linux follow the policy only.
+
 ### macOS
 
 The `.pkg` installs the app into `/Applications` with no interface and no reboot, for every user of the Mac.

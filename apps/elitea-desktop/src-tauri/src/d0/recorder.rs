@@ -54,6 +54,12 @@ pub const MAX_THINKING_TOTAL_BYTES: usize = 2 * 1024 * 1024;
 /// (`localturn.MaxHITLExchanges` in
 /// `services/elitea-main/internal/application/localturn/localturn.go`).
 pub const MAX_HITL_EXCHANGES: usize = 64;
+/// The most Full auto asks one commit carries: the server keeps 50
+/// (`localturn.MaxReportedCommands`); `answered` keeps the count.
+pub const MAX_FULL_AUTO_ASKS: usize = 50;
+/// The bytes of a Full auto ask's command and reason the server keeps
+/// (`localturn.MaxReportedCommandBytes`).
+const MAX_FULL_AUTO_TEXT: usize = 300;
 /// The `source` of an exchange that bypass mode answered.
 const SOURCE_BYPASS: &str = super::unattended::SOURCE_BYPASS;
 /// The key of a tool step's step record (`computer_step`, contract 1.41).
@@ -129,6 +135,9 @@ struct State {
     host_commands: u64,
     /// The folder was trusted when the turn started.
     trusted: bool,
+    /// The turn ran in Full auto (issue 3079): what it answered, the first
+    /// [`MAX_FULL_AUTO_ASKS`] of them, and how many.
+    full_auto: Option<(Vec<Value>, u64)>,
     paths: Vec<String>,
     enforcement: Option<String>,
     /// What the weakest enforcement left out (Landlock only: credentials
@@ -609,6 +618,33 @@ impl Recorder {
         let _ = self.with(|state| state.trusted = trusted);
     }
 
+    /// The turn runs in Full auto (issue 3079): the report carries
+    /// `full_auto`, even when it answered nothing.
+    pub fn set_full_auto(&self, on: bool) {
+        let _ = self.with(|state| state.full_auto = on.then(|| (Vec::new(), 0)));
+    }
+
+    /// A question Full auto answered (`held`: one on its hard-deny list it
+    /// left to the person, or declined unattended). `tainted`: the taint
+    /// gate asked it. Only in a Full auto turn.
+    pub fn full_auto_ask(&self, command: &str, reason: &str, tainted: bool, held: bool) {
+        let _ = self.with(|state| {
+            if let Some((asks, answered)) = state.full_auto.as_mut() {
+                if !held {
+                    *answered += 1;
+                }
+                if asks.len() < MAX_FULL_AUTO_ASKS {
+                    asks.push(json!({
+                        "command": clip_bytes(command, MAX_FULL_AUTO_TEXT),
+                        "reason": clip_bytes(reason, MAX_FULL_AUTO_TEXT),
+                        "tainted": tainted,
+                        "held": held,
+                    }));
+                }
+            }
+        });
+    }
+
     /// How many commands ran on the host this turn.
     #[must_use]
     pub fn host_commands(&self) -> u64 {
@@ -639,6 +675,10 @@ impl Recorder {
             }
             if state.trusted || state.host_commands > 0 {
                 report["trusted"] = json!(true);
+            }
+            // Issue 3079: what Full auto answered (contract 1.69).
+            if let Some((asks, answered)) = &state.full_auto {
+                report["full_auto"] = json!({ "answered": answered, "asks": asks });
             }
             if !state.memories_saved.is_empty() {
                 report["memories_saved"] = json!(state.memories_saved);

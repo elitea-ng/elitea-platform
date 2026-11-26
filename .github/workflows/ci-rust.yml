@@ -314,12 +314,23 @@ jobs:
           ELITEA_TEST_WORKSPACE_POSTGRES_REQUIRED: "1"
         run: |
           cargo test --locked --lib --features sandbox-supervisor -- --ignored --skip sandbox_supervisor_ \
+            --skip the_per_call_nested_admission_cost_is_within_the_child_overhead_budget \
             agents::graph::node_recovery_runtime::tests::code_owner_tests:: \
             sandbox::ledger::code_recovery::tests:: \
             sandbox::docker_supervisor::code_recovery_cleanup::tests:: \
             sandbox::ledger::workspace::postgres_tests:: \
             sandbox::ledger::failure_detail_tests:: \
             state::postgres_checkpointer_tests::
+
+      # The C7 nested admission budget is a wall-clock p99: run beside the
+      # ~100 PostgreSQL tests above it measures their load instead (35 ms
+      # against the 30 ms budget on PR 3085). Alone, after the rest.
+      - name: Verify the nested admission latency budget with PostgreSQL (alone)
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+        run: |
+          cargo test --locked --lib --features sandbox-supervisor -- --ignored --exact --test-threads=1 \
+            state::postgres_checkpointer_tests::tool_pipeline_admission::the_per_call_nested_admission_cost_is_within_the_child_overhead_budget
 
       # The three sandbox_supervisor_* tests drive real containers through the
       # Docker supervisor. They need a code runner image by ID: the

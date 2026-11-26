@@ -54,6 +54,18 @@ export function ranOutsideSandbox(meta: unknown): boolean {
 }
 
 /**
+ * The answer's turn ran in Full auto (ADR-0061 amendment of 2026-11-26, issue 3079: Main stores the commit's
+ * `local_work.full_auto` record on the answer). Its presence is the marker; absent, the chat shows none.
+ */
+export function ranInFullAuto(meta: unknown): boolean {
+  if (typeof meta !== 'object' || meta === null) return false;
+  const localWork = (meta as { readonly local_work?: unknown }).local_work;
+  if (typeof localWork !== 'object' || localWork === null) return false;
+  const record = (localWork as { readonly full_auto?: unknown }).full_auto;
+  return typeof record === 'object' && record !== null && !Array.isArray(record);
+}
+
+/**
  * The newest answer in the list was produced on a desktop (`meta.executed_by
  * === 'desktop'`). The server refuses to regenerate such an answer
  * (409 `local_work_turn`): the chat does not offer it.

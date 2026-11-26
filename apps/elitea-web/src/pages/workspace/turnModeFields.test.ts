@@ -40,4 +40,10 @@ describe('modeFields', () => {
     expect(modeFields({ mode: 'bypass', grant: grant() })).toMatchObject({ plan_mode: false, bypass_approvals: true, unattended: { continue_step_limit: true } });
     expect(modeFields({ mode: 'plan', grant: grant() })).toEqual({ plan_mode: true });
   });
+
+  it('sends full_auto with bypass_approvals in Full auto, the grant alongside, and from no other mode (issue 3079)', () => {
+    expect(modeFields('full_auto')).toEqual({ plan_mode: false, bypass_approvals: true, full_auto: true });
+    expect(modeFields({ mode: 'full_auto', grant: grant() })).toMatchObject({ plan_mode: false, bypass_approvals: true, full_auto: true, unattended: { continue_step_limit: true } });
+    for (const mode of ['act', 'plan', 'bypass'] as const) expect(modeFields(mode)).not.toHaveProperty('full_auto');
+  });
 });

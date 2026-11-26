@@ -158,3 +158,16 @@ export function ranOutsideSandbox(meta: unknown): boolean {
   const localWork = (meta as { local_work?: unknown }).local_work;
   return localWork !== null && typeof localWork === 'object' && (localWork as { ran_outside_sandbox?: unknown }).ran_outside_sandbox === true;
 }
+
+/**
+ * Whether a committed local answer ran in Full auto (ADR-0061 amendment of 2026-11-26, #3079):
+ * Main stores the commit's `meta.local_work.full_auto` record. Its presence is the marker;
+ * anything else is false.
+ */
+export function ranInFullAuto(meta: unknown): boolean {
+  if (meta === null || typeof meta !== 'object') return false;
+  const localWork = (meta as { local_work?: unknown }).local_work;
+  if (localWork === null || typeof localWork !== 'object') return false;
+  const record = (localWork as { full_auto?: unknown }).full_auto;
+  return record !== null && typeof record === 'object' && !Array.isArray(record);
+}

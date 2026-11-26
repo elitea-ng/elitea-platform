@@ -13,7 +13,7 @@ import { toChatMessages } from '@/features/chat/messageModel';
 import { ParticipantsSheet } from '@/features/chat/ParticipantsSheet';
 import { LiveReply, PersistedMessage } from '@/features/chat/ThreadRows';
 import { sampleLive } from '@/features/designGallery/chatFixtures';
-import { agentExecutorOf, ranOutsideSandbox } from '@/features/localWork/model';
+import { agentExecutorOf, ranInFullAuto, ranOutsideSandbox } from '@/features/localWork/model';
 import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
@@ -104,6 +104,23 @@ describe('the "Ran outside the sandbox" marker', () => {
     expect(screen.getByText(TEAM_COPY.ranOutsideSandbox)).toBeTruthy();
     await view.rerender(<PersistedMessage message={plain!} {...props} />);
     expect(screen.queryByTestId('ran-outside-sandbox')).toBeNull();
+  });
+
+  it('marks an answer that ran in Full auto only, from its meta.local_work.full_auto record (#3079)', async () => {
+    expect(ranInFullAuto({ local_work: { full_auto: { answered: 1, asks: [] } } })).toBe(true);
+    for (const meta of [undefined, null, {}, { local_work: {} }, { local_work: { full_auto: true } }, { local_work: { full_auto: [] } }]) {
+      expect(ranInFullAuto(meta)).toBe(false);
+    }
+    const [flagged] = toChatMessages(detail({ local_work: { full_auto: { answered: 2, asks: [] } } }) as never);
+    const [plain] = toChatMessages(detail({ executed_by: 'desktop' }) as never);
+    expect(flagged?.fullAuto).toBe(true);
+    expect(plain?.fullAuto).toBeUndefined();
+    const props = { highlight: { people: [], agents: [] }, opening: null, onOpenFile: null, tools: [], onOpenTool: () => {}, onActions: () => {} };
+    const view = await render(<PersistedMessage message={flagged!} {...props} />);
+    expect(screen.getByTestId('ran-in-full-auto')).toBeTruthy();
+    expect(screen.getByText(TEAM_COPY.fullAuto)).toBeTruthy();
+    await view.rerender(<PersistedMessage message={plain!} {...props} />);
+    expect(screen.queryByTestId('ran-in-full-auto')).toBeNull();
   });
 });
 

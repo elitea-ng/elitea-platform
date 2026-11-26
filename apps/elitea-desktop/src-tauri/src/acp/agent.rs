@@ -1167,6 +1167,7 @@ impl Connection {
                 prompt: input.text,
                 plan_mode: session.plan.load(Ordering::SeqCst),
                 bypass: false,
+                full_auto: false,
                 mentions: input.mentions,
                 skills: Vec::new(),
                 compact: input.compact,

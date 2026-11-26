@@ -287,6 +287,8 @@ pub struct FloorNext {
     pub conversation_id: Value,
     pub conversation_uuid: String,
     pub bypass: bool,
+    /// Full auto (issue 3079): carried like `bypass`, to routed agents only.
+    pub full_auto: bool,
     /// The person's plan-mode choice for the message: a later LOCAL agent
     /// runs read-only as the first did (a cloud agent has no workspace).
     pub plan_mode: bool,
@@ -316,6 +318,7 @@ impl FloorNext {
             conversation_id: request.conversation_id.clone(),
             conversation_uuid: conversation_uuid.to_owned(),
             bypass: false,
+            full_auto: false,
             plan_mode: request.plan_mode,
             defaults: request
                 .floor_turn
@@ -357,6 +360,7 @@ pub fn next(
         conversation_id: request.conversation_id.clone(),
         conversation_uuid: conversation_uuid.to_owned(),
         bypass: request.bypass,
+        full_auto: request.full_auto,
         plan_mode: request.plan_mode,
         defaults: request
             .floor_turn
@@ -480,6 +484,7 @@ mod tests {
             prompt: "Continue".into(),
             plan_mode: false,
             bypass: false,
+            full_auto: false,
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,

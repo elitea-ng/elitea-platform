@@ -233,6 +233,7 @@ pub fn open_session(config: &RunnerConfig) -> Result<Arc<LocalSession>, String> 
             browser_http: false,
             browser_private_network: false,
             folder_trust: false,
+            full_auto: false,
         },
         settings: WorkspaceSettings::default(),
         choices: Arc::new(MemoryChoices::default()),

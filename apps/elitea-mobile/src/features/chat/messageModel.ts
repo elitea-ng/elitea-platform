@@ -6,7 +6,7 @@ import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/st
 
 import { storedDelegationNotices } from '@/features/chat/delegationNotices';
 import { storedSubAgents } from '@/features/chat/subAgentLanes';
-import { ranOutsideSandbox } from '@/features/localWork/model';
+import { ranInFullAuto, ranOutsideSandbox } from '@/features/localWork/model';
 
 /**
  * Persisted conversation history → what the thread renders.
@@ -70,6 +70,8 @@ export interface ChatMessage {
   delegationNotices?: DelegationNotice[];
   /** ADR-0061 decision 5i: a Local work answer that ran commands outside the sandbox (`meta.local_work.ran_outside_sandbox`, #3060); absent otherwise. */
   ranOutsideSandbox?: true;
+  /** The ADR-0061 amendment of 2026-11-26: a Local work answer that ran in Full auto (`meta.local_work.full_auto`, #3079); absent otherwise. */
+  fullAuto?: true;
 }
 
 /** One file of a message. */
@@ -304,6 +306,7 @@ export function toChatMessages(
       ...subAgentsOf(role, group),
       ...delegationNoticesOf(role, group),
       ...(role === 'assistant' && ranOutsideSandbox(asRecord(group.meta) ?? asRecord(group.metadata)) ? { ranOutsideSandbox: true } : {}),
+      ...(role === 'assistant' && ranInFullAuto(asRecord(group.meta) ?? asRecord(group.metadata)) ? { fullAuto: true } : {}),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

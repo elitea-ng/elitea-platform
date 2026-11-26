@@ -265,6 +265,18 @@ func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []
 			"default":      defaults.FolderTrust,
 			"visible_when": visible,
 		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkFullAuto,
+			"type":  "boolean",
+			"title": "Allow Full Auto Mode",
+			"description": "Whether a person may run a desktop thread in Full auto: it answers every approval question " +
+				"Bypass answers, and also the questions asked after the agent read content from outside the folder. " +
+				"Denied commands, forbidden rules and a built-in list (recursive deletes outside the folder, credential " +
+				"stores, shell profiles, the app's own settings) still apply. Off hides the mode on the desktop.",
+			"section":      section,
+			"default":      defaults.FullAuto,
+			"visible_when": visible,
+		},
 		patternList(platformconfig.KeyNativeLocalWorkCommandAllow, "Allowed Commands",
 			fmt.Sprintf("Command patterns that run without asking the user. At most %d patterns of %d bytes.",
 				platformconfig.MaxLocalWorkPatterns, platformconfig.MaxLocalWorkPatternBytes)),

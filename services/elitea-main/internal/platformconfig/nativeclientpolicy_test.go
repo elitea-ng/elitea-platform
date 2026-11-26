@@ -73,7 +73,7 @@ func TestNativeClientPolicyJSONKeyOrder(t *testing.T) {
 		`"index_local_embeddings":true,"index_remote_embeddings":false,"index_model_mirror_url":"","web":false,"host_intel":false,` +
 		`"computer_use":false,"computer_use_apps_allow":[],"computer_use_apps_deny":[],` +
 		`"browser":true,"browser_agent":true,"browser_allow_domains":[],"browser_deny_domains":[],` +
-		`"browser_http":false,"browser_private_network":false,"folder_trust":true},"support_contact":""}`
+		`"browser_http":false,"browser_private_network":false,"folder_trust":true,"full_auto":true},"support_contact":""}`
 	if string(body) != want {
 		t.Fatalf("client_policy JSON = %s\nwant %s", body, want)
 	}
