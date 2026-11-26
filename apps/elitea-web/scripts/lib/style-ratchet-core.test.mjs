@@ -195,7 +195,7 @@ describe('totals and formatting', () => {
     expect(formatCounts(counts)).toEqual([
       'src/app: mui-dialog 1',
       'src/features/foo: spacing-rem 1',
-      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0',
+      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0, legacy-palette 0',
     ]);
   });
 

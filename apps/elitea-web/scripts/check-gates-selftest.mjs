@@ -245,10 +245,10 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
 
 // ── section 5b: theme-gate check 10, the style ratchet (ADR-0062 decision 3.8) ──
 // Each fixture is a base tree and a head tree. RED: the head adds a rem value,
-// an off-scale number and a Dialog import in one folder, and the message names
-// the fix. GREEN: the head removes one rem value and adds another in the same
-// folder, adds a step on the scale, a type-only Dialog import and Dialog
-// inside shared/ui.
+// an off-scale number, a Dialog import and a read of a generic legacy palette
+// id in one folder, and the message names the fix. GREEN: the head removes one
+// rem value and adds another in the same folder, adds a step on the scale, a
+// type-only Dialog import, Dialog inside shared/ui, a role and a component id.
 {
   const RATCHET = join(FIXTURES, 'theme-gate-ratchet');
   const run = (dir) =>
@@ -267,6 +267,8 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
     'gap: 0.75 is off the scale → nearest steps 0.5 or 1',
     'src/features/foo mui-dialog: 0 → 1',
     '[mui-dialog] use BaseModal from shared/ui',
+    'src/features/foo legacy-palette: 0 → 1',
+    '[legacy-palette] text.secondary → role.text',
   ];
   const missing = expected.filter((line) => !badOut.includes(line));
   const greenOk = good.status === 0 && goodOut.includes('theme-gate 10-style-ratchet: PASS');
