@@ -916,7 +916,7 @@
       "bodyShape": "renders-page",
       "targetPath": "src/pages/workspace/desktopEntry.tsx",
       "targetSpecifier": "@/pages/workspace/desktopEntry",
-      "targetExport": "TroubleshootEntry",
+      "targetExport": "DesktopSettingsEntry",
       "requiredProps": [],
       "status": "wired",
       "rendersRouteShell": false,
