@@ -28,6 +28,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetGeneratedClient();
+  delete (window as { admin_ui_config?: unknown }).admin_ui_config;
 });
 
 describe('Admin › LLM Governance › view only', () => {
@@ -56,5 +57,32 @@ describe('Admin › LLM Governance › view only', () => {
     await screen.findByText('team-budget');
     await waitFor(() => expect(screen.getByTestId('governance-create')).toBeEnabled());
     expect(screen.queryByTestId('admin-view-only')).not.toBeInTheDocument();
+  });
+
+  // ADR-0059 decision 3: the LLM manager writes governance rows but not
+  // guardrails. The control is disabled, never hidden; the 403 is the server's
+  // (admin.llm-manager.spec.ts asserts both on the running stack).
+  it('disables the guardrail preset for a writer without llm.guardrails.manage', async () => {
+    serveConsoleLevel('write', 'llm-governance');
+    (window as { admin_ui_config?: unknown }).admin_ui_config = {
+      permissions: ['llm.policy.view', 'llm.policy.manage'],
+      user_name: 'llm@example.com',
+    };
+    renderAdminRoute(<AdminGatewayGovernance />);
+
+    await screen.findByText('team-budget');
+    await waitFor(() => expect(screen.getByTestId('governance-create')).toBeEnabled());
+    expect(screen.getByTestId('governance-guardrail-preset')).toBeDisabled();
+  });
+
+  it('keeps the guardrail preset for a holder of llm.guardrails.manage or the legacy name', async () => {
+    serveConsoleLevel('write', 'llm-governance');
+    for (const permissions of [['llm.guardrails.manage'], ['configuration.governance']]) {
+      (window as { admin_ui_config?: unknown }).admin_ui_config = { permissions, user_name: 'ops@example.com' };
+      const view = renderAdminRoute(<AdminGatewayGovernance />);
+      await screen.findByText('team-budget');
+      await waitFor(() => expect(screen.getByTestId('governance-guardrail-preset')).toBeEnabled());
+      view.unmount();
+    }
   });
 });

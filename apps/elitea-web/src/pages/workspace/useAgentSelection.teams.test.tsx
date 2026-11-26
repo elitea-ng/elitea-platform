@@ -132,6 +132,31 @@ describe('useAgentSelection teams (#3053)', () => {
     expect(hook.current().companions).toHaveLength(1);
   });
 
+  it('Make lead before the first send swaps the composer\'s agent and a member, and the team keeps its name (#3081)', async () => {
+    serveProject(['models.teams.list']);
+    const hook = mountSelection();
+    await waitFor(() => expect(hook.current().teams).toHaveLength(2));
+    act(() => hook.current().selectTeam?.(3));
+    await waitFor(() => expect(hook.current().versionId).toBe('10'));
+
+    act(() => hook.current().makeLead?.('5'));
+    await waitFor(() => expect(hook.current().versionId).toBe('9'));
+    expect(hook.current().agentId).toBe('5');
+    expect(hook.current().companions).toEqual([{ agentId: '6', name: 'Reviewer', versionId: 10, agentType: 'openai', cloud: false, versionName: 'base' }]);
+    expect(hook.current().team).toMatchObject({ id: 3, name: 'Review crew', lead: true, primary: { applicationId: 5 }, others: [{ applicationId: 6 }] });
+
+    // A cloud agent is not made lead: the composer's agent runs on this computer.
+    act(() => hook.current().addCompanion?.('6', true));
+    await waitFor(() => expect(hook.current().companions?.[0]?.cloud).toBe(true));
+    act(() => hook.current().makeLead?.('6'));
+    expect(hook.current().agentId).toBe('5');
+
+    // A thread that exists has its lead in the conversation: nothing moves here.
+    act(() => hook.current().selectConversation('33333333-3333-4333-8333-333333333333'));
+    act(() => hook.current().makeLead?.('6'));
+    expect(hook.current().agentId).toBe('5');
+  });
+
   it('a team that cannot run here is not picked', async () => {
     serveProject(['models.teams.list']);
     const hook = mountSelection();

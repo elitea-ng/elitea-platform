@@ -23,7 +23,6 @@ import { TrustIpcProvider } from '@/features/folder-trust';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
 import { HandoffIpcProvider } from '@/features/workspace-handoff';
 import { IndexIpcProvider } from '@/features/workspace-index';
-import TrustedFoldersPage from '@/pages/workspace/TrustedFoldersPage';
 import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
 import ArchivedChatsPage from '@/pages/chat-archived/ArchivedChatsPage';
@@ -41,6 +40,7 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 import { FOLDERS, HarnessChat, installApiStub, Placeholder } from './devHarnessData';
 import { floorHarness } from './devHarnessFloor';
+import { harnessSettingsRoutes } from './devHarnessSettings';
 import { harnessTrustIpc, teamTalkHarness } from './devHarnessTeamTalk';
 
 export function mountDesktopHarness(container: HTMLElement): void {
@@ -122,8 +122,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage }),
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage }),
       page('/agents', 'Agents'),
-      page('/settings', 'Settings'),
-      createRoute({ getParentRoute: () => rootRoute, path: '/settings/trusted-folders', component: TrustedFoldersPage }),
+      // Settings › its desktop rows, through the app's redirect (`&at=/settings/trusted-folders`, #3078).
+      harnessSettingsRoutes(rootRoute),
       page('/marketplace', 'Marketplace'),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <HarnessChat title="New chat" /> }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat/archived', component: ArchivedChatsPage }),

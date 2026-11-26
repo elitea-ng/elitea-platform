@@ -8,6 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // PostgresStore is elitea_auth.browser_sessions.
@@ -120,12 +123,27 @@ func (s *PostgresStore) Revoke(ctx context.Context, id string, revokedAt time.Ti
 	// replayed by a browser retry must not rewrite when the session ended.
 	// The end (shared 0200) keeps the first end too: a session that already
 	// expired stays expired in its audit record.
-	_, err := s.pool.Exec(ctx, `
+	//
+	// The elevation bound to the session ends with it, in the same
+	// transaction, with the end reason `logout` (ADR-0059 R2.11). Only THAT
+	// session's elevation: another session of the same person keeps its own.
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		adminaccess.LockSessionElevations(ctx, tx, id, 0)
+		refs, err := revokeReturningRefs(ctx, tx, `
 		UPDATE elitea_auth.browser_sessions
 		SET revoked_at = $2,
 		    ended_at = COALESCE(ended_at, $2),
 		    end_reason = COALESCE(end_reason, 'logout')
-		WHERE id = $1 AND revoked_at IS NULL`, id, revokedAt)
+		WHERE id = $1 AND revoked_at IS NULL
+		RETURNING ref`, id, revokedAt)
+		if err != nil {
+			return err
+		}
+		for _, ref := range refs {
+			adminaccess.EndSessionElevations(ctx, tx, elevationAppender(), ref, adminaccess.ElevationEndLogout, revokedAt)
+		}
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("browsersession: revoke session: %w", err)
 	}
@@ -135,16 +153,52 @@ func (s *PostgresStore) Revoke(ctx context.Context, id string, revokedAt time.Ti
 func (s *PostgresStore) RevokeAllForUser(
 	ctx context.Context, userID int64, revokedAt time.Time,
 ) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `
+	// Each session's elevation ends with it, with the end reason
+	// `session_revoked` (ADR-0059 R2.11).
+	var revoked int64
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		adminaccess.LockSessionElevations(ctx, tx, "", userID)
+		refs, err := revokeReturningRefs(ctx, tx, `
 		UPDATE elitea_auth.browser_sessions
 		SET revoked_at = $2,
 		    ended_at = COALESCE(ended_at, $2),
 		    end_reason = COALESCE(end_reason, 'revoked')
-		WHERE user_id = $1 AND revoked_at IS NULL`, userID, revokedAt)
+		WHERE user_id = $1 AND revoked_at IS NULL
+		RETURNING ref`, userID, revokedAt)
+		if err != nil {
+			return err
+		}
+		revoked = int64(len(refs))
+		for _, ref := range refs {
+			adminaccess.EndSessionElevations(ctx, tx, elevationAppender(), ref,
+				adminaccess.ElevationEndSessionRevoked, revokedAt)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("browsersession: revoke sessions of user: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return revoked, nil
+}
+
+// revokeReturningRefs runs a revocation that returns the refs it revoked.
+func revokeReturningRefs(ctx context.Context, tx pgx.Tx, sql string, args ...any) ([]int64, error) {
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[int64])
+}
+
+// elevationAppender writes the `ended` events of the elevations a
+// revocation ends. A failed append never fails the revocation
+// (adminaccess.EndSessionElevations).
+func elevationAppender() securityaudit.Appender {
+	appender, err := securityaudit.NewPostgresAppender(adminaccess.PersonEndAppenderSource)
+	if err != nil {
+		return securityaudit.FailingAppender{Err: err}
+	}
+	return appender
 }
 
 // MarkEnded stamps a session ended at its deadline, once (EndMarker). A row

@@ -35,6 +35,8 @@ import {
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonHeaders, type AdminReason } from '../adminDangerousAction';
+
 const MODELS_URL = '/admin/gateway/platform_models';
 
 /**
@@ -294,11 +296,18 @@ export function useUpdatePlatformModel(): UseMutationResult<
  * else references it — a project that had been addressing it simply stops
  * finding it, which surfaces as `model_not_found` on the next call.
  */
-export function useDeletePlatformModel(): UseMutationResult<void, Error, number> {
+export function useDeletePlatformModel(): UseMutationResult<
+  void,
+  Error,
+  { readonly id: number; readonly reason: AdminReason }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: number) => {
-      await eliteaFetch<unknown>(`${MODELS_URL}/${String(id)}`, { method: 'DELETE' });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(`${MODELS_URL}/${String(id)}`, {
+        method: 'DELETE',
+        ...reasonHeaders('DELETE /api/v2/admin/gateway/platform_models/{configID}', reason),
+      });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: platformModelKeys.all }),
   });

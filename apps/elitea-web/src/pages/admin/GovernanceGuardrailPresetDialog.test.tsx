@@ -13,6 +13,7 @@ import { server } from '@/test/setup';
 import { renderWithQueryAndTheme } from '@/test/renderWithQueryAndTheme';
 
 import { GovernanceGuardrailPresetDialog } from './GovernanceGuardrailPresetDialog';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { DEFAULT_PRESET, presetEntries, presetIsComplete } from './governanceGuardrailPreset';
 
 const URL = '/api/v2/admin/gateway/governance';
@@ -68,9 +69,17 @@ describe('GovernanceGuardrailPresetDialog', () => {
     const onClose = vi.fn();
     renderWithQueryAndTheme(<GovernanceGuardrailPresetDialog onClose={onClose} />);
     await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await confirmDangerousAction(userEvent.setup(), 'Credentials and personal data');
     await waitFor(() => { expect(onClose).toHaveBeenCalled(); });
     expect(created).toHaveLength(2);
-    expect(created[0]).toMatchObject({ type: 'guardrail', name: 'Credentials and personal data - input', enabled: true });
+    expect(created[0]).toMatchObject({
+      type: 'guardrail',
+      name: 'Credentials and personal data - input',
+      enabled: true,
+      // A guardrail is critical (ADR-0059 R3.8b): one reason for the whole preset.
+      reason_code: 'incident',
+    });
+    expect(created[1]).toMatchObject({ reason_code: 'incident' });
     expect(created[1]).toMatchObject({ name: 'Credentials and personal data - output' });
   });
 
@@ -78,6 +87,7 @@ describe('GovernanceGuardrailPresetDialog', () => {
     renderWithQueryAndTheme(<GovernanceGuardrailPresetDialog onClose={vi.fn()} />);
     await userEvent.click(screen.getByRole('checkbox', { name: 'Check the model’s answer' }));
     await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await confirmDangerousAction(userEvent.setup(), 'Credentials and personal data');
     await waitFor(() => { expect(created).toHaveLength(1); });
     expect(created[0]).toMatchObject({ name: 'Credentials and personal data - input' });
   });
@@ -100,6 +110,7 @@ describe('GovernanceGuardrailPresetDialog', () => {
     }));
     renderWithQueryAndTheme(<GovernanceGuardrailPresetDialog onClose={onClose} />);
     await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await confirmDangerousAction(userEvent.setup(), 'Credentials and personal data');
     expect(await screen.findByTestId('governance-preset-error')).toHaveTextContent(
       'Created Credentials and personal data - input, then failed: a governance entry with this section/type/name already exists');
     expect(onClose).not.toHaveBeenCalled();
@@ -120,10 +131,12 @@ describe('GovernanceGuardrailPresetDialog', () => {
     }));
     renderWithQueryAndTheme(<GovernanceGuardrailPresetDialog onClose={onClose} />);
     await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await confirmDangerousAction(userEvent.setup(), 'Credentials and personal data');
     await screen.findByTestId('governance-preset-error');
     expect(names).toEqual(['Credentials and personal data - input']);
     failOutput = false;
     await userEvent.click(screen.getByTestId('governance-preset-create'));
+    await confirmDangerousAction(userEvent.setup(), 'Credentials and personal data');
     await waitFor(() => { expect(onClose).toHaveBeenCalled(); });
     // The input entry is not created a second time (it would be a 409 duplicate).
     expect(names).toEqual(['Credentials and personal data - input', 'Credentials and personal data - output']);

@@ -180,6 +180,12 @@ interface AdminVisualRoute {
   readonly landmark: (page: Page) => Locator;
   /** Also capture a light-scheme variant. */
   readonly light?: boolean;
+  /** Regions of this page only that move between two runs of the same code. */
+  readonly mask?: (page: Page) => Locator[];
+}
+
+function routeMask(page: Page, route: AdminVisualRoute): Locator[] {
+  return [...adminVolatileRegions(page), ...(route.mask?.(page) ?? [])];
 }
 
 /*
@@ -190,6 +196,16 @@ interface AdminVisualRoute {
  * and laundered the gap it existed to expose.
  */
 const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
+  {
+    // @covers /admin/app/
+    // Home (ADR-0059 R3.3a, issue 2533): the area cards and the queues. The
+    // counts follow the rows other specs leave behind, so they are hidden
+    // (`admin-screenshot.css`); the cards and their layout are compared.
+    name: 'admin-home',
+    path: '/admin/app/',
+    landmark: (page) => page.getByTestId('admin-home-area-platform'),
+    light: true,
+  },
   {
     // @covers /admin/app/users
     name: 'admin-users',
@@ -429,6 +445,70 @@ const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
     // the table is the honest default state of this shot, not an edge case.
     landmark: (page) => page.getByRole('tab', { name: /^Team \(\d+\)$/ }),
   },
+  /*
+   * Models and spend (ADR-0059 R3.5a, issue 2535; baselines R3.5b, issue
+   * 2536): the seven tabs of the LLM gateway editor as pages, in both
+   * schemes. Each landmark renders only once its panel's read resolved,
+   * with either answer a fresh stack can give (a table or its empty text).
+   */
+  {
+    // @covers /admin/app/models/providers
+    name: 'admin-llm-providers',
+    path: '/admin/app/models/providers',
+    landmark: (page) => page.getByTestId('llm-providers-table').or(page.getByTestId('llm-providers-empty')),
+    light: true,
+  },
+  {
+    // @covers /admin/app/models/pricing
+    name: 'admin-llm-models-pricing',
+    path: '/admin/app/models/pricing',
+    landmark: (page) => page.getByTestId('llm-proxy-models-table').or(page.getByTestId('llm-proxy-models-empty')),
+    light: true,
+  },
+  {
+    // @covers /admin/app/models/tool-prices
+    name: 'admin-llm-tool-prices',
+    path: '/admin/app/models/tool-prices',
+    landmark: (page) => page.getByTestId('metered-prices').or(page.getByTestId('metered-prices-empty')),
+    light: true,
+  },
+  {
+    // @covers /admin/app/models/usage
+    name: 'admin-llm-usage',
+    path: '/admin/app/models/usage',
+    landmark: (page) => page.getByTestId('llm-proxy-usage-totals'),
+    light: true,
+  },
+  {
+    // @covers /admin/app/models/status
+    name: 'admin-llm-status',
+    path: '/admin/app/models/status',
+    // The loaded snapshot, or the gateway's own answer that it is not there.
+    // The snapshot's times are masked (`mask`).
+    landmark: (page) =>
+      page
+        .getByRole('main')
+        .getByText(/^Snapshot loaded /)
+        .or(page.getByTestId('llm-proxy-status-unreachable'))
+        .or(page.getByTestId('llm-proxy-status-disabled')),
+    mask: (page) => [page.getByRole('main').getByText(/^Snapshot loaded /), page.getByTestId('llm-proxy-status-stale')],
+    light: true,
+  },
+  {
+    // @covers /admin/app/models/logs
+    name: 'admin-llm-logs',
+    path: '/admin/app/models/logs',
+    landmark: (page) => page.getByTestId('llm-logs-table').or(page.getByTestId('llm-logs-empty')),
+    light: true,
+  },
+  {
+    // @covers /admin/app/budgets/alerts
+    name: 'admin-budget-alerts',
+    path: '/admin/app/budgets/alerts',
+    // The save control renders with the loaded settings only.
+    landmark: (page) => page.getByTestId('llm-proxy-alerts-save'),
+    light: true,
+  },
   {
     // @covers /admin/app/service-descriptors
     name: 'admin-service-descriptors',
@@ -529,7 +609,7 @@ for (const route of ADMIN_ROUTES) {
 
     await expect(page).toHaveScreenshot(`${route.name}.png`, {
       fullPage: false,
-      mask: adminVolatileRegions(page),
+      mask: routeMask(page, route),
       stylePath: ADMIN_SCREENSHOT_STYLE,
       ...SNAPSHOT_TOLERANCE,
     });
@@ -600,7 +680,7 @@ for (const route of ADMIN_ROUTES.filter((r) => r.light)) {
 
     await expect(page).toHaveScreenshot(`${route.name}-light.png`, {
       fullPage: false,
-      mask: adminVolatileRegions(page),
+      mask: routeMask(page, route),
       stylePath: ADMIN_SCREENSHOT_STYLE,
       ...SNAPSHOT_TOLERANCE,
     });

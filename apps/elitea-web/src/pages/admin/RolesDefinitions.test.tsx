@@ -26,6 +26,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminRoles } from './Roles';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -267,14 +268,13 @@ describe('Admin › Roles › role definitions', () => {
 
     await screen.findByRole('table', { name: 'Permission matrix' });
     await user.click(screen.getByRole('button', { name: 'Delete role: security_reviewer' }));
-    const confirm = screen.getByRole('button', { name: 'Delete role' });
+    const confirm = screen.getByTestId('admin-dangerous-confirm');
     expect(confirm).toBeDisabled();
+    await user.selectOptions(screen.getByTestId('admin-dangerous-reason-code'), 'correction');
 
     // A near miss does not arm it: four tabs show four role lists that share
     // names, so typing the name is what proves WHICH role is meant.
-    const field = await screen.findByRole('textbox', {
-      name: 'Type security_reviewer to confirm',
-    });
+    const field = screen.getByTestId('admin-dangerous-target');
     await user.click(field);
     await user.paste('security_review');
     expect(confirm).toBeDisabled();
@@ -288,7 +288,7 @@ describe('Admin › Roles › role definitions', () => {
     const sent = lastWrite('DELETE');
     // Body AND query: a DELETE body is legal but is dropped by enough
     // intermediaries that the server reads `?name=` as a fallback.
-    expect(sent?.body).toBe(JSON.stringify({ name: 'security_reviewer' }));
+    expect(sent?.body).toBe(JSON.stringify({ name: 'security_reviewer', reason_code: 'correction', reason: '' }));
     expect(sent?.url).toContain('name=security_reviewer');
     expect(await screen.findByText('Role deleted.')).toBeInTheDocument();
   });
@@ -303,13 +303,11 @@ describe('Admin › Roles › role definitions', () => {
 
     await screen.findByRole('table', { name: 'Permission matrix' });
     await user.click(screen.getByRole('button', { name: 'Delete role: security_reviewer' }));
-    await user.click(screen.getByRole('textbox', { name: 'Type security_reviewer to confirm' }));
-    await user.paste('security_reviewer');
-    await user.click(screen.getByRole('button', { name: 'Delete role' }));
+    await confirmDangerousAction(user, 'security_reviewer');
 
     // The COUNT is the fact the operator acts on. A generic "Failed to delete
     // the role." would hide the only actionable part of the answer.
-    const notice = await screen.findByTestId('admin-roles-delete-error');
+    const notice = await screen.findByTestId('admin-dangerous-error');
     expect(notice).toHaveTextContent('3 user(s)');
     expect(screen.queryByText('Failed to delete the role.')).not.toBeInTheDocument();
     // The dialog stays open, so the operator can read it beside the control.

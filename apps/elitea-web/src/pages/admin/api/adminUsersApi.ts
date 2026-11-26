@@ -38,6 +38,8 @@ import type { AdminAuthUsersActionRequest, ListAdminAuthUsersParams } from '@/sh
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
+import { reasonFields, type AdminReason } from '../adminDangerousAction';
+
 /** Only `administration` has a handler, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
 
@@ -157,11 +159,19 @@ async function postAdminUsersAction(body: AdminAuthUsersActionRequest): Promise<
 }
 
 /** `POST … {action:'delete'}` — removes the users outright (the row cascades). */
-export function useDeleteAdminUsers(): UseMutationResult<void, Error, readonly number[]> {
+export function useDeleteAdminUsers(): UseMutationResult<
+  void,
+  Error,
+  { readonly userIds: readonly number[]; readonly reason: AdminReason }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (userIds: readonly number[]) =>
-      postAdminUsersAction({ action: 'delete', users: userIds.map((id) => ({ id })) }),
+    mutationFn: ({ userIds, reason }) =>
+      postAdminUsersAction({
+        action: 'delete',
+        users: userIds.map((id) => ({ id })),
+        ...reasonFields('POST /api/v2/admin/auth_users/{mode} delete', reason),
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminUsersKeys.all }),
   });
 }
@@ -171,28 +181,42 @@ export function useDeleteAdminUsers(): UseMutationResult<void, Error, readonly n
  * administration roles afterwards (`[]` for none). The server applies the
  * difference and checks each role given or taken (ADR-0059 R0.8b).
  */
-export function useSetAdminRoles(): UseMutationResult<void, Error, { userId: number; roleNames: readonly string[] }> {
+export function useSetAdminRoles(): UseMutationResult<
+  void,
+  Error,
+  { readonly userId: number; readonly roleNames: readonly string[]; readonly reason: AdminReason }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ userId, roleNames }) =>
-      postAdminUsersAction({ action: 'set_admin_role', user_id: userId, role_names: [...roleNames] }),
+    mutationFn: ({ userId, roleNames, reason }) =>
+      postAdminUsersAction({
+        action: 'set_admin_role',
+        user_id: userId,
+        role_names: [...roleNames],
+        ...reasonFields('POST /api/v2/admin/auth_users/{mode} set_admin_role', reason),
+      }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminUsersKeys.all }),
   });
 }
 
-/** `PUT /admin/user_suspend/administration/{id}` — toggles the suspended flag. */
+/**
+ * `PUT /admin/user_suspend/administration/{id}` — toggles the suspended flag.
+ * A suspend is dangerous and carries the reason; an unsuspend does not.
+ */
 export function useSuspendAdminUser(): UseMutationResult<
   void,
   Error,
-  { userId: number; suspended: boolean }
+  { userId: number; suspended: boolean; reason?: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ userId, suspended }) => {
+    mutationFn: async ({ userId, suspended, reason }) => {
+      const marked =
+        reason === undefined ? {} : reasonFields('PUT /api/v2/admin/user_suspend/{mode}/{userID} suspend', reason);
       await eliteaFetch<unknown>(`/admin/user_suspend/${ADMIN_MODE}/${userId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ suspended }),
+        body: JSON.stringify({ suspended, ...marked }),
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminUsersKeys.all }),

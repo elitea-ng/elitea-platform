@@ -35,6 +35,19 @@ type Caller struct {
 	Administration Set
 	// SuperAdmin is true when Administration holds SuperAdminPermission.
 	SuperAdmin bool
+	// Elevated is true when an active elevation bound to the request's
+	// browser session takes part in the caller's FULL administration
+	// resolution (ADR-0059 decision 5, "What an elevation cannot do"; story
+	// R2.8b). The role rules still measure against Administration; the
+	// named rules of an elevation (ElevationProtectedTargets, the
+	// provisional grants) read this.
+	Elevated bool
+	// Elevations are the active elevations of the session, when Elevated.
+	Elevations []auth.ElevationGrant
+	// Effective is the caller's full administration set: Administration
+	// and what the elevations add. It equals Administration when the
+	// caller is not elevated.
+	Effective Set
 
 	principal auth.User
 	resolver  auth.PermissionResolver
@@ -56,13 +69,58 @@ func ResolveCaller(r *http.Request, resolver auth.PermissionResolver) (Caller, *
 		return Caller{}, unresolved
 	}
 	administration := SetOf(resolution.Permissions...)
-	return Caller{
+	caller := Caller{
 		UserID:         resolution.UserID,
 		Administration: administration,
 		SuperAdmin:     administration[SuperAdminPermission],
+		Effective:      administration,
 		principal:      principal,
 		resolver:       resolver,
-	}, nil
+	}
+	if err := caller.readElevation(r.Context()); err != nil {
+		return Caller{}, unresolved
+	}
+	return caller, nil
+}
+
+// readElevation reads whether an elevation takes part in the caller's full
+// administration resolution. Only a credential that can hold an elevation
+// (a browser session with a server-side row) is read twice; for any other
+// the caller is not elevated with no second query. A failed read is an
+// error: the caller of a write fails closed.
+func (c *Caller) readElevation(ctx context.Context) error {
+	c.Elevated, c.Elevations, c.Effective = false, nil, c.Administration
+	if c.resolver == nil || c.principal.Credential().ElevationSessionRef() <= 0 {
+		return nil
+	}
+	resolution, err := c.resolver.ResolvePermissions(ctx, c.principal, ModeAdministration, "")
+	if errors.Is(err, auth.ErrPermissionDenied) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if resolution.UserID != c.UserID || !resolution.Elevated() {
+		return nil
+	}
+	c.Elevated = true
+	c.Elevations = append([]auth.ElevationGrant(nil), resolution.Elevations...)
+	effective := SetOf(resolution.Permissions...)
+	for name := range c.Administration {
+		effective[name] = true
+	}
+	c.Effective = effective
+	return nil
+}
+
+// ElevationIDs answers the ids of the caller's active elevations, sorted as
+// the resolver sorts them.
+func (c Caller) ElevationIDs() []string {
+	ids := make([]string, 0, len(c.Elevations))
+	for _, elevation := range c.Elevations {
+		ids = append(ids, elevation.ID)
+	}
+	return ids
 }
 
 // Reload reads the caller again. A write calls it after LockRoleWrites, so
@@ -82,6 +140,9 @@ func (c Caller) Reload(ctx context.Context) (Caller, error) {
 	administration := SetOf(resolution.Permissions...)
 	c.Administration = administration
 	c.SuperAdmin = administration[SuperAdminPermission]
+	if err := c.readElevation(ctx); err != nil {
+		return Caller{}, err
+	}
 	return c, nil
 }
 

@@ -29,6 +29,7 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 import { bulkInviteMembers } from '@/shared/api/generated/admin/admin';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonFields, type AdminReason } from '../adminDangerousAction';
 import { adminProjectsKeys } from './adminProjectsApi';
 
 /**
@@ -73,6 +74,8 @@ export interface BulkInviteInput {
   readonly users: readonly number[];
   readonly projects: readonly number[];
   readonly role: string;
+  /** The reason of the dangerous action (ADR-0059 R3.8b). */
+  readonly reason: AdminReason;
 }
 
 /**
@@ -107,6 +110,7 @@ export function useBulkInviteMembers(): UseMutationResult<BulkInviteReport, Erro
           users: [...input.users],
           projects: [...input.projects],
           role: input.role,
+          ...reasonFields('POST /api/v2/admin/invites_bulk/administration', input.reason),
         }),
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminProjectsKeys.all }),

@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 import { useNavigate, useRouterState } from '@tanstack/react-router';
 import type { RegisteredRouter, RouterState } from '@tanstack/react-router';
 
+import { isDesktopSettingsTab } from './desktopSettingsTabs';
+
 /** Tab identifiers that have explicit files in `routes/_shell/settings/`. */
 const VALID_TABS = [
   'project-general',
@@ -136,6 +138,8 @@ const SETTINGS_ROUTE_ID = '/_shell/settings';
  */
 export function computeRedirectTarget(
   state: RouterState<RegisteredRouter['routeTree']>,
+  /** The build (`import.meta.env.MODE`): the desktop tabs are tabs only in `desktop` (#3078). */
+  mode: string = import.meta.env.MODE,
 ): string | undefined {
   if (state.isLoading) return undefined;
 
@@ -148,6 +152,8 @@ export function computeRedirectTarget(
   const alias = SLUG_ALIASES[tab];
   if (alias) return alias;
   if (LEGACY_TABS.includes(tab as (typeof LEGACY_TABS)[number])) return DEFAULT_SETTINGS_TAB;
+  // The desktop app's tabs are served by this catch-all (`$tab.tsx`): never bounced in the desktop build (#3078).
+  if (isDesktopSettingsTab(tab, mode)) return undefined;
   if (!VALID_TABS.includes(tab as (typeof VALID_TABS)[number])) return DEFAULT_SETTINGS_TAB;
   return undefined;
 }
@@ -190,7 +196,7 @@ export function computeShouldRedirect(state: RouterState<RegisteredRouter['route
 export function SettingsRedirect() {
   const navigate = useNavigate();
 
-  const target = useRouterState({ select: computeRedirectTarget });
+  const target = useRouterState({ select: (state) => computeRedirectTarget(state) });
 
   useEffect(() => {
     if (target) {

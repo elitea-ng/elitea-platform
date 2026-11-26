@@ -29,6 +29,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminProjects } from './Projects';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -140,7 +141,11 @@ function useAdminProjectHandlers(): void {
       );
     }),
     http.delete('*/projects/project/administration/*', ({ request }) => {
-      recorded.push({ method: 'DELETE-project', url: request.url, body: null });
+      recorded.push({
+        method: 'DELETE-project',
+        url: request.url,
+        body: { reasonCode: request.headers.get('Elitea-Reason-Code') },
+      });
       return HttpResponse.json({ steps: [] });
     }),
   );
@@ -471,7 +476,7 @@ describe('Admin › Projects', () => {
       expect(screen.getByRole('button', { name: 'Delete projects' })).toBeDisabled();
     });
 
-    it('sends nothing until the confirmation word is typed', async () => {
+    it('sends nothing until the target is typed', async () => {
       const user = userEvent.setup();
       renderAdminRoute(<AdminProjects />);
       await screen.findByText('atlas');
@@ -489,7 +494,7 @@ describe('Admin › Projects', () => {
       expect(writes()).toHaveLength(0);
     });
 
-    it('DELETEs each selected project once the word is typed', async () => {
+    it('DELETEs each selected project once the target is typed, with the reason', async () => {
       const user = userEvent.setup();
       renderAdminRoute(<AdminProjects />);
       await screen.findByText('atlas');
@@ -498,17 +503,16 @@ describe('Admin › Projects', () => {
       await selectRow(user, 'borealis');
       await user.click(screen.getByRole('button', { name: 'Delete projects' }));
 
-      await user.type(
-        await screen.findByRole('textbox', { name: 'Type DELETE to confirm' }),
-        'DELETE',
-      );
-      await user.click(screen.getByRole('button', { name: 'Delete permanently' }));
+      await confirmDangerousAction(user, '2 projects');
 
       // One request per project: there is no batch route.
       await waitFor(() => expect(writes()).toHaveLength(2));
       expect(writes().map((entry) => entry.method)).toEqual(['DELETE-project', 'DELETE-project']);
       expect(writes()[0]!.url).toContain('/projects/project/administration/41');
       expect(writes()[1]!.url).toContain('/projects/project/administration/42');
+      // A critical action (ADR-0059 R3.8b): the reason code travels in the
+      // DELETE's header on every request of the loop.
+      expect(writes().map((entry) => entry.body)).toEqual([{ reasonCode: 'incident' }, { reasonCode: 'incident' }]);
     });
 
     it('reports the projects it could not delete, by name', async () => {
@@ -524,11 +528,7 @@ describe('Admin › Projects', () => {
       await selectRow(user, 'atlas');
       await selectRow(user, 'borealis');
       await user.click(screen.getByRole('button', { name: 'Delete projects' }));
-      await user.type(
-        await screen.findByRole('textbox', { name: 'Type DELETE to confirm' }),
-        'DELETE',
-      );
-      await user.click(screen.getByRole('button', { name: 'Delete permanently' }));
+      await confirmDangerousAction(user, '2 projects');
 
       // A refusal on one must not spare the rest, and "three of five" is the
       // only honest report when it happens.
@@ -569,11 +569,7 @@ describe('Admin › Projects', () => {
 
       await selectRow(user, 'atlas');
       await user.click(screen.getByRole('button', { name: 'Delete projects' }));
-      await user.type(
-        await screen.findByRole('textbox', { name: 'Type DELETE to confirm' }),
-        'DELETE',
-      );
-      await user.click(screen.getByRole('button', { name: 'Delete permanently' }));
+      await confirmDangerousAction(user, 'atlas');
 
       await waitFor(() => expect(screen.queryByText('atlas')).not.toBeInTheDocument());
       // The refresh removed ONE row, not the table: a listing that failed to

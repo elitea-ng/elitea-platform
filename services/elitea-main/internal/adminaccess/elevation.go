@@ -520,6 +520,9 @@ type ElevationEnd struct {
 // savepoint: `expired` when the stored end reason is `expired`, `ended`
 // otherwise. A failed append leaves the elevation open.
 //
+// The same savepoint records the eligible reviewers of the elevation (R2.9a,
+// elevation_review.go).
+//
 // An elevation on the sealed path also signs out its sealed session (the
 // browser_sessions row of provider `sealed`) in the same savepoint: the
 // session has no life of its own after the elevation (R2.7a).
@@ -555,6 +558,11 @@ WHERE id = $1 AND started_at IS NOT NULL AND ended_at IS NULL
   AND ($3::text <> 'expired' OR $2::timestamptz >= expires_at)
 RETURNING `+elevationColumns, end.ID, end.At.UTC(), end.Reason))
 		if err != nil {
+			return err
+		}
+		// The reviewers of THIS elevation are fixed now (R2.9a): nobody can
+		// remove them and wait.
+		if err := recordReviewers(ctx, sp, elevation, elevation.EndedAt); err != nil {
 			return err
 		}
 		if elevation.Path == ElevationPathSealed {

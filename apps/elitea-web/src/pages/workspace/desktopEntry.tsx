@@ -17,6 +17,8 @@ import { lazy, Suspense } from 'react';
 
 import { Navigate } from '@tanstack/react-router';
 
+import { isDesktopSettingsTab, type DesktopSettingsTab } from '@/shared/ui/settings/desktopSettingsTabs';
+
 const WorkspacesPage = /* @__PURE__ */ lazy(() => import('./WorkspacesPage'));
 const WorkspaceSessionPage = /* @__PURE__ */ lazy(() => import('./WorkspaceSessionPage'));
 const TroubleshootPage = /* @__PURE__ */ lazy(() => import('./TroubleshootPage'));
@@ -49,7 +51,7 @@ export function WorkspaceSessionEntry(): React.JSX.Element {
 }
 
 /** Settings › Troubleshoot (the Doctor); nothing outside `desktop` (an unknown settings tab renders empty). */
-export function TroubleshootEntry(): React.JSX.Element | null {
+function TroubleshootEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -59,7 +61,7 @@ export function TroubleshootEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Approval rules (#1216); nothing outside `desktop`. */
-export function RulesEntry(): React.JSX.Element | null {
+function RulesEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -69,7 +71,7 @@ export function RulesEntry(): React.JSX.Element | null {
 }
 
 /** Settings › MCP servers (#1230); nothing outside `desktop`. */
-export function McpEntry(): React.JSX.Element | null {
+function McpEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -79,7 +81,7 @@ export function McpEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Hooks (#1237); nothing outside `desktop`. */
-export function HooksEntry(): React.JSX.Element | null {
+function HooksEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -89,7 +91,7 @@ export function HooksEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Computer use (ADR-0047 decision 7, #1584); nothing outside `desktop`. */
-export function ComputerUseEntry(): React.JSX.Element | null {
+function ComputerUseEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -99,11 +101,30 @@ export function ComputerUseEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Trusted folders (ADR-0061 decision 5i, #3062); nothing outside `desktop`. */
-export function TrustedFoldersEntry(): React.JSX.Element | null {
+function TrustedFoldersEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
       <TrustedFoldersPage />
     </Suspense>
   );
+}
+
+const DESKTOP_SETTINGS_ENTRIES: Record<DesktopSettingsTab, () => React.JSX.Element | null> = {
+  'approval-rules': RulesEntry,
+  'mcp-servers': McpEntry,
+  hooks: HooksEntry,
+  'computer-use': ComputerUseEntry,
+  'trusted-folders': TrustedFoldersEntry,
+  troubleshoot: TroubleshootEntry,
+};
+
+/**
+ * The desktop Settings tab `tab` (`DESKTOP_SETTINGS_TABS`, #3078), as the `/settings/$tab` catch-all renders it;
+ * nothing for any other slug, and nothing outside `desktop`.
+ */
+export function DesktopSettingsEntry({ tab }: { tab: string }): React.JSX.Element | null {
+  if (!isDesktopSettingsTab(tab)) return null;
+  const Entry = DESKTOP_SETTINGS_ENTRIES[tab];
+  return <Entry />;
 }

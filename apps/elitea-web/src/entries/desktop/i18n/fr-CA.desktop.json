@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "L’agent n’a pas été créé : {{message}}",
   "workspace.noAgents.createCoding": "Créer un agent de codage local",
   "workspace.agent": "Agent",
-  "workspace.version": "Version",
   "workspace.composer.files": "Fichiers de ce dossier",
   "workspace.composer.commands": "Commandes",
   "workspace.composer.placeholder": "Que doit faire l’agent? Tapez @ pour ajouter un fichier, / pour les commandes et les compétences",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Sans approbation",
   "workspace.mode.planHint": "Planifie, ne modifie rien",
   "workspace.usage.context": "Contexte : {{percent}} % de la fenêtre utilisé",
-  "workspace.team.menu": "Exécuter en équipe",
   "workspace.team.note": "Démarre un nouveau fil avec les agents et le responsable de l’équipe. Tous travaillent sur cet ordinateur avec ce dossier.",
   "workspace.team.otherProject": "Agents d’un autre projet",
   "workspace.team.pipeline": "Contient un pipeline",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(dans le nuage, sans le dossier)",
   "workspace.consult.failed": "Aucune réponse : {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Nuage · sans dossier",
-  "workspace.team.folderNoticeLocal": "Chaque membre travaille sur cet ordinateur avec ce dossier et ses outils, même quand un autre membre le consulte ou lui passe la parole. Seul un agent qui ne peut pas s’exécuter sur cet ordinateur s’exécute dans le nuage, sans le dossier."
+  "workspace.team.folderNoticeLocal": "Chaque membre travaille sur cet ordinateur avec ce dossier et ses outils, même quand un autre membre le consulte ou lui passe la parole. Seul un agent qui ne peut pas s’exécuter sur cet ordinateur s’exécute dans le nuage, sans le dossier.",
+  "workspace.floor.addLocal": "Ajouter un agent",
+  "workspace.floor.addCloud": "Ajouter un agent infonuagique",
+  "workspace.floor.cloudNote": "Un agent infonuagique reçoit seulement le texte de la conversation, jamais ce dossier.",
+  "workspace.participants.change": "Changer",
+  "workspace.participants.joining": "Se joignent avec votre prochain message",
+  "workspace.participants.noMatch": "Aucun résultat",
+  "workspace.participants.open": "Agents de ce fil",
+  "workspace.participants.search": "Rechercher",
+  "workspace.participants.team": "Équipe : {{name}}",
+  "workspace.team.add": "Ajouter une équipe"
 }

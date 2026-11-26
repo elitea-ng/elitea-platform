@@ -145,10 +145,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-/** Picks the "Coder" agent in the composer footer's picker. */
-async function pickCoder(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(await screen.findByTestId('agent-chip'));
-  await user.click(await screen.findByRole('menuitem', { name: 'Coder' }));
+/** Waits for "Coder", the project's only agent, on its base version: the composer's agent (#3081: the chip has no menu). */
+async function pickCoder(_user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('agent-chip')).toHaveTextContent('Coder · base'));
 }
 
@@ -359,7 +357,10 @@ describe('WorkspaceSessionPage', () => {
       plan_mode: true,
       mentions: [],
       skills: [],
+      submit_id: expect.stringMatching(/^[0-9a-f-]{36}$/u) as string,
     });
+    // One client id for the message (#3077): the conversation's create and the turn's start are idempotent on it.
+    expect(createdConversations[0]).toEqual(expect.objectContaining({ client_request_id: (ipc.calls.started[0] as { submit_id: string }).submit_id }));
 
     const at = (seq: number) => ({ turn_id: 'turn-1', seq });
     ipc.emit({ ...at(1), kind: 'status', payload: { phase: 'running' } });
@@ -1449,9 +1450,11 @@ describe('WorkspaceSessionPage', () => {
       await user.type(input, '/help{Enter}');
       expect(within(await screen.findByTestId('workspace-help')).getByText('/undo')).toBeInTheDocument();
 
+      // `/agent` presses the agent chip, which opens the thread's Participants tab (#3081).
+      const chipPressed = vi.fn();
+      screen.getByTestId('agent-chip').addEventListener('click', chipPressed);
       await user.type(input, '/agent{Enter}');
-      expect(await screen.findByRole('menu')).toBeInTheDocument();
-      await user.keyboard('{Escape}');
+      await waitFor(() => expect(chipPressed).toHaveBeenCalledTimes(1));
 
       // Nothing to undo yet.
       await user.click(input);

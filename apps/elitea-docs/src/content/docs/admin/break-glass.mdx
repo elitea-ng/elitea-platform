@@ -88,6 +88,22 @@ An elevation that ends early (by its holder, an approver or the operator command
 
 To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).
 
+### What else ends an elevation
+
+An elevation is bound to one browser session and to one person, and it ends with either of them, in the same transaction:
+
+| What happened | End reason |
+|---|---|
+| The person signs out of the elevated session | `logout` |
+| The session is revoked (for example, all of the person's sessions are signed out) | `session_revoked` |
+| The person is suspended | `user_suspended` |
+| The person is deleted | `user_deleted` |
+| The identity provider deactivates the person over SCIM, including a deactivation that is refused because the person is the last administrator | `scim_deactivated` |
+
+A sign-out ends only the elevation of that session: another person's elevation, in another session, goes on. A new session of the same person does not inherit the elevation. A suspension, a deletion and a SCIM deactivation also revoke every unused sealed credential of the person, each with its `credential_revoked` event.
+
+Each end writes its `ended` event and moves the elevation to `review_pending`. This is the one place where a failed audit write does not stop the change: a sign-out or a suspension is never undone because its audit event could not be written. The elevation already grants nothing (its session is revoked, or its person cannot sign in), and the next pass of `main.elevation_reconciler` records the end with the same reason and its event. A sealed credential whose event cannot be written is revoked without the event.
+
 ## Who is told
 
 Break-glass is loud. Each of these events writes its notices in the same transaction as the event, and the platform then sends them by e-mail:
@@ -111,7 +127,44 @@ Break-glass notices need outbound e-mail. Configure it (the **E-mail** section o
 
 A deployment can also send these notices to an out-of-band webhook, for when e-mail is down: see [The out-of-band notice webhook](/deployment/configuration#the-out-of-band-notice-webhook). Every event of the table but the request makes one webhook call, with ids, a type and a time only; it names nobody.
 
-The notice in the bell icon of the application comes in a later release. The request writes its notices today; the start and the review, which write the others, ship in later releases.
+The notice in the bell icon of the application comes in a later release. The request, a critical change, an overdue review, the move to `unreviewed_no_reviewer` and an `unauthorized` review write their notices today; the start ships in a later release.
+
+## The review after use
+
+Every elevation is reviewed after it ends, by someone who was not involved. The review is an attestation: it changes no platform state.
+
+**Who may review.** When an elevation ends, the platform records its reviewers: every holder of `access.breakglass.review` through a standing role (the Security auditor role by default) whose account is not suspended, except the person elevated, the requester and the approver. That record decides who may write the review, not the current roles: a reviewer whose role is taken away afterwards can still review, and a person who gets the role after the end cannot. The holder, the requester and the approver can neither read nor write the review (`403 elevation_reviewer_involved`). A personal access token, a native session, a run token and a sealed session cannot review.
+
+**What the reviewer sees.** `GET /api/v2/admin/access/elevations/{elevationID}/review` answers the elevation with its reason, the recorded reviewers, and every administration audit row made under the elevation, flagged rows first, then by time, paged with `limit` and `offset`.
+
+**The two outcomes.** `POST` on the same path with `outcome` and an optional `note` (at most 4000 characters) records the attestation and moves the elevation to `reviewed`:
+
+- `justified`: the use was right.
+- `unauthorized`: the use was not. The same people as an elevation start are told (see [Who is told](#who-is-told)), and a revert list of the elevation's flagged changes is opened.
+
+The review of an elevation after a sealed sign-in also says whether a replacement credential was issued (`replacement_issued`). The `admin.elevation.reviewed` security event is written in the same transaction; it carries the outcome, never the note. A second review of the same elevation answers `409 elevation_not_reviewable`.
+
+**A reviewer cannot be removed and waited out.** While the review is pending, taking `access.breakglass.review` from one of its reviewers, suspending or deleting them needs `admin.auth.users.super_admin` (`403 elevation_pending_reviewer` otherwise). The change is listed in the review (`reviewer_changes`), and the person stays a reviewer of it.
+
+### The review deadline
+
+A review is due within the review time of the **Break-glass** settings: 72 hours after the elevation ended on the online path, 24 hours after a sealed sign-in. The `main.elevation_reconciler` routine checks the pending reviews on every pass:
+
+- **A reviewer is left.** While at least one recorded reviewer still has an account that is not suspended, an overdue review stays `review_pending` and is raised **once a day**: the same people as an elevation start are told, and the webhook is called (see [Who is told](#who-is-told)). It is raised until someone reviews it.
+- **Nobody is left.** When no recorded reviewer is left, at the deadline or on a later day (the last one was suspended or deleted), the elevation moves to the terminal state `unreviewed_no_reviewer`. The move is announced once: the `admin.elevation.unreviewed` security event, the notices and the webhook call. The daily reminder stops, and a review of it is refused (`409 elevation_not_reviewable`).
+
+<Tip>
+Give the Security auditor role to at least one person who will not use break-glass, so that every elevation has a reviewer. With only administrators, an elevation one administrator approved for another has nobody independent to review it, and it ends as `unreviewed_no_reviewer`.
+</Tip>
+
+### The revert list
+
+An `unauthorized` review opens one entry per flagged change of the elevation. The platform reverts nothing by itself: the list is a queue for the platform administrators, the holders of `access.breakglass.manage`.
+
+- `GET /api/v2/admin/access/reverts?open=true`: the entries not handled yet; without `open`, every entry, unhandled ones first.
+- `POST /api/v2/admin/access/reverts/{itemID}/handled`: marks an entry handled, once. A Security auditor can read the review but cannot mark an entry.
+
+Marking an entry handled writes no security audit event. The entry keeps who marked it and when (`handled_by`, `handled_at`), and that record cannot be changed afterwards.
 
 ## What an elevation cannot do
 
@@ -133,6 +186,8 @@ The table lists every action whose value is not `allow`, reads included (reading
 | `-` | `POST /api/v2/admin/access/elevations` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/approve` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/deny` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/elevations/{elevationID}/review` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/reverts/{itemID}/handled` | refused (`deny`) |
 | `-` | `GET /api/v2/admin/access/sealed_credentials` | refused (`deny`) |
 | `delete` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
 | `set_admin_role` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
@@ -184,6 +239,19 @@ The table lists every action whose value is not `allow`, reads included (reading
 | `-` | `POST /api/v2/configurations/configurations/{projectID}` | allowed and flagged (`flag`) |
 
 {/* elevation-table:end */}
+
+### The people an elevation cannot remove
+
+Some limits are about people, not actions, so they hold on routes the table allows:
+
+- **The people who can stop and review the elevation stay.** An elevated session cannot demote, suspend or delete a holder of `access.breakglass.approve` or `access.breakglass.review` (`403` with the code `elevation_protected_person`). This covers both role assignment routes (the Users page and **Modes**), user suspension and user deletion. Who holds the two permissions is read from standing roles.
+- **Not the own roles, not the own eligibility.** An elevated person cannot give or take any of the own roles, and so cannot change the own `access.breakglass.request`, at either level (`403 role_self_assignment`). The exemption a standing global administrator has is read from standing roles only: an elevation at the `super_admin` level never carries it.
+
+### A critical change is announced at once
+
+A `critical` action that an elevation may do (for example changing a global provider's endpoint, or giving an administration role) is announced in the same transaction as the change: it writes the security audit event `admin.elevation.critical_change` and a notice to the same people as an elevation start (see [Who is told](#who-is-told)). If the event or the notices cannot be written, the change is rolled back. The review is not the first time someone hears of it.
+
+Two critical actions cannot be announced this way yet, so an elevation is refused them (`403 elevation_restricted`): writing a guardrail row of the gateway governance (an elevation is refused every governance row write, because which kind of row a request writes is decided after the route), and deleting a project. A person whose standing roles admit them is not affected.
 
 ## The sealed credential list
 

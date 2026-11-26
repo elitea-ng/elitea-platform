@@ -58,6 +58,16 @@ async function openConfiguration(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: /Guardrails/ })).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Opens one page of Models and spend (ADR-0059 R3.5a, issue 2535): the tabs
+ * of the LLM gateway editor that was a section of this page.
+ */
+async function openGatewayPage(page: Page, path: string): Promise<void> {
+  const response = await page.goto(BASE_URL + '/admin/app' + path, { waitUntil: 'domcontentloaded' });
+  expect(response?.status(), `the admin SPA must serve ${path}, not 404`).toBeLessThan(400);
+  await expect(page.getByTestId('admin-nav')).toBeVisible({ timeout: 20_000 });
+}
+
 adminTest('J34: the sidebar marks what this deployment cannot configure', async ({ page }) => {
   await openConfiguration(page);
 
@@ -109,7 +119,6 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
     'Banner',
     'Maintenance',
     'Guardrails',
-    'LLM Proxy',
     'Native client policy',
   ];
   for (const section of live) {
@@ -118,6 +127,12 @@ adminTest('J34: the sidebar marks what this deployment cannot configure', async 
       `${section} is available and must not be marked`,
     ).toHaveCount(0);
   }
+  // LLM Proxy's row is a link to the Models and spend pages its tabs became
+  // (ADR-0059 R3.5a), and it is not marked either. Located first, so a row
+  // that is gone fails here instead of passing the mark check vacuously.
+  const llmProxy = sections.getByRole('link', { name: /LLM Proxy/ });
+  await expect(llmProxy).toBeVisible();
+  await expect(llmProxy.getByText('Not available here')).toHaveCount(0);
 
   // Advanced is not marked either — it is GONE. Its subject is legacy-runtime
   // plugin loading, which the target architecture drops on purpose, so a
@@ -331,8 +346,9 @@ adminTest('J34e: the MCP Servers section renders its editor, not a refusal', asy
   await checkA11y(page);
 });
 
-adminTest('J34g: the LLM Proxy section renders its editor, not a refusal', async ({ page }) => {
+adminTest('J34g: the LLM Proxy section leads to the Models and spend pages, and its old anchor redirects', async ({ page }) => {
   await openConfiguration(page);
+  const sections = page.getByRole('navigation', { name: 'Configuration sections' });
 
   // The section that replaced LiteLLM. LiteLLM is gone — ADR-0015 replaced it
   // with the Bifrost-based elitea-llm-gateway — so the old name must not be on
@@ -340,35 +356,41 @@ adminTest('J34g: the LLM Proxy section renders its editor, not a refusal', async
   // subsystem that no longer exists.
   await expect(page.getByRole('button', { name: /LiteLLM/ })).toHaveCount(0);
 
-  const llmProxy = page.getByRole('button', { name: /LLM Proxy/ });
+  // Under the six areas (ADR-0059 R3.5a, issue 2535) the editor's tabs are
+  // pages of Models and spend, and the section's row is a link to the first.
+  // It is not marked: marking it would send an operator away from the pages
+  // that edit it.
+  const llmProxy = sections.getByRole('link', { name: /LLM Proxy/ });
   await expect(llmProxy).toBeVisible();
-  // Editable despite still declaring an `unavailable_reason` — true of the
-  // plugin-config value endpoints, which cannot serve a live status report or a
-  // price catalogue — because it also declares a `managed_surface`. Marking it
-  // would send an operator away from the only page that can edit it.
   await expect(llmProxy.getByText('Not available here')).toHaveCount(0);
-
   await llmProxy.click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/models/providers', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Providers and models' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('admin-nav-item-providers-models')).toHaveAttribute('aria-current', 'page');
 
-  // The editor's own control, so this proves the dedicated surface MOUNTED —
-  // not merely that the refusal notice is absent, which a blank pane would also
-  // satisfy.
-  await expect(page.getByTestId('llm-proxy-tabs')).toBeVisible();
-  await expect(page.getByTestId('admin-configuration-unavailable')).toHaveCount(0);
+  // A bookmark of one tab of the old editor opens that tab's page.
+  await page.goto(BASE_URL + '/admin/app/configuration#llm_proxy/status', { waitUntil: 'domcontentloaded' });
+  await page.waitForURL((url) => url.pathname === '/admin/app/models/status', { timeout: 20_000 });
+  await expect(page.getByTestId('admin-usage-tab-status')).toHaveAttribute('aria-selected', 'true');
 
   // The status panel reaches the gateway through elitea-main. On a stack with no
   // gateway wired it reports that as a state rather than as a load failure, so
   // either the loaded snapshot or the explained unreachable notice is correct
   // here — what must NOT happen is the panel failing to read its own route.
+  await expect(
+    page
+      .getByRole('main')
+      .getByText(/^Snapshot loaded /)
+      .or(page.getByTestId('llm-proxy-status-unreachable'))
+      .or(page.getByTestId('llm-proxy-status-disabled')),
+  ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('llm-proxy-status-error')).toHaveCount(0);
 
   await checkA11y(page);
 });
 
 adminTest('J34h: the LLM Proxy model catalogue is authorised and answers', async ({ page }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-  await page.getByRole('tab', { name: 'Models & pricing' }).click();
+  await openGatewayPage(page, '/models/pricing');
 
   // Wait for a POSITIVE terminal state before judging. `llm-proxy-add-price`
   // renders unconditionally and the error test-ids are absent while the request
@@ -389,16 +411,13 @@ adminTest('J34h: the LLM Proxy model catalogue is authorised and answers', async
 });
 
 adminTest('J34o: the platform default model card reads its route', async ({ page }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-
   // #6826. The card reads GET /admin/gateway/default_model. The read itself is
   // the positive terminal state: the error Alert is absent while the read is in
   // flight, so its absence alone would read a 403 or 500 as success.
   const read = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith('/admin/gateway/default_model'),
   );
-  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  await openGatewayPage(page, '/models/providers');
   expect((await read).status()).toBe(200);
 
   const card = page.getByTestId('platform-default-model');
@@ -477,9 +496,7 @@ adminTest('J34j: the Maintenance section is an editable form', async ({ page }) 
 });
 
 adminTest('J34k: the LLM Proxy usage report is authorised and answers', async ({ page }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-  await page.getByRole('tab', { name: 'Usage' }).click();
+  await openGatewayPage(page, '/models/usage');
 
   // The screen LiteLLM's admin UI had and the Bifrost port lost — migration
   // 0084 recorded the loss in its own header ("a meter and nothing else").
@@ -509,9 +526,7 @@ adminTest('J34k: the LLM Proxy usage report is authorised and answers', async ({
 });
 
 adminTest('J34l: platform providers are authored from the admin panel', async ({ page }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  await openGatewayPage(page, '/models/providers');
 
   // A PLATFORM provider is the public project's `shared = true` credential — the
   // scope the gateway has resolved since issue #316 and that nothing could
@@ -559,9 +574,7 @@ adminTest('J34l: platform providers are authored from the admin panel', async ({
 adminTest('J34n: a platform model cannot be authored without a platform provider', async ({
   page,
 }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  await openGatewayPage(page, '/models/providers');
 
   // Wait on a POSITIVE terminal state before opening the dialog: the dialog's
   // provider select is filled from this same listing, so an assertion made
@@ -636,9 +649,7 @@ adminTest('J34n: a platform model cannot be authored without a platform provider
 });
 
 adminTest('J34m: the LLM Proxy request log is authorised and answers', async ({ page }) => {
-  await openConfiguration(page);
-  await page.getByRole('button', { name: /LLM Proxy/ }).click();
-  await page.getByRole('tab', { name: 'Logs' }).click();
+  await openGatewayPage(page, '/models/logs');
 
   // The tab the Usage report cannot be: a billing delta rides only a BILLED
   // request, so a refusal never reaches the ledger Usage reads. This reads

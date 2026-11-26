@@ -90,32 +90,6 @@ export function useUserInputRowCollapse(showExpandIcon: boolean, maxRows: number
   }, [showExpandIcon, maxRows, setRows]);
 }
 
-export interface UseUserInputSendQuestionParams {
-  readonly question: string;
-  readonly inputContent: string;
-  readonly disabledSend: boolean | undefined;
-  readonly clearInputAfterSend: boolean;
-  readonly onSend: ((question: string, inputContent: string) => void) | undefined;
-  readonly setQuestion: (value: string) => void;
-  readonly setInputContent: (value: string) => void;
-  readonly setShowExpandIcon: (value: boolean) => void;
-}
-
-export function useUserInputSendQuestion(params: UseUserInputSendQuestionParams): () => void {
-  const { question, inputContent, disabledSend, clearInputAfterSend, onSend, setQuestion, setInputContent, setShowExpandIcon } =
-    params;
-  return useCallback(() => {
-    if (question.trim() && !disabledSend) {
-      if (clearInputAfterSend) {
-        setInputContent('');
-        setQuestion('');
-        setShowExpandIcon(false);
-      }
-      onSend?.(question, inputContent);
-    }
-  }, [clearInputAfterSend, disabledSend, onSend, question, inputContent, setInputContent, setQuestion, setShowExpandIcon]);
-}
-
 export interface UseUserInputInsertTextAtCursorParams {
   readonly inputRef: RefObject<HTMLTextAreaElement | null>;
   /**

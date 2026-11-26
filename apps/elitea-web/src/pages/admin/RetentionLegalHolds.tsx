@@ -30,6 +30,7 @@ import Typography from '@mui/material/Typography';
 import type { LegalHold, LegalHoldCreate } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
 import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { useAdminActionControl, useAdminWritable } from './adminWriteAccess';
 import {
@@ -192,58 +193,46 @@ function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null;
   const access = useAdminWritable(ADMIN_ITEM.dataRetention);
   const locked = useAdminActionControl(ADMIN_ACTION_PERMISSION.legalHoldManage).disabled;
   const release = access.guard(useReleaseLegalHold());
-  const [reason, setReason] = useState('');
   const [error, setError] = useState('');
 
   const close = () => {
-    setReason('');
     setError('');
     onClose();
   };
 
+  if (hold === null) return null;
+  // The one dangerous-action dialog (ADR-0059 R3.8b): its reason text is the
+  // hold's release reason, recorded on the hold and in the audit log.
   return (
-    <Dialog open={hold !== null} onClose={close} fullWidth maxWidth="sm">
-      <DialogTitle>{t('pages.admin.retention.holds.releaseTitle', 'Release the legal hold?')}</DialogTitle>
-      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingTop: '0.5rem' }}>
-        <Typography variant="bodyMedium">{hold ? subject(hold) : ''}</Typography>
-        <Typography variant="bodySmall" color="text.secondary">
-          {t(
-            'pages.admin.retention.holds.releaseHelp',
-            'Deletion of what this hold covers resumes on the next retention sweep. A released hold cannot be placed again; place a new one if you need it.',
-          )}
-        </Typography>
-        {error !== '' ? <Alert severity="error">{error}</Alert> : null}
-        <TextField
-          label={t('pages.admin.retention.holds.releaseReason', 'Release reason (optional)')}
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-        />
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={close}>{t('pages.admin.retention.cancel', 'Cancel')}</Button>
-        <Button
-          variant="contained"
-          color="error"
-          disabled={locked || release.isPending || hold === null}
-          onClick={() => {
-            if (hold === null) return;
-            release.mutate(
-              { id: hold.id, reason: reason.trim() },
-              {
-                onSuccess: close,
-                onError: (failure) =>
-                  setError(
-                    retentionFailureReason(failure) ??
-                      t('pages.admin.retention.holds.error.release', 'Failed to release the legal hold.'),
-                  ),
-              },
-            );
-          }}
-        >
-          {t('pages.admin.retention.holds.release', 'Release')}
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <AdminDangerousActionDialog
+      open
+      action="POST /api/v2/admin/legal_holds/{id}/release"
+      title={t('pages.admin.retention.holds.releaseTitle', 'Release the legal hold?')}
+      change={t(
+        'pages.admin.retention.holds.releaseHelp',
+        'Deletion of what this hold covers resumes on the next retention sweep. A released hold cannot be placed again; place a new one if you need it.',
+      )}
+      reach={hold.scope === 'user' ? { count: 1, unit: 'people' } : { count: 1, unit: 'projects' }}
+      target={subject(hold)}
+      confirmLabel={t('pages.admin.retention.holds.release', 'Release')}
+      pending={release.isPending}
+      locked={locked}
+      error={error === '' ? null : error}
+      onClose={close}
+      onConfirm={(reason) =>
+        release.mutate(
+          { id: hold.id, reason },
+          {
+            onSuccess: close,
+            onError: (failure) =>
+              setError(
+                retentionFailureReason(failure) ??
+                  t('pages.admin.retention.holds.error.release', 'Failed to release the legal hold.'),
+              ),
+          },
+        )
+      }
+    />
   );
 }
 

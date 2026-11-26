@@ -45,6 +45,8 @@ import {
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody, unwrapListPage } from '@/shared/api/unwrap';
 
+import { reasonFields, reasonHeaders, type AdminReason } from '../adminDangerousAction';
+
 const GOVERNANCE_URL = '/admin/gateway/governance';
 
 function governanceUrl(id: string): string {
@@ -149,6 +151,16 @@ export interface GovernanceWrite {
 }
 
 /**
+ * A governance write with the reason of the dangerous action (ADR-0059
+ * R3.8b): the server tells a guardrail from another kind, so every write of
+ * these routes carries one.
+ */
+interface GovernanceMarkedWrite {
+  readonly row: GovernanceWrite;
+  readonly reason: AdminReason;
+}
+
+/**
  * One query-key namespace, declared once.
  *
  * Every mutation invalidates `governanceKeys.all`, so a key built ad hoc at a
@@ -203,14 +215,20 @@ export function useGovernanceRows(): UseQueryResult<GovernanceRow[], Error> {
 }
 
 /** `POST /admin/gateway/governance`. */
-export function useCreateGovernanceRow(): UseMutationResult<void, Error, GovernanceWrite> {
+export function useCreateGovernanceRow(): UseMutationResult<void, Error, GovernanceMarkedWrite> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (row: GovernanceWrite) => {
+    mutationFn: async ({ row, reason }: GovernanceMarkedWrite) => {
       await eliteaFetch<unknown>(GOVERNANCE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: row.type, name: row.name, data: row.data, enabled: row.enabled }),
+        body: JSON.stringify({
+          type: row.type,
+          name: row.name,
+          data: row.data,
+          enabled: row.enabled,
+          ...reasonFields('POST /api/v2/admin/gateway/governance guardrail', reason),
+        }),
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: governanceKeys.all }),
@@ -218,15 +236,21 @@ export function useCreateGovernanceRow(): UseMutationResult<void, Error, Governa
 }
 
 /** `PUT /admin/gateway/governance/{id}`. */
-export function useUpdateGovernanceRow(): UseMutationResult<void, Error, GovernanceWrite> {
+export function useUpdateGovernanceRow(): UseMutationResult<void, Error, GovernanceMarkedWrite> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (row: GovernanceWrite) => {
+    mutationFn: async ({ row, reason }: GovernanceMarkedWrite) => {
       if (row.id === undefined) throw new Error('cannot update a governance row without an id');
       await eliteaFetch<unknown>(governanceUrl(row.id), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: row.type, name: row.name, data: row.data, enabled: row.enabled }),
+        body: JSON.stringify({
+          type: row.type,
+          name: row.name,
+          data: row.data,
+          enabled: row.enabled,
+          ...reasonFields('PUT /api/v2/admin/gateway/governance/{id} guardrail', reason),
+        }),
       });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: governanceKeys.all }),
@@ -234,11 +258,18 @@ export function useUpdateGovernanceRow(): UseMutationResult<void, Error, Governa
 }
 
 /** `DELETE /admin/gateway/governance/{id}`. */
-export function useDeleteGovernanceRow(): UseMutationResult<void, Error, string> {
+export function useDeleteGovernanceRow(): UseMutationResult<
+  void,
+  Error,
+  { readonly id: string; readonly reason: AdminReason }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      await eliteaFetch<unknown>(governanceUrl(id), { method: 'DELETE' });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(governanceUrl(id), {
+        method: 'DELETE',
+        ...reasonHeaders('DELETE /api/v2/admin/gateway/governance/{id} guardrail', reason),
+      });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: governanceKeys.all }),
   });

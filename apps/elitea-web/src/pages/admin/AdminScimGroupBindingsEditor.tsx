@@ -25,15 +25,13 @@ import { useMemo, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 
 import { t } from "@/shared/i18n";
 
+import { AdminDangerousActionDialog, type AdminDangerousActionDialogProps } from "./AdminDangerousActionDialog";
+import type { AdminReason } from "./adminDangerousAction";
 import { AdminScimGroupBindingDialog } from "./AdminScimGroupBindingDialog";
 import { AdminScimGroupBindingTable } from "./AdminScimGroupBindingTable";
 import { ADMIN_ITEM } from "./adminItemIds";
@@ -46,6 +44,47 @@ import {
   type AdminScimGroupBinding,
   type AdminScimGroupBindingDraft,
 } from "./api/adminScimGroupBindingsApi";
+
+type PendingBindingAction =
+  | { readonly kind: "save"; readonly draft: AdminScimGroupBindingDraft }
+  | { readonly kind: "delete"; readonly binding: AdminScimGroupBinding };
+
+/** The dangerous-action dialog's copy for a binding write (ADR-0059 R3.8b: every binding write is critical). */
+function bindingDialog(
+  pending: PendingBindingAction,
+): Pick<AdminDangerousActionDialogProps, "action" | "title" | "change" | "reach" | "target" | "confirmLabel"> {
+  const reach = { count: 1, unit: "projects" } as const;
+  if (pending.kind === "delete") {
+    return {
+      action: "DELETE /api/v2/admin/scim_group_bindings/administration/{id}",
+      title: t("pages.admin.scimGroups.delete.title", "Remove group binding"),
+      change: t(
+        "pages.admin.scimGroups.delete.body",
+        "This withdraws the role “{{name}}” gave its members and removes the binding. The project, its content and any member added by hand are not affected, and the identity provider is refused until the group is bound again.",
+        { name: pending.binding.display_name },
+      ),
+      reach,
+      target: pending.binding.display_name,
+      confirmLabel: t("pages.admin.scimGroups.delete.confirm", "Remove"),
+    };
+  }
+  const { draft } = pending;
+  return {
+    action:
+      draft.id === undefined
+        ? "POST /api/v2/admin/scim_group_bindings/administration"
+        : "PUT /api/v2/admin/scim_group_bindings/administration/{id}",
+    title: t("pages.admin.scimGroups.saveConfirm.title", "Save group binding"),
+    change: t(
+      "pages.admin.scimGroups.saveConfirm.body",
+      "Every member the directory pushes in “{{name}}” holds the role {{role}} on project {{project}}. A changed project or role moves the access the group granted.",
+      { name: draft.displayName, role: draft.roleName, project: draft.projectId },
+    ),
+    reach,
+    target: draft.displayName,
+    confirmLabel: t("pages.admin.scimGroups.saveConfirm.confirm", "Save"),
+  };
+}
 
 export function AdminScimGroupBindingsEditor() {
   // The page offset this screen is showing. A binding past the first page must
@@ -61,9 +100,9 @@ export function AdminScimGroupBindingsEditor() {
   const [editing, setEditing] = useState<AdminScimGroupBinding | undefined>(
     undefined,
   );
-  const [pendingDelete, setPendingDelete] = useState<
-    AdminScimGroupBinding | undefined
-  >(undefined);
+  const [pending, setPending] = useState<PendingBindingAction | undefined>(
+    undefined,
+  );
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
 
@@ -76,9 +115,9 @@ export function AdminScimGroupBindingsEditor() {
   const total = listQueryPage?.total ?? bindings.length;
   const hasMore = offset + bindings.length < total;
 
-  const handleSubmit = (draft: AdminScimGroupBindingDraft): void => {
+  const handleSubmit = (draft: AdminScimGroupBindingDraft, reason: AdminReason): void => {
     setSaveError(undefined);
-    saveMutation.mutate(draft, {
+    saveMutation.mutate({ draft, reason }, {
       onSuccess: () => {
         setDialogOpen(false);
         setEditing(undefined);
@@ -98,12 +137,17 @@ export function AdminScimGroupBindingsEditor() {
     });
   };
 
-  const handleDelete = (): void => {
-    if (pendingDelete === undefined) return;
+  const handleConfirm = (reason: AdminReason): void => {
+    if (pending === undefined) return;
+    if (pending.kind === "save") {
+      setPending(undefined);
+      handleSubmit(pending.draft, reason);
+      return;
+    }
     setActionError(undefined);
-    deleteMutation.mutate(pendingDelete.id, {
+    deleteMutation.mutate({ id: pending.binding.id, reason }, {
       onSuccess: () => {
-        setPendingDelete(undefined);
+        setPending(undefined);
       },
       onError: (error: unknown) => {
         setActionError(
@@ -113,7 +157,7 @@ export function AdminScimGroupBindingsEditor() {
               "Failed to remove that group binding.",
             ),
         );
-        setPendingDelete(undefined);
+        setPending(undefined);
       },
     });
   };
@@ -204,7 +248,9 @@ export function AdminScimGroupBindingsEditor() {
           setSaveError(undefined);
           setDialogOpen(true);
         }}
-        onRemove={setPendingDelete}
+        onRemove={(binding) => {
+          setPending({ kind: "delete", binding });
+        }}
         onOffset={setOffset}
       />
 
@@ -217,51 +263,23 @@ export function AdminScimGroupBindingsEditor() {
           setDialogOpen(false);
           setEditing(undefined);
         }}
-        onSubmit={handleSubmit}
+        onSubmit={(draft) => {
+          setPending({ kind: "save", draft });
+        }}
       />
 
-      <Dialog
-        open={pendingDelete !== undefined}
-        onClose={() => {
-          setPendingDelete(undefined);
-        }}
-        maxWidth="xs"
-        fullWidth
-        data-testid="admin-scim-binding-delete-dialog"
-      >
-        <DialogTitle>
-          {t("pages.admin.scimGroups.delete.title", "Remove group binding")}
-        </DialogTitle>
-        <DialogContent>
-          <Typography variant="bodyMedium">
-            {t(
-              "pages.admin.scimGroups.delete.body",
-              "This withdraws the role “{{name}}” gave its members and removes the binding. The project, its content and any member added by hand are not affected, and the identity provider is refused until the group is bound again.",
-              { name: pendingDelete?.display_name ?? "" },
-            )}
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            onClick={() => {
-              setPendingDelete(undefined);
-            }}
-            disabled={deleteMutation.isPending}
-            sx={{ textTransform: "none" }}
-          >
-            {t("pages.admin.scimGroups.delete.cancel", "Cancel")}
-          </Button>
-          <Button
-            variant="elitea" color="alarm"
-            onClick={handleDelete}
-            disabled={deleteMutation.isPending}
-            sx={{ textTransform: "none" }}
-            data-testid="admin-scim-binding-delete-confirm"
-          >
-            {t("pages.admin.scimGroups.delete.confirm", "Remove")}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {pending !== undefined ? (
+        <AdminDangerousActionDialog
+          open
+          {...bindingDialog(pending)}
+          pending={deleteMutation.isPending || saveMutation.isPending}
+          onClose={() => {
+            setPending(undefined);
+          }}
+          onConfirm={handleConfirm}
+        />
+      ) : null}
+
     </Box>
   );
 }

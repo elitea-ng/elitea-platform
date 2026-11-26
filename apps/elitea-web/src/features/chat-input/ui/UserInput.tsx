@@ -28,10 +28,10 @@ import {
   useUserInputRefs,
   useUserInputRowCollapse,
   useUserInputScrollSync,
-  useUserInputSendQuestion,
   useUserInputTextState,
 } from '../lib/hooks/useUserInputController.hooks';
 import { useFileDragAndDrop } from '../lib/hooks/useFileDragAndDrop.hooks';
+import { useUserInputSendQuestion } from '../lib/hooks/useUserInputSendQuestion.hooks';
 
 import type { UserInputHandle, UserInputProps } from './UserInput.types';
 import { MAX_ROWS, MIN_ROWS } from './UserInput.types';

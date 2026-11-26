@@ -28,6 +28,7 @@ import { server } from "@/test/setup";
 
 import { daysUntil, expiryInstant } from "./AdminScimClientExpiry";
 import { AdminScimClientsEditor } from "./AdminScimClientsEditor";
+import { confirmDangerousAction } from "./__tests__/dangerousDialog";
 import { renderAdminRoute } from "./__tests__/testRouter";
 
 const BEARER_CLIENT = {
@@ -67,6 +68,11 @@ interface RecordedRequest {
 let recorded: RecordedRequest[] = [];
 
 const BASE = "*/admin/scim_clients/administration";
+
+/** The reason of a bodiless dangerous action travels in its header (ADR-0059 R3.8b). */
+function reasonCode(request: Request): { reasonCode: string | null } {
+  return { reasonCode: request.headers.get("Elitea-Reason-Code") };
+}
 
 function useClientHandlers(
   options: { createStatus?: number; createBody?: Record<string, string> } = {},
@@ -111,17 +117,17 @@ function useClientHandlers(
       );
     }),
     http.post(`${BASE}/:id/rotate`, ({ request }) => {
-      recorded.push({ method: "POST", url: request.url, body: null });
+      recorded.push({ method: "POST", url: request.url, body: reasonCode(request) });
       return HttpResponse.json({ client: BEARER_CLIENT, secret: BEARER_SECRET });
     }),
     http.post(`${BASE}/:id/revoke`, ({ request }) => {
-      recorded.push({ method: "POST", url: request.url, body: null });
+      recorded.push({ method: "POST", url: request.url, body: reasonCode(request) });
       return HttpResponse.json({
         client: { ...BEARER_CLIENT, status: "revoked" },
       });
     }),
     http.delete(`${BASE}/:id`, ({ request }) => {
-      recorded.push({ method: "DELETE", url: request.url, body: null });
+      recorded.push({ method: "DELETE", url: request.url, body: reasonCode(request) });
       return new HttpResponse(null, { status: 204 });
     }),
   );
@@ -197,11 +203,17 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.click(screen.getByTestId("admin-scim-clients-add"));
     await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Okta");
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
     });
-    expect(writes()[0]?.body).toEqual({ name: "Okta", auth_method: "bearer" });
+    expect(writes()[0]?.body).toEqual({
+      name: "Okta",
+      auth_method: "bearer",
+      reason_code: "incident",
+      reason: "ticket 42",
+    });
 
     const reveal = await screen.findByTestId("admin-scim-client-secret-dialog");
     expect(reveal).toHaveTextContent("It is shown only once");
@@ -231,6 +243,7 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.click(screen.getByTestId("admin-scim-clients-add"));
     await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Okta");
     await screen.findByTestId("admin-scim-client-secret-dialog");
 
     await user.keyboard("{Escape}");
@@ -262,11 +275,14 @@ describe("Admin › Authentication › SCIM clients", () => {
       ).getByRole("radio"),
     );
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Entra CC");
 
     await screen.findByTestId("admin-scim-client-secret-dialog");
     expect(writes()[0]?.body).toEqual({
       name: "Entra CC",
       auth_method: "client_credentials",
+      reason_code: "incident",
+      reason: "ticket 42",
     });
     expect(
       screen.getByTestId("admin-scim-client-reveal-client-id"),
@@ -291,6 +307,7 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.click(screen.getByTestId("admin-scim-clients-add"));
     await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Okta");
 
     expect(
       await screen.findByTestId("admin-scim-client-create-error"),
@@ -316,6 +333,7 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.click(screen.getByTestId("admin-scim-clients-add"));
     await user.type(screen.getByTestId("admin-scim-client-name"), "Okta");
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Okta");
 
     expect(
       await screen.findByTestId("admin-scim-client-create-error"),
@@ -333,19 +351,19 @@ describe("Admin › Authentication › SCIM clients", () => {
     await screen.findByText("Entra production");
 
     await user.click(screen.getByTestId("admin-scim-client-rotate-c1"));
-    const confirm = await screen.findByTestId(
-      "admin-scim-client-confirm-dialog",
-    );
+    const confirm = await screen.findByTestId("admin-dangerous-dialog");
     expect(confirm).toHaveTextContent("stops working immediately");
+    expect(confirm).toHaveTextContent("Critical action");
     expect(writes()).toHaveLength(0);
 
-    await user.click(screen.getByTestId("admin-scim-client-confirm"));
+    await confirmDangerousAction(user, "Entra production");
     expect(
       await screen.findByTestId("admin-scim-client-reveal-secret"),
     ).toHaveValue(BEARER_SECRET);
     expect(writes()[0]?.url).toContain(
       "/admin/scim_clients/administration/c1/rotate",
     );
+    expect(writes()[0]?.body).toEqual({ reasonCode: "incident" });
   });
 
   it("confirms a revoke and posts to the revoke endpoint", async () => {
@@ -355,9 +373,9 @@ describe("Admin › Authentication › SCIM clients", () => {
 
     await user.click(screen.getByTestId("admin-scim-client-revoke-c2"));
     expect(
-      await screen.findByTestId("admin-scim-client-confirm-dialog"),
+      await screen.findByTestId("admin-dangerous-dialog"),
     ).toHaveTextContent("can no longer provision");
-    await user.click(screen.getByTestId("admin-scim-client-confirm"));
+    await confirmDangerousAction(user, "Entra staging", { code: "offboarding" });
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -366,6 +384,7 @@ describe("Admin › Authentication › SCIM clients", () => {
     expect(writes()[0]?.url).toContain(
       "/admin/scim_clients/administration/c2/revoke",
     );
+    expect(writes()[0]?.body).toEqual({ reasonCode: "offboarding" });
   });
 
   it("confirms a delete and deletes by id", async () => {
@@ -374,13 +393,14 @@ describe("Admin › Authentication › SCIM clients", () => {
     await screen.findByText("Entra production");
 
     await user.click(screen.getByTestId("admin-scim-client-delete-c1"));
-    await user.click(await screen.findByTestId("admin-scim-client-confirm"));
+    await confirmDangerousAction(user, "Entra production");
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
     });
     expect(writes()[0]?.method).toBe("DELETE");
     expect(writes()[0]?.url).toContain("/admin/scim_clients/administration/c1");
+    expect(writes()[0]?.body).toEqual({ reasonCode: "incident" });
   });
 
   it("names the missing permission on a 403", async () => {
@@ -427,6 +447,7 @@ describe("Admin › Authentication › SCIM clients", () => {
     await user.clear(dateInput);
     await user.type(dateInput, value);
     await user.click(screen.getByTestId("admin-scim-client-create-submit"));
+    await confirmDangerousAction(user, "Okta");
 
     await waitFor(() => {
       expect(writes()).toHaveLength(1);
@@ -435,6 +456,8 @@ describe("Admin › Authentication › SCIM clients", () => {
       name: "Okta",
       auth_method: "bearer",
       expires_at: expiryInstant(value),
+      reason_code: "incident",
+      reason: "ticket 42",
     });
   });
 

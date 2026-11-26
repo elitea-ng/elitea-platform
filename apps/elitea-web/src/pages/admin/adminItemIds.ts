@@ -26,6 +26,9 @@ export const ADMIN_ACTION_PERMISSION = {
   descriptorActivate: 'provider_hub.descriptor.activate',
   nativeClients: 'configuration.native_clients',
   microsoftApps: 'configuration.microsoft_apps',
+  /** A guardrail row of LLM Governance; the legacy `configuration.governance` is its alternative. */
+  guardrailsManage: 'llm.guardrails.manage',
+  governanceLegacy: 'configuration.governance',
 } as const;
 
 export const ADMIN_ITEM = {
