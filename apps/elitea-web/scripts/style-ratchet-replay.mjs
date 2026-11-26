@@ -90,7 +90,8 @@ function run(cmd, args, options = {}) {
 }
 const TOP = run('git', ['rev-parse', '--show-toplevel']).stdout.trim();
 // Paths in git calls are repository paths (apps/elitea-web/src), so git runs at the top.
-const git = (args, options) => run('git', args, { cwd: TOP, ...options });
+// core.quotePath=false: non-ASCII paths come unquoted, as style-ratchet-base.mjs reads them.
+const git = (args, options) => run('git', ['-c', 'core.quotePath=false', ...args], { cwd: TOP, ...options });
 const PREFIX = `${relative(TOP, APP_DIR).split('\\').join('/')}/`;
 const SRC = `${PREFIX}src`;
 

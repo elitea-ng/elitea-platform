@@ -6,7 +6,9 @@
   // themselves — only a count that grows does (scripts/lib/style-ratchet-core.mjs).
   //
   // Every message carries its ratchet kind in brackets ([spacing-rem], …);
-  // the core reads the kind from there. A new kind is a new bracketed tag.
+  // the core reads the kind from there. A new kind is a new bracketed tag and
+  // its entry in KINDS (scripts/lib/style-ratchet-core.mjs); a finding with a
+  // tag KINDS does not know stops the check.
   //
   // Folders where .oxlintrc.json turns elitea/raw-px-spacing off are counted
   // here on purpose (decision 3.6): the ratchet stops growth there and asks
@@ -20,21 +22,11 @@
   "options": {
     "typeAware": false
   },
-  "ignorePatterns": [
-    // Tests, stories and mocks are not screens.
-    "**/*.test.ts",
-    "**/*.test.tsx",
-    "**/*.spec.ts",
-    "**/*.spec.tsx",
-    "**/*.stories.tsx",
-    "**/*.stories.ts",
-    "**/__tests__/**",
-    "**/__mocks__/**",
-    "**/*.d.ts",
-    // The ported source of @eliteaai/elitea-assistant owns its own styling
-    // (see theme-gate.oxlintrc.json); the only folder the ratchet skips.
-    "**/widgets/support-assistant/vendor/**"
-  ],
+  // No ignorePatterns: here they would resolve against scripts/ and match
+  // nothing in the trees the check lints. Tests, stories, mocks, type
+  // declarations, test/ and smoke/ folders and the ported source of
+  // @eliteaai/elitea-assistant are left out by NOT_COUNTED in
+  // scripts/lib/style-ratchet-core.mjs.
   "rules": {
     // R-T9 as amended by ADR-0062 decision 2: rem and px lengths in spacing,
     // and numbers MUI multiplies that are off the brand scale (unit 8 =
