@@ -8155,9 +8155,11 @@ sandboxKubernetes:
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
-  # ADR-0034: the RuntimeClass workspace-run Pods run under. The supervisor
-  # reads it (a ClusterRole grants `get` on this one name) and refuses every
-  # workspace run unless its handler is runsc or gvisor (gVisor) or kata*.
+  # ADR-0034 / ADR-0011: the RuntimeClass code, workspace-run and browser
+  # Pods run under. The supervisor reads it (a ClusterRole, rendered whenever
+  # sandboxKubernetes.enabled, grants `get` on this one name) and refuses every
+  # such Pod unless its handler is runsc or gvisor (gVisor) or kata* (#2968).
+  # Code profiles in the supervisor Secret must name this same runtime_class.
   # The platform provides it, or `sandboxRuntime` below does:
   #   GKE Sandbox node pool (sandbox_config gvisor):   gvisor
   #   AKS Pod Sandboxing node pool (KataVmIsolation): kata-vm-isolation

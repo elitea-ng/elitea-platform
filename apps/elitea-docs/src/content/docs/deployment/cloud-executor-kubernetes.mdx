@@ -198,6 +198,8 @@ Under gVisor, `dmesg` prints gVisor's own boot lines ("Starting gVisor..."), not
 
 <Note title="The supervisor checks the handler itself">
 Before it creates any workspace-run Pod, the supervisor reads the RuntimeClass named in `sandboxKubernetes.runtimeClass.name` and accepts only the handlers `runsc`, `gvisor` and `kata*`. It checks at start and again before each run. A missing RuntimeClass, a read the API server refuses, and `runc` or `crun` refuse every workspace run, with `workspace_run_runtime_class_refused` in its log (and `workspace_run_runtime_class_unverified` at start). The supervisor itself keeps running, so its other profiles keep working, and a fixed RuntimeClass is picked up within seconds, without a restart. The chart grants it `get` on that one RuntimeClass, and nothing else cluster-wide.
+
+**Code Pods verify the runtime too.** Code-node jobs (toolkit Code) run user code in short-lived Pods in the same execution namespace. Before it creates a code Pod, the supervisor makes the same check on the code profile's `runtime_class`, with the same caching: a verdict is reused for a minute, a refusal for five seconds. A missing, unreadable or `runc` RuntimeClass fails the code job with "Kubernetes sandbox RuntimeClass does not isolate code Pods", logs `code_pod_runtime_class_refused` with the RuntimeClass name, and creates no Pod. Code never falls back to the standard container boundary. The chart renders its RuntimeClass `get` grant whenever `sandboxKubernetes.enabled` is on. Set each code profile's `runtime_class` to `sandboxKubernetes.runtimeClass.name`, because that is the one name the grant covers.
 </Note>
 
 ## Step 2: the bucket

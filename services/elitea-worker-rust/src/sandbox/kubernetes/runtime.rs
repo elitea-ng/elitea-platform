@@ -2,6 +2,7 @@
 use super::{
     PodIdentity, PodPolicy,
     client::{ControlError, KubernetesClient, LifecycleCommand},
+    runtime_class::{Gate, PodKind},
 };
 use crate::sandbox::runtime::CodeJobRuntime;
 use adk_sandbox::{
@@ -12,6 +13,9 @@ use std::time::Duration;
 
 pub struct KubernetesRuntime {
     client: KubernetesClient,
+    /// The `RuntimeClass` check every code Pod passes before it is created,
+    /// with the same caching and refusal semantics as workspace runs.
+    isolation: Gate,
     policy: PodPolicy,
     cluster: String,
     digest: String,
@@ -44,6 +48,7 @@ impl KubernetesRuntime {
             .1
             .to_owned();
         Ok(Self {
+            isolation: Gate::new(client.clone(), policy.runtime_class.clone(), PodKind::Code),
             client: KubernetesClient::new(client, policy.namespace.clone()),
             policy,
             cluster,
@@ -87,6 +92,14 @@ impl KubernetesRuntime {
         Ok((identity, uid))
     }
 
+    /// Fail-closed, before any code Pod exists: never user code on runc.
+    async fn isolating(&self) -> Result<(), ControlError> {
+        self.isolation
+            .isolating()
+            .await
+            .map_err(|_| ControlError::Isolation)
+    }
+
     fn bound(&self, job: &CodeJobIdentity) -> Result<(PodIdentity, String), ControlError> {
         let (identity, uid) = self.identity(job)?;
         Ok((identity, uid.ok_or(ControlError::Identity)?))
@@ -102,6 +115,7 @@ impl KubernetesRuntime {
             return Err(failure(ControlError::Identity));
         }
         let (code, runner) = files(manifest).map_err(failure)?;
+        self.isolating().await.map_err(failure)?;
         let operation = async {
             let mut pod = self
                 .client
@@ -164,6 +178,7 @@ impl KubernetesRuntime {
         if bound.is_some() {
             return Err(failure(ControlError::Identity));
         }
+        self.isolating().await.map_err(failure)?;
         // Persist this Pod's UID before any repository bytes or launch files are sent.
         self.client
             .create_with_repository(&self.policy, &identity, launch, Some(root))
@@ -857,5 +872,119 @@ mod tests {
         let mut duplicate = manifest;
         duplicate.entries[1] = duplicate.entries[0].clone();
         assert!(files(&duplicate).is_err());
+    }
+
+    /// A fake API server: the `RuntimeClass` read answers `class` (a handler,
+    /// or 404 for `None`); every Pod create is counted and refused with 500,
+    /// so a test sees whether a code Pod would have been created.
+    fn isolation_api(
+        class: Option<&'static str>,
+    ) -> (kube::Client, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let creates = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&creates);
+        let client = kube::Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                let counted = std::sync::Arc::clone(&counted);
+                async move {
+                    let path = request.uri().path().to_owned();
+                    let (status, body) = if path == "/apis/node.k8s.io/v1/runtimeclasses/sandbox" {
+                        match class {
+                            Some(handler) => (
+                                200,
+                                json!({"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass",
+                                       "metadata":{"name":"sandbox"},"handler":handler}),
+                            ),
+                            None => (
+                                404,
+                                json!({"kind":"Status","apiVersion":"v1","status":"Failure",
+                                       "reason":"NotFound","message":"test","code":404}),
+                            ),
+                        }
+                    } else {
+                        assert_eq!(request.method(), http::Method::POST, "{path}");
+                        assert_eq!(path, "/api/v1/namespaces/execution/pods");
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        (
+                            500,
+                            json!({"kind":"Status","apiVersion":"v1","status":"Failure",
+                                   "reason":"InternalError","message":"test","code":500}),
+                        )
+                    };
+                    Ok::<_, std::convert::Infallible>(
+                        http::Response::builder()
+                            .status(status)
+                            .body(http_body_util::Full::new(bytes::Bytes::from(
+                                serde_json::to_vec(&body).unwrap(),
+                            )))
+                            .unwrap(),
+                    )
+                }
+            }),
+            "execution",
+        );
+        (client, creates)
+    }
+
+    fn runtime_on(client: kube::Client) -> KubernetesRuntime {
+        let mut runtime = runtime();
+        runtime.isolation = Gate::new(client.clone(), "sandbox".into(), PodKind::Code);
+        runtime.client = KubernetesClient::new(client, "execution".into());
+        runtime
+    }
+
+    fn code_manifest() -> Manifest {
+        Manifest::new(vec![
+            ManifestEntry::File {
+                path: ".elitea-code.json".into(),
+                content: b"{}".to_vec(),
+            },
+            ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: b"{}".to_vec(),
+            },
+        ])
+    }
+
+    /// A missing `RuntimeClass` and a non-sandbox handler refuse the code job
+    /// before any Pod is created, with the typed isolation error; an approved
+    /// handler lets the create go ahead.
+    #[tokio::test]
+    async fn code_pods_verify_the_runtime_class_before_creation() {
+        use std::sync::atomic::Ordering;
+        let job = CodeJobIdentity::new("a".repeat(64), "b".repeat(64)).unwrap();
+        let isolation = ControlError::Isolation.to_string();
+        for class in [None, Some("runc"), Some("crun")] {
+            let (client, creates) = isolation_api(class);
+            let runtime = runtime_on(client);
+            assert!(matches!(
+                runtime.isolating().await,
+                Err(ControlError::Isolation)
+            ));
+            let refused = runtime
+                .prepare_inner(&job, &code_manifest(), None)
+                .await
+                .unwrap_err();
+            assert!(
+                refused.to_string().contains(&isolation),
+                "{class:?}: {refused}"
+            );
+            assert_eq!(creates.load(Ordering::SeqCst), 0, "{class:?}");
+        }
+        for handler in ["runsc", "gvisor", "kata-qemu"] {
+            let (client, creates) = isolation_api(Some(handler));
+            let runtime = runtime_on(client);
+            assert!(runtime.isolating().await.is_ok(), "{handler}");
+            let outcome = runtime
+                .prepare_inner(&job, &code_manifest(), None)
+                .await
+                .unwrap_err();
+            // The fake refuses the create itself: the isolation gate passed.
+            assert!(
+                !outcome.to_string().contains(&isolation),
+                "{handler}: {outcome}"
+            );
+            assert_eq!(creates.load(Ordering::SeqCst), 1, "{handler}");
+        }
     }
 }

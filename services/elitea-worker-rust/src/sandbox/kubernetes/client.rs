@@ -30,6 +30,12 @@ pub enum ControlError {
     Helper,
     #[error("Kubernetes sandbox receipt is malformed or exceeds its size limit")]
     Receipt,
+    /// The code Pod's `RuntimeClass` is missing, unreadable or not a sandbox
+    /// runtime; the supervisor log names the `RuntimeClass` and why.
+    #[error(
+        "Kubernetes sandbox RuntimeClass does not isolate code Pods; the code job is refused before any Pod exists"
+    )]
+    Isolation,
 }
 
 impl From<InvalidWorkload> for ControlError {
