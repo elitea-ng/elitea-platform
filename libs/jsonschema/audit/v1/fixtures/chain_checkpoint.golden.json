@@ -1,0 +1,25 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000040",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "security_signal",
+  "event_type": "chain.checkpoint",
+  "tenant": {
+    "project_id": 3
+  },
+  "actor": {
+    "type": "system",
+    "id": "system"
+  },
+  "action": "chain.checkpoint",
+  "outcome": "success",
+  "details": {
+    "partition": "3",
+    "epoch": 7,
+    "head_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+    "length": 42,
+    "delivery_seq_high": 41,
+    "key_id": "checkpoint-key-1",
+    "signature": "c3JjLWxhZ2UtdGVzdA=="
+  }
+}

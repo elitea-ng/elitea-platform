@@ -1,0 +1,75 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000010",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "security_signal",
+  "event_type": "security_signal.content.prompt_injection",
+  "tenant": {
+    "project_id": 3
+  },
+  "actor": {
+    "type": "user",
+    "id": "7f9b1a2c-3e4f-5a6b-7c8d-9e0f1a2b3c4d",
+    "role": "affected"
+  },
+  "action": "content.prompt_injection",
+  "target": {
+    "type": "application",
+    "id": "42",
+    "release_id": "8"
+  },
+  "outcome": "deny",
+  "correlation": {
+    "correlation_id": "exec-3",
+    "conversation_id": "0192f0c1-7b6e-7c3a-8f00-000000000011",
+    "trace_id": "00f067aa0ba90281235de2e4a4d5a72c"
+  },
+  "chain": {
+    "partition": "3",
+    "sequence": 5,
+    "prev_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "signal": {
+    "type": "content.prompt_injection",
+    "taxonomy_version": "1.0.0",
+    "category": "content",
+    "severity": "high",
+    "default_severity": "high",
+    "confidence": "medium",
+    "disposition": "blocked",
+    "detector": {
+      "component": "gateway-guardrail",
+      "name": "prompt-injection",
+      "type": "classifier"
+    },
+    "provenance": {
+      "kind": "tool_result",
+      "toolkit": "web_search",
+      "mcp_server": "brave-search",
+      "author": "7f9b1a2c-3e4f-5a6b-7c8d-9e0f1a2b3c4d",
+      "self_supplied": false,
+      "digest": "9b1a2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d",
+      "claimed": false
+    },
+    "locator": {
+      "step_ref": "step-1",
+      "part_index": 0,
+      "byte_start": 10,
+      "byte_end": 42
+    },
+    "attribution": "resolved",
+    "labels": ["reason:injection"],
+    "count": 1,
+    "first_seen": "2026-11-25T09:29:00Z",
+    "last_seen": "2026-11-25T09:30:00Z",
+    "folded": ["0192f0c1-7b6e-7c3a-8f00-000000000012"],
+    "dedup_key": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "origin": "server",
+    "evidence": {
+      "digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "ref": "object-storage://artifacts/0123456789abcdef"
+    }
+  },
+  "details": {}
+}
