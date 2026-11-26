@@ -104,19 +104,42 @@ func TestWebhookReceiverRefusesBadSignature(t *testing.T) {
 }
 
 func TestWebhookReceiverStatusSwitch(t *testing.T) {
-	rcv := NewWebhookReceiver(t, testKey2)
-	defer func() { _ = rcv.Stop(t) }()
-	sink := newWebhookSink(t, rcv.URL(), testKey2)
-	rcv.SetStatus(http.StatusServiceUnavailable, http.StatusTooManyRequests)
-	events := []auditexport.Event{testEvent("event-a")}
-	// The sink retries transient failures; the received set stays complete.
-	for i := 0; i < 3; i++ {
-		if err := sink.Send(context.Background(), events); err != nil {
-			t.Fatalf("pass %d: %v", i, err)
-		}
+	// Transient codes (401, 429, 500) make the sink retry; the received set
+	// stays complete across the switch.
+	for _, code := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			rcv := NewWebhookReceiver(t, testKey2)
+			defer func() { _ = rcv.Stop(t) }()
+			sink := newWebhookSink(t, rcv.URL(), testKey2)
+			rcv.SetStatus(code)
+			events := []auditexport.Event{testEvent("event-a")}
+			for i := 0; i < 3; i++ {
+				if err := sink.Send(context.Background(), events); err != nil {
+					t.Fatalf("pass %d: %v", i, err)
+				}
+			}
+			if rcv.Delivered("event-a") != 3 {
+				t.Fatalf("event-a delivered %d times, want 3 (status %d)", rcv.Delivered("event-a"), code)
+			}
+		})
 	}
-	if rcv.Delivered("event-a") != 3 {
-		t.Fatalf("event-a delivered %d times, want 3", rcv.Delivered("event-a"))
+	// A 400 is a content refusal: the pipeline splits and dead-letters.
+	{
+		rcv := NewWebhookReceiver(t, testKey2)
+		defer func() { _ = rcv.Stop(t) }()
+		sink := newWebhookSink(t, rcv.URL(), testKey2)
+		rcv.Refusals()["event-b"] = http.StatusBadRequest
+		events := []auditexport.Event{testEvent("event-a"), testEvent("event-b")}
+		err := sink.Send(context.Background(), events)
+		if err == nil {
+			t.Fatal("a content refusal must return an error")
+		}
+		if rcv.Delivered("event-a") != 1 {
+			t.Fatalf("event-a delivered %d times, want 1", rcv.Delivered("event-a"))
+		}
+		if rcv.Delivered("event-b") != 0 {
+			t.Fatalf("event-b delivered %d times, want 0", rcv.Delivered("event-b"))
+		}
 	}
 }
 
