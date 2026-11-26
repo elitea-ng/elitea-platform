@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import { Composer, peopleSuggestions, stoppedNote } from '@/features/chat/Composer';
 
@@ -11,6 +11,30 @@ describe('Composer with an async onSend', () => {
     await fireEvent.press(screen.getByLabelText('Send'));
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect(screen.getByLabelText('Message').props.value).toBe('written offline');
+  });
+
+  it('sends once when Send is pressed twice before the send settles (#3077)', async () => {
+    let release: (problem: string | null) => void = () => undefined;
+    const onSend = jest.fn(
+      () =>
+        new Promise<string | null>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await render(<Composer busy={false} onSend={onSend} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello');
+    const send = screen.getByLabelText('Send');
+    // Both presses in the same tick, before a render can disable Send (an accessibility click, as Pressability takes it).
+    const click = send.props.onClick as (event: unknown) => void;
+    const event = { nativeEvent: {}, currentTarget: send, target: send, stopPropagation: () => undefined };
+    await act(async () => {
+      click(event);
+      click(event);
+    });
+    expect(onSend).toHaveBeenCalledTimes(1);
+    release(null);
+    await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe(''));
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 
   it('clears the text once the send is accepted', async () => {

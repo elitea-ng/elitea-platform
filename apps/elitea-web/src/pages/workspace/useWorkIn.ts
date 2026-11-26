@@ -10,6 +10,8 @@
  */
 import { useEffect, useState } from 'react';
 
+import { createSubmitIds } from '@elitea/client-core/conversation';
+
 import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, takeFirstMessage, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
 import type { WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
@@ -59,10 +61,14 @@ export function useWorkIn({ workspaceId, offered: asked, canSend, send, onError,
     if (first !== undefined) void send(...first);
   }, [canSend, workspaceId, send]);
 
+  // The new thread's id, kept until its message is handed over (#3077): a retry, or a second call that got past the
+  // composer's gate, makes no second worktree (the host answers the one this id made).
+  const [threadIds] = useState(createSubmitIds);
   const toWorktree: Send = async (...args) => {
     if (start === undefined) return false;
     try {
-      const entry = await start(workspaceId);
+      const entry = await start(workspaceId, threadIds.current());
+      threadIds.sent();
       holdFirstMessage(entry.workspace_id, args);
       open(entry.workspace_id);
       return true;

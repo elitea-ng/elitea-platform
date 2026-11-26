@@ -73,6 +73,9 @@ export function createFakeWorktreeIpc(script: FakeWorktreeScript = {}): FakeWork
     },
     create: (workspaceId, threadUuid, base) =>
       run('create', [workspaceId, threadUuid, base], () => {
+        // As the host: a thread UUID that has a worktree answers it (#3077).
+        const made = entries.find((e) => e.thread_uuid === threadUuid);
+        if (made !== undefined) return { ...made };
         const entry = fakeWorktreeEntry({ workspace_id: `wt-${threadUuid}`, thread_uuid: threadUuid, branch: `elitea/${threadUuid.replaceAll('-', '').slice(0, 8)}` });
         entries = [entry, ...entries];
         return entry;

@@ -37,8 +37,8 @@ async function teamThread(page: Page): Promise<void> {
   const chip = page.getByTestId('agent-chip');
   await expect(chip).toContainText('Coder', { timeout: 150_000 });
   await chip.click();
-  await page.getByTestId('agent-team').click();
-  await page.getByTestId('agent-team-3').click();
+  await page.getByTestId('thread-add-team').click();
+  await page.getByTestId('thread-add-team-option-3').click();
   await expect(chip).toContainText('Review crew');
   await page.getByRole('textbox').fill('lint-web is red, please fix it');
   await page.getByTestId('workspace-send-button').click();

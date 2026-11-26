@@ -7,6 +7,10 @@
  * decision 4c): only the active agent's avatar animates. Its menu makes or clears the lead, addresses the agent in
  * the composer (`@Name`), moves it here or to the cloud (not while the thread is handed off), opens the agent and
  * removes it from the thread. The exchange strip (decision 2c) sits on top while a message's agents answer in turn.
+ *
+ * The thread's agents are managed here (#3081), not in the composer's chip: below the conversation's rows,
+ * `ThreadAgentsPanel` lists the agents that join with the next message (before the first send, the composer's agent and
+ * the ones added to it, so a new thread has the tab too) and the Add agent, Add cloud agent and Add team pickers.
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
@@ -22,6 +26,8 @@ import { AgentStateAnnouncer, HandoffBaton, useAgentRowViews } from '@/pages/cha
 import { ParticipantRowControls, type ParticipantRowActions } from '@/pages/chat/ParticipantRowControls';
 
 import { ExchangeStrip, exchangeOf, type ExchangeStripProps } from './ExchangeStrip';
+import { participantsTabId, pendingAgents, ThreadAgentsPanel } from './ThreadAgentsPanel';
+import type { AgentSelection } from './useAgentSelection';
 import { useThreadTeam } from './useThreadTeam';
 
 export interface ParticipantsTabProps {
@@ -36,6 +42,8 @@ export interface ParticipantsTabProps {
   /** The turn on screen and the host: the exchange strip, while a message's agents answer in turn, and the live states. */
   readonly turn: Pick<WorkspaceTurn, 'turnId' | 'view'>;
   readonly ipc: ExchangeStripProps['ipc'];
+  /** The composer's agents (#3081): the ones that join with the next message, and the add pickers. */
+  readonly selection?: AgentSelection | undefined;
 }
 
 type WrapperConversation = NonNullable<Parameters<typeof ParticipantsWrapper>[0]['activeConversation']>;
@@ -54,7 +62,7 @@ function report(action: string) {
   return (error: unknown) => { console.error(`[workspace] failed to ${action}`, error); };
 }
 
-export function ParticipantsTab({ projectId, conversationId, subject, executorLocked, onAddress, turn, ipc }: ParticipantsTabProps): ReactNode {
+export function ParticipantsTab({ projectId, conversationId, subject, executorLocked, onAddress, turn, ipc, selection }: ParticipantsTabProps): ReactNode {
   const navigate = useNavigate();
   const team = useThreadTeam({ projectId, conversationId });
   useLocalAgentStates(conversationId, turn.view.agentState);
@@ -72,24 +80,33 @@ export function ParticipantsTab({ projectId, conversationId, subject, executorLo
       const agent = team.agents.find((row) => row.participantId === id);
       if (agent !== undefined) void navigate({ to: '/agents/$tab/$agentId', params: { tab: 'all', agentId: String(agent.applicationId) } });
     },
-    onRemove: (id) => { team.remove(id).catch(report('remove the agent')); },
-  }), [team, executorLocked, onAddress, navigate]);
+    onRemove: (id) => {
+      // An agent the composer still holds would join again with the next message.
+      const agent = team.agents.find((row) => row.participantId === id);
+      if (agent !== undefined) selection?.removeCompanion?.(String(agent.applicationId));
+      team.remove(id).catch(report('remove the agent'));
+    },
+  }), [team, executorLocked, onAddress, navigate, selection]);
   const renderAgentLead = useMemo(() => ({ participantId }: { participantId: number }) => {
     const row = rows.find((candidate) => candidate.participantId === participantId);
     return row === undefined ? null : <ParticipantRowControls row={row} actions={actions} />;
   }, [rows, actions]);
-  if (team.conversation === undefined || team.agents.length === 0) return null;
-  const several = team.agents.length >= 2;
+  const joined = team.conversation === undefined ? [] : team.agents;
+  const pending = selection === undefined ? [] : pendingAgents(selection, joined);
+  if (joined.length === 0 && pending.length === 0) return null;
   return (
-    <InspectorTab id={several ? 'team' : 'participants'} title={t('workspace.participants.title', 'Participants')} subject={subject}>
+    <InspectorTab id={participantsTabId(joined.length + pending.length)} title={t('workspace.participants.title', 'Participants')} subject={subject}>
       <Box ref={container} sx={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }} data-testid="workspace-participants-tab">
         <ExchangeStrip exchange={exchangeOf(turn, team.agents)} ipc={ipc} />
-        <ParticipantsWrapper
-          appearance="inspector"
-          context="local_work"
-          activeConversation={team.conversation as unknown as WrapperConversation}
-          renderAgentLead={renderAgentLead}
-        />
+        {joined.length > 0 && (
+          <ParticipantsWrapper
+            appearance="inspector"
+            context="local_work"
+            activeConversation={team.conversation as unknown as WrapperConversation}
+            renderAgentLead={renderAgentLead}
+          />
+        )}
+        {selection !== undefined && <ThreadAgentsPanel selection={selection} joined={joined} locked={executorLocked} />}
         <HandoffBaton container={container} states={states} />
         <AgentStateAnnouncer rows={rows} />
       </Box>

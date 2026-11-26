@@ -83,3 +83,4 @@ export {
   type FoldableRow,
   type FoldedEntry,
 } from './floor';
+export { createSubmitGate, createSubmitIds, type SubmitGate, type SubmitIds } from './submitGate';

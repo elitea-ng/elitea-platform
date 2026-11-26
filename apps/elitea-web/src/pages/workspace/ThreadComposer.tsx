@@ -319,7 +319,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         acceptImages={!cloudMode}
         planMode={commands.planMode}
         {...modes.switchProps}
-        agentPicker={<AgentChip selection={session.selection} agentRef={commands.agentRef} disabledHint={agentHint} />}
+        agentPicker={(draft) => <AgentChip selection={session.selection} draft={draft} floor={team.floor} agentRef={commands.agentRef} disabledHint={agentHint} />}
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={
           <>

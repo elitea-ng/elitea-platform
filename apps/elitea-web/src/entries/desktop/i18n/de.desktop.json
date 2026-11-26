@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "Der Agent wurde nicht erstellt: {{message}}",
   "workspace.noAgents.createCoding": "Lokalen Coding-Agent erstellen",
   "workspace.agent": "Agent",
-  "workspace.version": "Version",
   "workspace.composer.files": "Dateien in diesem Ordner",
   "workspace.composer.commands": "Befehle",
   "workspace.composer.placeholder": "Was soll der Agent tun? Mit @ eine Datei hinzufügen, mit / Befehle und Skills",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Ohne Freigaben",
   "workspace.mode.planHint": "Plant, ändert nichts",
   "workspace.usage.context": "Kontext: {{percent}} % des Fensters belegt",
-  "workspace.team.menu": "Als Team ausführen",
   "workspace.team.note": "Startet einen neuen Thread mit den Agenten und dem Lead des Teams. Alle arbeiten auf diesem Computer mit diesem Ordner.",
   "workspace.team.otherProject": "Agenten eines anderen Projekts",
   "workspace.team.pipeline": "Enthält eine Pipeline",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(in der Cloud, ohne den Ordner)",
   "workspace.consult.failed": "Keine Antwort: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Cloud · kein Ordner",
-  "workspace.team.folderNoticeLocal": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen, auch wenn ein anderes Mitglied es fragt oder ihm das Wort übergibt. Nur ein Agent, der nicht auf diesem Computer laufen kann, läuft in der Cloud ohne den Ordner."
+  "workspace.team.folderNoticeLocal": "Jedes Mitglied arbeitet auf diesem Computer mit diesem Ordner und seinen Werkzeugen, auch wenn ein anderes Mitglied es fragt oder ihm das Wort übergibt. Nur ein Agent, der nicht auf diesem Computer laufen kann, läuft in der Cloud ohne den Ordner.",
+  "workspace.floor.addLocal": "Agent hinzufügen",
+  "workspace.floor.addCloud": "Cloud-Agent hinzufügen",
+  "workspace.floor.cloudNote": "Ein Cloud-Agent erhält nur den Text der Unterhaltung, nie diesen Ordner.",
+  "workspace.participants.change": "Ändern",
+  "workspace.participants.joining": "Kommen mit deiner nächsten Nachricht dazu",
+  "workspace.participants.noMatch": "Kein Treffer",
+  "workspace.participants.open": "Agenten dieses Threads",
+  "workspace.participants.search": "Suchen",
+  "workspace.participants.team": "Team: {{name}}",
+  "workspace.team.add": "Team hinzufügen"
 }

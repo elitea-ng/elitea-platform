@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "عامل ایجاد نشد: {{message}}",
   "workspace.noAgents.createCoding": "ایجاد یک عامل کدنویسی محلی",
   "workspace.agent": "عامل",
-  "workspace.version": "نسخه",
   "workspace.composer.files": "فایل‌های این پوشه",
   "workspace.composer.commands": "دستورها",
   "workspace.composer.placeholder": "عامل چه کاری باید انجام دهد؟ @ را برای افزودن فایل و / را برای دستورها و مهارت‌ها تایپ کنید",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "بدون تأیید",
   "workspace.mode.planHint": "برنامه‌ریزی، بدون تغییر",
   "workspace.usage.context": "بافت: {{percent}}٪ از پنجره استفاده شده",
-  "workspace.team.menu": "اجرا به‌صورت تیم",
   "workspace.team.note": "رشته‌ای تازه با عامل‌ها و سرپرست تیم آغاز می‌کند. همه روی این رایانه با این پوشه کار می‌کنند.",
   "workspace.team.otherProject": "عامل‌های پروژه‌ای دیگر",
   "workspace.team.pipeline": "دارای خط لوله",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(در فضای ابری، بدون پوشه)",
   "workspace.consult.failed": "بدون پاسخ: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "ابری · بدون پوشه",
-  "workspace.team.folderNoticeLocal": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند، حتی وقتی عضو دیگری از او می‌پرسد یا نوبت را به او می‌سپارد. فقط عاملی که نمی‌تواند روی این رایانه اجرا شود، در فضای ابری و بدون پوشه اجرا می‌شود."
+  "workspace.team.folderNoticeLocal": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند، حتی وقتی عضو دیگری از او می‌پرسد یا نوبت را به او می‌سپارد. فقط عاملی که نمی‌تواند روی این رایانه اجرا شود، در فضای ابری و بدون پوشه اجرا می‌شود.",
+  "workspace.floor.addLocal": "افزودن عامل",
+  "workspace.floor.addCloud": "افزودن عامل ابری",
+  "workspace.floor.cloudNote": "عامل ابری فقط متن گفتگو را می‌گیرد، هرگز این پوشه را.",
+  "workspace.participants.change": "تغییر",
+  "workspace.participants.joining": "با پیام بعدی شما می‌پیوندند",
+  "workspace.participants.noMatch": "موردی یافت نشد",
+  "workspace.participants.open": "عامل‌های این رشته",
+  "workspace.participants.search": "جستجو",
+  "workspace.participants.team": "تیم: {{name}}",
+  "workspace.team.add": "افزودن تیم"
 }

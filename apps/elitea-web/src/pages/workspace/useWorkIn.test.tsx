@@ -67,6 +67,27 @@ describe('useWorkIn', () => {
     expect(navigate).toHaveBeenCalledWith(entry?.workspace_id);
   });
 
+  it('a failed hand-off is retried on the same thread id, and the next message gets a new one (#3077)', async () => {
+    const ipc = createFakeWorktreeIpc();
+    const client = new QueryClient();
+    const { result } = renderHook(() => useWorkIn({ workspaceId: 'f8', offered: true, canSend: true, send: vi.fn(() => Promise.resolve(true)), onError: vi.fn(), open: navigate, ipc }), {
+      wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
+    });
+    ipc.failNext('create', 'worktree_failed');
+    await act(async () => {
+      expect(await result.current.send('fix the build', [], [])).toBe(false);
+    });
+    await act(async () => {
+      expect(await result.current.send('fix the build', [], [])).toBe(true);
+    });
+    await act(async () => {
+      expect(await result.current.send('and the docs', [], [])).toBe(true);
+    });
+    const uuids = ipc.calls.create.map((call) => call[1]);
+    expect(uuids[0]).toBe(uuids[1]);
+    expect(uuids[2]).not.toBe(uuids[1]);
+  });
+
   it('the worktree thread sends the held message once it can', async () => {
     holdFirstMessage('wt-9', ['fix the build', []]);
     const { rerender, send } = renderWorkIn('wt-9', false, false);

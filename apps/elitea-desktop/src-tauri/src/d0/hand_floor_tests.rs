@@ -152,6 +152,12 @@ pub(super) fn platform(thread: Thread) -> impl Fn(&Req) -> Res {
                 "expires_at": "2026-10-10T00:00:00Z",
                 "memory_recall": {"text": ""}, "executor": executor,
             });
+            // Main admits a start's unattended grant (#3080).
+            if let Some(grant_id) = body["unattended"]["grant_id"].as_str() {
+                started["unattended"] = json!({"grant_id": grant_id,
+                    "chain_root_execution_id": execution_of(participant), "continuation_index": 0,
+                    "chain": {"max_continuations": 0}});
+            }
             if let Some(hand_id) = body["floor_turn"]["hand_id"].as_str() {
                 started["hand_off"] = json!({
                     "hand_id": hand_id, "from_participant_id": 77, "from_name": "Coder",
@@ -344,6 +350,67 @@ async fn a_local_agent_hands_the_floor_and_the_cloud_receiver_answers_after_the_
     assert!(input.contains("[Person]: Fix the build"), "{input}");
     assert!(!input.contains("WORKSPACE-ONLY"));
     assert!(child[0].get("tools").is_none());
+}
+
+/// #3080: "Run to completion" is on by default, so a team's lead runs every
+/// message as an unattended turn, and such a turn had no `hand_floor`. It
+/// has it now, and its tail names the team; a hand-off ends the chain
+/// (`completed`, no continuation and no goal check) and the handed agent
+/// answers next, without the grant.
+#[tokio::test]
+async fn an_unattended_lead_hands_the_floor_and_its_chain_ends_for_the_hand_off() {
+    let thread = Thread::new(handed(&[(88, "Reviewer", HAND_1)]), |n| match n {
+        0 => hand_to(&[88]),
+        _ => say("Handed."),
+    });
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let grant: super::super::unattended::UnattendedGrant =
+        serde_json::from_value(json!({})).unwrap();
+    let started = h
+        .host
+        .start(TurnRequest {
+            prompt: "Start the implementation with the team".into(),
+            unattended: Some(super::super::unattended::UnattendedTurn::root(
+                grant.admit().unwrap(),
+            )),
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+
+    let model = bodies(&h.server, "/llm/v1/chat/completions");
+    let first = model
+        .iter()
+        .find(|body| tool_names(body).contains(&"hand_floor".to_owned()))
+        .expect("an unattended lead is offered hand_floor");
+    let asked = first.to_string();
+    assert!(asked.contains("Your team in this thread"), "{asked}");
+    assert!(
+        asked.contains("Reviewer (cloud agent), participant 88"),
+        "{asked}"
+    );
+    assert!(
+        asked.contains("Linter (local agent, on this computer with this folder), participant 99"),
+        "{asked}"
+    );
+
+    let done = settled_done(&h, &started.turn_id);
+    assert_eq!(done["floor_next"]["hand_id"], HAND_1);
+    let ended = event_of(&h, "chain_ended", Some(&started.turn_id)).await;
+    assert_eq!(ended.payload["outcome"], "completed");
+    let continued = event_of(&h, "turn_continued", Some(&started.turn_id)).await;
+    assert_eq!(continued.payload["kind"], "hand");
+    let next = continued.payload["next_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_done_of(&h, &next).await;
+    let starts = starts(&h);
+    assert_eq!(starts.len(), 2, "{starts:?}");
+    assert_eq!(starts[1]["participant_id"], 88);
+    assert!(starts[1].get("unattended").is_none());
 }
 
 /// Threat model (ADR-0061 decision 5f): the person chose Bypass for their
@@ -637,6 +704,35 @@ async fn a_failed_handing_turn_starts_no_hand_off() {
     );
     let queue = event_of(&h, "exchange", Some(&started.turn_id)).await;
     assert_eq!(queue.payload["hands"], json!([]));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(starts(&h).len(), 1);
+}
+
+/// #3080: an unattended turn that handed the floor and then failed ends its
+/// chain `failed`, not `completed`, and starts none of its hand-offs.
+#[tokio::test]
+async fn a_failed_unattended_handing_turn_ends_its_chain_failed() {
+    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), |n| match n {
+        0 => hand_to(&[99]),
+        _ => Res::json(400, &json!({"error": {"message": "bad request"}})),
+    });
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let grant: super::super::unattended::UnattendedGrant =
+        serde_json::from_value(json!({})).unwrap();
+    let started = h
+        .host
+        .start(TurnRequest {
+            unattended: Some(super::super::unattended::UnattendedTurn::root(
+                grant.admit().unwrap(),
+            )),
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    let ended = event_of(&h, "chain_ended", Some(&started.turn_id)).await;
+    assert_eq!(ended.payload["outcome"], "failed");
+    commits_settled(&h.host).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(starts(&h).len(), 1);
 }

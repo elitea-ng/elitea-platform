@@ -41,6 +41,8 @@ export interface ConversationCreateParams {
   readonly source?: string;
   readonly participants?: readonly unknown[];
   readonly meta?: Readonly<Record<string, unknown>>;
+  /** The sending message's client id (a lowercase UUID, #3077): Main answers the conversation an earlier create with it made. */
+  readonly client_request_id?: string;
 }
 
 export async function conversationCreate(params: ConversationCreateParams): Promise<ConversationWire> {

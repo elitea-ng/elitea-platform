@@ -12,6 +12,7 @@ import type { ExecutionEventData } from "@/shared/api/sse";
 import { t } from "@/shared/i18n";
 
 import { pickIdAndUuid } from "../ChatBox.helpers";
+import { useOneConversationCreate } from "./useOneConversationCreate";
 import {
   NO_STREAM_TRANSPORT,
   type StreamStartOutcome,
@@ -317,7 +318,7 @@ export function useChatBoxSend(
   );
 
   const { deps } = params;
-  const createConversationForSend = useCallback(
+  const createConversationOnce = useCallback(
     async (question: string) => {
       if (params.editorTest) throw new Error('A validated Test context is required.');
       const internalTools = await getInternalToolsForSend?.();
@@ -351,6 +352,7 @@ export function useChatBoxSend(
       getInternalToolsForSend,
     ],
   );
+  const createConversationForSend = useOneConversationCreate(createConversationOnce, params.conversationUuid); // #3077
 
   const uploadAttachmentsForSend = useCallback(
     async (conversationId: string | number, files: readonly File[]) => {
