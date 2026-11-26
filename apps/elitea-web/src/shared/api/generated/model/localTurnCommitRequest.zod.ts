@@ -138,7 +138,7 @@ export const LocalTurnCommitRequest = zod
       .max(localTurnCommitRequestConsultsMax)
       .optional()
       .describe(
-        "Client contract 1.68 (ADR-0061 decision 3e). The thread members the turn consulted locally, in call order. Main writes each as two side messages before the answer: the question by the turn's agent and the reply by the consulted agent, with cause `delegation`. A consulted agent outside the thread, or a consult in a cloud agent's turn, answers 400 `invalid_local_turn`. Part of the commit's identity: a retried commit sends the same list.",
+        "Client contract 1.68 (ADR-0061 decision 3e). The thread members the turn consulted locally, in call order. Main writes each as two side messages before the answer: the question by the turn's agent and the reply by the consulted agent, with cause `delegation`. A consult of no local agent of the thread (outside it, the turn's own agent, a cloud member) is left out and the answer is still stored; a consult in a cloud agent's turn answers 400 `invalid_local_turn`. Part of the commit's identity: a retried commit sends the same list.",
       ),
   })
   .describe(

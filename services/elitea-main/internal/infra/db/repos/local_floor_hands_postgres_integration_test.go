@@ -57,27 +57,9 @@ VALUES (gen_random_uuid(), 'team', $1, 'local_work', now() AT TIME ZONE 'UTC')
 RETURNING id, uuid::text`, localHandsUser).Scan(&h.conversation, &h.uuid); err != nil {
 		t.Fatalf("seed conversation: %v", err)
 	}
-	seed := func(key, entity, meta, settings string) {
-		var id int64
-		if err := pool.QueryRow(ctx, `
-INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
-VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, entity, meta).Scan(&id); err != nil {
-			t.Fatalf("seed participant: %v", err)
-		}
-		if _, err := pool.Exec(ctx, `
-INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
-VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, h.conversation, id, settings); err != nil {
-			t.Fatalf("map participant: %v", err)
-		}
-		h.ids[key] = id
-	}
-	seed("user", "user", fmt.Sprintf(`{"id": %d}`, localHandsUser), `{}`)
-	for index, agent := range agents {
-		settings := fmt.Sprintf(`{"version_id": %d}`, 60+index)
-		if agent[2] == "cloud" {
-			settings = fmt.Sprintf(`{"version_id": %d, "executor": "cloud"}`, 60+index)
-		}
-		seed(agent[0], "application", fmt.Sprintf(`{"id": %d, "project_id": 1, "name": %q}`, 50+index, agent[1]), settings)
+	h.seed("user", "user", fmt.Sprintf(`{"id": %d}`, localHandsUser), `{}`)
+	for _, agent := range agents {
+		h.seedAgent(agent[0], agent[1], agent[2])
 	}
 	repo := NewLocalTurnsRepo(pool)
 	service, err := localturn.NewService(repo, &localTurnPolicy{allowed: true}, NewMemoriesRepo(pool), &localTurnAudit{},
@@ -93,6 +75,35 @@ VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, h.conversation, id, setti
 		t.Fatal(err)
 	}
 	return h
+}
+
+// seed maps one participant into the thread.
+func (h *localHands) seed(key, entity, meta, settings string) int64 {
+	h.t.Helper()
+	ctx := context.Background()
+	var id int64
+	if err := h.pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
+VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, entity, meta).Scan(&id); err != nil {
+		h.t.Fatalf("seed participant: %v", err)
+	}
+	if _, err := h.pool.Exec(ctx, `
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings, created_at)
+VALUES ($1, $2, $3::jsonb, now() AT TIME ZONE 'UTC')`, h.conversation, id, settings); err != nil {
+		h.t.Fatalf("map participant: %v", err)
+	}
+	h.ids[key] = id
+	return id
+}
+
+// seedAgent maps an application agent, local or cloud, into the thread.
+func (h *localHands) seedAgent(key, name, executor string) int64 {
+	index := len(h.ids)
+	settings := fmt.Sprintf(`{"version_id": %d}`, 60+index)
+	if executor == "cloud" {
+		settings = fmt.Sprintf(`{"version_id": %d, "executor": "cloud"}`, 60+index)
+	}
+	return h.seed(key, "application", fmt.Sprintf(`{"id": %d, "project_id": 1, "name": %q}`, 49+index, name), settings)
 }
 
 func (h *localHands) start(participant int64, addressed []int64, floor *localturn.FloorTurnRef) (localturn.StartOutcome, error) {
@@ -347,13 +358,20 @@ func TestPostgresLocalFloorHandsStopSkipAndConsults(t *testing.T) {
 	}
 
 	// Consults: stored as delegation side messages before the answer.
+	// A consult of no local agent of the thread (outside it, the agent
+	// itself, a cloud member) is left out; the answer is still stored.
+	cloudy := h.seedAgent("cloudy", "Cloudy", "cloud")
+	stray := h.mustStart(mira, []int64{mira}, nil)
+	h.mustCommit(stray.ExecutionID,
+		localturn.Consult{ParticipantID: 999999, Question: "q", Reply: "r"},
+		localturn.Consult{ParticipantID: mira, Question: "q", Reply: "r"},
+		localturn.Consult{ParticipantID: cloudy, Question: "q", Reply: "r"})
+	var strays int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM p_1.chat_message_group WHERE conversation_id = $1 AND cause = 'delegation'`,
+		h.conversation).Scan(&strays); err != nil || strays != 0 {
+		t.Fatalf("stray consult rows = %d, %v", strays, err)
+	}
 	second := h.mustStart(mira, []int64{mira}, nil)
-	if err := h.commit(second.ExecutionID, "x", localturn.Consult{ParticipantID: 999999, Question: "q", Reply: "r"}); !errors.Is(err, localturn.ErrInvalid) {
-		t.Fatalf("a consult outside the thread = %v, want ErrInvalid", err)
-	}
-	if err := h.commit(second.ExecutionID, "x", localturn.Consult{ParticipantID: mira, Question: "q", Reply: "r"}); !errors.Is(err, localturn.ErrInvalid) {
-		t.Fatalf("a consult of itself = %v, want ErrInvalid", err)
-	}
 	h.mustCommit(second.ExecutionID,
 		localturn.Consult{ParticipantID: doctor, Question: "Is lint-web green?", Reply: "Yes."},
 		localturn.Consult{ParticipantID: writer, Question: "Draft the note", Reply: "Done."})
@@ -550,5 +568,37 @@ WHERE question_id = $2::uuid AND position = $3`, run.ExecutionID, cloudQuestion,
 				t.Fatalf("the model reads %q in the cloud and %q locally", cloud.message, local.message)
 			}
 		})
+	}
+}
+
+// Parallel hand_floor calls of one turn (a model's parallel tool calls)
+// serialise on the calling turn's row instead of deadlocking.
+func TestPostgresLocalFloorHandsParallelCallsDoNotDeadlock(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	h := newLocalHands(t, pool, [3]string{"mira", "Mira", "local"}, [3]string{"doctor", "CI Doctor", "local"},
+		[3]string{"writer", "Writer", "local"})
+	first := h.mustStart(h.ids["mira"], []int64{h.ids["mira"]}, nil)
+	const calls = 6
+	errs := make(chan error, calls)
+	for index := range calls {
+		to := h.ids["doctor"]
+		if index%2 == 1 {
+			to = h.ids["writer"]
+		}
+		go func() {
+			_, err := h.hand(first.ExecutionID, []int64{to})
+			errs <- err
+		}()
+	}
+	for range calls {
+		if err := <-errs; err != nil {
+			t.Fatalf("a parallel hand: %v", err)
+		}
+	}
+	// Doctor and Writer each take 2 turns; the fifth call is a third turn,
+	// so the guard stopped the exchange once and skipped the queue.
+	states := h.statuses(first.QuestionID)
+	if len(states) != 4 || states[0] != "SKIPPED:consecutive_turns" || h.systemMessages() != 1 {
+		t.Fatalf("statuses = %v, system messages %d", states, h.systemMessages())
 	}
 }

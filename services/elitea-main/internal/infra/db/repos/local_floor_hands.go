@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -46,9 +47,13 @@ type localHandingTurn struct {
 	question     string
 }
 
-// lockLocalHandingTurn reads the calling turn under a shared lock (its
-// commit takes the row FOR UPDATE, so no hand-off lands after the commit)
-// and answers it with the routed message it belongs to.
+// lockLocalHandingTurn reads the calling turn FOR UPDATE (its commit takes
+// the same lock, so no hand-off lands after the commit) and answers it with
+// the routed message it belongs to. FOR UPDATE, not FOR SHARE: the caller is
+// often the message's first turn, which HandLocalFloor then locks FOR
+// UPDATE, and two concurrent calls upgrading a shared lock on one row
+// deadlock. The order is always the calling turn, then the first turn;
+// admission takes the first turn alone.
 func lockLocalHandingTurn(ctx context.Context, tx pgx.Tx, scope localturn.HandScope) (localHandingTurn, error) {
 	var (
 		turn               localHandingTurn
@@ -62,7 +67,7 @@ SELECT target_participant_id, executor, conversation_uuid::text, floor_question_
        committed_at IS NOT NULL, expires_at <= clock_timestamp(), token_id, native_client_id
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3
-FOR SHARE`, scope.ExecutionID, scope.ProjectID, strconv.FormatInt(scope.ActorUserID, 10)).
+FOR UPDATE`, scope.ExecutionID, scope.ProjectID, strconv.FormatInt(scope.ActorUserID, 10)).
 		Scan(&turn.participant, &executor, &turn.conversation, &floorOf, &committed, &expired,
 			&credential.TokenID, &credential.NativeClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -445,21 +450,32 @@ func writeLocalConsults(
 	if err != nil {
 		return err
 	}
-	for index, consult := range consults {
+	written := 0
+	for _, consult := range consults {
+		// Only a local agent of the thread other than the turn's own is a
+		// consult. Anything else (an agent removed mid-turn, the agent
+		// itself, a cloud member, which never gets the folder) is left out
+		// of the thread rather than losing the person's answer: the commit
+		// still stores the answer, and the host never ran a cloud member
+		// locally (ADR-0061 owner decision 3).
 		var member bool
 		if err := tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT EXISTS (
     SELECT 1 FROM %[1]s.chat_participant_mapping AS mapping
     JOIN %[1]s.chat_participants AS participant
       ON participant.id = mapping.participant_id AND participant.entity_name = 'application'
-    WHERE mapping.conversation_id = $1 AND mapping.participant_id = $2)`, schema),
+    WHERE mapping.conversation_id = $1 AND mapping.participant_id = $2
+      AND COALESCE(mapping.entity_settings ->> 'executor', '') <> 'cloud')`, schema),
 			target.conversationID, consult.ParticipantID).Scan(&member); err != nil {
 			return fmt.Errorf("local turn: read the consulted agent: %w", err)
 		}
 		if !member || consult.ParticipantID == target.targetID {
-			return errors.Join(localturn.ErrInvalid, errors.New("consult_not_in_thread"))
+			slog.WarnContext(ctx, "local turn: a consult of no local agent of the thread was left out",
+				"execution_id", executionID, "participant_id", consult.ParticipantID)
+			continue
 		}
-		step := time.Duration(2*index+1) * 10 * time.Microsecond
+		step := time.Duration(2*written+1) * 10 * time.Microsecond
+		written++
 		question, err := insertLocalSideMessage(ctx, tx, schema, target.conversationID, target.targetID,
 			consult.ParticipantID, nil, meta, questionAt.Add(step), consult.Question)
 		if err != nil {

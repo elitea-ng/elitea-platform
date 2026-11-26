@@ -48,7 +48,7 @@ export const LocalTurnConsult = zod
       .int()
       .min(1)
       .describe(
-        "The consulted agent; it must be an agent of the thread other than the turn's own.",
+        "The consulted agent, a local agent of the thread other than the turn's own; any other is left out.",
       ),
     question: zod
       .string()
