@@ -13,26 +13,22 @@
  * (ADR-0059 R0.16). That list is presentation only — see
  * `./adminUiConfig`.
  */
-import Typography from '@mui/material/Typography';
-
 import { t } from '@/shared/i18n';
-import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
+import { PageFrame, PageHeader } from '@/shared/ui/page-frame';
 
 import { AdminEmailEditor } from './AdminEmailEditor';
 
 export function AdminEmail() {
   return (
-    <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
-      <Typography variant="headingLarge" component="h1">
-        {t('pages.admin.email.title', 'E-mail')}
-      </Typography>
-      <Typography variant="bodySmall" color="text.secondary">
-        {t(
+    <PageFrame>
+      <PageHeader
+        title={t('pages.admin.email.title', 'E-mail')}
+        subtitle={t(
           'pages.admin.email.subtitle',
           'The relay this deployment sends invitations and notices through. A change takes effect on the next message; no restart.',
         )}
-      </Typography>
+      />
       <AdminEmailEditor />
-    </DrawerPage>
+    </PageFrame>
   );
 }
