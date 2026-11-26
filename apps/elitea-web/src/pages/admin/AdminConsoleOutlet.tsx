@@ -3,9 +3,10 @@
  * issue 2532).
  *
  * A typed URL whose item the capability document does not open shows the
- * access-denied page for that item instead of the page. The index route
- * renders Users; a caller the document does not open Users to lands on the
- * first item it opens instead of a refusal. An item that spans pages
+ * access-denied page for that item instead of the page. The index route is
+ * Home (R3.3a, issue 2533): a caller with exactly one area lands on its first
+ * item instead, and a caller with none sees the no-access page (the layout
+ * shows no navigation beside it). An item that spans pages
  * ("Schedules and tasks", Usage, "Budgets and alerts") shows its pages under
  * a strip that links them (`./AdminItemTabs`).
  *
@@ -18,7 +19,7 @@
  * (`available: false`), the page renders and the server answers for itself:
  * a failed read is never an answer about access.
  */
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 
 import { Navigate, Outlet, useRouterState } from '@tanstack/react-router';
 
@@ -34,6 +35,11 @@ import {
   type ConsoleItemLevel,
 } from './adminConsoleAreas';
 import { gatewayAnchorRoute } from './configurationAnchors';
+
+const AdminHome = lazy(() => import('./Home').then((module) => ({ default: module.AdminHome })));
+const AdminConsoleNoAccess = lazy(() =>
+  import('./Home').then((module) => ({ default: module.AdminConsoleNoAccess })),
+);
 
 export interface AdminConsoleOutletProps {
   readonly itemLevel: ConsoleItemLevel;
@@ -55,9 +61,15 @@ function RoutedPage({ leaf }: { readonly leaf: string | undefined }): ReactNode 
   );
 }
 
-/** The first item the document opens. */
-function landingItem(areas: readonly AdminConsoleNavArea[]): AdminConsoleNavArea['items'][number] | undefined {
-  return areas.flatMap((area) => area.items)[0];
+/** The index: the no-access page, the one area's first item, or Home. */
+function ConsoleIndex({ itemLevel, areas }: AdminConsoleOutletProps): ReactNode {
+  const only = areas.length === 1 ? areas[0]?.items[0] : undefined;
+  if (only !== undefined) return <Navigate to={only.path} replace />;
+  return (
+    <Suspense fallback={null}>
+      {areas.length === 0 ? <AdminConsoleNoAccess /> : <AdminHome areas={areas} itemLevel={itemLevel} />}
+    </Suspense>
+  );
 }
 
 export function AdminConsoleOutlet({ itemLevel, areas }: AdminConsoleOutletProps): ReactNode {
@@ -75,9 +87,8 @@ export function AdminConsoleOutlet({ itemLevel, areas }: AdminConsoleOutletProps
   });
   const moved = route.leaf === '/configuration' ? gatewayAnchorRoute(route.hash) : undefined;
   if (moved !== undefined) return <Navigate to={moved} hash="" replace />;
+  if (route.index) return <ConsoleIndex itemLevel={itemLevel} areas={areas} />;
   const entry = adminConsoleNavItems().find((candidate) => candidate.id === route.itemId);
   if (entry === undefined || consoleItemOpen(entry, itemLevel) !== false) return <RoutedPage leaf={route.leaf} />;
-  const first = landingItem(areas);
-  if (route.index && first !== undefined) return <Navigate to={first.path} replace />;
   return <AdminItemAccessDenied itemId={entry.id} label={entry.label} />;
 }

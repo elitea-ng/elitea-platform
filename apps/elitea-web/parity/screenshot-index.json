@@ -589,6 +589,26 @@
     },
     {
       "file": null,
+      "route": "/admin/app/",
+      "targetComponent": "src/pages/admin/Home.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Home (ADR-0059 R3.3a): one card per area the capability document opens, with its items, and the queues the caller decides (App requests, Connector requests, Delegations awaiting review). The counts are hidden in the snapshot: they follow rows other specs leave behind.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-home-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/",
+      "targetComponent": "src/pages/admin/Home.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Home (ADR-0059 R3.3a): one card per area the capability document opens, with its items, and the queues the caller decides (App requests, Connector requests, Delegations awaiting review). The counts are hidden in the snapshot: they follow rows other specs leave behind.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-home-light-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/users",
       "targetComponent": "src/pages/admin/Users.tsx",
       "theme": "dark",

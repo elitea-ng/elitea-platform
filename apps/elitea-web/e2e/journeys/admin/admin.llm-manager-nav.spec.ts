@@ -103,10 +103,11 @@ adminTest('an LLM manager reaches Providers and models through the navigation an
     for (const area of ['projects', 'models_spend']) {
       await expect(nav.getByTestId(`admin-nav-area-${area}`)).toBeVisible();
     }
-    // The index renders Users, which the role does not open: it lands on the
-    // first item it does open instead of a refusal.
-    await page.waitForURL((url) => url.pathname === '/admin/app/projects', { timeout: 20_000 });
-    await expect(page.getByTestId('admin-nav-item-projects')).toHaveAttribute('aria-current', 'page');
+    // The index is Home (R3.3a, issue 2533): a card for each of its two areas,
+    // and no queue, since the role decides none.
+    await expect(page.getByTestId('admin-home')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('admin-home-area-models_spend')).toBeVisible();
+    await expect(page.getByTestId('admin-home-queues')).toHaveCount(0);
 
     // Models and spend → Providers and models, by clicking.
     await page.getByTestId('admin-nav-item-providers-models').click();

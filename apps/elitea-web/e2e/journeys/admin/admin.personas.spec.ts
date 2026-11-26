@@ -107,6 +107,7 @@ const PERSONA_AREAS: Readonly<Record<BuiltInAdminRole, Readonly<Record<string, r
     models_spend: ['budgets-alerts'],
   },
   security_auditor: { people_access: ['access'], security: ['audit-trail'] },
+  // No area: the no-access page, and no navigation at all.
   emergency_access: {},
 };
 
@@ -117,6 +118,14 @@ for (const persona of ADMIN_PERSONAS) {
       const page = await context.newPage();
       await page.goto(`${BASE_URL}/admin/app/`, { waitUntil: 'domcontentloaded' });
       const nav = page.getByTestId('admin-nav');
+      if (persona.role === 'emergency_access') {
+        // A document that opens no area: the no-access page with the support
+        // contact, and no navigation (ADR-0059 R3.3a, issue 2533).
+        await expect(page.getByTestId('admin-no-access')).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId('admin-item-denied-contact')).toBeVisible({ timeout: 20_000 });
+        await expect(nav).toHaveCount(0);
+        return;
+      }
       await expect(nav).toBeVisible({ timeout: 30_000 });
 
       const expected = PERSONA_AREAS[persona.role];

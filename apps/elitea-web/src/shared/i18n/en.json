@@ -7525,5 +7525,16 @@
   "pages.admin.console.item.providers-models": "Providers and models",
   "pages.admin.console.item.tool-prices": "Tool prices",
   "pages.admin.console.item.usage": "Usage",
-  "pages.admin.llmProxy.page.status": "Gateway status"
+  "pages.admin.llmProxy.page.status": "Gateway status",
+  "pages.admin.home.queue.appRequests": "App requests awaiting a decision",
+  "pages.admin.home.queue.connectorRequests": "Connector requests awaiting a decision",
+  "pages.admin.home.queue.delegations": "Delegations awaiting review",
+  "pages.admin.home.queue.failed": "Could not be read",
+  "pages.admin.home.queue.loading": "Counting…",
+  "pages.admin.home.queues": "Waiting for you",
+  "pages.admin.home.title": "Home",
+  "pages.admin.noAccess.askFallback": "To ask for administration access, contact the people who manage this deployment.",
+  "pages.admin.noAccess.askSupport": "To ask for administration access, contact your IT support:",
+  "pages.admin.noAccess.explanation": "Your administration roles open no part of this console. The server refuses its pages and changes for you.",
+  "pages.admin.noAccess.title": "You have no administration access"
 }

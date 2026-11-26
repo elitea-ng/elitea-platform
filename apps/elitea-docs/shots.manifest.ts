@@ -916,7 +916,7 @@ export const shots: readonly Shot[] = [
     viewport: DEFAULT_VIEWPORT,
     persona: "admin",
     notes:
-      "Admin console landing on Users with the sidebar's six labelled areas visible.",
+      "Admin console landing on Home (area cards and queues) with the sidebar's six labelled areas visible.",
   },
   {
     id: "admin-users-table",

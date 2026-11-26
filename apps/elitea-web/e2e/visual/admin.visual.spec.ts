@@ -197,6 +197,16 @@ function routeMask(page: Page, route: AdminVisualRoute): Locator[] {
  */
 const ADMIN_ROUTES: readonly AdminVisualRoute[] = [
   {
+    // @covers /admin/app/
+    // Home (ADR-0059 R3.3a, issue 2533): the area cards and the queues. The
+    // counts follow the rows other specs leave behind, so they are hidden
+    // (`admin-screenshot.css`); the cards and their layout are compared.
+    name: 'admin-home',
+    path: '/admin/app/',
+    landmark: (page) => page.getByTestId('admin-home-area-platform'),
+    light: true,
+  },
+  {
     // @covers /admin/app/users
     name: 'admin-users',
     path: '/admin/app/users',

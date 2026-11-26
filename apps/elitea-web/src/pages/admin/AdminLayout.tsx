@@ -44,6 +44,8 @@ export function AdminLayout(): ReactNode {
   const areas = areasEnabled === true ? visibleConsoleNavAreas(itemLevel) : undefined;
   let navigation: ReactNode;
   if (status !== 'success') navigation = <AdminConsoleStatus status={status} onRetry={retry} />;
+  // A document that opens no area: the no-access page, with nothing to navigate to (issue 2533).
+  else if (areas?.length === 0) navigation = null;
   else navigation = <AdminNav areas={areas} />;
   return (
     <Box sx={{ display: 'flex', height: '100vh', width: '100%', overflow: 'hidden' }}>

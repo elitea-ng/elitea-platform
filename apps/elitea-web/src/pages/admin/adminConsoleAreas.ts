@@ -271,11 +271,11 @@ export function visibleConsoleNavAreas(level: ConsoleItemLevel): readonly AdminC
 
 /**
  * The item that owns the matched route, from the router's matched route ids
- * (leaf and ancestors). The index route `/` renders Users, so it is Users'.
+ * (leaf and ancestors). The index route `/` is Home (issue 2533) under the
+ * six areas, which no item owns.
  */
 export function consoleNavItemForRoute(matchedRouteIds: readonly string[]): AdminConsoleNavItem | undefined {
   const matched = new Set(matchedRouteIds);
   const items = adminConsoleNavItems();
-  if (matched.has('/')) return items.find((entry) => entry.id === 'users');
   return items.find((entry) => matched.has(entry.path) || (entry.alsoOn ?? []).some((path) => matched.has(path)));
 }

@@ -7,6 +7,7 @@
  * SPA the one that ships. Its root route was a bare `<Outlet/>`: every page
  * worked by URL and NOTHING in the product linked any of them. An operator
  * opening `/admin/app/` landed on Users and had no way to reach the other nine.
+ * (The index is Home under the six areas since ADR-0059 R3.3a, issue 2533.)
  *
  * The whole admin suite was green throughout, because every journey in this
  * directory reaches its page with `page.goto(BASE_URL + '/admin/app/<path>')`.
@@ -173,13 +174,20 @@ async function openAdminLanding(page: Page): Promise<void> {
   await expect(page.getByTestId('admin-nav')).toBeVisible({ timeout: 20_000 });
 }
 
-adminTest('J37: the landing page offers a nav, and marks the page it is showing', async ({ page }) => {
+adminTest('J37: the landing page is Home, beside a nav that marks the page it is showing', async ({ page }) => {
   await openAdminLanding(page);
 
-  // The root route renders the Users page rather than redirecting, so Users is
-  // the item that must be marked — without the index alias the LANDING screen
-  // would be the one screen with nothing active, which reads as a broken nav on
-  // first contact.
+  // The index is Home under the six areas (ADR-0059 R3.3a, issue 2533): a
+  // card per area the document opens, and the queues the caller decides.
+  // Home is no item's page, so no item is marked on it.
+  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId('admin-home-area-platform')).toBeVisible();
+  await expect(page.getByTestId('admin-home-queue-app-requests')).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Admin navigation' }).locator('[aria-current="page"]')).toHaveCount(0);
+
+  // A card's link opens its page, and the nav marks it there.
+  await page.getByTestId('admin-home-item-users').click();
+  await page.waitForURL((url) => url.pathname === '/admin/app/users', { timeout: 20_000 });
   await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-nav-item-users')).toHaveAttribute('aria-current', 'page');
 
@@ -313,7 +321,7 @@ adminTest('J37e: collapsing the nav survives a full reload', async ({ page }) =>
 adminTest('J37f: every admin page renders on the one type scale', async ({ page }) => {
   adminTest.setTimeout(120_000);
   await openAdminLanding(page);
-  await expect(page.getByRole('heading', { level: 1, name: 'Users' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({ timeout: 20_000 });
   await expectTextSpacingSurvives(page, 'admin landing');
 
   const nav = page.getByRole('navigation', { name: 'Admin navigation' });

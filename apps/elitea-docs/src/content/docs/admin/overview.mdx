@@ -9,7 +9,7 @@ The admin console is a separate application at `/admin/app`, distinct from the m
 
 Sign in to Elitea, open the account menu at the bottom of the sidebar, and select **Admin portal**. The item is there only when your account holds an administration permission. You can also go to `/admin/app` directly. The console renders only if your account holds at least one administration-mode permission — otherwise you see an access-denied screen instead of an empty shell. Every individual page still enforces its own permission on the server on every request; the console's own check only decides whether it is worth rendering the navigation at all.
 
-<Screenshot id="admin-overview-nav" alt="Admin console sidebar with its labelled areas" />
+<Screenshot id="admin-overview-nav" alt="Admin console Home beside the sidebar with its labelled areas" />
 
 ## Six labelled areas
 
@@ -19,14 +19,14 @@ The sidebar lists the console's pages in six labelled areas, in this order. Each
 | --- | --- |
 | **People and access** | Users, Access, Identity providers, SCIM |
 | **Projects** | Projects, App Requests |
-| **Models and spend** | LLM Governance, Budgets |
+| **Models and spend** | Providers and models, Models and pricing, Tool prices, Usage, Logs, LLM Governance, Budgets and alerts |
 | **Agents and governance** | Agent registry, Connector requests, Delegations awaiting review, Toolkits, Credential inventory, Permission trimming, Kill switch |
 | **Security** | Audit Trail, Data retention |
 | **Platform** | Configuration, Features, Branding, E-mail, Schedules and tasks, Service Descriptors, Secrets, Client applications |
 
 **Schedules and tasks** is one item for two pages: the recurring schedules and the background tasks. A strip of two tabs at the top of either page links the other, and the item is marked on both. The old addresses `/admin/app/schedules` and `/admin/app/tasks` keep working.
 
-**Access** lists every administration role: what it opens, and whether you may give it to someone (see [Users and roles](/admin/users-and-roles#role-definitions)). The permission matrix, `/admin/app/roles`, is reached from Access by a caller who can read it. **Identity providers**, **SCIM** and **Client applications** are the editors that used to be sections of **Configuration**; their Configuration sections now link to these pages. The provider, pricing, usage and log tabs are still tabs of **Configuration**, so Configuration is shown to anybody who can open one of them.
+**Access** lists every administration role: what it opens, and whether you may give it to someone (see [Users and roles](/admin/users-and-roles#role-definitions)). The permission matrix, `/admin/app/roles`, is reached from Access by a caller who can read it. **Identity providers**, **SCIM** and **Client applications** are the editors that used to be sections of **Configuration**; their Configuration sections now link to these pages. The LLM gateway tabs that were in **Configuration › LLM Proxy** are the pages of **Models and spend** (see [LLM proxy](/admin/llm-proxy#where-the-pages-were)).
 
 ## What a narrow role sees
 
@@ -35,12 +35,24 @@ The areas and items in the sidebar come from the [capability document](#what-the
 | Role | Areas and items |
 | --- | --- |
 | Global administrator, Platform administrator | All six areas and all their items |
-| LLM manager | Projects (Projects), Models and spend (LLM Governance, Budgets), Platform (Configuration) |
-| Project administrator (all projects) | People and access (SCIM), Projects (Projects, App Requests), Models and spend (Budgets) |
+| LLM manager | Projects (Projects, view only), Models and spend (all seven items; Usage and Logs view only) |
+| Project administrator (all projects) | People and access (SCIM), Projects (Projects, App Requests), Models and spend (Budgets and alerts) |
 | Security auditor | People and access (Access, view only), Security (Audit Trail) |
 | Emergency access | None: its one item, Break-glass, has no page yet |
 
-The console's landing page is Users. If your roles do not open Users, the console opens the first item they do open.
+## Home
+
+The console opens on **Home**, at `/admin/app`. Home has one card for each area your roles open, listing the items you can open there, and a **Waiting for you** section with the queues you decide:
+
+| Queue | Shown when your roles |
+| --- | --- |
+| App requests awaiting a decision | can decide App Requests |
+| Connector requests awaiting a decision | can decide Connector requests |
+| Delegations awaiting review | can decide Delegations awaiting review |
+
+Each queue shows how many requests wait in it and links to its page. A queue you can only view is not shown, since nothing in it waits for you. When a count cannot be read, Home says so instead of showing zero.
+
+If your roles open only one area, the console skips Home and opens that area's first item. If they open no area, the console shows a page that says you have no administration access and whom to ask: your deployment's IT support contact, or otherwise the people who manage the deployment. That page has no sidebar and names no administrator.
 
 If you type the address of a page your roles do not open, the console shows an access-denied page for that item instead. It names the item, lists the roles that open it, and says whom to ask: the IT support contact your deployment has set, or otherwise the people who manage the deployment. It never names an administrator. If the roles cannot be read, the page says so rather than claiming that no role opens the item.
 

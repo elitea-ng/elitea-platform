@@ -924,8 +924,6 @@ const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>>
   },
   // access.roles.view opens Access, at read (R3.6, R3.9a).
   security_auditor: { people_access: ['access'], security: ['audit-trail'] },
-  // Its one name opens Break-glass, whose page has not shipped.
-  emergency_access: {},
 };
 
 function renderedAreas(): Record<string, string[]> {
@@ -994,6 +992,22 @@ describe('the six labelled areas', () => {
     }, testTimeout(30_000));
   }
 
+  // Its one name opens Break-glass, whose page has not shipped: the document
+  // opens no area, and the console shows no navigation at all (issue 2533).
+  it('shows the emergency_access persona no navigation', async () => {
+    serveDocument(goldenDocument('emergency_access'));
+    window.history.replaceState(null, '', '/admin/app/projects');
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <RouterProvider router={createAdminRouter()} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('admin-item-denied')).toHaveAttribute('data-item-id', 'projects');
+    expect(screen.queryByTestId('admin-nav')).toBeNull();
+  }, testTimeout(30_000));
+
   it('labels each area', async () => {
     await mountAdmin('/users');
     const area = screen.getByTestId('admin-nav-area-models_spend');
@@ -1016,12 +1030,13 @@ describe('the six labelled areas', () => {
     expect(within(denied).getByRole('heading', { level: 1 })).toHaveTextContent('Kill switch');
   }, testTimeout(30_000));
 
-  // The auditor's first item is Access (R3.6), where it lands.
-  it('lands a caller the document does not open Users to on its first item', async () => {
+  // The index is Home (R3.3a, issue 2533), not Users: a caller the document
+  // does not open Users to is neither refused nor sent away.
+  it('renders Home at the index for a caller the document does not open Users to', async () => {
     serveDocument(goldenDocument('security_auditor'));
     await mountAdmin('/');
-    await screen.findByTestId('admin-nav-item-access');
-    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/access'));
+    expect(await screen.findByTestId('admin-home')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/admin/app/');
     expect(screen.queryByTestId('admin-item-denied')).toBeNull();
   }, testTimeout(30_000));
 
