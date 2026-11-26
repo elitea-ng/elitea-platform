@@ -91,6 +91,10 @@ SKIP_MIGRATIONS
 # --- pipeline bug that had silently hidden it, along with a large batch of
 # --- test-only vars, from ever being checked before now).
 ELITEA_DEV_BOOTSTRAP_LEGACY_SCHEMA
+# Admits a loopback identity provider through the identity-provider egress
+# guard (#2970). Compose and native development stacks only; a cluster has no
+# loopback identity provider, so the chart deliberately cannot set it.
+ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK
 
 # --- Removal tripwire, NOT a knob. AUTH_DEV_MODE was an unauthenticated-admin
 # --- bypass, deleted in ADR-0017 (#260). cmd/elitea-main still reads it for

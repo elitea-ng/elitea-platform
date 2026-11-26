@@ -539,6 +539,9 @@ export default function table(ctx) {
           ADMIN_UI_STATIC_DIR: path.join(bin, "admin_ui", "static", "dist"),
           APPLICATION_SECRET_KEY: d("APPLICATION_SECRET_KEY", ""),
           OIDC_ISSUER_URL: `http://oidc.localhost:${oidcPort}`,
+          // The mock is on loopback here; the CIDRs keep compose parity.
+          ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+          ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true",
           OIDC_CLIENT_ID: "elitea-standalone-client",
           OIDC_CLIENT_SECRET: "elitea-standalone-secret",
           OIDC_REDIRECT_URI: `http://${host}:${MAIN_PORT}/auth/oidc/callback`,

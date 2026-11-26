@@ -922,6 +922,10 @@ services:
       # Generated per stack by deploy/scripts/standalone-stack.sh (#2958).
       APPLICATION_SECRET_KEY: "${APPLICATION_SECRET_KEY:-}"
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
+      # Identity-provider egress guard: the mock sits on the compose network
+      # (a private address) here and on loopback natively. Development only.
+      ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
       # The host the browser signs in on. Cookies are scoped by host, never by

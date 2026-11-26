@@ -115,6 +115,13 @@ Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the 
 --set-string main.env.ELITEA_MCP_EGRESS_ALLOWLIST="10.0.0.0/8"
 ```
 </Tab>
+<Tab title="Identity providers — ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST">
+Governs where elitea-main may dial for OpenID Connect discovery, the JWKS fetch and the token exchange, for `OIDC_ISSUER_URL` and for every provider on the admin **Authentication** page. **Unset refuses every private address**; a public identity provider needs nothing. Name the range or IP of an identity provider on a private address (an in-cluster Keycloak, an on-premises AD FS). Link-local and cloud-metadata addresses are always refused, loopback is never admitted in a cluster, and no proxy is used. See [Identity providers on a private address](/admin/authentication#identity-providers-on-a-private-address).
+
+```bash
+--set-string main.env.ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST="10.20.0.0/16"
+```
+</Tab>
 <Tab title="Agent tools — Configuration › Worker Egress">
 Governs the public hosts an agent's tools reach from the **worker**: web fetches, toolkit clients, OpenAPI tools, remote MCP servers, index runs and the workspace pull-request push. It is a console setting, not an environment variable: section `worker_egress`, with `mode` (`open`, the default, or `allowlist`) and `allowlist` (at most 512 entries, the same grammar as above). A project adds its own entries with a `worker_egress` project configuration (at most 256). In `allowlist` mode each run may reach the platform's entries, its project's entries and the hosts its own toolkits and MCP servers are configured with. Runs under the governed credential profile always use `allowlist` mode.
 

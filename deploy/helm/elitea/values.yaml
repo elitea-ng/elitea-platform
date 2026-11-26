@@ -3918,6 +3918,17 @@ main:
     # Link-local, multicast, reserved and cloud-metadata addresses stay
     # refused whatever it says. No proxy is used. The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
     ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
+    # The egress guard of identity-provider traffic (#2970): OpenID Connect
+    # discovery, the JWKS fetch and the token exchange, for the environment
+    # provider (OIDC_ISSUER_URL) and every provider authored on the admin
+    # Authentication page. EMPTY IS FAIL-CLOSED for private addresses: an
+    # identity provider on a public address needs nothing here; one on a
+    # private address (an in-cluster or on-premises Keycloak, AD FS, ...)
+    # needs its range or IP named, e.g. "10.20.0.0/16" or "10.20.0.5:8443".
+    # Link-local, cloud-metadata, multicast and reserved addresses stay
+    # refused whatever it says, and loopback is never admitted in a cluster.
+    # No proxy is used.
+    ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: ""
 
     # --- Outbound MCP requests made by Main (Load Tools, metadata reads) ---
     #

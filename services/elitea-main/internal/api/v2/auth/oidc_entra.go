@@ -77,6 +77,7 @@ type entraRuntime struct {
 // generic path would build, with the Entra checks attached.
 func (h *OIDCHandler) buildEntraRuntime(
 	ctx context.Context,
+	client *http.Client,
 	provider identityproviders.Provider,
 	clientSecret string,
 	scopes []string,
@@ -89,7 +90,7 @@ func (h *OIDCHandler) buildEntraRuntime(
 	// Entra's multi-tenant discovery publishes the {tenantid} template as
 	// its issuer. The discovered issuer is checked below, and every token
 	// issuer is checked per tid by the policy.
-	discovered, err := oidc.NewProvider(oidc.InsecureIssuerURLContext(ctx, policy.IssuerTemplate()), document.Issuer)
+	discovered, err := discoverOIDCProvider(oidc.InsecureIssuerURLContext(ctx, policy.IssuerTemplate()), client, document.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("OIDC discovery failed for %s: %w", document.Issuer, err)
 	}
@@ -107,7 +108,8 @@ func (h *OIDCHandler) buildEntraRuntime(
 	if !allowedIssuer {
 		return nil, fmt.Errorf("the Entra discovery issuer of %s is not an allowed tenant", document.Issuer)
 	}
-	keys := oidc.NewRemoteKeySet(ctx, metadata.JWKSURI)
+	// The key set fetches through the same guarded client as discovery.
+	keys := oidc.NewRemoteKeySet(oidc.ClientContext(ctx, client), metadata.JWKSURI)
 	assertions, err := identityoidc.NewEntraAssertionVerifier(policy, keys, nil)
 	if err != nil {
 		return nil, err
@@ -128,6 +130,7 @@ func (h *OIDCHandler) buildEntraRuntime(
 			ClientID:        document.ClientID,
 			SkipIssuerCheck: true,
 		}),
+		client:               client,
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d (entra)", provider.Key, provider.Revision),

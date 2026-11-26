@@ -252,6 +252,10 @@ services:
       # Local mock (see the oidc-mock service above) — no real credentials,
       # the mock accepts any client_id/client_secret.
       OIDC_ISSUER_URL: "http://oidc.localhost:9400"
+      # Identity-provider egress guard: the mock is on the compose network, a
+      # private address. Development only.
+      ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true"
       OIDC_CLIENT_ID: "elitea-dev-client"
       OIDC_CLIENT_SECRET: "elitea-dev-secret"
       OIDC_REDIRECT_URI: "http://localhost:8080/auth/oidc/callback"

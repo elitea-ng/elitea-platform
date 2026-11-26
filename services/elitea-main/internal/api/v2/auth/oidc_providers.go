@@ -57,6 +57,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -91,6 +92,10 @@ var errNoOIDCProvider = errors.New("auth: no OIDC identity provider is configure
 type oidcRuntime struct {
 	oauth2Cfg *oauth2.Config
 	verifier  *oidc.IDTokenVerifier
+
+	// client is the guarded identity-provider client (oidc_egress.go) the
+	// token exchange uses; discovery and the key set already used it.
+	client *http.Client
 
 	// requireEmailVerified decides whether an ABSENT `email_verified` claim
 	// stops a first login. An explicit `false` is refused whatever this says;
@@ -223,11 +228,15 @@ func (h *OIDCHandler) buildRuntime(
 
 	// Entra mode needs governance on (h.entraCustody); off, the marker is
 	// ignored and the provider is built exactly as any other.
+	client, err := h.identityClient()
+	if err != nil {
+		return nil, err
+	}
 	if h.entraCustody != nil && document.Entra {
-		return h.buildEntraRuntime(ctx, provider, clientSecret, scopes)
+		return h.buildEntraRuntime(ctx, client, provider, clientSecret, scopes)
 	}
 
-	discovered, err := oidc.NewProvider(ctx, document.Issuer)
+	discovered, err := discoverOIDCProvider(ctx, client, document.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("OIDC discovery failed for %s: %w", document.Issuer, err)
 	}
@@ -241,6 +250,7 @@ func (h *OIDCHandler) buildRuntime(
 			Scopes:       scopes,
 		},
 		verifier:             discovered.Verifier(&oidc.Config{ClientID: document.ClientID}),
+		client:               client,
 		requireEmailVerified: document.RequireEmailVerified,
 		adoptSCIMUsers:       document.AdoptSCIMUsers,
 		origin:               fmt.Sprintf("provider %s revision %d", provider.Key, provider.Revision),
@@ -253,8 +263,8 @@ func (h *OIDCHandler) buildRuntime(
 // It performs discovery at BOOT, as it always has, so a deployment whose
 // environment names an unreachable issuer fails to start rather than failing at
 // the first login.
-func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcRuntime, error) {
-	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
+func newOIDCRuntimeFromEnvironment(ctx context.Context, client *http.Client, cfg *OIDCConfig) (*oidcRuntime, error) {
+	provider, err := discoverOIDCProvider(ctx, client, cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("OIDC discovery failed for %s: %w", cfg.IssuerURL, err)
 	}
@@ -267,6 +277,7 @@ func newOIDCRuntimeFromEnvironment(ctx context.Context, cfg *OIDCConfig) (*oidcR
 			Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 		},
 		verifier:             provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		client:               client,
 		requireEmailVerified: oidcRequiresVerifiedEmail(),
 		adoptSCIMUsers:       oidcAdoptsSCIMUsers(),
 		origin:               "environment",
