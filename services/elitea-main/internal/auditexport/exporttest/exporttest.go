@@ -203,11 +203,9 @@ func (s *server) WaitForEvent(eventID string, timeout time.Duration) error {
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for time.Now().Before(deadline) {
-		select {
-		case <-tick.C:
-			if s.Delivered(eventID) > 0 {
-				return nil
-			}
+		<-tick.C
+		if s.Delivered(eventID) > 0 {
+			return nil
 		}
 	}
 	return fmt.Errorf("event %s was not received within %s", eventID, timeout)

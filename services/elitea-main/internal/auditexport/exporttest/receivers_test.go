@@ -66,7 +66,7 @@ func fixedKeys(keys ...SigningKey) func() ([]auditexport.SigningKey, error) {
 
 func TestWebhookReceiverVerifiesWithBothKeys(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey1, testKey2)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	sink := newWebhookSink(t, rcv.URL(), testKey2)
 	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
 	if err := sink.Send(context.Background(), events); err != nil {
@@ -85,7 +85,7 @@ func TestWebhookReceiverVerifiesWithBothKeys(t *testing.T) {
 
 func TestWebhookReceiverRefusesBadSignature(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey1)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	// Sign with the wrong key: the receiver holds only testKey1 and the body
 	// is signed by testKey2.
 	body := []byte(`{"schema":"elitea.audit.v1","batch_id":"b","events":[]}`)
@@ -101,7 +101,7 @@ func TestWebhookReceiverRefusesBadSignature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
@@ -109,7 +109,7 @@ func TestWebhookReceiverRefusesBadSignature(t *testing.T) {
 
 func TestWebhookReceiverStatusSwitch(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey2)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	sink := newWebhookSink(t, rcv.URL(), testKey2)
 	rcv.SetStatus(http.StatusServiceUnavailable, http.StatusTooManyRequests)
 	events := []auditexport.Event{testEvent("event-a")}
@@ -126,7 +126,7 @@ func TestWebhookReceiverStatusSwitch(t *testing.T) {
 
 func TestWebhookReceiverKillAndRestore(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey2)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	sink := newWebhookSink(t, rcv.URL(), testKey2)
 	events := []auditexport.Event{testEvent("event-x"), testEvent("event-y")}
 	if err := sink.Send(context.Background(), events); err != nil {
@@ -148,7 +148,7 @@ func TestWebhookReceiverKillAndRestore(t *testing.T) {
 
 func TestOTLPReceiverDecodes(t *testing.T) {
 	rcv := NewOTLPReceiver(t)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	sink := newOTLPSink(t, rcv.URL())
 	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
 	if err := sink.Send(context.Background(), events); err != nil {
@@ -168,7 +168,7 @@ func TestOTLPReceiverDecodes(t *testing.T) {
 
 func TestOTLPReceiverStatusSwitch(t *testing.T) {
 	rcv := NewOTLPReceiver(t)
-	defer rcv.Stop(t)
+	defer func() { _ = rcv.Stop(t) }()
 	rcv.SetStatus(http.StatusServiceUnavailable, http.StatusServiceUnavailable)
 	sink := newOTLPSink(t, rcv.URL())
 	err := sink.Send(context.Background(), []auditexport.Event{testEvent("event-a")})

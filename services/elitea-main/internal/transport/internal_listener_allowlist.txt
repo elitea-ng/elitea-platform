@@ -163,6 +163,7 @@ site | internal/infra/storage/content_server.go:ContentServer.Register | Registe
 helper | internal/llmproxy/llmproxytest | a fake elitea.gateway.v1 GatewayService for elitea-main's tests
 helper | internal/llmproxy/gatewaytest | builds on llmproxytest for elitea-main's tests
 helper | internal/providerhost/proxy/providertest | a fake elitea.subapp.v1 ProviderService for elitea-main's tests
+helper | internal/auditexport/exporttest | in-process test receivers for the export stories; no binary links them
 
 # --- files that may name the administration permission mode --------------------------
 # The administration-mode scan reads internal/transport, the package of every
