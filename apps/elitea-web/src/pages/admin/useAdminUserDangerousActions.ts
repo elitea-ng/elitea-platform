@@ -47,7 +47,10 @@ function dialogFor(pending: PendingUserAction, rows: readonly AdminUserRow[]): A
           'The selected people are removed from the platform with their memberships. There is no restore.',
         ),
         reach: { count: pending.ids.length, unit: 'people' },
-        target: pending.ids.length === 1 ? emailOf(rows, pending.ids[0] ?? 0) : `${pending.ids.length} users`,
+        target:
+          pending.ids.length === 1
+            ? emailOf(rows, pending.ids[0] ?? 0)
+            : t('pages.admin.users.dangerous.deleteTarget', '{{count}} users', { count: pending.ids.length }),
         confirmLabel: t('pages.admin.users.dangerous.deleteConfirm', 'Delete'),
       };
     case 'roles':
@@ -80,6 +83,8 @@ function dialogFor(pending: PendingUserAction, rows: readonly AdminUserRow[]): A
 
 interface Callbacks {
   readonly rows: readonly AdminUserRow[];
+  /** A request starts: the page clears the error of the one before. */
+  readonly onStart: () => void;
   readonly onError: (message: string) => void;
   readonly onDeleted: (ids: readonly number[]) => void;
 }
@@ -88,7 +93,7 @@ function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export function useAdminUserDangerousActions({ rows, onError, onDeleted }: Callbacks) {
+export function useAdminUserDangerousActions({ rows, onStart, onError, onDeleted }: Callbacks) {
   const access = useAdminWritable(ADMIN_ITEM.users);
   const deleteUsers = access.guard(useDeleteAdminUsers());
   const setAdminRole = access.guard(useSetAdminRoles());
@@ -99,6 +104,7 @@ export function useAdminUserDangerousActions({ rows, onError, onDeleted }: Callb
     (reason: AdminReason) => {
       const action = pending;
       setPending(undefined);
+      onStart();
       if (action?.kind === 'delete') {
         deleteUsers.mutate(
           { userIds: action.ids, reason },
@@ -131,7 +137,7 @@ export function useAdminUserDangerousActions({ rows, onError, onDeleted }: Callb
         );
       }
     },
-    [pending, deleteUsers, setAdminRole, suspendUser, onError, onDeleted],
+    [pending, deleteUsers, setAdminRole, suspendUser, onStart, onError, onDeleted],
   );
 
   const onToggleSuspended = useCallback(
@@ -140,6 +146,7 @@ export function useAdminUserDangerousActions({ rows, onError, onDeleted }: Callb
         setPending({ kind: 'suspend', user });
         return;
       }
+      onStart();
       suspendUser.mutate(
         { userId: user.id, suspended: false },
         {
@@ -148,7 +155,7 @@ export function useAdminUserDangerousActions({ rows, onError, onDeleted }: Callb
         },
       );
     },
-    [suspendUser, onError],
+    [suspendUser, onStart, onError],
   );
 
   return {

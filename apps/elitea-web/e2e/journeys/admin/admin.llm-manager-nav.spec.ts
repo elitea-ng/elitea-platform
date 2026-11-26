@@ -89,6 +89,8 @@ adminTest('an LLM manager reaches Providers and models through the navigation an
     const nav = page.getByTestId('admin-nav');
     await expect(nav).toBeVisible({ timeout: 30_000 });
     const expected = [
+      // Home, for a caller with more than one area (R3.3a, issue 2533).
+      'admin-nav-item-home',
       'admin-nav-item-projects',
       'admin-nav-item-providers-models',
       'admin-nav-item-models-pricing',

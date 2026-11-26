@@ -130,7 +130,9 @@ for (const persona of ADMIN_PERSONAS) {
 
       const expected = PERSONA_AREAS[persona.role];
       const expectedLinks = Object.values(expected).flat();
-      await expect(nav.getByRole('link')).toHaveCount(expectedLinks.length, { timeout: 20_000 });
+      // Home is a link of its own for a caller with more than one area (R3.3a).
+      const home = Object.keys(expected).length > 1 ? 1 : 0;
+      await expect(nav.getByRole('link')).toHaveCount(expectedLinks.length + home, { timeout: 20_000 });
       const rendered = await nav.locator('section[data-testid^="admin-nav-area-"]').evaluateAll((sections) =>
         Object.fromEntries(
           sections.map((section) => [

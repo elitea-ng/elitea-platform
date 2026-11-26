@@ -65,6 +65,8 @@ describe('the index route', () => {
       timeout: 10_000,
     });
     expect(await screen.findByTestId('admin-nav-item-identity-providers')).toHaveAttribute('aria-current', 'page');
+    // One area: no Home to go back to, so the navigation offers none.
+    expect(screen.queryByTestId('admin-nav-item-home')).not.toBeInTheDocument();
     expect(screen.queryByTestId('admin-home')).not.toBeInTheDocument();
   }, testTimeout(30_000));
 
@@ -73,8 +75,9 @@ describe('the index route', () => {
     const router = mountAdmin('/');
     expect(await screen.findByTestId('admin-home', undefined, { timeout: 10_000 })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/');
-    // Home is no item's page: nothing in the navigation is current.
-    expect(screen.getByTestId('admin-nav').querySelector('[aria-current="page"]')).toBeNull();
+    // Home is no item's page: its own link is the one current.
+    expect(screen.getByTestId('admin-nav-item-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('admin-nav').querySelectorAll('[aria-current="page"]')).toHaveLength(1);
   }, testTimeout(30_000));
 
   it('keeps rendering Users while the six-area switch is off', async () => {

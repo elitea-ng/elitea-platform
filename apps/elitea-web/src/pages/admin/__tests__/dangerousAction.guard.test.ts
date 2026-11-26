@@ -40,7 +40,7 @@ const API_DIR = join(ADMIN_DIR, 'api');
  */
 const NOT_CONVERTED: Readonly<Record<string, string>> = {
   'PUT /api/v2/admin/plugin_config_values/administration/{plugin} break_glass':
-    'the break_glass section editor is out of scope of R3.8b (issue 2614)',
+    'no console control saves it yet: its editor ships with the break-glass console of R3.10a (issue 2541), which sends this reason',
   'POST /api/v2/admin/modes/administration': 'no console control creates a mode',
   'DELETE /api/v2/admin/modes/administration': 'no console control deletes a mode',
   'PUT /api/v2/admin/user_project_permissions/administration': 'no console control writes it',

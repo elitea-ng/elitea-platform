@@ -42,7 +42,8 @@ export function CredentialRevokeDialog({ row, onClose }: CredentialRevokeDialogP
       reach={{ count: undefined, unit: 'projects' }}
       target={row.name}
       confirmLabel={t('pages.admin.credentialInventory.revoke', 'Revoke')}
-      pending={!access.writable || revoke.isPending}
+      pending={revoke.isPending}
+      locked={!access.writable}
       error={revoke.error === null ? undefined : credentialReviewErrorMessage(revoke.error)}
       onClose={close}
       onConfirm={(reason) =>

@@ -55,17 +55,17 @@ export function reasonBytes(text: string): number {
 }
 
 /**
- * `text` cut to `MAX_REASON_BYTES` of UTF-8 on a code point boundary, so the
- * percent-encoded header decodes to at most the bound and never to half a
- * character.
+ * `text` cut to `limit` (by default `MAX_REASON_BYTES`) of UTF-8 on a code
+ * point boundary, so the percent-encoded header decodes to at most the bound
+ * and never to half a character.
  */
-export function clampReason(text: string): string {
-  if (reasonBytes(text) <= MAX_REASON_BYTES) return text;
+export function clampReason(text: string, limit: number = MAX_REASON_BYTES): string {
+  if (reasonBytes(text) <= limit) return text;
   let kept = '';
   let used = 0;
   for (const char of text) {
     const size = reasonBytes(char);
-    if (used + size > MAX_REASON_BYTES) break;
+    if (used + size > limit) break;
     kept += char;
     used += size;
   }
@@ -90,17 +90,22 @@ export function reasonFields(
  * The body fields of the reason for a route whose own request has a `reason`
  * (a suspension, a revocation, a release): the server keeps that field, so
  * it records the request's own text, and the dialog's text is added to it
- * rather than lost.
+ * rather than lost. `maxBytes` is the route's own bound on that field: the
+ * request's text is kept whole and the dialog's is cut to what still fits,
+ * so the combined field never makes the server refuse the action.
  */
 export function reasonFieldsKeepText(
   key: DangerousActionKey,
   reason: AdminReason,
   ownText: string | undefined,
+  maxBytes: number,
 ): { readonly reason_code: ActionReasonCode; readonly reason: string } {
   const fields = reasonFields(key, reason);
   const own = (ownText ?? '').trim();
-  if (own === '') return fields;
-  return { ...fields, reason: fields.reason === '' ? own : `${own}\n${fields.reason}` };
+  if (own === '') return { ...fields, reason: clampReason(fields.reason, maxBytes) };
+  const room = maxBytes - reasonBytes(own) - 1;
+  const added = fields.reason === '' || room <= 0 ? '' : clampReason(fields.reason, room);
+  return { ...fields, reason: added === '' ? own : `${own}\n${added}` };
 }
 
 /**

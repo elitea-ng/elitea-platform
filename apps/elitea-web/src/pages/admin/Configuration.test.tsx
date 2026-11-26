@@ -606,8 +606,9 @@ describe('AdminConfiguration — sections by area (R3.7)', () => {
 
 /*
  * Turning maintenance mode on is a dangerous action (ADR-0059 R3.8b, issue
- * 2614): the save asks for a reason in the one dialog and sends it; any
- * other save of the section does not ask.
+ * 2614). The server cannot tell it from another save of the section by the
+ * request alone, so every save of the section asks for a reason in the one
+ * dialog and sends it; another section's save does not ask.
  */
 describe('AdminConfiguration — turning maintenance on', () => {
   const MAINTENANCE = {
@@ -648,15 +649,32 @@ describe('AdminConfiguration — turning maintenance on', () => {
     });
   });
 
-  it('saves any other change at once, with no reason', async () => {
+  it('asks for a reason on any other save of the section too, since the server cannot tell them apart', async () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminConfiguration />);
     const title = await screen.findByRole('textbox', { name: 'Splash Title' });
     await waitFor(() => expect(title).toBeEnabled());
     await user.type(title, '!');
     await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByRole('heading', { name: 'Save the maintenance settings' })).toBeInTheDocument();
+    await confirmDangerousAction(user, 'maintenance', { code: 'correction', text: 'typo' });
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]!.body).toEqual({
+      values: { maintenance_title: 'Back soon!' },
+      reason_code: 'correction',
+      reason: 'typo',
+    });
+  });
+
+  it('saves another section at once, with no reason', async () => {
+    const user = userEvent.setup();
+    serveSections([{ ...AREA_SECTIONS[1], fields: SECTIONS[1]!.fields }]);
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    await user.type(screen.getByRole('textbox', { name: 'Documentation Card Title' }), '!');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(screen.queryByTestId('admin-dangerous-dialog')).not.toBeInTheDocument();
-    expect(writes()[0]!.body).toEqual({ values: { maintenance_title: 'Back soon!' } });
+    expect(writes()[0]!.body).not.toHaveProperty('reason_code');
   });
 });

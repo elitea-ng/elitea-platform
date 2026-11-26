@@ -287,11 +287,11 @@ export function useAdminConfigValues(
 export interface AdminConfigSave {
   readonly sectionId: string;
   readonly values: Readonly<Record<string, unknown>>;
-  /** The dialog's reason of a save that turns maintenance mode on (R3.8b, issue 2614). */
+  /** The dialog's reason of a save of the Maintenance section (R3.8b, issue 2614). */
   readonly reason?: AdminReason;
 }
 
-/** The action table key of the save that turns maintenance mode on. */
+/** The action table key of a Maintenance save: its marked outcome, turning the mode on. */
 export const MAINTENANCE_ON_ACTION: DangerousActionKey =
   'PUT /api/v2/admin/plugin_config_values/administration/{plugin} maintenance:on';
 

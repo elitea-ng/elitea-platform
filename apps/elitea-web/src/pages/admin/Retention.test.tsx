@@ -120,7 +120,7 @@ describe('AdminRetention - policies', () => {
     await user.click(within(row).getByRole('button', { name: 'Save' }));
     // Shortening is critical and only the server can tell: every save asks (ADR-0059 R3.8b).
     expect(recorded).toHaveLength(0);
-    await confirmDangerousAction(user, 'conversation', { code: 'request' });
+    await confirmDangerousAction(user, 'Conversations', { code: 'request' });
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.url).toMatch(/\/admin\/retention\/policies\/conversation$/);
     expect(recorded[0]!.body).toEqual({
@@ -135,7 +135,7 @@ describe('AdminRetention - policies', () => {
     await user.clear(gatewayMax);
     const gatewayRow = screen.getByTestId('admin-retention-row-gateway_request_log');
     await user.click(within(gatewayRow).getByRole('button', { name: 'Save' }));
-    await confirmDangerousAction(user, 'gateway_request_log', { text: '' });
+    await confirmDangerousAction(user, 'LLM gateway request log', { text: '' });
     await waitFor(() => expect(recorded).toHaveLength(2));
     expect(recorded[1]!.body).toEqual({
       min_age_days: 1,
@@ -151,7 +151,7 @@ describe('AdminRetention - policies', () => {
     renderAdminRoute(<AdminRetention />);
     const overrides = await screen.findByRole('table', { name: 'Project overrides' });
     await user.click(within(overrides).getByRole('button', { name: 'Remove' }));
-    await confirmDangerousAction(user, 'conversation');
+    await confirmDangerousAction(user, 'Conversations');
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.method).toBe('DELETE');
     expect(recorded[0]!.body).toEqual({ reasonCode: 'incident' });

@@ -179,11 +179,11 @@ adminTest('J37: the landing page is Home, beside a nav that marks the page it is
 
   // The index is Home under the six areas (ADR-0059 R3.3a, issue 2533): a
   // card per area the document opens, and the queues the caller decides.
-  // Home is no item's page, so no item is marked on it.
   await expect(page.getByRole('heading', { level: 1, name: 'Home' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId('admin-home-area-platform')).toBeVisible();
   await expect(page.getByTestId('admin-home-queue-app-requests')).toBeVisible();
-  await expect(page.getByRole('navigation', { name: 'Admin navigation' }).locator('[aria-current="page"]')).toHaveCount(0);
+  // Its own link in the navigation is the one current.
+  await expect(page.getByTestId('admin-nav-item-home')).toHaveAttribute('aria-current', 'page');
 
   // A card's link opens its page, and the nav marks it there.
   await page.getByTestId('admin-home-item-users').click();
@@ -232,9 +232,9 @@ adminTest('J37b: every one of the admin pages is reachable by CLICKING the nav',
     );
   }
 
-  // Exactly the items above, each under its area's label. One more would
-  // mean an item nothing in this list covers.
-  await expect(nav.getByRole('link')).toHaveCount(ITEMS.length);
+  // Exactly the items above, each under its area's label, and Home above
+  // them. One more would mean an item nothing in this list covers.
+  await expect(nav.getByRole('link')).toHaveCount(ITEMS.length + 1);
   for (const area of AREAS) {
     const section = nav.getByTestId(`admin-nav-area-${area.id}`);
     await expect(section.getByRole('heading', { name: area.label, exact: true })).toBeVisible();

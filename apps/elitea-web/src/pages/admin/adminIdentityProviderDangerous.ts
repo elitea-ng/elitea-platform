@@ -67,9 +67,6 @@ function deleteWarning(name: string): string {
 }
 
 /** A delete is a trust action: a locked holder cannot confirm it; a save of the settings half still can. */
-export function confirmBlocked(
-  pending: PendingProviderAction,
-  state: { readonly saving: boolean; readonly locked: boolean },
-): boolean {
-  return state.saving || (pending.kind === "delete" && state.locked);
+export function confirmLocked(pending: PendingProviderAction, locked: boolean): boolean {
+  return pending.kind === "delete" && locked;
 }

@@ -62,7 +62,8 @@ function retentionRequest(dataClass: string, projectId: number | undefined) {
       'A shorter maximum deletes the data older than it on the next sweep, and nothing restores it. A longer one keeps data that would have been deleted.',
     ),
     reach: { count: projectId === undefined ? undefined : 1, unit: 'projects' as const },
-    target: dataClass,
+    // The name the table shows, so the operator types what they read.
+    target: classLabel(dataClass),
     confirmLabel: t('pages.admin.retention.save', 'Save'),
   };
 }

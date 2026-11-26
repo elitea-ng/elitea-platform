@@ -59,7 +59,11 @@ export function projectDeleteCopy(projects: readonly AdminProjectRow[], isDeleti
       'Deleting a project drops its tenant schema and everything in it — prompts, agents, conversations, artifacts, datasources and audit history — and tears down its object storage, vault secrets and system account. There is no restore.',
     ),
     reach: { count, unit: 'projects' as const },
-    target: count === 1 ? (projects[0]?.name ?? '') : `${count} projects`,
+    // A nameless project is typed by its id: an empty target would arm with nothing typed.
+    target:
+      count === 1
+        ? projects[0]?.name.trim() || String(projects[0]?.id ?? '')
+        : t('pages.admin.projects.delete.target', '{{count}} projects', { count }),
     confirmLabel: isDeleting
       ? t('pages.admin.projects.delete.submitting', 'Deleting…')
       : t('pages.admin.projects.delete.submit', 'Delete permanently'),

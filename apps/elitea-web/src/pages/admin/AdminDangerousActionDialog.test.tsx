@@ -25,7 +25,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminDangerousActionDialog, type AdminDangerReach } from './AdminDangerousActionDialog';
-import { MAX_REASON_BYTES, clampReason, reasonBytes, type AdminReason } from './adminDangerousAction';
+import { MAX_REASON_BYTES, clampReason, reasonBytes, reasonFieldsKeepText, type AdminReason } from './adminDangerousAction';
 import { useResetBrandingSettings } from './api/adminBrandingApi';
 import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
@@ -170,5 +170,68 @@ describe('AdminDangerousActionDialog', () => {
     expect(seen[0]?.code).toBe('request');
     expect(seen[0]?.reason).toBe(encodeURIComponent(text));
     expect(decodeURIComponent(seen[0]?.reason ?? '')).toBe(text);
+  });
+});
+
+/* Review fixes of PR 3083: a locked dialog still closes; an empty target never arms; a kept reason fits its route. */
+describe('AdminDangerousActionDialog — locked, empty target, kept text', () => {
+  function Closable({ locked, target = 'Acme brand' }: { locked: boolean; target?: string }) {
+    const [open, setOpen] = useState(true);
+    return open ? (
+      <AdminDangerousActionDialog
+        open
+        action={RESET}
+        title="Reset branding"
+        change="Every field inherits again."
+        reach={{ count: 1, unit: 'projects' }}
+        target={target}
+        confirmLabel="Reset"
+        pending={false}
+        locked={locked}
+        onClose={() => setOpen(false)}
+        onConfirm={() => undefined}
+      />
+    ) : (
+      <span data-testid="admin-dangerous-test-closed">closed</span>
+    );
+  }
+
+  it('lets a caller who may not confirm close the dialog', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<Closable locked />);
+    const dialog = await screen.findByTestId('admin-dangerous-dialog');
+    expect(screen.getByTestId('admin-dangerous-confirm')).toBeDisabled();
+    expect(screen.getByTestId('admin-dangerous-target')).toBeDisabled();
+    expect(dialog).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByTestId('admin-dangerous-test-closed')).toBeInTheDocument();
+  });
+
+  it('never arms on an empty target', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<Closable locked={false} target="  " />);
+    await screen.findByTestId('admin-dangerous-dialog');
+    await user.selectOptions(screen.getByTestId('admin-dangerous-reason-code'), 'incident');
+    expect(screen.getByTestId('admin-dangerous-confirm')).toBeDisabled();
+  });
+
+  it("keeps the request's own reason whole and cuts the dialog's text to the route's bound", () => {
+    const own = 'x'.repeat(700);
+    const fields = reasonFieldsKeepText(
+      'POST /api/v2/admin/execution_suspensions platform',
+      { code: 'incident', text: 'y'.repeat(400) },
+      own,
+      1024,
+    );
+    expect(fields.reason_code).toBe('incident');
+    expect(fields.reason.startsWith(`${own}\n`)).toBe(true);
+    expect(reasonBytes(fields.reason)).toBe(1024);
+    const full = reasonFieldsKeepText(
+      'POST /api/v2/admin/execution_suspensions platform',
+      { code: 'incident', text: 'short' },
+      'x'.repeat(1024),
+      1024,
+    );
+    expect(full.reason).toBe('x'.repeat(1024));
   });
 });

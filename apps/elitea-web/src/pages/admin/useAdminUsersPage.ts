@@ -180,7 +180,13 @@ export function useAdminUsersPage(): AdminUsersPageState {
   const onDeleted = useCallback((ids: readonly number[]) => {
     setSelectedIds((previous) => previous.filter((id) => !ids.includes(id)));
   }, []);
-  const dangerous = useAdminUserDangerousActions({ rows: listing.rows, onError: setErrorMessage, onDeleted });
+  const clearError = useCallback(() => setErrorMessage(''), []);
+  const dangerous = useAdminUserDangerousActions({
+    rows: listing.rows,
+    onStart: clearError,
+    onError: setErrorMessage,
+    onDeleted,
+  });
   const { deleteUsers, setAdminRole, suspendUser } = dangerous;
 
   /**

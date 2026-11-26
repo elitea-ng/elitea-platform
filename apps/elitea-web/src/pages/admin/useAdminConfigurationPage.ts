@@ -63,10 +63,15 @@ export interface AdminConfigurationPageState {
   readonly readOnly: boolean;
   /** The open section alone is read for this caller, on a page it may write (R3.7). */
   readonly sectionReadOnly: boolean;
-  /** Saves the draft; `reason` is the dialog's, for a save that turns maintenance on. */
+  /** Saves the draft; `reason` is the dialog's, for a save of the Maintenance section. */
   readonly onSave: (reason?: AdminReason) => void;
-  /** The save turns maintenance mode on: a dangerous action that asks for a reason (R3.8b). */
-  readonly turnsMaintenanceOn: boolean;
+  /**
+   * A save of the Maintenance section, which asks for a reason (R3.8b):
+   * `on` when it turns maintenance mode on, `other` for any other save.
+   * The server cannot tell the two apart from the request alone (it needs
+   * the stored switch), so it asks a reason of every save of the section.
+   */
+  readonly maintenanceSave: 'on' | 'other' | undefined;
   readonly onDiscard: () => void;
   readonly saveError: string | undefined;
   readonly savedAt: number | undefined;
@@ -75,16 +80,18 @@ export interface AdminConfigurationPageState {
 }
 
 /**
- * Whether saving the draft turns maintenance mode on: the server's
- * `MaintenanceAction` outcome `on`, off (or unset) before and on after.
+ * The outcome of saving the draft of the Maintenance section, as the
+ * server's `MaintenanceAction` names it: `on` when the switch is off (or
+ * unset) before and on after.
  */
-function turnsMaintenanceOn(
+function maintenanceSave(
   section: AdminConfigSection | undefined,
   stored: Readonly<Record<string, unknown>> | undefined,
   draft: Readonly<Record<string, unknown>>,
-): boolean {
-  if (section?.id !== MAINTENANCE_SECTION || !(MAINTENANCE_ENABLED_KEY in draft)) return false;
-  return stored?.[MAINTENANCE_ENABLED_KEY] !== true && draft[MAINTENANCE_ENABLED_KEY] === true;
+): 'on' | 'other' | undefined {
+  if (section?.id !== MAINTENANCE_SECTION) return undefined;
+  const turnsOn = stored?.[MAINTENANCE_ENABLED_KEY] !== true && draft[MAINTENANCE_ENABLED_KEY] === true;
+  return turnsOn ? 'on' : 'other';
 }
 
 const MAINTENANCE_SECTION = 'maintenance';
@@ -275,7 +282,7 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     isSaving: saveMutation.isPending,
     ...writeFlags(access.writable, activeSection),
     onSave,
-    turnsMaintenanceOn: turnsMaintenanceOn(activeSection, serverValues, draft),
+    maintenanceSave: maintenanceSave(activeSection, serverValues, draft),
     onDiscard,
     saveError,
     savedAt,

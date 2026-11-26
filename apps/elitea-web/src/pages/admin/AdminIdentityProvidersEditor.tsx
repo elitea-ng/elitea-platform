@@ -46,7 +46,7 @@ import { t } from "@/shared/i18n";
 
 import { AdminDangerousActionDialog } from "./AdminDangerousActionDialog";
 import type { AdminReason } from "./adminDangerousAction";
-import { confirmBlocked, providerDialog, type PendingProviderAction } from "./adminIdentityProviderDangerous";
+import { confirmLocked, providerDialog, type PendingProviderAction } from "./adminIdentityProviderDangerous";
 import { AdminIdentityProviderDialog } from "./AdminIdentityProviderDialog";
 import { AdminIdentityTrustNotice, useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
 import { ProviderTable } from "./AdminIdentityProviderTable";
@@ -326,10 +326,8 @@ function IdentityProvidersEditor() {
         <AdminDangerousActionDialog
           open
           {...providerDialog(pending)}
-          pending={confirmBlocked(pending, {
-            saving: saveMutation.isPending || deleteMutation.isPending,
-            locked: !access.writable || trustLocked,
-          })}
+          pending={saveMutation.isPending || deleteMutation.isPending}
+          locked={confirmLocked(pending, !access.writable || trustLocked)}
           onClose={() => {
             setPending(undefined);
           }}

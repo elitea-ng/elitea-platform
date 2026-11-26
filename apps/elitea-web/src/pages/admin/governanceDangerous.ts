@@ -1,9 +1,11 @@
 /**
  * What the dangerous-action dialog says for a governance row write (ADR-0059
  * decision 6; R3.8b, issue 2614). A guardrail rule or its fail mode is
- * critical. The server decides by the kind of the row, so every write of the
- * governance routes carries the reason and the dialog shows the route's
- * level.
+ * critical. The server decides by the kind of the stored row and of the
+ * request together, which the request alone cannot tell, so it asks a reason
+ * of every write of these routes (`api/middleware/reason.go`): every write
+ * carries one, and the dialog shows the route's level. The words follow the
+ * row's kind.
  */
 import { t } from '@/shared/i18n';
 
@@ -39,15 +41,21 @@ export function governanceSaveRequest(row: {
   };
 }
 
-/** The copy and action key of deleting the row `name`. */
-export function governanceDeleteRequest(row: { readonly name: string }): GovernanceRequest {
+/** The copy and action key of deleting the row `name` of kind `type`. */
+export function governanceDeleteRequest(row: { readonly name: string; readonly type: string }): GovernanceRequest {
   return {
     action: 'DELETE /api/v2/admin/gateway/governance/{id} guardrail',
     title: t('pages.admin.governance.confirm.deleteTitle', 'Delete governance entry'),
-    change: t(
-      'pages.admin.governance.confirm.deleteBody',
-      'The gateway stops applying this entry within its refresh interval. A deleted guardrail no longer blocks or redacts anything.',
-    ),
+    change:
+      row.type === 'guardrail'
+        ? t(
+            'pages.admin.governance.confirm.deleteGuardrailBody',
+            'The gateway stops applying this guardrail within its refresh interval: it no longer blocks or redacts anything.',
+          )
+        : t(
+            'pages.admin.governance.confirm.deleteBody',
+            'The gateway stops applying this entry within its refresh interval.',
+          ),
     reach: { count: undefined, unit: 'projects' },
     target: row.name,
     confirmLabel: t('pages.admin.governance.confirm.delete', 'Delete'),

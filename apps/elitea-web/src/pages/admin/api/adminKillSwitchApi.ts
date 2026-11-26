@@ -34,6 +34,9 @@ export interface AdminSuspensionCreate {
   readonly reason?: AdminReason;
 }
 
+/** The server's bound on a suspension's reason (`safety.MaxReasonBytes`). */
+const SUSPENSION_REASON_MAX_BYTES = 1024;
+
 export function useCreateAdminSuspension() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -44,7 +47,15 @@ export function useCreateAdminSuspension() {
         await createExecutionSuspension(
           reason === undefined
             ? body
-            : { ...body, ...reasonFieldsKeepText('POST /api/v2/admin/execution_suspensions platform', reason, body.reason) },
+            : {
+                ...body,
+                ...reasonFieldsKeepText(
+                  'POST /api/v2/admin/execution_suspensions platform',
+                  reason,
+                  body.reason,
+                  SUSPENSION_REASON_MAX_BYTES,
+                ),
+              },
         ),
       ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: KEY }),

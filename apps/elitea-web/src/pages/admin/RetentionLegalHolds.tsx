@@ -215,7 +215,8 @@ function ReleaseHoldDialog({ hold, onClose }: { readonly hold: LegalHold | null;
       reach={hold.scope === 'user' ? { count: 1, unit: 'people' } : { count: 1, unit: 'projects' }}
       target={subject(hold)}
       confirmLabel={t('pages.admin.retention.holds.release', 'Release')}
-      pending={locked || release.isPending}
+      pending={release.isPending}
+      locked={locked}
       error={error === '' ? null : error}
       onClose={close}
       onConfirm={(reason) =>

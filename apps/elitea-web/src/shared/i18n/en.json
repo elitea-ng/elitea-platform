@@ -7561,7 +7561,7 @@
   "pages.admin.dangerous.reasonText": "Why (recorded in the audit log)",
   "pages.admin.dangerous.typeTarget": "Type “{{target}}” to confirm",
   "pages.admin.governance.confirm.delete": "Delete",
-  "pages.admin.governance.confirm.deleteBody": "The gateway stops applying this entry within its refresh interval. A deleted guardrail no longer blocks or redacts anything.",
+  "pages.admin.governance.confirm.deleteBody": "The gateway stops applying this entry within its refresh interval.",
   "pages.admin.governance.confirm.deleteTitle": "Delete governance entry",
   "pages.admin.governance.confirm.guardrailBody": "The guardrail and its fail mode decide what the gateway blocks, redacts or lets through for every project it covers.",
   "pages.admin.governance.confirm.save": "Save",
@@ -7603,5 +7603,10 @@
   "pages.admin.users.dangerous.suspendTitle": "Suspend user",
   "pages.admin.configuration.maintenanceOn.change": "Every request from a caller without administration access is answered with the maintenance page until the mode is turned off.",
   "pages.admin.configuration.maintenanceOn.confirm": "Turn on",
-  "pages.admin.configuration.maintenanceOn.title": "Turn maintenance mode on"
+  "pages.admin.configuration.maintenanceOn.title": "Turn maintenance mode on",
+  "pages.admin.configuration.maintenanceSave.change": "The maintenance page and its switch change for everyone. Every save of this section is recorded with its reason.",
+  "pages.admin.configuration.maintenanceSave.title": "Save the maintenance settings",
+  "pages.admin.governance.confirm.deleteGuardrailBody": "The gateway stops applying this guardrail within its refresh interval: it no longer blocks or redacts anything.",
+  "pages.admin.projects.delete.target": "{{count}} projects",
+  "pages.admin.users.dangerous.deleteTarget": "{{count}} users"
 }

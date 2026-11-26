@@ -58,7 +58,14 @@ export interface AdminDangerousActionDialogProps {
   /** The name the operator types to arm the confirmation. */
   readonly target: string;
   readonly confirmLabel: string;
+  /** A request is in flight: nothing can be changed, and the dialog cannot be closed. */
   readonly pending: boolean;
+  /**
+   * The caller may not confirm (a view-only page, a missing permission): the
+   * fields and Confirm are disabled, but Cancel, Esc and the backdrop still
+   * close the dialog.
+   */
+  readonly locked?: boolean;
   readonly error?: string | null | undefined;
   readonly onClose: () => void;
   readonly onConfirm: (reason: AdminReason) => void;
@@ -181,13 +188,16 @@ function ReasonFields({ code, text, disabled, onCode, onText }: ReasonFieldsProp
 }
 
 function DialogBody(props: Omit<AdminDangerousActionDialogProps, 'open'>) {
-  const { action, title, change, reach, target, confirmLabel, pending, error, onClose, onConfirm, children } = props;
+  const { action, title, change, reach, target, confirmLabel, pending, locked, error, onClose, onConfirm, children } =
+    props;
   const [typed, setTyped] = useState('');
   const [code, setCode] = useState<ActionReasonCode | ''>('');
   const [text, setText] = useState('');
-  const matches = typed.trim() === target.trim();
+  const frozen = pending || locked === true;
+  // An empty target never arms: nothing typed would otherwise match it.
+  const matches = target.trim() !== '' && typed.trim() === target.trim();
   const reasonReady = code !== '' && (code !== REASON_CODE_OTHER || text.trim() !== '');
-  const armed = matches && reasonReady && !pending;
+  const armed = matches && reasonReady && !frozen;
   return (
     <>
       <DialogTitle id="admin-dangerous-title">{title}</DialogTitle>
@@ -195,11 +205,11 @@ function DialogBody(props: Omit<AdminDangerousActionDialogProps, 'open'>) {
         <Stack spacing={2} sx={{ paddingTop: '0.25rem' }}>
           <LevelSummary action={action} change={change} reach={reach} />
           {children}
-          <ReasonFields code={code} text={text} disabled={pending} onCode={setCode} onText={setText} />
+          <ReasonFields code={code} text={text} disabled={frozen} onCode={setCode} onText={setText} />
           <TextField
             fullWidth
             size="small"
-            disabled={pending}
+            disabled={frozen}
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             label={t('pages.admin.dangerous.typeTarget', 'Type “{{target}}” to confirm', { target })}
@@ -233,6 +243,15 @@ function DialogBody(props: Omit<AdminDangerousActionDialogProps, 'open'>) {
 }
 
 export function AdminDangerousActionDialog({ open, ...body }: AdminDangerousActionDialogProps) {
+  // The body stays mounted through the exit fade, so the dialog does not
+  // collapse to an empty shell while it closes; each opening is a new
+  // generation, so it starts with empty fields.
+  const [mounted, setMounted] = useState(open);
+  const [generation, setGeneration] = useState(0);
+  if (open && !mounted) {
+    setMounted(true);
+    setGeneration((previous) => previous + 1);
+  }
   return (
     <Dialog
       open={open}
@@ -241,9 +260,9 @@ export function AdminDangerousActionDialog({ open, ...body }: AdminDangerousActi
       fullWidth
       aria-labelledby="admin-dangerous-title"
       data-testid="admin-dangerous-dialog"
+      slotProps={{ transition: { onExited: () => setMounted(false) } }}
     >
-      {/* Mounted only while open, so each opening starts with empty fields. */}
-      {open ? <DialogBody {...body} /> : null}
+      {mounted ? <DialogBody key={generation} {...body} /> : null}
     </Dialog>
   );
 }
