@@ -11,6 +11,7 @@
 import { adHocFontSize } from './rules/ad-hoc-font-size.mjs';
 import { adHocRadius } from './rules/ad-hoc-radius.mjs';
 import { legacyPaletteId } from './rules/legacy-palette-id.mjs';
+import { pageH1 } from './rules/page-h1.mjs';
 import { noAdHocEnvelopeUnwrap } from './rules/no-adhoc-envelope-unwrap.mjs';
 import { noExportAll } from './rules/no-export-all.mjs';
 import { noImportantSx } from './rules/no-important-sx.mjs';
@@ -45,5 +46,6 @@ export default {
     'no-raw-webstorage': noRawWebstorage, //   STOR-1 (member-expression half, issue #22)
     'no-adhoc-envelope-unwrap': noAdHocEnvelopeUnwrap, // R-A6 (issue #132)
     'legacy-palette-id': legacyPaletteId, //   R-T15, theme-gate check 10 only (ADR-0062)
+    'page-h1': pageH1, //   page title by PageHeader, theme-gate check 10 only (ADR-0062)
   },
 };
