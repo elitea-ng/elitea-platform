@@ -401,6 +401,11 @@ fn outside(target: &str, moves: bool, root: &crate::workspace::Workspace) -> boo
     if path.is_absolute() {
         return !contained(path, root.root());
     }
+    // Rooted but not absolute: on Windows `/usr/local` or `\x` (no drive) is
+    // the current drive's root, never a folder's inside.
+    if target.starts_with(['/', '\\']) {
+        return true;
+    }
     // A drive path (`C:…`, its `\` possibly eaten by the shell's quoting) is
     // never inside a folder here; on Windows it is absolute, above.
     if moves || target.as_bytes().get(1) == Some(&b':') {

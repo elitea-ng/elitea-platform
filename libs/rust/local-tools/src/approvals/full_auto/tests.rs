@@ -219,19 +219,25 @@ fn hold_names_what_outlives_the_folder() {
         );
     }
     // Absolute inside the folder is inside, a protected path included;
-    // escaping it with `..` is not.
-    for inside in [
-        format!("rm -rf {root}/build"),
-        format!("rm -rf {root}/.git/hooks"),
-    ] {
-        assert_eq!(hold(&host(&inside), &fixture.workspace), None, "{inside}");
+    // escaping it with `..` is not. (A Windows root holds `\`, which the
+    // POSIX analysis reads as escapes: Unix only.)
+    #[cfg(unix)]
+    {
+        for inside in [
+            format!("rm -rf {root}/build"),
+            format!("rm -rf {root}/.git/hooks"),
+        ] {
+            assert_eq!(hold(&host(&inside), &fixture.workspace), None, "{inside}");
+        }
+        let escape = format!("rm -rf {root}/../other");
+        assert_eq!(
+            hold(&host(&escape), &fixture.workspace),
+            Some(Hold::RecursiveDeleteOutside),
+            "{escape}"
+        );
     }
-    let escape = format!("rm -rf {root}/../other");
-    assert_eq!(
-        hold(&host(&escape), &fixture.workspace),
-        Some(Hold::RecursiveDeleteOutside),
-        "{escape}"
-    );
+    #[cfg(not(unix))]
+    let _ = &root;
     // A call without a command (a file tool) is never on the list.
     assert_eq!(
         hold(&ToolCall::new(ToolKind::WriteFile), &fixture.workspace),
