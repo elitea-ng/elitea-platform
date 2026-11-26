@@ -417,7 +417,9 @@ jobs:
           retention-days: 7
       # #2954: the upstream Rust image leaves its toolchain world-writable; the
       # rust-runtime stage removes that. As the image's own user (10001), no
-      # directory on PATH may be writable.
+      # directory on PATH may be writable. `find -L`: /bin and /sbin are links
+      # to usr/ (merged /usr), and a link's own mode is always 0777; the
+      # directory it names is what counts.
       - name: The rust-runtime image puts no writable directory on PATH
         env:
           DIGESTS_FILE: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
@@ -428,8 +430,6 @@ jobs:
           docker pull -q "$image" > /dev/null
           writable="$(docker run --rm --network none --entrypoint sh "$image" -c '
             id -u
-            # -L: /bin and /sbin are links to usr/ (merged /usr), and a link's
-            # own mode is always 0777; the directory it names is what counts.
             find -L $(echo "$PATH" | tr ":" " ") -maxdepth 0 -perm -o+w 2>/dev/null
             for d in $(echo "$PATH" | tr ":" " "); do
               if [ -d "$d" ] && [ -w "$d" ]; then echo "$d"; fi
