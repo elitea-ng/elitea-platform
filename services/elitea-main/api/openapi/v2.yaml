@@ -7413,7 +7413,7 @@ components:
         person. Stored on the answer as `local_work.full_auto` with at most 50
         asks (command and reason cut to 300 bytes); its presence is the
         "Full auto" marker viewers show. What the client reports; the server
-        cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:371
+        cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:374
         (`FullAutoReport`).
       required: [answered, asks]
       properties:
@@ -7421,7 +7421,9 @@ components:
           type: integer
           minimum: 0
           example: 3
-          description: How many questions Full auto answered in the turn.
+          description: >-
+            How many questions Full auto answered in the turn (held asks
+            excluded). A commit above 10000 is refused.
         asks:
           type: array
           maxItems: 500

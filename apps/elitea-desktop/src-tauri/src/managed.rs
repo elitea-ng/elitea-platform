@@ -67,15 +67,22 @@ pub fn full_auto_forbidden() -> bool {
 
 #[cfg(target_os = "macos")]
 fn forced_bool(key: &str) -> Option<bool> {
-    use objc2_foundation::{NSString, NSUserDefaults};
+    use objc2_foundation::{NSNumber, NSString, NSUserDefaults};
     let key = NSString::from_str(key);
     let defaults = NSUserDefaults::standardUserDefaults();
     if !defaults.objectIsForcedForKey(&key) {
         return None;
     }
-    // A forced value of another type is not a valid switch: it forbids
-    // (the organisation meant to manage it).
-    Some(defaults.objectForKey(&key).is_some() && defaults.boolForKey(&key))
+    // Only a forced number (a plist `<true/>`, `<false/>` or integer) is a
+    // switch; a forced value of another type (a string "true") reads as
+    // false, which forbids: the organisation meant to manage it.
+    let value = defaults.objectForKey(&key);
+    Some(
+        value
+            .as_deref()
+            .and_then(|value| value.downcast_ref::<NSNumber>())
+            .is_some_and(NSNumber::as_bool),
+    )
 }
 
 #[cfg(not(target_os = "macos"))]

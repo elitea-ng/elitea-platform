@@ -170,6 +170,27 @@ fn hold_names_what_outlives_the_folder() {
             "Remove-Item -Recurse C:\\Users\\me",
             Some(Hold::RecursiveDeleteOutside),
         ),
+        // After a `cd`, a relative target may be anywhere.
+        (
+            "cd /usr/local && rm -rf lib",
+            Some(Hold::RecursiveDeleteOutside),
+        ),
+        ("cd .. && rm -rf proj", Some(Hold::RecursiveDeleteOutside)),
+        // `find`'s leading options do not hide its paths.
+        (
+            "find -L / -name '*.log' -delete",
+            Some(Hold::RecursiveDeleteOutside),
+        ),
+        ("find -H . -delete", None),
+        // A substitution elsewhere in the command does not make an inside delete opaque.
+        ("rm -rf dist && echo \"built $(date)\"", None),
+        ("rm -rf $(cat list)", Some(Hold::RecursiveDeleteOutside)),
+        // `-Force` is not `-Recurse`.
+        ("Remove-Item -Force C:\\proj\\out.txt", None),
+        (
+            "Remove-Item -rec C:\\proj",
+            Some(Hold::RecursiveDeleteOutside),
+        ),
         ("cat .npmrc", None),
         ("cd ~ && cat .npmrc", Some(Hold::CredentialStore)),
         (
@@ -197,8 +218,20 @@ fn hold_names_what_outlives_the_folder() {
             "{command}"
         );
     }
-    let inside = format!("rm -rf {root}/build");
-    assert_eq!(hold(&host(&inside), &fixture.workspace), None, "{inside}");
+    // Absolute inside the folder is inside, a protected path included;
+    // escaping it with `..` is not.
+    for inside in [
+        format!("rm -rf {root}/build"),
+        format!("rm -rf {root}/.git/hooks"),
+    ] {
+        assert_eq!(hold(&host(&inside), &fixture.workspace), None, "{inside}");
+    }
+    let escape = format!("rm -rf {root}/../other");
+    assert_eq!(
+        hold(&host(&escape), &fixture.workspace),
+        Some(Hold::RecursiveDeleteOutside),
+        "{escape}"
+    );
     // A call without a command (a file tool) is never on the list.
     assert_eq!(
         hold(&ToolCall::new(ToolKind::WriteFile), &fixture.workspace),

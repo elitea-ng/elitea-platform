@@ -937,6 +937,17 @@ pub enum Source {
     FullAutoHold,
 }
 
+impl Source {
+    /// A mode or a grant answered (or, for a Full auto hold, judged) the ask
+    /// without the person: the answer sink records it.
+    const fn reported_to_sink(self) -> bool {
+        matches!(
+            self,
+            Self::Bypass | Self::Grant | Self::FullAuto | Self::FullAutoTaint | Self::FullAutoHold
+        )
+    }
+}
+
 /// The answers an unattended turn's grant gives (ADR-0045 decision 1) that
 /// the rules engine applies. A grant does not set
 /// [`PermissionProfile::Bypass`]: the rules' own asks go to the person as
@@ -3530,14 +3541,8 @@ impl ApprovalChannel for RuleApprovals {
                 _ => RulesEngine::with_hook_ask(decision, hook),
             };
         }
-        if matches!(
-            decision.source,
-            Source::Bypass
-                | Source::Grant
-                | Source::FullAuto
-                | Source::FullAutoTaint
-                | Source::FullAutoHold
-        ) && let Some(sink) = self.engine.answer_sink()
+        if decision.source.reported_to_sink()
+            && let Some(sink) = self.engine.answer_sink()
         {
             sink.answered(&request.subject, &call, &decision);
         }

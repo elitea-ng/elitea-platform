@@ -61,15 +61,26 @@ function choiceOf(mode: TurnMode, run: RunChoice | null): TurnModeChoice {
 
 export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands): ComposerModes {
   const bypass = useBypassMode(workspaceId);
-  const fullAuto = useFullAutoMode(local);
+  const rawFullAuto = useFullAutoMode(local, commands.planMode);
   const run = useRunToCompletion(workspaceId);
   const grantsOff = useGrantsTurnedOff();
-  const mode = modeOf(commands.planMode, local && fullAuto.on, local && bypass.on);
+  const mode = modeOf(commands.planMode, local && rawFullAuto.on, local && bypass.on);
   const offered = local && !grantsOff;
-  // Picking Bypass leaves Full auto; picking Act or Plan leaves both.
+  // Picking Bypass leaves Full auto once Bypass is on (a cancelled warning keeps the mode); picking Act or Plan leaves both.
   const onBypassChange = (next: boolean): void => {
-    fullAuto.request(false);
-    bypass.request(next, () => commands.setPlanMode(false));
+    if (!next) rawFullAuto.request(false);
+    bypass.request(next, () => {
+      rawFullAuto.request(false);
+      commands.setPlanMode(false);
+    });
+  };
+  // Turning Full auto off (the banner) returns to Act, not to a Bypass kept for the folder.
+  const fullAuto: FullAutoMode = {
+    ...rawFullAuto,
+    request: (next, turnedOn) => {
+      if (!next && rawFullAuto.on) bypass.request(false);
+      rawFullAuto.request(next, turnedOn);
+    },
   };
   // Full auto turns plan mode off only once the person confirmed it.
   const onFullAutoChange = (next: boolean): void => fullAuto.request(next, () => commands.setPlanMode(false));
@@ -82,7 +93,7 @@ export function useComposerModes(workspaceId: string, local: boolean, commands: 
     switchProps: {
       bypass: local && bypass.on,
       onBypassChange: local ? onBypassChange : undefined,
-      fullAuto: local && fullAuto.allowed ? { on: fullAuto.on, onChange: onFullAutoChange } : undefined,
+      fullAuto: local && rawFullAuto.allowed ? { on: rawFullAuto.on, onChange: onFullAutoChange } : undefined,
     },
     runToCompletion: offered
       ? {

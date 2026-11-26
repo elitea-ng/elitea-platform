@@ -664,8 +664,8 @@ profile: everything Bypass answers, and also the trusted folder's taint
 gate (`source: "taint"`, the questions asked after the turn read outside
 content). It does not answer its hard-deny list
 (`libs/rust/local-tools/src/approvals/full_auto.rs`): a recursive delete
-whose target is outside the folder, unresolvable (`$`, `~`, a backtick) or
-on another drive; a command naming a credential store, a shell profile or
+whose target is outside the folder, unresolvable (`$`, `~`, a backtick),
+on another drive, or relative after a `cd`; a command naming a credential store, a shell profile or
 the app's own settings; a keychain program; a command that turns an OS
 protection off. These are asked as in Act mode, and declined at once in an
 unattended turn. Everything Bypass leaves to the person (a hook's ask,
@@ -680,7 +680,8 @@ runs in Full auto (it starts from another agent's text), and a sub-agent in
 a task worktree runs in Bypass; an agent the person addressed in the same
 message keeps it. A resumed turn runs in Full auto only when unattended,
 otherwise in Bypass. The session leaves the profile when the turn ends. The
-UI never keeps the choice: it is the open thread's, confirmed every time.
+UI never keeps the choice: it is the open thread's, confirmed every time;
+plan mode ends it, and turning it off returns to Act.
 
 | Command | Args | Returns |
 |---------|------|---------|

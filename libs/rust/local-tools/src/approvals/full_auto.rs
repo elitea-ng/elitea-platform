@@ -21,14 +21,13 @@
 //! path or program, not a script that does it. The OS sandbox, where the
 //! command runs in one, still bounds it; in a trusted folder nothing does.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use super::{Decision, RulesEngine, Source, ToolCall, Verdict};
 
 #[cfg(test)]
 mod tests;
 use crate::command::{analyse, basename};
-use crate::workspace::Intent;
 
 /// Why Full auto did not answer a call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -184,7 +183,7 @@ pub fn hold(call: &ToolCall, root: &crate::workspace::Workspace) -> Option<Hold>
     if text.names(SHELL_PROFILES) {
         return Some(Hold::ShellProfile);
     }
-    recursive_delete_outside(command, root).then_some(Hold::RecursiveDeleteOutside)
+    recursive_delete_outside(command, text.moves, root).then_some(Hold::RecursiveDeleteOutside)
 }
 
 /// A command's text as the hard-deny list reads it.
@@ -297,37 +296,44 @@ fn protection_off(command: &str) -> bool {
 /// A recursive delete (`rm -r`, `find … -delete`, `Remove-Item -Recurse`,
 /// `rmdir /s`) whose target lies outside the folder, or whose target a
 /// variable, `~` or a substitution spells (the analysis cannot tell where
-/// it points, so it holds).
-fn recursive_delete_outside(command: &str, root: &crate::workspace::Workspace) -> bool {
-    let opaque = command.contains(['$', '~', '`', '%']);
-    segments(command).iter().any(|argv| {
-        let Some(program) = program(argv) else {
-            return false;
-        };
-        let Some(targets) = delete_targets(&program, argv) else {
-            return false;
-        };
-        opaque || targets.iter().any(|target| outside(target, root))
+/// it points, so it holds). After a `cd` a relative target may point
+/// anywhere, so it holds too.
+fn recursive_delete_outside(
+    command: &str,
+    moves: bool,
+    root: &crate::workspace::Workspace,
+) -> bool {
+    // Each piece between shell operators on its own: a variable in another
+    // piece (`rm -rf dist && echo "$(date)"`) does not make the delete
+    // opaque. The analysis drops such words from the argv, so the raw piece
+    // decides.
+    command.split([';', '|', '&', '\n']).any(|piece| {
+        let opaque = piece.contains(['$', '~', '`', '%']);
+        segments(piece).iter().any(|argv| {
+            let Some(program) = program(argv) else {
+                return false;
+            };
+            let Some(targets) = delete_targets(&program, argv) else {
+                return false;
+            };
+            opaque || targets.iter().any(|target| outside(target, moves, root))
+        })
     })
 }
 
-/// The targets of a recursive delete, or `None` when `argv` is not one.
-fn delete_targets(program: &str, argv: &[String]) -> Option<Vec<String>> {
-    let args = &argv[1..];
-    // `/s` and `/q` are switches of the Windows programs only: elsewhere a
-    // word starting with `/` is an absolute path.
-    let windows = matches!(program, "rmdir" | "rd" | "del" | "erase");
-    let flag = |word: &String| {
-        word.starts_with('-') || (windows && word.len() == 2 && word.starts_with('/'))
-    };
-    let lower: Vec<String> = args.iter().map(|word| word.to_lowercase()).collect();
-    let recursive = match program {
-        "rm" | "remove-item" | "ri" | "del" | "erase" => lower.iter().any(|word| {
+/// Whether a delete's switch asks for recursion.
+fn recursive(program: &str, lower: &[String]) -> bool {
+    match program {
+        // `rm`'s short flags may be grouped (`-rf`, `-fR`).
+        "rm" => lower.iter().any(|word| {
             word == "--recursive"
-                || word.starts_with("-recurse")
-                || word == "/s"
                 || (word.starts_with('-') && !word.starts_with("--") && word.contains('r'))
         }),
+        // PowerShell takes any prefix of a parameter name (`-r`, `-rec`);
+        // `del` and `erase` are also cmd's, whose `/s` recurses.
+        "remove-item" | "ri" | "del" | "erase" => lower
+            .iter()
+            .any(|word| word == "/s" || (word.len() >= 2 && "-recurse".starts_with(word.as_str()))),
         "rmdir" | "rd" => lower
             .iter()
             .any(|word| word == "/s" || word == "--recursive"),
@@ -335,22 +341,43 @@ fn delete_targets(program: &str, argv: &[String]) -> Option<Vec<String>> {
             .iter()
             .any(|word| word == "-delete" || word == "rm" || word.ends_with("/rm")),
         _ => false,
-    };
-    if !recursive {
+    }
+}
+
+/// The targets of a recursive delete, or `None` when `argv` is not one.
+fn delete_targets(program: &str, argv: &[String]) -> Option<Vec<String>> {
+    let rest = &argv[1..];
+    let lower: Vec<String> = rest.iter().map(|word| word.to_lowercase()).collect();
+    if !recursive(program, &lower) {
         return None;
     }
     if program == "find" {
-        // `find` takes its paths before the first expression.
+        // `find` takes its options (`-H`, `-L`, `-P`, `-D …`, `-O3`), then
+        // its paths before the first expression; no path is `.`.
+        let mut words = rest.iter().peekable();
+        while let Some(word) = words.next_if(|word| {
+            matches!(word.as_str(), "-H" | "-L" | "-P" | "-D") || word.starts_with("-O")
+        }) {
+            if *word == "-D" {
+                words.next();
+            }
+        }
         return Some(
-            args.iter()
+            words
                 .take_while(|word| !word.starts_with('-') && !matches!(word.as_str(), "(" | "!"))
                 .cloned()
                 .collect(),
         );
     }
+    // `/s` and `/q` are switches of the Windows programs only: elsewhere a
+    // word starting with `/` is an absolute path.
+    let windows = matches!(program, "rmdir" | "rd" | "del" | "erase");
+    let switch = |word: &String| {
+        word.starts_with('-') || (windows && word.len() == 2 && word.starts_with('/'))
+    };
     let mut after_dashes = false;
     Some(
-        args.iter()
+        rest.iter()
             .filter(|word| {
                 if after_dashes {
                     return true;
@@ -359,26 +386,27 @@ fn delete_targets(program: &str, argv: &[String]) -> Option<Vec<String>> {
                     after_dashes = true;
                     return false;
                 }
-                !flag(word)
+                !switch(word)
             })
             .cloned()
             .collect(),
     )
 }
 
-/// Whether `target` lies outside the folder (or cannot be resolved in it).
-fn outside(target: &str, root: &crate::workspace::Workspace) -> bool {
+/// Whether `target` lies outside the folder (or cannot be told inside it).
+/// Only containment counts: a protected or denied path inside the folder is
+/// inside, written absolute or relative.
+fn outside(target: &str, moves: bool, root: &crate::workspace::Workspace) -> bool {
     let path = Path::new(target);
     if path.is_absolute() {
-        return root.resolve(target, Intent::Write).is_err();
+        return !contained(path, root.root());
     }
     // A drive path (`C:…`, its `\` possibly eaten by the shell's quoting) is
     // never inside a folder here; on Windows it is absolute, above.
-    if target.as_bytes().get(1) == Some(&b':') {
+    if moves || target.as_bytes().get(1) == Some(&b':') {
         return true;
     }
-    // Relative: only an escape (`..`) leaves the folder; a denied path
-    // inside it is still inside.
+    // Relative: only an escape (`..`) leaves the folder.
     let mut depth: i64 = 0;
     for part in target.split(['/', '\\']) {
         match part {
@@ -393,6 +421,36 @@ fn outside(target: &str, root: &crate::workspace::Workspace) -> bool {
         }
     }
     false
+}
+
+/// Whether the absolute `path` lies under the canonical `root`: its `..`
+/// folded, and its longest existing ancestor canonicalised (a `/tmp` that is
+/// `/private/tmp`).
+fn contained(path: &Path, root: &Path) -> bool {
+    let mut folded = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                folded.pop();
+            }
+            Component::CurDir => {}
+            other => folded.push(other),
+        }
+    }
+    let mut existing = folded.as_path();
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            break;
+        };
+        rest.push(name.to_owned());
+        existing = parent;
+    }
+    let Ok(mut resolved) = std::fs::canonicalize(existing) else {
+        return false;
+    };
+    resolved.extend(rest.iter().rev());
+    resolved.starts_with(root) && resolved != root
 }
 
 impl RulesEngine {

@@ -30,11 +30,13 @@ export interface FullAutoMode {
 
 const FULL_AUTO_STATUS_KEY = ['desktop', 'full-auto-status'] as const;
 
-export function useFullAutoMode(local: boolean): FullAutoMode {
+export function useFullAutoMode(local: boolean, planMode: boolean): FullAutoMode {
   const status = useQuery({ queryKey: FULL_AUTO_STATUS_KEY, queryFn: fullAutoAllowed, enabled: local, staleTime: 60_000 });
   const allowed = local && status.data === true;
   const [chosen, setChosen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Plan mode (`/plan` included) and a policy that stops allowing it end the choice: coming back asks again.
+  if (chosen && (!allowed || planMode)) setChosen(false);
   // What runs once a confirmed turn-on lands (the composer leaves plan mode and Bypass).
   const pending = useRef<(() => void) | undefined>(undefined);
   return {

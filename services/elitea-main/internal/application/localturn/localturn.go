@@ -78,6 +78,9 @@ const (
 	MaxReportedCommandBytes = 300
 	MaxReportedPaths        = 200
 	MaxReportedPathBytes    = 400
+	// MaxFullAutoAnswered bounds the Full auto count a commit may report: a
+	// turn answering more questions than this is refused, not stored.
+	MaxFullAutoAnswered = 10_000
 	// MaxReportedMemoryIDs bounds each of the report's memory id lists
 	// (memories_saved, memories_deleted); further ids are counted only.
 	MaxReportedMemoryIDs = 200
@@ -775,6 +778,10 @@ func validCommit(request CommitRequest) bool {
 		return false
 	}
 	if len(request.Report.Commands) > 10*MaxReportedCommands || len(request.Report.Paths) > 10*MaxReportedPaths {
+		return false
+	}
+	if fullAuto := request.Report.FullAuto; fullAuto != nil &&
+		(len(fullAuto.Asks) > 10*MaxReportedCommands || fullAuto.Answered < 0 || fullAuto.Answered > MaxFullAutoAnswered) {
 		return false
 	}
 	for _, exchange := range request.HITLExchanges {

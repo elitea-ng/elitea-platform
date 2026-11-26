@@ -3,6 +3,7 @@ package localturn
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -60,5 +61,32 @@ func TestCommitStoresFullAuto(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), `"full_auto"`) {
 		t.Fatalf("a report without Full auto must not carry it: %s", encoded)
+	}
+}
+
+// TestCommitRefusesAnUnboundedFullAuto: a Full auto record with more asks
+// than any commit may carry, or a count out of range, is refused, as an
+// oversized command list is.
+func TestCommitRefusesAnUnboundedFullAuto(t *testing.T) {
+	asks := make([]FullAutoAsk, 10*MaxReportedCommands+1)
+	for i := range asks {
+		asks[i] = FullAutoAsk{Command: "run_command: true"}
+	}
+	for name, report := range map[string]*FullAutoReport{
+		"too many asks":    {Answered: 1, Asks: asks},
+		"negative count":   {Answered: -1, Asks: []FullAutoAsk{}},
+		"count past bound": {Answered: MaxFullAutoAnswered + 1, Asks: []FullAutoAsk{}},
+	} {
+		store := &commitFakeStore{}
+		service, err := NewService(store, commitFakePolicy{allowed: true}, commitFakeMemories{}, commitFakeAudit{},
+			func() (string, error) { return strings.Repeat("b", 32), nil }, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := hostReportCommit()
+		request.Report.FullAuto = report
+		if _, err := service.Commit(context.Background(), request); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s: err = %v, want ErrInvalid", name, err)
+		}
 	}
 }

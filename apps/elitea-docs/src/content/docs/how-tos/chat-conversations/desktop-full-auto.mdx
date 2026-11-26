@@ -13,7 +13,7 @@ After the agent reads a web page, an issue, a tool's result or another agent's r
 
 Full auto does not answer these. They are asked as in Act mode, and declined at once when nobody is there to answer (a run to completion):
 
-- A recursive delete whose target is outside the folder, or cannot be told (a variable, `~`, another drive).
+- A recursive delete whose target is outside the folder, or cannot be told (a variable, `~`, another drive, or a relative path after a `cd`).
 - A command that names a credential store (`~/.ssh`, `~/.aws`, `~/.kube`, a keychain and others), a shell profile (`.zshrc`, `.bashrc`, `.profile` and others) or this app's own settings.
 - A command that turns an operating-system protection off.
 - Computer use, a purchase in the browser pane, a hook's question and an MCP server's sign-in, as in Bypass.
@@ -34,7 +34,7 @@ It works with **Run to completion**: a run that continues by itself keeps Full a
 
 ## Turn it off
 
-Select **Turn off** in the red line, or pick another mode.
+Select **Turn off** in the red line, or pick another mode. Turning it off returns the thread to **Act**. Switching to **Plan** (`/plan` included) also ends it: coming back from Plan asks again.
 
 ## Who gets it
 

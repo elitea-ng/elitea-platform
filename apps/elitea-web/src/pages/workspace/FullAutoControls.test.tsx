@@ -7,6 +7,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FullAutoControls } from './FullAutoControls';
@@ -20,9 +21,13 @@ function host(allowed: boolean): void {
 }
 
 function Probe({ local, turnedOn }: { local: boolean; turnedOn: () => void }): React.JSX.Element {
-  const fullAuto = useFullAutoMode(local);
+  const [planMode, setPlanMode] = useState(false);
+  const fullAuto = useFullAutoMode(local, planMode);
   return (
     <>
+      <button type="button" onClick={() => setPlanMode((value) => !value)}>
+        plan
+      </button>
       <span data-testid="state">{`${String(fullAuto.allowed)}/${String(fullAuto.on)}`}</span>
       <button type="button" onClick={() => fullAuto.request(true, turnedOn)}>
         on
@@ -107,5 +112,21 @@ describe('Full auto', () => {
 
     mount();
     await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('true/false'));
+  });
+
+  it('ends with plan mode: leaving plan mode (a `/plan` round trip) does not turn it back on unasked', async () => {
+    host(true);
+    const user = userEvent.setup();
+    mount();
+    await waitFor(() => expect(screen.getByTestId('state')).toHaveTextContent('true/false'));
+    await user.click(screen.getByRole('button', { name: 'on' }));
+    await user.click(await screen.findByTestId('workspace-full-auto-confirm'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getByTestId('state')).toHaveTextContent('true/true');
+    await user.click(screen.getByRole('button', { name: 'plan' }));
+    expect(screen.getByTestId('state')).toHaveTextContent('true/false');
+    await user.click(screen.getByRole('button', { name: 'plan' }));
+    expect(screen.getByTestId('state')).toHaveTextContent('true/false');
+    expect(screen.queryByTestId('workspace-full-auto-banner')).toBeNull();
   });
 });

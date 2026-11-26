@@ -52,11 +52,13 @@ export const LocalTurnFullAutoReport = zod
     answered: zod
       .int()
       .min(localTurnFullAutoReportAnsweredMin)
-      .describe("How many questions Full auto answered in the turn."),
+      .describe(
+        "How many questions Full auto answered in the turn (held asks excluded). A commit above 10000 is refused.",
+      ),
     asks: zod.array(LocalTurnFullAutoAsk).max(localTurnFullAutoReportAsksMax),
   })
   .describe(
-    'Client contract 1.69 (ADR-0061 amendment of 2026-11-26). Present when the turn ran in Full auto: the approval questions it answered for the person. Stored on the answer as `local_work.full_auto` with at most 50 asks (command and reason cut to 300 bytes); its presence is the "Full auto" marker viewers show. What the client reports; the server cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:371 (`FullAutoReport`).',
+    'Client contract 1.69 (ADR-0061 amendment of 2026-11-26). Present when the turn ran in Full auto: the approval questions it answered for the person. Stored on the answer as `local_work.full_auto` with at most 50 asks (command and reason cut to 300 bytes); its presence is the "Full auto" marker viewers show. What the client reports; the server cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:374 (`FullAutoReport`).',
   );
 
 export type LocalTurnFullAutoReport = zod.input<typeof LocalTurnFullAutoReport>;
