@@ -733,12 +733,26 @@ func TestSeparationMatrixProjectAdministratorIsRefusedOnPlatformAndLLMWrites(t *
 func TestSeparationMatrixSecurityAuditorIsRefusedOnEveryWrite(t *testing.T) {
 	a := newRoleAssertion(t)
 	var writes []matrixRow
+	var attestations []matrixRow
 	for _, row := range a.file {
-		if row.isWrite() {
+		switch {
+		case row.isWrite() && row.Method == http.MethodPost && row.Pattern == adminaccess.ElevationReviewPattern:
+			attestations = append(attestations, row)
+		case row.isWrite():
 			writes = append(writes, row)
 		}
 	}
 	a.refused(adminaccess.RoleSecurityAuditor, "write or approve", writes)
+	// The exception: the review attestation of R2.9a is the auditor's own
+	// write. It changes no platform state.
+	if len(attestations) == 0 {
+		t.Fatal("the matrix has no row for the review attestation; the exception went blind")
+	}
+	for _, row := range attestations {
+		if got := row.answer(adminaccess.RoleSecurityAuditor); got != classAllowed {
+			t.Errorf("the review attestation: security_auditor is %s on %s, want allowed", got, row.key())
+		}
+	}
 	// No route of the surface reads run evidence yet (#2429); a row that does
 	// must refuse the auditor until that story pins it.
 	for _, row := range rowsMatching(a.file, false, "evidence") {

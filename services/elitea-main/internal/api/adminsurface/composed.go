@@ -313,7 +313,8 @@ const (
 	VariantBrowserSession = "browser_session"
 )
 
-// ElevationRequestRoutes are the elevation request routes (ADR-0059 R2.2b).
+// ElevationRequestRoutes are the elevation request routes (ADR-0059 R2.2b)
+// and the review routes (R2.9a).
 // They take a browser session only and refuse the bearer token of the
 // default request before any decision, so the browser session variant is the
 // one that reaches their gates.
@@ -325,6 +326,11 @@ func ElevationRequestRoutes() []Route {
 		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/elevations/pending"},
 		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/approve"},
 		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/deny"},
+		// The review after use (R2.9a) takes a browser session only, too.
+		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/elevations/{elevationID}/review"},
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/elevations/{elevationID}/review"},
+		{Method: http.MethodGet, Pattern: "/api/v2/admin/access/reverts"},
+		{Method: http.MethodPost, Pattern: "/api/v2/admin/access/reverts/{itemID}/handled"},
 	}
 }
 

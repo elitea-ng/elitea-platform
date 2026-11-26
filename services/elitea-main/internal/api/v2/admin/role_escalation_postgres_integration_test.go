@@ -49,6 +49,7 @@ func newEscalationEnvironment(t *testing.T) escalationEnvironment {
 	t.Helper()
 	pool := newRolesPool(t)
 	prepareRolesFixture(t, pool)
+	applyAccessTables(t, pool)
 	t.Setenv("AI_PROJECT_ID", fmt.Sprint(publicProjectID))
 	ctx := context.Background()
 	for _, statement := range []string{

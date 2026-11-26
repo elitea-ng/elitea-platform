@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -42,7 +43,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -370,6 +371,25 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		// the caller holds every permission of each role taken, and changes
 		// no role of its own. One refused account refuses the whole delete.
 		if ruled {
+			// An elevated caller deletes nobody who can approve or review
+			// break-glass access (ADR-0059 R2.8b).
+			if refusal, err := adminaccess.ElevationProtectedTargets(ctx, tx, caller, int64(id)); err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			} else if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
+			// Deleting a reviewer of a pending review needs the standing
+			// super_admin and is listed in the review (ADR-0059 R2.9a).
+			if refusal, err := adminaccess.GuardPendingReviewer(ctx, tx, caller, int64(id),
+				adminaccess.ReviewerChangeDeleted, time.Now()); err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			} else if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
 			refusal, err := h.checkAccountDeletion(ctx, tx, caller, id)
 			if err != nil {
 				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
@@ -390,6 +410,20 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		if err := h.appendRoleAssignment(ctx, tx, r, caller.UserID, id, adminaccess.ModeAdministration,
 			heldBefore, origin.Source); err != nil {
 			slog.ErrorContext(ctx, "could not record the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
+	// The deleted people's sessions, elevations and sealed credentials end
+	// before the row goes, in this transaction (ADR-0059 R2.11): the ledger
+	// and the credential store have no foreign key, so nothing cascades to
+	// them.
+	revokedBy := caller.UserID
+	for _, id := range ids {
+		if _, err := adminaccess.RevokePersonAccess(ctx, tx, int64(id), adminaccess.PersonAccessEnd{
+			ElevationEnd: adminaccess.ElevationEndUserDeleted, RevokedBy: &revokedBy,
+		}); err != nil {
+			slog.ErrorContext(ctx, "could not end the access of a deleted user", "user_id", id, "err", err)
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 			return
 		}
@@ -459,7 +493,7 @@ func (h *Handler) checkAccountDeletion(
 		return nil, err
 	}
 	return h.checkCentralRoles(ctx, tx, caller, centralChange{
-		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true,
+		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true, deletion: true,
 	})
 }
 
@@ -593,6 +627,13 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 	// append rolls the change back (ADR-0059 R1.5).
 	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, targetID, mode, held, origin.Source); err != nil {
 		slog.ErrorContext(ctx, "admin: the role change could not be recorded", "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+	// A critical change under an elevation is announced in this
+	// transaction (ADR-0059 R2.8b).
+	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {
+		slog.ErrorContext(ctx, "admin: the critical role change could not be announced", "err", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
@@ -758,6 +799,18 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
+	// An elevated caller suspends nobody who can approve or review
+	// break-glass access (ADR-0059 R2.8b), read under the role-writes lock
+	// the guard took.
+	if *body.Suspended {
+		if refusal, err := h.checkSuspension(r, tx, int64(userID)); err != nil {
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
+			return
+		} else if refusal != nil {
+			adminaccess.Write(w, r, refusal)
+			return
+		}
+	}
 	tag, err := tx.Exec(r.Context(),
 		`UPDATE public.auth_core__user SET suspended = $1 WHERE id = $2`, *body.Suspended, userID)
 	if err != nil {
@@ -782,8 +835,11 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 				revokedBy = &id
 			}
 		}
-		if _, err := nativeauth.RevokeUserSessions(r.Context(), tx, int64(userID),
-			nativeauth.ReasonUserDeactivated, revokedBy); err != nil {
+		// The person's sessions, elevations and sealed credentials end with
+		// the suspension, in this transaction (ADR-0025 WP3, ADR-0059 R2.11).
+		if _, err := adminaccess.RevokePersonAccess(r.Context(), tx, int64(userID), adminaccess.PersonAccessEnd{
+			ElevationEnd: adminaccess.ElevationEndUserSuspended, RevokedBy: revokedBy,
+		}); err != nil {
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
 			return
 		}
@@ -814,6 +870,27 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"id": userID, "suspended": *body.Suspended})
+}
+
+// checkSuspension applies the rules about people to a suspension of userID:
+// an elevated caller suspends no holder of access.breakglass.approve or
+// access.breakglass.review (ADR-0059 R2.8b), and only a standing super_admin
+// suspends a reviewer of a pending review (R2.9a). A handler built without a
+// permission resolver (unit fixtures only) applies none.
+func (h *Handler) checkSuspension(r *http.Request, tx pgx.Tx, userID int64) (*adminaccess.Refusal, error) {
+	if h.resolver == nil {
+		return nil, nil
+	}
+	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
+	if refusal != nil {
+		return adminaccess.Unresolved("your own permissions could not be read, so the suspension was refused"), nil
+	}
+	if refusal, err := adminaccess.ElevationProtectedTargets(r.Context(), tx, caller, userID); err != nil || refusal != nil {
+		return refusal, err
+	}
+	// Suspending a reviewer of a pending review needs the standing
+	// super_admin and is listed in the review (ADR-0059 R2.9a).
+	return adminaccess.GuardPendingReviewer(r.Context(), tx, caller, userID, adminaccess.ReviewerChangeSuspended, time.Now())
 }
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
@@ -854,6 +931,9 @@ type centralChange struct {
 	// changes is false when the write would leave the target's roles as they
 	// are; the not-yourself rule refuses only a change.
 	changes bool
+	// deletion is true for the roles an account delete takes: the delete
+	// applies the pending-reviewer rule itself (ADR-0059 R2.9a).
+	deletion bool
 }
 
 // checkCentralRoles is the rule for one central assignment, applied to EACH
@@ -876,11 +956,34 @@ type centralChange struct {
 //     route reads, so clearing a developer-mode row that the legacy runtime
 //     left behind needs no subset.
 func (h *Handler) checkCentralRoles(
-	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, change centralChange,
+	ctx context.Context, q adminaccess.ExecQuerier, caller adminaccess.Caller, change centralChange,
 ) (*adminaccess.Refusal, error) {
 	caller, err := caller.Reload(ctx)
 	if err != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
+	}
+	if len(change.taken) > 0 && change.changes {
+		// An elevated caller demotes nobody who can approve or review
+		// break-glass access (ADR-0059 R2.8b).
+		if refusal, err := adminaccess.ElevationProtectedTargets(ctx, q, caller, int64(change.targetID)); err != nil || refusal != nil {
+			return refusal, err
+		}
+		// Taking the review permission from a reviewer of a pending review
+		// needs the standing super_admin, and is listed in the review
+		// (ADR-0059 R2.9a).
+		if !change.deletion {
+			takesReview, err := adminaccess.RolesTakePermission(ctx, q, change.mode, int64(change.targetID),
+				change.taken, change.given, adminaccess.AccessBreakglassReview)
+			if err != nil {
+				return nil, err
+			}
+			if takesReview {
+				if refusal, err := adminaccess.GuardPendingReviewer(ctx, q, caller, int64(change.targetID),
+					adminaccess.ReviewerChangeRoleRemoved, time.Now()); err != nil || refusal != nil {
+					return refusal, err
+				}
+			}
+		}
 	}
 	// The reserved break-glass account holds no role (ADR-0059 R2.6b), for a
 	// global administrator too; rolegrants.Grant refuses it again at the

@@ -51,6 +51,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // modeAssignment is one row of the listing.
@@ -261,6 +262,13 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
+	// A critical change under an elevation is announced in this
+	// transaction (ADR-0059 R2.8b).
+	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {
+		slog.ErrorContext(ctx, "admin: the critical role assignment could not be announced", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
+		return
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
@@ -381,6 +389,13 @@ func (h *Handler) ModesRemove(w http.ResponseWriter, r *http.Request) {
 	// The security audit event, in this transaction (ADR-0059 R1.5).
 	if err := h.appendRoleAssignment(ctx, transaction, r, caller.UserID, userID, mode, held, origin.Source); err != nil {
 		slog.ErrorContext(ctx, "admin: the role removal could not be recorded", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
+		return
+	}
+	// A critical change under an elevation is announced in this
+	// transaction (ADR-0059 R2.8b).
+	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {
+		slog.ErrorContext(ctx, "admin: the critical role removal could not be announced", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to remove role"})
 		return
 	}
