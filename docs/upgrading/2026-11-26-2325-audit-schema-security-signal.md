@@ -10,8 +10,10 @@ object and no `chain` object, carrying `details.partition`, `epoch`,
 `head_hash`, `length`, `delivery_seq_high`, `chain_status`, `key_id` and
 `signature`), and states the rule that a receiver ignores fields it does not
 know. `ocsf` is allowed on a signal event when the registry's OCSF class fits;
-it is optional, never required. The change is additive; `schema` stays
-`elitea.audit.v1` and no migration, contract or Helm key changes.
+it is optional, never required. The optional `delivery_seq` field is also
+declared, with the relay expected to stamp it; the relay's stamping is E11.2b.
+The change is additive; `schema` stays `elitea.audit.v1` and no migration,
+contract or Helm key changes.
 
 **Who is affected.** Receivers and exporters of the audit evidence. They now
 see a source they have not met (`security_signal`) and a new optional `signal`

@@ -144,6 +144,27 @@ func TestWebhookReceiverKillAndRestore(t *testing.T) {
 	}
 }
 
+func TestOTLPReceiverKillAndRestore(t *testing.T) {
+	rcv := NewOTLPReceiver(t)
+	sink := newOTLPSink(t, rcv.URL())
+	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
+	if err := sink.Send(context.Background(), events); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	_ = rcv.Stop(t)
+	rcv.Restart(t)
+	sink2 := newOTLPSink(t, rcv.URL())
+	if err := sink2.Send(context.Background(), []auditexport.Event{testEvent("event-3")}); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	got := rcv.Received()
+	for _, id := range []string{"event-1", "event-2", "event-3"} {
+		if got[id] != 1 {
+			t.Fatalf("event %s delivered %d times, want 1 (all: %v)", id, got[id], got)
+		}
+	}
+}
+
 func TestOTLPReceiverDecodes(t *testing.T) {
 	rcv := NewOTLPReceiver(t)
 	defer func() { _ = rcv.Stop(t) }()
