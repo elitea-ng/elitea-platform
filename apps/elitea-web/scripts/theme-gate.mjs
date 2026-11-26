@@ -30,11 +30,14 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 import {
+  UNPAIRED_MANIFEST,
   compareCounts,
   countFindings,
   formatCounts,
   formatGrowth,
+  oxlintArgs,
   parseOxlintJson,
+  parseUnpairedManifest,
   totals,
 } from './lib/style-ratchet-core.mjs';
 import {
@@ -134,7 +137,7 @@ function styleRatchetCounts(oxlint, tree) {
   if (!existsSync(join(tree, 'src'))) {
     throw new Error(`${tree}/src does not exist — a missing tree would read as 0 findings`);
   }
-  const run = spawnSync(oxlint, ['-c', STYLE_RATCHET_CONFIG, '-f', 'json', '--no-ignore', 'src'], {
+  const run = spawnSync(oxlint, oxlintArgs(STYLE_RATCHET_CONFIG), {
     cwd: tree,
     encoding: 'utf8',
     maxBuffer: 1 << 28,
@@ -150,9 +153,16 @@ function styleRatchet(oxlint, root, base) {
   const name = '10-style-ratchet';
   let head;
   let baseCounts;
+  let unpaired;
   try {
     head = styleRatchetCounts(oxlint, root);
     baseCounts = base ? styleRatchetCounts(oxlint, base) : null;
+    // The files git did not pair, written next to the base tree (decision 3.2).
+    if (base) {
+      const manifest = join(base, UNPAIRED_MANIFEST);
+      if (!existsSync(manifest)) throw new Error(`${manifest} does not exist — write the base with style-ratchet-base.mjs`);
+      unpaired = parseUnpairedManifest(readFileSync(manifest, 'utf8'));
+    }
   } catch (error) {
     console.error(`theme-gate ${name}: FAIL — ${error.message}`);
     return true;
@@ -169,7 +179,7 @@ function styleRatchet(oxlint, root, base) {
     return false;
   }
   console.error(`theme-gate ${name}: FAIL (${growth.length} folder count(s) grew; ADR-0062 decision 3)`);
-  for (const line of formatGrowth(growth)) console.error(`  ${line}`);
+  for (const line of formatGrowth(growth, unpaired)) console.error(`  ${line}`);
   return true;
 }
 

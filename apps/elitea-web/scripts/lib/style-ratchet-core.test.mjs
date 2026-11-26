@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   KINDS,
+  UNPAIRED_FIXES,
+  UNPAIRED_MANIFEST,
+  UNPAIRED_NOTE,
   compareCounts,
   countFindings,
   folderOf,
@@ -9,9 +12,14 @@ import {
   formatGrowth,
   isCounted,
   kindOf,
+  namedUnpaired,
+  oxlintArgs,
+  parseNameStatus,
   parseOxlintJson,
+  parseUnpairedManifest,
   planBaseTree,
   totals,
+  unpairedFiles,
 } from './style-ratchet-core.mjs';
 
 const diag = (filename, message, line = 1, help) => ({
@@ -226,6 +234,147 @@ describe('planBaseTree', () => {
       { from: 'apps/elitea-web/src/features/foo/ui/A.tsx', to: 'src/features/foo/ui/A.tsx' },
       { from: 'apps/elitea-web/src/features/foo/ui/Moved.tsx', to: 'src/features/bar/ui/Moved.tsx' },
       { from: 'apps/elitea-web/src/features/foo/ui/Same.tsx', to: 'src/features/foo/ui/Same.tsx' },
+    ]);
+  });
+});
+
+describe("a split and a merge follow git's pairing (decision 3.2)", () => {
+  const prefix = 'apps/elitea-web/';
+  // A split: git pairs Big.tsx with one part (R) and lists the other as added.
+  // A merge: git pairs the result with one source (R) and lists the other as deleted.
+  const nameStatus = [
+    'R064\tapps/elitea-web/src/features/foo/ui/Big.tsx\tapps/elitea-web/src/features/bar/ui/PartA.tsx',
+    'A\tapps/elitea-web/src/features/bar/ui/PartB.tsx',
+    'R071\tapps/elitea-web/src/features/foo/ui/One.tsx\tapps/elitea-web/src/features/zed/ui/Both.tsx',
+    'D\tapps/elitea-web/src/features/foo/ui/Two.tsx',
+  ].join('\n');
+  const baseFiles = [
+    'apps/elitea-web/src/features/foo/ui/Big.tsx',
+    'apps/elitea-web/src/features/foo/ui/One.tsx',
+    'apps/elitea-web/src/features/foo/ui/Two.tsx',
+  ];
+
+  it('writes the one paired part or source under its head path, and leaves the rest where it was', () => {
+    expect(planBaseTree(baseFiles, nameStatus, prefix)).toEqual([
+      { from: 'apps/elitea-web/src/features/foo/ui/Big.tsx', to: 'src/features/bar/ui/PartA.tsx' },
+      { from: 'apps/elitea-web/src/features/foo/ui/One.tsx', to: 'src/features/zed/ui/Both.tsx' },
+      { from: 'apps/elitea-web/src/features/foo/ui/Two.tsx', to: 'src/features/foo/ui/Two.tsx' },
+    ]);
+  });
+
+  it('lists the other part as new and the other source as removed', () => {
+    expect(unpairedFiles(nameStatus, prefix)).toEqual({
+      added: ['src/features/bar/ui/PartB.tsx'],
+      removed: ['src/features/foo/ui/Two.tsx'],
+    });
+  });
+});
+
+describe('parseNameStatus', () => {
+  it('reads the status letter and both paths; a line with one path has from = to', () => {
+    expect(parseNameStatus('R087\ta.tsx\tb.tsx\nM\tc.tsx\n\n')).toEqual([
+      { status: 'R', from: 'a.tsx', to: 'b.tsx' },
+      { status: 'M', from: 'c.tsx', to: 'c.tsx' },
+    ]);
+  });
+});
+
+describe('unpairedFiles', () => {
+  const prefix = 'apps/elitea-web/';
+
+  it('is every added and deleted file under src/, sorted, and no modified or renamed one', () => {
+    const nameStatus = [
+      'A\tapps/elitea-web/src/features/foo/ui/Z.tsx',
+      'A\tapps/elitea-web/src/features/foo/ui/New.tsx',
+      'D\tapps/elitea-web/src/features/foo/ui/Old.tsx',
+      'M\tapps/elitea-web/src/features/foo/ui/Same.tsx',
+      'R100\tapps/elitea-web/src/features/foo/ui/A.tsx\tapps/elitea-web/src/features/bar/ui/A.tsx',
+      'A\tapps/elitea-web/index.html',
+      'D\tapps/elitea-web/vite.config.ts',
+    ].join('\n');
+    expect(unpairedFiles(nameStatus, prefix)).toEqual({
+      added: ['src/features/foo/ui/New.tsx', 'src/features/foo/ui/Z.tsx'],
+      removed: ['src/features/foo/ui/Old.tsx'],
+    });
+  });
+
+  it('counts a pair across the edge of src/ as new to, or removed from, the counted tree', () => {
+    const nameStatus = [
+      'R100\tapps/elitea-web/tools/In.tsx\tapps/elitea-web/src/features/foo/ui/In.tsx',
+      'R100\tapps/elitea-web/src/features/foo/ui/Out.tsx\tapps/elitea-web/tools/Out.tsx',
+    ].join('\n');
+    expect(unpairedFiles(nameStatus, prefix)).toEqual({
+      added: ['src/features/foo/ui/In.tsx'],
+      removed: ['src/features/foo/ui/Out.tsx'],
+    });
+  });
+});
+
+describe('parseUnpairedManifest', () => {
+  it('returns the two lists', () => {
+    expect(parseUnpairedManifest('{"base":"x","added":["src/a/b/c.tsx"],"removed":[]}')).toEqual({
+      added: ['src/a/b/c.tsx'],
+      removed: [],
+    });
+  });
+
+  it('throws on text that is not the manifest, so the names are never dropped quietly', () => {
+    expect(() => parseUnpairedManifest('nope')).toThrow(`${UNPAIRED_MANIFEST} is not JSON`);
+    expect(() => parseUnpairedManifest('null')).toThrow(/needs "added" and "removed"/);
+    expect(() => parseUnpairedManifest('{"added":[]}')).toThrow(/needs "added" and "removed"/);
+    expect(() => parseUnpairedManifest('{"added":[1],"removed":[]}')).toThrow(/needs "added" and "removed"/);
+  });
+});
+
+describe('a grown folder with a file git did not pair', () => {
+  const growth = compareCounts(
+    countFindings([rem('src/features/bar/ui/Old.tsx', 1)]),
+    countFindings([
+      rem('src/features/bar/ui/Old.tsx', 1),
+      rem('src/features/bar/ui/Moved.tsx', 3),
+      rem('src/features/bar/ui/Moved.tsx', 4),
+      rem('src/features/bar/ui/Edited.tsx', 2),
+    ]),
+  );
+  const unpaired = { added: ['src/features/bar/ui/Moved.tsx', 'src/features/bar/ui/Clean.tsx'], removed: [] };
+
+  it('names the new file in the message and gives the two fixes once for the folder', () => {
+    expect(formatGrowth(growth, unpaired)).toEqual([
+      'src/features/bar spacing-rem: 1 → 4 (the base branch is the ceiling; remove as many as you add)',
+      `  src/features/bar/ui/Moved.tsx (0 → 2 in this file; ${UNPAIRED_NOTE})`,
+      "    src/features/bar/ui/Moved.tsx:3 R-T9 [spacing-rem] p: '1rem' → 2",
+      "    src/features/bar/ui/Moved.tsx:4 R-T9 [spacing-rem] p: '1rem' → 2",
+      '  src/features/bar/ui/Edited.tsx (0 → 1 in this file)',
+      "    src/features/bar/ui/Edited.tsx:2 R-T9 [spacing-rem] p: '1rem' → 2",
+      ...UNPAIRED_FIXES.map((line) => `  ${line}`),
+    ]);
+    expect(UNPAIRED_FIXES.join(' ')).toMatch(
+      /land the move unchanged in its own PR first .* onto the system in this PR/,
+    );
+  });
+
+  it('lists the named files with their folder, kind and count; a new file with no values is not named', () => {
+    expect(namedUnpaired(growth, unpaired)).toEqual([
+      { folder: 'src/features/bar', kind: 'spacing-rem', path: 'src/features/bar/ui/Moved.tsx', count: 2 },
+    ]);
+  });
+
+  it('has no fixes when no grown file is new', () => {
+    expect(
+      formatGrowth(growth, { added: ['src/features/zed/ui/X.tsx'] }).some((l) => l.includes('land the move')),
+    ).toBe(false);
+  });
+});
+
+describe('oxlintArgs', () => {
+  it('runs one config over src/ with JSON output and no ignore files', () => {
+    expect(oxlintArgs('/x/style-ratchet.oxlintrc.json')).toEqual([
+      '-c',
+      '/x/style-ratchet.oxlintrc.json',
+      '-f',
+      'json',
+      '--no-ignore',
+      'src',
     ]);
   });
 });

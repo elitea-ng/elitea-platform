@@ -1,0 +1,4 @@
+{
+  "added": ["src/features/bar/ui/Card.tsx"],
+  "removed": ["src/features/foo/ui/Card.tsx"]
+}

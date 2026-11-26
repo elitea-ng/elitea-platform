@@ -667,7 +667,10 @@ jobs:
       # On a pull request the checkout is GitHub's merge commit, so its first
       # parent is the base branch the PR lands on; style-ratchet-base.mjs
       # fetches it (the checkout has depth 1) and writes its src/ with renamed
-      # files under their new paths. A nightly or dispatch run has no base:
+      # files under their new paths, plus the files git did not pair, which a
+      # failing folder names with the two fixes (decision 3.2). The replay of
+      # this check over merged PRs is scripts/style-ratchet-replay.mjs.
+      # A nightly or dispatch run has no base:
       # check 10 then prints the counts per folder and does not fail.
       - name: Theme gate
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
