@@ -431,6 +431,8 @@ pub struct TurnContext {
     ran: std::sync::atomic::AtomicBool,
     /// What the thread's idle compaction needs once the turn committed.
     idle: Mutex<Option<super::idle::IdleBasis>>,
+    /// The turn's local consults of thread members (#3065).
+    consults: Arc<Mutex<Vec<Value>>>,
 }
 
 impl TurnContext {
@@ -457,6 +459,24 @@ impl TurnContext {
             .idle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(basis);
+    }
+
+    /// Where the turn's local consults of thread members are recorded
+    /// for its commit (ADR-0061 decision 3e, #3065).
+    #[must_use]
+    pub fn consults(&self) -> Arc<Mutex<Vec<Value>>> {
+        self.consults.clone()
+    }
+
+    /// The consults recorded for the commit.
+    #[must_use]
+    pub fn take_consults(&self) -> Vec<Value> {
+        std::mem::take(
+            &mut *self
+                .consults
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// What the turn's model left for its thread's idle compaction (`None`

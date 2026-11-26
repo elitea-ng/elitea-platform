@@ -65,6 +65,7 @@ pub mod cache;
 pub mod catalogue;
 pub mod child_agent;
 pub mod commits;
+pub mod consult;
 pub mod context;
 pub mod definition;
 pub mod environment;

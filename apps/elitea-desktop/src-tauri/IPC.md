@@ -1100,6 +1100,32 @@ so a lead thread's chain stays on its agent.
   beside `continued_automatically: true`, `continuation_kind: "hand"` and
   `host_prompt` (the handing agent's message): the host started it, so
   history never shows its model input as the person's prompt.
+- **Local consults** (ADR-0061 decisions 3e/3f, #3065; `src/d0/consult.rs`).
+  In a thread with other agents, a local agent's nested-agent
+  (`application`) tool call runs the callee on this computer when the
+  desktop may run it (not a pipeline, no withheld secret, no project MCP
+  server; checked once per turn), whether it is a thread member (its
+  application is a `floor.agents[].application_id`) or another nested agent
+  of the caller's version. The callee runs in the caller's session (its
+  folder, sandbox, rules, approvals and checkpoint, on the caller's model,
+  quiet), with the caller's local and index tools and the caller's remote
+  tools its definition also names (toolkit type and tool name); never
+  `hand_floor`, a nested agent, a sub-agent, the browser or the computer.
+  The taint gate closes before it runs, and Bypass never carries into it
+  (the session runs it in Build). Its answer is the tool result, framed as
+  another agent's text (`agent_reply` block under the thread's nonce). A
+  callee the desktop may not run is a cloud child turn as before; its
+  `subagent_started` carries `executor: "cloud"`. A turn runs at most 3
+  consults and a message 8; past them the call is refused as a tool result
+  (`consult_limit`). The caller's turn sends `consult_started` `{caller,
+  callee, callee_name, question_excerpt, local}` and `consult_finished`
+  `{caller, callee, callee_name, reply_excerpt, ok, local}` (excerpts ≤ 280
+  characters; `callee` is `null` for a nested agent that is no thread
+  member), and its avatar waits on the callee (`waiting_on: "agent"`,
+  `peer_participant_id`). A thread member's local consult is recorded in the
+  commit's `consults` (`{participant_id, question ≤ 32 KiB, reply ≤ 16
+  KiB}`, at most 3) and goes with the next `handLocalFloor` as a `{from, to}`
+  pair. A thread of one agent keeps the cloud child turns unchanged.
 
 **Remote tools.** A credentialed toolkit (`remote_toolkit`) and a platform
 MCP server (`platform_mcp`, `mcp_elitea_internal_*`, when the resolved

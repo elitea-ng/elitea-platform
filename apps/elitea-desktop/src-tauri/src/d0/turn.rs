@@ -3666,6 +3666,7 @@ impl AgentHost {
             local_work: recorder.work_report(sandbox_mode.as_str()),
             context_summary: turn_context.take_summary(),
             chain_outcome: None,
+            consults: turn_context.take_consults(),
         };
         // The workspace stays held by the commit (below) until it settles:
         // a handoff, restore or removal is refused until the last turn is
@@ -5378,6 +5379,45 @@ impl AgentHost {
             planner: Some(planner.clone()),
             child: None,
         };
+        // Local consults (ADR-0061 decision 3e, #3065): in a thread with
+        // other agents, a nested-agent call runs the callee here, with the
+        // folder and the caller's tools; a thread of one agent keeps the
+        // cloud child turns.
+        if let Some(caller) = started.participant_id
+            && let Some(question) = started.message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            )
+            && started
+                .thread_agents()
+                .iter()
+                .any(|agent| agent.participant_id != caller)
+            && !admitted.child_agents.is_empty()
+        {
+            let _ = children_remote.set_consults(Arc::new(super::consult::LocalConsults::new(
+                api.clone(),
+                request.project_id,
+                caller,
+                question.to_owned(),
+                started.thread_agents().to_vec(),
+                self.exchanges.clone(),
+                events.clone(),
+                transport.clone(),
+                child_model.clone(),
+                toolsets.clone(),
+                remote_specs.clone(),
+                remote.clone(),
+                ToolObserver {
+                    planner: None,
+                    ..observer.clone()
+                },
+                workspace.session.clone(),
+                nonce.clone(),
+                turn_context.consults(),
+            )));
+        }
         // Sub-agents: the turn's model, quiet, and its local and index tools
         // (never the remote toolkits, nor the person's MCP servers: a child
         // is not asked about, and its tools are only the read-only built-in
@@ -7240,6 +7280,11 @@ struct CommitBody {
     /// turn, the one the host does not continue.
     #[serde(skip_serializing_if = "Option::is_none")]
     chain_outcome: Option<ChainOutcome>,
+    /// The turn's local consults of thread members (ADR-0061 decision 3e,
+    /// #3065), at most `consult::MAX_PER_TURN`; part of the commit's digest,
+    /// so a retry sends the same list.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    consults: Vec<Value>,
 }
 
 impl CommitBody {

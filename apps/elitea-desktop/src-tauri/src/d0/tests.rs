@@ -11682,3 +11682,7 @@ mod floor_tests;
 /// A local agent hands the floor (ADR-0061 decision 3d, #3064).
 #[path = "hand_floor_tests.rs"]
 mod hand_floor_tests;
+
+/// Local consults (ADR-0061 decision 3e, #3065).
+#[path = "consult_tests.rs"]
+mod consult_tests;

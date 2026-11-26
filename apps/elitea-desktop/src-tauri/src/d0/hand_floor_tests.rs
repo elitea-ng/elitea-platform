@@ -36,7 +36,7 @@ pub(super) fn agents() -> Value {
     ])
 }
 
-fn resolved_for(application_id: i64, version_id: i64, tools: Value) -> Value {
+pub(super) fn resolved_for(application_id: i64, version_id: i64, tools: Value) -> Value {
     json!({
         "schema_version": "elitea.client.resolved-application-version.v1",
         "project_id": 1, "application_id": application_id, "version_id": version_id,
@@ -51,7 +51,7 @@ fn resolved_for(application_id: i64, version_id: i64, tools: Value) -> Value {
     })
 }
 
-fn execution_of(participant: i64) -> &'static str {
+pub(super) fn execution_of(participant: i64) -> &'static str {
     match participant {
         77 => EXECUTION,
         88 => EXECUTION_2,
@@ -105,6 +105,12 @@ pub(super) fn platform(thread: Thread) -> impl Fn(&Req) -> Res {
         }
         if path.starts_with("/api/v2/configurations/models/1?") {
             return Res::json(200, &catalogue(200_000));
+        }
+        // Application 8 (version 12) is a pipeline: the desktop never runs it.
+        if path == "/api/v2/elitea_core/resolved_version/prompt_lib/1/8/12" {
+            let mut pipeline = resolved_for(8, 12, json!([]));
+            pipeline["version_details"]["agent_type"] = json!("pipeline");
+            return Res::json(200, &pipeline);
         }
         for (application, version) in [(5, 9), (6, 10), (7, 11)] {
             if path
@@ -168,7 +174,9 @@ pub(super) fn platform(thread: Thread) -> impl Fn(&Req) -> Res {
         if path.starts_with("/api/v2/elitea_core/local_turn_hand_floor_skip/prompt_lib/1/") {
             return Res::json(200, &json!({"skipped": body["hand_ids"]}));
         }
-        if path == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION_2}") {
+        if [EXECUTION, EXECUTION_2].iter().any(|execution| {
+            path == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{execution}")
+        }) {
             return Res::json(
                 202,
                 &json!({"child_execution_id": "child-1",
@@ -176,9 +184,9 @@ pub(super) fn platform(thread: Thread) -> impl Fn(&Req) -> Res {
                 "conversation_uuid": "44444444-2222-4333-8444-555555555555"}),
             );
         }
-        if path
-            == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION_2}/child-1")
-        {
+        if [EXECUTION, EXECUTION_2].iter().any(|execution| {
+            path == format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{execution}/child-1")
+        }) {
             if thread.stall.load(Ordering::SeqCst) {
                 return Res::json(200, &json!({"status": "running"}));
             }
@@ -235,7 +243,7 @@ pub(super) fn starts(h: &Harness) -> Vec<Value> {
     )
 }
 
-fn tool_names(request: &Value) -> Vec<String> {
+pub(super) fn tool_names(request: &Value) -> Vec<String> {
     request["tools"]
         .as_array()
         .into_iter()
@@ -244,7 +252,7 @@ fn tool_names(request: &Value) -> Vec<String> {
         .collect()
 }
 
-fn hand_to(ids: &[i64]) -> Res {
+pub(super) fn hand_to(ids: &[i64]) -> Res {
     tool_call(
         "call-hand",
         "hand_floor",
