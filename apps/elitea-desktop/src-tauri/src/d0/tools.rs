@@ -197,6 +197,17 @@ impl ObservedTool {
     }
 }
 
+/// Whether `tool`'s result is content from outside the folder: a remote
+/// toolkit's (the platform's), a local MCP server's, the web's, the browser
+/// pane's or another app's (ADR-0061 decision 5f).
+fn reads_outside_content(tool: &str, remote: bool) -> bool {
+    remote
+        || tool.starts_with(elitea_local_tools::mcp::naming::PREFIX)
+        || ["web_", "browser_", "computer_", "host_"]
+            .iter()
+            .any(|prefix| tool.starts_with(prefix))
+}
+
 fn shorten(text: &str) -> (String, bool) {
     let mut chars = text.chars();
     let cut: String = chars.by_ref().take(SUMMARY_CHARS).collect();
@@ -367,6 +378,13 @@ impl Tool for ObservedTool {
         let running = ToolTimer::begin(&observer.events);
         let result = self.inner.execute(ctx.clone(), args).await;
         drop(running);
+        // Content from outside the folder entered the turn (ADR-0061
+        // decision 5f): its host commands are asked from now on.
+        if reads_outside_content(&tool, self.remote)
+            && let Some(session) = &observer.session
+        {
+            session.rules().record_untrusted_read();
+        }
         if let (Some(plan), Ok(value)) = (&plan, &result)
             && value.get("accepted") == Some(&Value::Bool(true))
         {
@@ -428,6 +446,14 @@ impl Tool for ObservedTool {
             "summary": summary,
             "truncated": truncated,
         });
+        // A failed local tool's code (`sandbox_unavailable`: the card
+        // offers to trust the folder, ADR-0061 decision 5j).
+        if !ok
+            && let Ok(value) = &observed
+            && let Some(code) = value.get("code").and_then(Value::as_str)
+        {
+            done["code"] = json!(code.strip_prefix("local_tools.").unwrap_or(code));
+        }
         // A screenshot of another app: its thumbnail, for this device's
         // transcript only.
         if let Some(thumbnail) = observer.recorder.take_thumbnail(&call_id) {

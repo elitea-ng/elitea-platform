@@ -131,6 +131,7 @@ async fn sh_loopback(
             network,
             loopback,
             grant: None,
+            host: false,
         },
     )
     .await

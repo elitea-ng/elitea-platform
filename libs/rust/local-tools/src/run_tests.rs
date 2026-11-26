@@ -503,6 +503,13 @@ pub(crate) fn answer(
     if let Some(note) = output.enforcement_note {
         put("enforcement_note", json!(note));
     }
+    // A trusted folder's run on the host is reported as such (ADR-0061).
+    if let Some(execution) = output.execution {
+        put("execution", json!(execution));
+    }
+    if output.env_fallback {
+        put("env_fallback", json!(true));
+    }
     if let Some(id) = &output_id {
         put("output_id", json!(id));
     }
@@ -606,6 +613,8 @@ mod tests {
             shell: false,
             grant: None,
             network: None,
+            execution: None,
+            env_fallback: false,
         }
     }
 
@@ -701,6 +710,32 @@ mod tests {
         );
         assert!(passing.get("needs_network").is_none());
         assert!(passing.get("output").is_none(), "{passing}");
+        assert!(passing.get("execution").is_none(), "{passing}");
+    }
+
+    /// A run on the host (a trusted folder) says so, like `run_command`.
+    #[test]
+    fn a_host_run_reports_its_execution() {
+        let dir = tempfile::tempdir().expect("dir");
+        let spill = SpillStore::new(&dir.path().join("data"), "s");
+        let host = CommandOutput {
+            execution: Some(crate::shell::EXECUTION_HOST),
+            env_fallback: true,
+            enforcement: Enforcement::None,
+            ..output(0, "")
+        };
+        let max = budget::bytes(Budgets::default().run_command);
+        let value = answer(
+            &planned(),
+            &host,
+            &TestReport::default(),
+            None,
+            &spill,
+            max,
+            false,
+        );
+        assert_eq!(value["execution"], "host", "{value}");
+        assert_eq!(value["env_fallback"], true, "{value}");
     }
 
     #[test]

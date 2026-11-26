@@ -64,7 +64,7 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 		{"app deny not a string", `{"local_work_computer_use_apps_deny":[3]}`, "local_work_computer_use_apps_deny"},
 		{"app id too long", `{"local_work_computer_use_apps_deny":["` + strings.Repeat("a", 256) + `"]}`, "local_work_computer_use_apps_deny"},
 		{"browser valid", `{"local_work_browser":false,"local_work_browser_agent":false,"local_work_browser_http":true,
-			"local_work_browser_private_network":true,
+			"local_work_browser_private_network":true,"local_work_folder_trust":false,
 			"local_work_browser_allow_domains":["example.com","*.example.org"],
 			"local_work_browser_deny_domains":["Ads.Example.com"]}`, ""},
 		{"browser domains not a list", `{"local_work_browser_allow_domains":"example.com"}`, "local_work_browser_allow_domains"},
@@ -125,14 +125,15 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		"local_work_index_model_mirror_url", "local_work_web", "local_work_host_intel",
 		"local_work_computer_use", "local_work_computer_use_apps_allow", "local_work_computer_use_apps_deny",
 		"local_work_browser", "local_work_browser_agent", "local_work_browser_allow_domains",
-		"local_work_browser_deny_domains", "local_work_browser_http", "local_work_browser_private_network"} {
+		"local_work_browser_deny_domains", "local_work_browser_http", "local_work_browser_private_network",
+		"local_work_folder_trust"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 40 {
+	if len(keys) != 41 {
 		t.Errorf("section declares %d fields, want the ADR's 7, contract 1.3's 6, contract 1.5's 11, ADR-0034's 1, "+
-			"contract 1.9's 3, #1238's 2, ADR-0047's 3, ADR-0048's 6 and contract 1.45's 1", len(keys))
+			"contract 1.9's 3, #1238's 2, ADR-0047's 3, ADR-0048's 6, contract 1.45's 1 and ADR-0061's 1", len(keys))
 	}
 	for _, field := range section.fields {
 		if field["key"] == "notification_preview" {

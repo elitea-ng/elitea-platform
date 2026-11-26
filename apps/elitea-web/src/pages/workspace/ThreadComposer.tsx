@@ -45,6 +45,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
+import { TrustBadge } from '@/features/folder-trust';
 import { RunToCompletionControl } from '@/features/unattended';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
 import { IndexStatusIcon } from '@/features/workspace-index';
@@ -174,6 +175,11 @@ function steeringProps(steering: Steering, agent: { readonly name: string } | un
 /** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
 const canSendHere = (session: ThreadSession, steering: Steering, offLaptop: boolean): boolean => (session.canSend || steering.active) && !offLaptop;
 
+/** Beside the run-location chip of a thread that runs here: the folder's "No sandbox" / "Trust paused" badge (ADR-0061 decision 5i). */
+function LocalTrustBadge({ workspaceId, local }: { workspaceId: string; local: boolean }): React.JSX.Element | null {
+  return local ? <TrustBadge workspaceId={workspaceId} /> : null;
+}
+
 interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
   projectId: number;
@@ -299,7 +305,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     <>
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
-      <BypassControls bypass={modes.bypass} active={modes.bypassActive} />
+      <BypassControls bypass={modes.bypass} active={modes.bypassActive} workspaceId={workspaceId} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <CloudLeadNotice projectId={projectId} conversationId={conversationId} local={local} />
       <TeamThreadNotice team={session.selection.team} local={local} />
@@ -319,6 +325,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
           <>
             {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={bound.busy} />}
             <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
+            <LocalTrustBadge workspaceId={workspaceId} local={local} />
           </>
         }
         runToCompletion={runControl(modes.runToCompletion, bound.busy)}

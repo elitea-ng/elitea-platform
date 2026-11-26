@@ -63,6 +63,8 @@ mod sessions;
 mod settings;
 mod store;
 mod tokens;
+mod trust;
+mod trust_commands;
 mod view_socket;
 mod window;
 mod workspaces;
@@ -424,6 +426,44 @@ pub fn run() {
             // The turns that ran when the app stopped: an unattended one
             // continues, any other offers Continue (ADR-0045 decision 7).
             tauri::async_runtime::spawn(agents.clone().resume_until_settled());
+            // Trusted folders (ADR-0061): never the app's own directories.
+            // A change reaches the open sessions (revoking stops their host
+            // processes) and the window (`trust://event`).
+            {
+                let mut refused = vec![data_dir.clone(), config_dir.clone()];
+                refused.extend(cache_dir.clone());
+                let store = trust::TrustStore::new(
+                    workspaces.clone(),
+                    Some(config_dir.join(rules::RULES_FILE)),
+                    refused,
+                );
+                agents.rule_files().set_trust_store(&store);
+                let weak = Arc::downgrade(&agents);
+                let handle = app.handle().clone();
+                store.on_change(move |change| {
+                    use tauri::Emitter as _;
+                    if let Err(error) = handle.emit_to("main", trust::EVENT_NAME, change.payload()) {
+                        log::warn!("could not deliver a trust event: {error}");
+                    }
+                    let Some(agents) = weak.upgrade() else {
+                        return;
+                    };
+                    let workspace = match change {
+                        trust::TrustChange::Changed(id) => id,
+                        trust::TrustChange::Tamper(_) => None,
+                    };
+                    tauri::async_runtime::spawn(async move {
+                        agents.trust_changed(workspace.as_deref()).await;
+                    });
+                });
+                agents.set_trust_store(store);
+                // The person's login-shell environment, once per app session.
+                let agents = agents.clone();
+                tauri::async_runtime::spawn(async move {
+                    let env = elitea_local_tools::host_env::capture().await;
+                    agents.set_host_environment(Arc::new(env));
+                });
+            }
             // The app-wide compaction settings (threshold, idle compaction).
             agents.set_compaction_store(Arc::new(
                 compaction_settings::CompactionSettingsStore::open(data_dir.clone()),
@@ -568,6 +608,10 @@ pub fn run() {
             local_commands::workspace_files,
             local_commands::commands_list,
             local_commands::rules_get,
+            trust_commands::trust_status,
+            trust_commands::trust_grant,
+            trust_commands::trust_revoke,
+            trust_commands::trust_list,
             local_commands::rules_put,
             local_commands::rules_explain,
             local_commands::rules_import_proposed,

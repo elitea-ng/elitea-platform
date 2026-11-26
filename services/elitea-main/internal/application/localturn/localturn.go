@@ -327,7 +327,15 @@ type HITLExchange struct {
 type CommandRecord struct {
 	Command  string `json:"command"`
 	ExitCode *int   `json:"exit_code,omitempty"`
+	// Execution is ExecutionHost when the command ran outside the OS sandbox
+	// in a trusted folder (ADR-0061 decision 5i, client contract 1.67); ""
+	// for a sandboxed one. omitempty keeps older digests unchanged.
+	Execution string `json:"execution,omitempty"`
 }
+
+// ExecutionHost is the one CommandRecord.Execution value stored: the command
+// ran on the host, outside the sandbox (ADR-0061 decision 5c).
+const ExecutionHost = "host"
 
 // LocalWorkReport is what the client reports it did on the device.
 type LocalWorkReport struct {
@@ -340,6 +348,12 @@ type LocalWorkReport struct {
 	// omitempty keeps the commit digest of a report without them unchanged.
 	MemoriesSaved   []int64 `json:"memories_saved,omitempty"`
 	MemoriesDeleted []int64 `json:"memories_deleted,omitempty"`
+	// HostCommands is how many commands ran outside the OS sandbox in a
+	// trusted folder, and Trusted whether the folder was trusted when the
+	// turn ran (ADR-0061 decision 5i, client contract 1.67). omitempty keeps
+	// the commit digest of a report without them unchanged.
+	HostCommands int  `json:"host_commands,omitempty"`
+	Trusted      bool `json:"trusted,omitempty"`
 }
 
 // Credential names the credential family a caller authenticated with: the
@@ -810,6 +824,12 @@ type boundedReport struct {
 	MemoriesDeleted      []int64 `json:"memories_deleted"`
 	MemoriesDeletedTotal int     `json:"memories_deleted_total"`
 	Reported             string  `json:"reported_by"`
+	// HostCommands and Trusted as the client reported them, and
+	// RanOutsideSandbox when HostCommands is above 0: the "Ran outside the
+	// sandbox" marker web and mobile show on the turn (ADR-0061, issue 3069).
+	HostCommands      int  `json:"host_commands,omitempty"`
+	Trusted           bool `json:"trusted,omitempty"`
+	RanOutsideSandbox bool `json:"ran_outside_sandbox,omitempty"`
 }
 
 func boundReport(report LocalWorkReport) boundedReport {
@@ -819,7 +839,9 @@ func boundReport(report LocalWorkReport) boundedReport {
 		CommandsTotal: len(report.Commands), PathsTotal: len(report.Paths),
 		MemoriesSaved: boundMemoryIDs(report.MemoriesSaved), MemoriesSavedTotal: len(report.MemoriesSaved),
 		MemoriesDeleted: boundMemoryIDs(report.MemoriesDeleted), MemoriesDeletedTotal: len(report.MemoriesDeleted),
+		HostCommands: max(report.HostCommands, 0), Trusted: report.Trusted,
 	}
+	out.RanOutsideSandbox = out.HostCommands > 0
 	for _, command := range report.Commands {
 		if len(out.Commands) == MaxReportedCommands {
 			break
@@ -828,7 +850,11 @@ func boundReport(report LocalWorkReport) boundedReport {
 		if text == "" {
 			continue
 		}
-		out.Commands = append(out.Commands, CommandRecord{Command: text, ExitCode: command.ExitCode})
+		record := CommandRecord{Command: text, ExitCode: command.ExitCode}
+		if command.Execution == ExecutionHost {
+			record.Execution = ExecutionHost
+		}
+		out.Commands = append(out.Commands, record)
 	}
 	for _, path := range report.Paths {
 		if len(out.Paths) == MaxReportedPaths {

@@ -72,6 +72,7 @@ echo "end"
 
 #[tokio::test]
 #[ignore = "run by a_granted_command_runs_sandboxed_with_its_login_only"]
+#[allow(clippy::too_many_lines, reason = "one end-to-end scenario")]
 async fn inner() {
     if std::env::var_os(INNER).is_none() {
         return;
@@ -109,8 +110,11 @@ async fn inner() {
         network: true,
         loopback: false,
         grant: Some(grant.clone()),
+        host: true, // trusted: a grant keeps its sandbox (ADR-0061 5h)
     };
     let output = run(&workspace, &config, &spec).await.expect("ran");
+    let full = elitea_local_tools::sandbox::Enforcement::Full;
+    assert_eq!((output.execution, output.enforcement), (None, full));
     let all = format!("{}\n{}", output.stdout, output.stderr);
     assert!(!all.contains(TOKEN), "the token leaked: {all}");
     assert!(all.contains("token=[REDACTED]"), "{all}");

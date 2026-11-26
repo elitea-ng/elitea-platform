@@ -27,6 +27,7 @@ async fn sh(dir: &tempfile::TempDir, command: &str, loopback: bool) -> Option<Co
             network: false,
             loopback,
             grant: None,
+            host: false,
         },
     )
     .await;
@@ -94,6 +95,7 @@ async fn denied_files_inside_a_reopened_workspace_stay_hidden() {
             network: false,
             loopback: false,
             grant: None,
+            host: false,
         },
     )
     .await;

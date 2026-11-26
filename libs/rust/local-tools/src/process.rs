@@ -357,6 +357,11 @@ pub struct SpawnSpec {
     pub keep_alive: KeepAlive,
     /// Stopped (`timed_out`) past this.
     pub max_wall: Duration,
+    /// It runs on the host in a trusted folder (ADR-0061 decision 5c): its
+    /// output passes through a [`crate::redact::StreamRedactor`] with these
+    /// secrets and the known token formats before anything keeps it.
+    /// `None`: sandboxed, nothing to redact.
+    pub host_redact: Option<Vec<crate::credentials::Secret>>,
 }
 
 #[derive(Debug)]
@@ -443,6 +448,12 @@ impl Process {
     #[must_use]
     pub fn sandbox(&self) -> SandboxMode {
         self.spec.sandbox
+    }
+
+    /// Whether it runs on the host in a trusted folder.
+    #[must_use]
+    pub const fn on_host(&self) -> bool {
+        self.spec.host_redact.is_some()
     }
 
     /// The workspace-relative working directory.
@@ -943,6 +954,17 @@ impl ProcessRegistry {
         stop_all(&self.list()).await;
     }
 
+    /// Stop every process that runs on the host (the folder's trust was
+    /// revoked or suspended, ADR-0061 decision 5i).
+    pub async fn stop_host(&self) {
+        let host: Vec<_> = self
+            .list()
+            .into_iter()
+            .filter(|process| process.on_host())
+            .collect();
+        stop_all(&host).await;
+    }
+
     /// The first half of [`Self::stop_all`] from synchronous code (the app
     /// quits): `SIGTERM` every running process now, and return them for
     /// [`kill_left`] once the caller's grace is over (one grace shared
@@ -1091,22 +1113,37 @@ fn start_threads(
     shared: &Arc<Shared>,
 ) {
     let reading = Arc::clone(process);
+    let mut redactor = process
+        .spec
+        .host_redact
+        .as_deref()
+        .map(|secrets| crate::redact::StreamRedactor::new(secrets, true));
     let read = move || {
         let mut chunk = [0u8; 8192];
+        let keep = |bytes: &[u8]| {
+            if bytes.is_empty() {
+                return;
+            }
+            lock(&reading.buffer).push(bytes);
+            if let Some(screen) = &reading.screen {
+                lock(screen).process(bytes);
+            }
+            reading.changed.notify_waiters();
+        };
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) => break,
-                Ok(read) => {
-                    lock(&reading.buffer).push(&chunk[..read]);
-                    if let Some(screen) = &reading.screen {
-                        lock(screen).process(&chunk[..read]);
-                    }
-                    reading.changed.notify_waiters();
-                }
+                Ok(read) => match redactor.as_mut() {
+                    Some(redactor) => keep(&redactor.push(&chunk[..read])),
+                    None => keep(&chunk[..read]),
+                },
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 // A closed terminal answers EIO.
                 Err(_) => break,
             }
+        }
+        if let Some(redactor) = redactor.as_mut() {
+            keep(&redactor.finish());
         }
         lock(&reading.status).reader_done = true;
         reading.changed.notify_waiters();
@@ -1343,6 +1380,7 @@ mod tests {
             loopback: false,
             keep_alive,
             max_wall: Duration::from_mins(5),
+            host_redact: None,
         }
     }
 

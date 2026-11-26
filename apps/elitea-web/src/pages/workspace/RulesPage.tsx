@@ -6,6 +6,7 @@ import { MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 
+import { useFolderTrusted } from '@/features/folder-trust';
 import { useWorkspaceIpc } from '@/features/workspace';
 import { RulesPanel } from '@/features/workspace-rules';
 import { tauriRulesIpc, type RulesIpc } from '@/shared/desktop/rulesIpc';
@@ -19,6 +20,7 @@ export default function RulesPage({ ipc }: { ipc?: RulesIpc }): React.JSX.Elemen
   const [picked, setPicked] = useState<string | null>(null);
   const workspaces = openedFolders(list.data ?? []);
   const workspaceId = picked ?? workspaces[0]?.id ?? null;
+  const trusted = useFolderTrusted(workspaceId ?? undefined);
   return (
     <Stack spacing={2} sx={{ p: 3, maxWidth: 860 }}>
       <Typography component="h1" variant="headingMedium">
@@ -37,7 +39,7 @@ export default function RulesPage({ ipc }: { ipc?: RulesIpc }): React.JSX.Elemen
               </MenuItem>
             ))}
           </TextField>
-          {workspaceId !== null && <RulesPanel ipc={rules} workspaceId={workspaceId} />}
+          {workspaceId !== null && <RulesPanel ipc={rules} workspaceId={workspaceId} trusted={trusted} />}
         </>
       )}
     </Stack>

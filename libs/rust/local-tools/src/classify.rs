@@ -767,11 +767,145 @@ fn verb_risk(
     ))
 }
 
+/// Programs that reach the network whatever their arguments.
+const NETWORK_PROGRAMS: &[&str] = &[
+    "kubectl",
+    "oc",
+    "helm",
+    "terraform",
+    "tofu",
+    "terragrunt",
+    "pulumi",
+    "curl",
+    "wget",
+    "fetch",
+    "http",
+    "https",
+    "aria2c",
+    "ssh",
+    "scp",
+    "sftp",
+    "rsync",
+    "nc",
+    "ncat",
+    "netcat",
+    "socat",
+    "telnet",
+    "ftp",
+    "ping",
+    "dig",
+    "nslookup",
+    "host",
+    "traceroute",
+    "npx",
+    "pnpx",
+    "bunx",
+    "gh",
+    "glab",
+];
+
+/// Programs that reach the network for these subcommands.
+const NETWORK_VERBS: &[(&str, &[&str])] = &[
+    (
+        "git",
+        &[
+            "fetch",
+            "pull",
+            "push",
+            "clone",
+            "ls-remote",
+            "remote",
+            "submodule",
+            "send-email",
+        ],
+    ),
+    (
+        "npm",
+        &[
+            "install", "i", "ci", "add", "update", "publish", "view", "info", "exec", "login",
+            "audit", "outdated",
+        ],
+    ),
+    (
+        "pnpm",
+        &[
+            "install", "i", "add", "update", "publish", "dlx", "outdated", "audit",
+        ],
+    ),
+    (
+        "yarn",
+        &["install", "add", "upgrade", "publish", "dlx", "npm"],
+    ),
+    ("bun", &["install", "i", "add", "update", "publish", "x"]),
+    (
+        "cargo",
+        &[
+            "fetch", "update", "install", "publish", "search", "login", "yank", "owner",
+        ],
+    ),
+    ("go", &["get", "install", "mod"]),
+    ("pip", &["install", "download", "search"]),
+    ("pip3", &["install", "download", "search"]),
+    (
+        "uv",
+        &["add", "sync", "pip", "tool", "run", "publish", "lock"],
+    ),
+    (
+        "docker",
+        &["pull", "push", "login", "run", "build", "search"],
+    ),
+    (
+        "podman",
+        &["pull", "push", "login", "run", "build", "search"],
+    ),
+];
+
+/// The first segment of `shape` that starts a program able to reach the
+/// network (ADR-0061 decision 5d, layer 6: such a host command is asked in
+/// a trusted folder even when routine). Its program and verb, or `None`.
+/// Every cloud CLI (`aws`, `gcloud`, ...) counts too.
+#[must_use]
+pub fn network_program(shape: &CommandShape) -> Option<String> {
+    shape.segments().into_iter().find_map(|argv| {
+        let program = basename(argv.first()?);
+        if NETWORK_PROGRAMS.contains(&program) || CLOUD.contains(&program) {
+            return Some(program.to_owned());
+        }
+        let (_, verbs) = NETWORK_VERBS.iter().find(|(name, _)| *name == program)?;
+        // Any word, not just the first: `git -C dir fetch` fetches too
+        // (asking too often is the safe side here).
+        let verb = argv[1..]
+            .iter()
+            .map(String::as_str)
+            .find(|word| verbs.contains(word))?;
+        Some(format!("{program} {verb}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{Place, Risk, assess};
+    use super::{Place, Risk, assess, network_program};
+
+    #[test]
+    fn network_programs_are_named() {
+        let named = |command: &str| network_program(&crate::command::analyse(command));
+        assert_eq!(named("curl https://x").as_deref(), Some("curl"));
+        assert_eq!(named("git fetch origin").as_deref(), Some("git fetch"));
+        assert_eq!(named("cargo test && git pull").as_deref(), Some("git pull"));
+        assert_eq!(named("/usr/bin/ssh host").as_deref(), Some("ssh"));
+        assert_eq!(named("aws s3 ls").as_deref(), Some("aws"));
+        for routine in [
+            "git status",
+            "cargo test",
+            "npm test",
+            "ls -la",
+            "make build",
+        ] {
+            assert_eq!(named(routine), None, "{routine}");
+        }
+    }
 
     fn risk(command: &str) -> Risk {
         assess(

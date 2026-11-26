@@ -132,6 +132,29 @@ pub struct LocalWorkPolicy {
     /// (and the names private by definition, `localhost`, `.local`, …) may
     /// load. Link-local and the other forbidden ranges never do.
     pub browser_private_network: bool,
+    /// `local_work_folder_trust` (ADR-0061 decision 5b, client contract
+    /// 1.67): a person may mark a folder trusted, so its commands run on the
+    /// host outside the sandbox. It matters only with a `full-access`
+    /// ceiling, the network and the shell ([`Self::folder_trust_blocks`]).
+    /// The server sends `true` by default; off when absent.
+    pub folder_trust: bool,
+}
+
+/// Why the policy does not let a person trust a folder (ADR-0061 decision
+/// 5b), as the trust dialog names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustBlock {
+    /// Local work itself is off.
+    LocalWork,
+    /// `local_work_shell` is off.
+    Shell,
+    /// `local_work_network` is off.
+    Network,
+    /// `local_work_max_sandbox_mode` is below `full-access`.
+    Ceiling,
+    /// `local_work_folder_trust` is off.
+    FolderTrust,
 }
 
 impl Default for LocalWorkPolicy {
@@ -162,7 +185,45 @@ impl Default for LocalWorkPolicy {
             browser_deny_domains: Vec::new(),
             browser_http: false,
             browser_private_network: false,
+            folder_trust: false,
         }
+    }
+}
+
+impl LocalWorkPolicy {
+    /// What keeps a folder from being trusted under this policy; empty when
+    /// trust is allowed: local work, the shell and the network on, the
+    /// `full-access` ceiling, and `local_work_folder_trust`.
+    #[must_use]
+    pub fn folder_trust_blocks(&self) -> Vec<TrustBlock> {
+        let mut blocks = Vec::new();
+        if !self.allowed {
+            blocks.push(TrustBlock::LocalWork);
+        }
+        if !self.shell {
+            blocks.push(TrustBlock::Shell);
+        }
+        if !self.network {
+            blocks.push(TrustBlock::Network);
+        }
+        if self.max_sandbox_mode != SandboxMode::FullAccess {
+            blocks.push(TrustBlock::Ceiling);
+        }
+        if !self.folder_trust {
+            blocks.push(TrustBlock::FolderTrust);
+        }
+        blocks
+    }
+
+    /// Whether this policy lets a person trust a folder (ADR-0061 decision
+    /// 5b): nothing in [`Self::folder_trust_blocks`].
+    #[must_use]
+    pub fn folder_trust_allowed(&self) -> bool {
+        self.allowed
+            && self.shell
+            && self.network
+            && self.max_sandbox_mode == SandboxMode::FullAccess
+            && self.folder_trust
     }
 }
 

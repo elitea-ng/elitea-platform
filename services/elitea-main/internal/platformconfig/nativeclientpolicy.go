@@ -106,6 +106,13 @@ const (
 	KeyNativeLocalWorkBrowserDenyDomains    = "local_work_browser_deny_domains"
 	KeyNativeLocalWorkBrowserHTTP           = "local_work_browser_http"
 	KeyNativeLocalWorkBrowserPrivateNetwork = "local_work_browser_private_network"
+	// KeyNativeLocalWorkFolderTrust lets a person mark one desktop folder
+	// trusted ("no sandbox", ADR-0061 decision 5b, client contract 1.67): its
+	// commands then run as the person's own processes, under approvals. On by
+	// default, but effective only while local_work_max_sandbox_mode is
+	// full-access and local_work_network and local_work_shell are on; the
+	// default ceiling is workspace-write, so a default deployment has no trust.
+	KeyNativeLocalWorkFolderTrust = "local_work_folder_trust"
 )
 
 // MaxBrowserDomains and MaxBrowserDomainBytes bound the browser pane's domain
@@ -317,6 +324,11 @@ type LocalWorkPolicy struct {
 	// loopback and private addresses may load.
 	BrowserHTTP           bool `json:"browser_http"`
 	BrowserPrivateNetwork bool `json:"browser_private_network"`
+	// FolderTrust: the person may trust a folder so its commands run outside
+	// the sandbox (ADR-0061 decision 5b). The desktop allows a grant only
+	// with Allowed, Shell, Network and MaxSandboxMode full-access too, and
+	// suspends every trusted folder when the policy stops allowing it.
+	FolderTrust bool `json:"folder_trust"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -357,6 +369,9 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		BrowserDenyDomains:    []string{},
 		BrowserHTTP:           false,
 		BrowserPrivateNetwork: false,
+		// Owner decision at acceptance (ADR-0061 question 1): on, because the
+		// workspace-write ceiling already keeps trust off by default.
+		FolderTrust: true,
 	}
 }
 
@@ -389,6 +404,7 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.BrowserDenyDomains = browserDomains(values, KeyNativeLocalWorkBrowserDenyDomains)
 	policy.BrowserHTTP = values.Bool(KeyNativeLocalWorkBrowserHTTP, policy.BrowserHTTP)
 	policy.BrowserPrivateNetwork = values.Bool(KeyNativeLocalWorkBrowserPrivateNetwork, policy.BrowserPrivateNetwork)
+	policy.FolderTrust = values.Bool(KeyNativeLocalWorkFolderTrust, policy.FolderTrust)
 	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
 		policy.IndexModelMirrorURL = mirror
 	}

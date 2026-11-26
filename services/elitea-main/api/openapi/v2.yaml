@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.66"
+  x-elitea-client-contract: "1.67"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -7160,6 +7160,14 @@ components:
           description: The command line; stored cut to 300 bytes, control characters as spaces.
         exit_code:
           type: integer
+        execution:
+          type: string
+          enum: [host]
+          example: host
+          description: >-
+            Client contract 1.67 (ADR-0061 decision 5i). `host` when the
+            command ran outside the OS sandbox in a trusted folder; absent for
+            a sandboxed command. Any other value is dropped.
     LocalTurnWorkReport:
       type: object
       description: >-
@@ -7200,6 +7208,22 @@ components:
             delete_memory calls removed, in call order; absent when none.
             Stored and audited as `memories_saved` is.
           items: { type: integer, format: int64, minimum: 1 }
+        host_commands:
+          type: integer
+          minimum: 0
+          example: 2
+          description: >-
+            Client contract 1.67 (ADR-0061 decision 5i). How many of the turn's
+            commands ran outside the OS sandbox in a trusted folder. Absent
+            when none. When above 0 the stored `local_work` carries
+            `ran_outside_sandbox: true`. As everything here, what the client
+            reports; the server cannot verify it.
+        trusted:
+          type: boolean
+          example: true
+          description: >-
+            Client contract 1.67. The turn's folder was trusted (and not
+            suspended) when the turn ran. Absent when it was not.
     LocalTurnCommitRequest:
       type: object
       description: >-
@@ -23006,6 +23030,18 @@ components:
             names private by definition, `localhost`, `.local`, ...) may
             load. Link-local and the other forbidden ranges never do.
             Default false.
+        folder_trust:
+          type: boolean
+          example: true
+          description: >-
+            Client contract 1.67 (ADR-0061 decision 5b). A person may mark one
+            desktop folder trusted ("no sandbox"): its commands then run as the
+            person's own processes, still under approvals, the person's rules
+            and `command_deny`. Default true, but effective only while
+            `max_sandbox_mode` is `full-access` and `network` and `shell` are
+            true. When the policy stops allowing it, the desktop suspends every
+            trusted folder until the person confirms again. Absent reads as
+            false on the desktop.
     InvalidQueryParameterError:
       type: object
       description: >-

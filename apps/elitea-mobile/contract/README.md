@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.67
+
+| Area | What |
+|---|---|
+| Trusted folders (ADR-0061, #3059 #3060) | `local_work.folder_trust` in the client policy and `host_commands`, `trusted` and `execution: host` in the local turn commit report are desktop-only. The app needs nothing new: it never commits a local turn. The "Ran outside the sandbox" marker on a viewed Local work turn reads the answer meta's `local_work.ran_outside_sandbox` (issue 3069). A server before 1.67 sends neither. |
+
 ## Client contract 1.66
 
 | Area | What |

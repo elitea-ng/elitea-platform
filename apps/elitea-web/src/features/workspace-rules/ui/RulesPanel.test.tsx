@@ -223,4 +223,36 @@ describe('RulesPanel', { timeout: testTimeout(20_000) }, () => {
     await user.click(within(box).getByRole('button', { name: 'Test' }));
     expect(await screen.findByTestId('rules-explain-result')).toHaveTextContent('Refused by workspace setting 1 (from an earlier version)');
   });
+
+  // ADR-0061 decisions 5d and 5e (#3062).
+  const REMEMBERED: RulesView = {
+    ...VIEW,
+    scopes: [{ ...VIEW.scopes[0]!, file: { version: 1, rules: [{ pattern: ['make', 'deploy'], decision: 'allow', sandbox: 'host', requires_trust: true }] } }, VIEW.scopes[1]!],
+  };
+
+  it('marks a rule remembered in a trusted folder "Needs trust" while the folder is not trusted', async () => {
+    const { rerender } = renderWithTheme(<RulesPanel ipc={createFakeRulesIpc(REMEMBERED)} workspaceId="w1" />);
+    const rule = await screen.findByTestId('rule-workspace-1');
+    expect(within(rule).getByTestId('rule-needs-trust')).toHaveTextContent('Needs trust');
+    expect(rule).toHaveTextContent('Runs without a sandbox, only while this folder is trusted');
+    rerender(<RulesPanel ipc={createFakeRulesIpc(REMEMBERED)} workspaceId="w1" trusted />);
+    expect(within(await screen.findByTestId('rule-workspace-1')).queryByTestId('rule-needs-trust')).toBeNull();
+  });
+
+  it('offers sandbox: host on the person’s own Allow rules only, never on a repository’s', async () => {
+    const ipc = createFakeRulesIpc(VIEW);
+    const user = userEvent.setup({ delay: null });
+    renderWithTheme(<RulesPanel ipc={ipc} workspaceId="w1" />);
+    const own = await screen.findByTestId('rules-scope-user');
+    await user.click(within(own).getByRole('button', { name: 'Edit' }));
+    await user.click(within(own).getByLabelText(/Without a sandbox, in a trusted folder/));
+    await user.click(within(own).getByRole('button', { name: 'Save rule' }));
+    await screen.findByTestId('rule-user-1');
+    expect(ipc.calls.puts.at(-1)?.file.rules[0]?.sandbox).toBe('host');
+
+    await user.click(screen.getByRole('button', { name: 'Import these rules' }));
+    const imported = await screen.findByTestId('rule-workspace-2');
+    await user.click(within(imported).getByRole('button', { name: 'Edit' }));
+    expect(within(screen.getByTestId('rules-scope-workspace')).queryByTestId('rule-host-sandbox')).toBeNull();
+  });
 });

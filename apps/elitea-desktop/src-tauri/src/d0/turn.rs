@@ -1189,6 +1189,15 @@ pub struct AgentHost {
     /// run).
     #[cfg(test)]
     test_toolsets: Mutex<Vec<Arc<dyn Toolset>>>,
+    /// The trusted folders (ADR-0061, `crate::trust`), set once at
+    /// start-up; unset, no folder is trusted.
+    trust: std::sync::OnceLock<Arc<crate::trust::TrustStore>>,
+    /// The person's login-shell environment for host commands, captured
+    /// once at start-up (`elitea_local_tools::host_env`).
+    host_env: std::sync::OnceLock<Arc<elitea_local_tools::host_env::HostEnvironment>>,
+    /// The tokens this host holds: never in a host command's environment
+    /// or output (refreshed at each turn's start).
+    held_secrets: elitea_local_tools::credentials::HeldSecrets,
 }
 
 /// What an isolated sub-agent's session holds while the child lives: its
@@ -1429,7 +1438,77 @@ impl AgentHost {
             exchanges: super::exchange::Exchanges::default(),
             #[cfg(test)]
             test_toolsets: Mutex::new(Vec::new()),
+            trust: std::sync::OnceLock::new(),
+            host_env: std::sync::OnceLock::new(),
+            held_secrets: elitea_local_tools::credentials::HeldSecrets::default(),
         })
+    }
+
+    /// Keep the trusted folders in `store` (set once, at start-up).
+    pub fn set_trust_store(&self, store: Arc<crate::trust::TrustStore>) {
+        let _ = self.trust.set(store);
+    }
+
+    /// The trusted folders, if set.
+    #[must_use]
+    pub fn trust_store(&self) -> Option<&Arc<crate::trust::TrustStore>> {
+        self.trust.get()
+    }
+
+    /// Keep the person's captured environment for host commands (set once,
+    /// at start-up; sessions opened later get it).
+    pub fn set_host_environment(&self, env: Arc<elitea_local_tools::host_env::HostEnvironment>) {
+        if let Some(store) = self.trust.get() {
+            store.set_env_fallback(env.fallback());
+        }
+        let _ = self.host_env.set(env);
+    }
+
+    /// `workspace_id`'s trust as the rules engine takes it now.
+    fn folder_trust(
+        &self,
+        workspace_id: &str,
+        policy: &LocalWorkPolicy,
+    ) -> Option<elitea_local_tools::approvals::FolderTrust> {
+        self.trust
+            .get()?
+            .status(workspace_id, policy)
+            .ok()?
+            .folder_trust()
+    }
+
+    /// A folder's trust changed (`None`: every folder's): the open sessions
+    /// take it now, and the ones that lost it stop their host processes.
+    pub async fn trust_changed(&self, workspace_id: Option<&str>) {
+        let open: Vec<(String, Arc<WorkspaceSession>)> = self
+            .sessions
+            .lock()
+            .map(|sessions| {
+                sessions
+                    .iter()
+                    .map(|(id, session)| (id.clone(), session.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (id, workspace) in open {
+            // A worktree's session follows its folder's trust.
+            if let Some(changed) = workspace_id
+                && changed != id
+                && self
+                    .deps
+                    .workspaces
+                    .get(&id)
+                    .ok()
+                    .flatten()
+                    .and_then(|w| w.parent_id)
+                    .as_deref()
+                    != Some(changed)
+            {
+                continue;
+            }
+            let trust = self.folder_trust(&id, &workspace.policy);
+            workspace.session.set_folder_trust(trust).await;
+        }
     }
 
     /// Keep the compaction settings in `store` (set once, at start-up).
@@ -1537,11 +1616,17 @@ impl AgentHost {
 
     /// The `local_work` policy as the server sent it (defaults when none).
     pub fn local_work_policy(&self) -> LocalWorkPolicy {
-        self.deps
+        let received: Option<LocalWorkPolicy> = self
+            .deps
             .policy
             .local_work()
-            .and_then(|section| serde_json::from_value(section).ok())
-            .unwrap_or_default()
+            .and_then(|section| serde_json::from_value(section).ok());
+        // Defaults stand in for a missing policy, but never suspend trust
+        // (ADR-0061 decision 5i: only a policy that says no does).
+        if let Some(store) = self.trust.get() {
+            store.set_policy_known(received.is_some());
+        }
+        received.unwrap_or_default()
     }
 
     /// The "always for this app" answers of every workspace (ADR-0047
@@ -1694,6 +1779,14 @@ impl AgentHost {
             PermissionProfile::Build
         });
         workspace.session.rules().set_unattended(unattended);
+        // A task worktree has its folder's trust (#3015); a sub-agent's task
+        // comes from another agent, so its host commands are asked until
+        // the person answers (ADR-0061 decision 5f).
+        workspace
+            .session
+            .rules()
+            .set_folder_trust(self.folder_trust(workspace_id, &policy));
+        workspace.session.rules().reset_untrusted_reads(true);
         Ok((
             workspace.session.clone(),
             ChildHold {
@@ -1739,12 +1832,7 @@ impl AgentHost {
     }
 
     fn policy(&self) -> Result<LocalWorkPolicy, TurnError> {
-        let policy: LocalWorkPolicy = self
-            .deps
-            .policy
-            .local_work()
-            .and_then(|section| serde_json::from_value(section).ok())
-            .unwrap_or_default();
+        let policy = self.local_work_policy();
         if !policy.allowed {
             return Err(TurnError::new(
                 "local_work_disabled",
@@ -1774,9 +1862,13 @@ impl AgentHost {
             return Ok(existing.clone());
         }
         // The policy changed: the session it replaces ends, and its
-        // background processes with it (#1223).
+        // background processes with it (#1223). A policy that no longer
+        // allows trust suspends it (ADR-0061 decision 5i).
         if let Some(replaced) = sessions.remove(workspace_id) {
             stop_processes_soon(&replaced.session);
+        }
+        if let Some(store) = self.trust.get() {
+            store.policy_changed(policy);
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
         // Owner-only (0700), the workspaces folder above it too: remembered
@@ -1828,6 +1920,9 @@ impl AgentHost {
                     data_dir.join("tmp").join(workspace_id),
                 );
                 shell.credential_grants = true;
+                // Host commands in a trusted folder (ADR-0061 decision 5c).
+                shell.host_environment = self.host_env.get().cloned();
+                shell.held_secrets = self.held_secrets.clone();
                 shell
             }),
             data_dir,
@@ -3191,6 +3286,21 @@ impl AgentHost {
         // The edit tools that suit the admitted model (#1214): stable for
         // the thread unless its model or meta.edit_format changes.
         session.set_edit_profile(admitted.edit_profile);
+        // The folder's trust for this turn (ADR-0061): a later agent's turn
+        // of a routed message reads the answers before it, so its host
+        // commands start behind the taint gate (decision 5f).
+        let trust = self.folder_trust(&request.workspace_id, &workspace.policy);
+        session.set_folder_trust(trust).await;
+        session
+            .rules()
+            .reset_untrusted_reads(request.floor_turn.is_some());
+        recorder.set_trusted(trust.is_some());
+        if let Ok(bearer) = self.deps.credentials.bearer().await {
+            self.held_secrets
+                .set(vec![elitea_local_tools::credentials::Secret::held(
+                    &bearer.token,
+                )]);
+        }
         session.begin_turn(&checkpoint_label(&request.prompt));
         // The processes this turn starts show on its tool cards until it ends.
         workspace.processes.bind_turn(Some(events.clone()));
@@ -3489,6 +3599,11 @@ impl AgentHost {
         recorder
             .settle_uploads(crate::computer_tools::UPLOAD_SETTLE_WAIT)
             .await;
+        if recorder.host_commands() > 0
+            && let Some(store) = self.trust.get()
+        {
+            store.host_command_ran(&request.workspace_id);
+        }
         // Encoded in the commit's job: a goal check may change the chain's
         // outcome after `done`.
         let commit_body = CommitBody {

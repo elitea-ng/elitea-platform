@@ -243,4 +243,13 @@ describe('TurnTranscript', () => {
     );
     expect(screen.getByTestId('turn-refusal')).toHaveTextContent('Governance session revoked.');
   });
+
+  it("offers what the page gives for a failed call's error code under its row (sandbox_unavailable, #3062)", () => {
+    const offer = vi.fn((code: string) => <span data-testid="tool-offer">{code}</span>);
+    const failed = { type: "tool" as const, key: "c1", callId: "c1", tool: "run_command", argsSummary: "make", remote: false, result: { ok: false, summary: "no sandbox", truncated: false, code: "sandbox_unavailable" } };
+    const passed = { ...failed, key: "c2", callId: "c2", result: { ok: true, summary: "ok", truncated: false } };
+    renderWithTheme(<TurnTranscript view={{ phase: null, items: [failed, passed], approvals: [] }} busy={false} toolOffer={offer} />);
+    expect(screen.getAllByTestId("tool-offer").map((node) => node.textContent)).toEqual(["sandbox_unavailable"]);
+    expect(offer).toHaveBeenCalledTimes(1);
+  });
 });

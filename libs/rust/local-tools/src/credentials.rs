@@ -158,6 +158,50 @@ impl Secret {
     pub(crate) fn for_test(value: &str) -> Self {
         Self(Arc::from(value))
     }
+
+    /// A secret the host holds (its access and refresh tokens): kept out
+    /// of a host command's environment and removed from its output
+    /// (ADR-0061 decision 5c, [`HeldSecrets`]).
+    #[must_use]
+    pub fn held(value: &str) -> Self {
+        Self(Arc::from(value))
+    }
+}
+
+/// The secrets the host holds, shared with every session: the host replaces
+/// them when its tokens rotate. Their `Debug` shows only how many.
+#[derive(Clone, Default)]
+pub struct HeldSecrets(Arc<std::sync::RwLock<Vec<Secret>>>);
+
+impl std::fmt::Debug for HeldSecrets {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.0.read().map_or(0, |held| held.len());
+        write!(formatter, "HeldSecrets({count})")
+    }
+}
+
+/// Settings compare equal whatever secrets they hold.
+impl PartialEq for HeldSecrets {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for HeldSecrets {}
+
+impl HeldSecrets {
+    /// Replace what the host holds.
+    pub fn set(&self, secrets: Vec<Secret>) {
+        if let Ok(mut held) = self.0.write() {
+            *held = secrets.into_iter().filter(|s| !s.0.is_empty()).collect();
+        }
+    }
+
+    /// What the host holds now.
+    #[must_use]
+    pub fn list(&self) -> Vec<Secret> {
+        self.0.read().map(|held| held.clone()).unwrap_or_default()
+    }
 }
 
 impl std::fmt::Debug for Secret {
@@ -198,6 +242,16 @@ fn plausible(value: &str) -> bool {
 }
 
 impl CredentialCache {
+    /// The logins fetched so far (fresh or not): kept out of a host
+    /// command's environment and output.
+    #[must_use]
+    pub fn secrets(&self) -> Vec<Secret> {
+        self.0
+            .lock()
+            .map(|cache| cache.values().map(|(secret, _)| secret.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// The login of `profile` as `program` (the absolute file the command
     /// runs) prints it, from the cache when fresh. `env` is the
     /// environment the host runs it with (nothing else is passed).

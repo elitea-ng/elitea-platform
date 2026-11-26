@@ -109,6 +109,7 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
               { id: 'mcp-servers', label: 'MCP servers' },
               { id: 'hooks', label: 'Hooks' },
               { id: 'computer-use', label: 'Computer use' },
+              { id: 'trusted-folders', label: 'Trusted folders' },
               { id: 'troubleshoot', label: 'Troubleshoot' },
             ]
           : []),

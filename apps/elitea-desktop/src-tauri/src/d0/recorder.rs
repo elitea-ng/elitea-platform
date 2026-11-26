@@ -125,6 +125,10 @@ struct State {
     /// committed either (the committed reasoning has no gaps).
     thinking_full: bool,
     commands: Vec<Value>,
+    /// Commands that ran on the host in a trusted folder (ADR-0061).
+    host_commands: u64,
+    /// The folder was trusted when the turn started.
+    trusted: bool,
     paths: Vec<String>,
     enforcement: Option<String>,
     /// What the weakest enforcement left out (Landlock only: credentials
@@ -449,10 +453,16 @@ impl Recorder {
     /// A command the shell tool ran, from its result.
     pub fn command(&self, command: &str, result: &Value) {
         self.with(|state| {
+            if result.get("execution").and_then(Value::as_str) == Some("host") {
+                state.host_commands += 1;
+            }
             if state.commands.len() < MAX_COMMANDS {
                 let mut entry = json!({ "command": command });
                 if let Some(code) = result.get("exit_code").and_then(Value::as_i64) {
                     entry["exit_code"] = json!(code);
+                }
+                if result.get("execution").and_then(Value::as_str) == Some("host") {
+                    entry["execution"] = json!("host");
                 }
                 // A background process (#1223): its id, and its state as the
                 // turn left it (`process_ended` brings it up to date).
@@ -594,8 +604,20 @@ impl Recorder {
         self.with(|state| state.memories_deleted.push(id));
     }
 
+    /// The folder is trusted for this turn (ADR-0061): the report says so.
+    pub fn set_trusted(&self, trusted: bool) {
+        let _ = self.with(|state| state.trusted = trusted);
+    }
+
+    /// How many commands ran on the host this turn.
+    #[must_use]
+    pub fn host_commands(&self) -> u64 {
+        self.with(|state| state.host_commands).unwrap_or(0)
+    }
+
     /// The commit's `local_work` report: `memories_saved` and
-    /// `memories_deleted` only when the turn saved or deleted one.
+    /// `memories_deleted` only when the turn saved or deleted one; with
+    /// `host_commands` and `trusted` for a trusted folder (ADR-0061).
     #[must_use]
     pub fn work_report(&self, sandbox_mode: &str) -> Value {
         self.with(|state| {
@@ -609,6 +631,14 @@ impl Recorder {
             }
             if let Some(note) = &state.enforcement_note {
                 report["enforcement_note"] = json!(note);
+            }
+            // ADR-0061: what ran outside the sandbox (the server stamps
+            // `local_work.ran_outside_sandbox` from it).
+            if state.host_commands > 0 {
+                report["host_commands"] = json!(state.host_commands);
+            }
+            if state.trusted || state.host_commands > 0 {
+                report["trusted"] = json!(true);
             }
             if !state.memories_saved.is_empty() {
                 report["memories_saved"] = json!(state.memories_saved);

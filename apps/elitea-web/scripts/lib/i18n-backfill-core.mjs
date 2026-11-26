@@ -247,6 +247,7 @@ export function planRouteCatalogues(sharedEn, desktopEn, routeCatalogues) {
 /** Modules that only the `desktop` build reaches. `desktopEntry.tsx` is the door the web build also ships (its notice is web copy). */
 const DESKTOP_ONLY_PREFIXES = [
   'src/entries/desktop/',
+  'src/features/folder-trust/',
   'src/features/workspace/',
   'src/features/workspace-browser/',
   'src/features/workspace-handoff/',

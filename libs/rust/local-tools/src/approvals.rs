@@ -150,6 +150,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
 use elitea_agent_runtime::host::{ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError};
+use elitea_agent_runtime::untrusted::UntrustedReads;
 use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -338,6 +339,23 @@ impl ToolKind {
     #[must_use]
     pub const fn is_computer(self) -> bool {
         matches!(self, Self::ComputerRead | Self::ComputerAct)
+    }
+
+    /// Whether its result is content from outside the folder: an MCP
+    /// server's, the web's, the browser pane's or another app's (ADR-0061
+    /// decision 5f).
+    #[must_use]
+    pub const fn reads_untrusted(self) -> bool {
+        matches!(
+            self,
+            Self::McpCall
+                | Self::WebRead
+                | Self::HostIntel
+                | Self::BrowserRead
+                | Self::BrowserNavigate
+                | Self::BrowserAct
+                | Self::ComputerRead
+        )
     }
 
     /// Whether it is one of the browser pane's tools (ADR-0048).
@@ -812,6 +830,14 @@ pub struct ToolCall {
     /// [`ToolKind::BrowserAct`]: the page, control and effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<BrowserTarget>,
+    /// For [`ToolKind::RunCommand`], [`ToolKind::RunTests`] and
+    /// [`ToolKind::ProcessWrite`]: the command runs on the host because the
+    /// folder is trusted (ADR-0061 decision 5c). Set by the session from the
+    /// folder's trust, never by the model; decided by the trusted folder's
+    /// layers (`approvals::trust`) only while the engine's folder is trusted
+    /// too. Such a call is still [`Self::unconfined`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub host: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -837,6 +863,7 @@ impl ToolCall {
             argv: None,
             computer: None,
             browser: None,
+            host: false,
         }
     }
 
@@ -881,6 +908,10 @@ pub enum Source {
     Bypass,
     /// An unattended grant answered the question ([`Unattended`]).
     Grant,
+    /// A host command asked after the turn read untrusted content
+    /// (ADR-0061 decision 5f, [`TAINT_REASON`]): neither bypass mode nor an
+    /// unattended grant answers it.
+    Taint,
 }
 
 /// The answers an unattended turn's grant gives (ADR-0045 decision 1) that
@@ -1255,6 +1286,11 @@ pub struct RulesEngine {
     /// Whether the host runs a granted command with its grant
     /// ([`Self::set_credential_grants`]); off, no rule grants anything.
     grants: AtomicBool,
+    /// The folder's trust as the host set it ([`Self::set_folder_trust`],
+    /// ADR-0061); `None`: not trusted or suspended.
+    trust: RwLock<Option<FolderTrust>>,
+    /// The running turn's untrusted reads (ADR-0061 decision 5f).
+    reads: RwLock<Arc<UntrustedReads>>,
 }
 
 fn path_glob(glob: &str) -> Option<GlobMatcher> {
@@ -1363,6 +1399,8 @@ impl RulesEngine {
             computer_threads: Mutex::default(),
             thread: RwLock::new(None),
             confined: true,
+            trust: RwLock::new(None),
+            reads: RwLock::new(UntrustedReads::new(true)),
         })
     }
 
@@ -1709,8 +1747,11 @@ impl RulesEngine {
         let decision = self.decide_by_layers(call);
         // A `computer` ask is the person's (ADR-0047 decisions 4 and 6):
         // bypass mode does not answer it.
+        // Nor does it answer a host command asked after an untrusted read
+        // (ADR-0061 decision 5g).
         if decision.verdict == Verdict::Ask
             && self.profile() == PermissionProfile::Bypass
+            && decision.source != Source::Taint
             && !call.tool.is_computer()
             && !Self::browser_consequential(call)
             && !self.unattended_browser_effect(call)
@@ -1730,6 +1771,24 @@ impl RulesEngine {
         decision
     }
 
+    /// `exit_plan_mode`: the person's every time (no workspace rule and no
+    /// remembered choice may accept a plan).
+    fn decide_plan_exit(&self) -> Decision {
+        if self.plan_mode() {
+            Decision::new(
+                Verdict::Ask,
+                Source::PlanMode,
+                "the person accepts or declines the plan",
+            )
+        } else {
+            Decision::new(
+                Verdict::Deny,
+                Source::PlanMode,
+                "the session is not in plan mode",
+            )
+        }
+    }
+
     /// Decide one call by its layers, without [`PermissionProfile::Bypass`]
     /// (what the rules say: a rules panel's explanation).
     #[must_use]
@@ -1744,21 +1803,7 @@ impl RulesEngine {
             return decision;
         }
         if call.tool == ToolKind::ExitPlanMode {
-            // The person's every time: no workspace rule and no remembered
-            // choice may accept a plan.
-            return if self.plan_mode() {
-                Decision::new(
-                    Verdict::Ask,
-                    Source::PlanMode,
-                    "the person accepts or declines the plan",
-                )
-            } else {
-                Decision::new(
-                    Verdict::Deny,
-                    Source::PlanMode,
-                    "the session is not in plan mode",
-                )
-            };
+            return self.decide_plan_exit();
         }
         if self.plan_mode() && !call.tool.plan_allows() {
             return Decision::new(
@@ -1768,6 +1813,10 @@ impl RulesEngine {
             );
         }
         let shape = call.shape();
+        if self.on_host(call) {
+            // A trusted folder's command (ADR-0061 decision 5d).
+            return self.decide_host(call, shape.as_ref());
+        }
         let risk = if call.tool.runs_commands() {
             Some(self.command_risk(call))
         } else if call.tool == ToolKind::ProcessWrite {
@@ -1828,7 +1877,7 @@ impl RulesEngine {
             );
         }
         let allow = |reason: &str| Decision::new(Verdict::Allow, Source::Default, reason);
-        match (call.tool, risk) {
+        let decision = match (call.tool, risk) {
             (_, Some(Risk::Destructive(reason))) => {
                 Decision::new(Verdict::Ask, Source::Default, reason)
             }
@@ -1840,7 +1889,35 @@ impl RulesEngine {
             (_, None) => {
                 allow("changes inside the workspace are allowed; the checkpoint undoes them")
             }
+        };
+        self.noting_inert_trust_rule(call, shape.as_ref(), decision)
+    }
+
+    /// `decision`, with a note when an "Always allow" made in a trusted
+    /// folder would have matched but is inert now (the folder is not
+    /// trusted): the rules panel's "needs trust".
+    fn noting_inert_trust_rule(
+        &self,
+        call: &ToolCall,
+        shape: Option<&CommandShape>,
+        mut decision: Decision,
+    ) -> Decision {
+        let Some(shape) = shape else {
+            return decision;
+        };
+        if !self.folder_trusted()
+            && let Some((scope, index, _)) =
+                self.winning_prefix_rule_by(call, shape, &|_, rule, _| {
+                    rule.requires_trust && rule.decision == RuleDecision::Allow
+                })
+        {
+            decision.reason = format!(
+                "{} ({}#{index} needs trust: it applies only while this folder is trusted)",
+                decision.reason,
+                scope.as_str()
+            );
         }
+        decision
     }
 
     /// The default rule's view of a command: asked when it is destructive,
@@ -2079,6 +2156,29 @@ impl RulesEngine {
         call: &ToolCall,
         shape: &CommandShape,
     ) -> Option<(RuleScope, usize, PrefixRule)> {
+        // An allow vouches for exactly one simple command, within its
+        // sandbox and network bounds. A rule that limits the network to
+        // named hosts covers a call that asks for the network only where
+        // its grant applies (the command then runs with those hosts, no
+        // more). An "Always allow" made in a trusted folder
+        // (`requires_trust`) is inert outside trust (ADR-0061 decision 5e).
+        self.winning_prefix_rule_by(call, shape, &|scope, rule, argv| {
+            !rule.requires_trust
+                && (rule.covers(call.sandbox_mode(), call.network)
+                    || (rule.covers(call.sandbox_mode(), false)
+                        && self.grant_applies(call, argv, scope, rule)))
+        })
+    }
+
+    /// [`Self::winning_prefix_rule`] with the allow rules `admits` admits
+    /// (for a matching simple command `argv`); forbidden and prompt rules
+    /// match any segment, whatever their origin.
+    fn winning_prefix_rule_by(
+        &self,
+        call: &ToolCall,
+        shape: &CommandShape,
+        admits: &dyn Fn(RuleScope, &PrefixRule, &[String]) -> bool,
+    ) -> Option<(RuleScope, usize, PrefixRule)> {
         let push = call.tool == ToolKind::GitPush;
         if !(call.tool.runs_commands() || call.tool == ToolKind::McpStart || push) {
             return None;
@@ -2114,16 +2214,8 @@ impl RulesEngine {
                     // a rule naming `git_push`, or by the person.
                     false
                 } else {
-                    // An allow vouches for exactly one simple command,
-                    // within its sandbox and network bounds. A rule that
-                    // limits the network to named hosts covers a call that
-                    // asks for the network only where its grant applies
-                    // (the command then runs with those hosts, no more).
                     matches!(shape, CommandShape::Simple(argv)
-                        if set.matches(rule, argv, Some(resolver))
-                            && (rule.covers(call.sandbox_mode(), call.network)
-                                || (rule.covers(call.sandbox_mode(), false)
-                                    && self.grant_applies(call, argv, scope, rule))))
+                        if set.matches(rule, argv, Some(resolver)) && admits(scope, rule, argv))
                 };
                 if hit
                     && best
@@ -2538,8 +2630,15 @@ impl RulesEngine {
             crate::execpolicy::today()
         ));
         rule.matches = vec![Example::Tokens(example)];
-        rule.sandbox = call.sandbox;
-        rule.network = call.network;
+        if self.on_host(call) {
+            // Made in a trusted folder (ADR-0061 decision 5e): it allows
+            // the host run, and only while the folder is trusted.
+            rule.sandbox = Some(crate::execpolicy::RuleSandbox::Host);
+            rule.requires_trust = true;
+        } else {
+            rule.sandbox = call.sandbox.map(crate::execpolicy::RuleSandbox::from);
+            rule.network = call.network;
+        }
         let workspace = sink.append(rule)?;
         if let Ok(mut rules) = self.commands.write() {
             Arc::make_mut(&mut rules).workspace = workspace;
@@ -2560,7 +2659,7 @@ pub fn choice_as_rule(choice: &RememberedChoice) -> Option<PrefixRule> {
     let mut rule = PrefixRule::from_command_pattern(tokens.clone());
     rule.justification = Some("Allowed from the approval dialog (an earlier version)".to_owned());
     rule.matches = vec![Example::Tokens(tokens)];
-    rule.sandbox = choice.sandbox;
+    rule.sandbox = choice.sandbox.map(crate::execpolicy::RuleSandbox::from);
     rule.network = choice.network;
     Some(rule)
 }
@@ -2686,6 +2785,9 @@ impl RulesEngine {
                 ErrorCode::Denied,
                 "keeping a process past its turn is asked for each process",
             ));
+        }
+        if self.on_host(call) {
+            return self.host_never_remembered(call);
         }
         if self.runs_unconfined(call) {
             return Some(ToolError::new(
@@ -3471,6 +3573,9 @@ mod computer_tests;
 #[cfg(test)]
 mod grant_tests;
 
+mod trust;
+pub use trust::{ASK_EVERY_COMMAND_REASON, FolderTrust, TAINT_REASON};
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -3515,6 +3620,7 @@ mod tests {
             browser_deny_domains: Vec::new(),
             browser_http: false,
             browser_private_network: false,
+            folder_trust: false,
         }
     }
 
@@ -5842,7 +5948,7 @@ mod tests {
         };
         let rule = super::choice_as_rule(&choice).expect("a command choice");
         assert_eq!(rule.display_pattern(), "/usr/bin/make test");
-        assert_eq!(rule.sandbox, Some(SandboxMode::ReadOnly));
+        assert_eq!(rule.sandbox, Some(crate::execpolicy::RuleSandbox::ReadOnly));
         assert!(rule.network);
         let set = crate::execpolicy::RuleSet::default()
             .with_rule("workspace", rule)

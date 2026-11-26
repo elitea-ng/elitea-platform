@@ -54,6 +54,13 @@
 //! [`SandboxMode::FullAccess`] with the network on is no sandbox at all and
 //! reports [`Enforcement::None`].
 //!
+//! **Host** ([`SandboxRequest::host`], ADR-0061 decision 5c): a command in a
+//! folder the person trusted runs as their own process on every platform:
+//!
+//! | OS | What `host` does | Reported enforcement |
+//! |---|---|---|
+//! | macOS, Linux, Windows | no wrapper, the network on, the person's login-shell environment ([`crate::host_env`]); the session's deny list is not hidden ([`Prepared::hides_denied`] is false), output is redacted ([`crate::redact`]). Not in a container: the container is the boundary there | `none` |
+//!
 //! When a mode needs confinement the machine cannot give, [`prepare`]
 //! refuses ([`ErrorCode::SandboxUnavailable`]) unless the host opted into
 //! running unenforced; the result always states the enforcement level, so
@@ -145,6 +152,14 @@ pub struct SandboxRequest {
     /// [`scoped_network_supported`]; [`prepare`] refuses it elsewhere,
     /// even when unenforced commands are allowed.
     pub network_proxy: Option<u16>,
+    /// Run on the host (ADR-0061 decision 5c): the folder is trusted, so
+    /// the command runs as the person's own process, unwrapped, with the
+    /// network, reporting [`Enforcement::None`]. Set by the session only,
+    /// from the folder's trust; the model cannot ask for it. Not
+    /// [`Self::is_unconfined`]: a host command never hides what the session
+    /// denies ([`Prepared::hides_denied`] is false), so every guard that
+    /// applies to an unconfined command still applies to it.
+    pub host: bool,
 }
 
 /// Whether this platform's sandbox can keep a command's network to the
@@ -171,7 +186,7 @@ impl SandboxRequest {
     /// Whether this request needs no confinement at all.
     #[must_use]
     pub fn is_unconfined(&self) -> bool {
-        self.mode == SandboxMode::FullAccess && self.network
+        self.mode == SandboxMode::FullAccess && self.network && !self.host
     }
 }
 
@@ -495,6 +510,18 @@ pub fn prepare(
         };
         prepared.hides_denied = true;
         return Ok(prepared);
+    }
+    if request.host {
+        // A trusted folder's command (ADR-0061 decision 5c): the person's
+        // own process, the same on every platform. A grant's command never
+        // gets here (the session keeps it sandboxed with its grant).
+        if request.network_proxy.is_some() {
+            return Err(ToolError::new(
+                ErrorCode::SandboxUnavailable,
+                "a command limited to named hosts never runs on the host; nothing ran",
+            ));
+        }
+        return unwrapped(argv, Enforcement::None);
     }
     if request.is_unconfined() {
         // Full access with the network on: nothing is confined.

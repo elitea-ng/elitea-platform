@@ -17,11 +17,13 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::command::{CommandShape, analyse};
-use crate::credentials::{CommandGrant, CredentialCache, Redactor, Secret};
+use crate::credentials::{CommandGrant, CredentialCache, HeldSecrets, Secret};
 use crate::deny::DenyList;
 use crate::egress_proxy::{EgressProxy, NetworkReport};
 use crate::error::{ErrorCode, ToolError, ToolResult};
+use crate::host_env::HostEnvironment;
 use crate::policy::SandboxMode;
+use crate::redact::StreamRedactor;
 use crate::sandbox::{Enforcement, Prepared, SandboxConfig, SandboxRequest, prepare};
 use crate::workspace::{EntryKind, Workspace, WsPath};
 
@@ -137,6 +139,13 @@ pub struct ShellConfig {
     pub credential_grants: bool,
     /// The logins fetched for grants in this session (in memory only).
     pub credentials: CredentialCache,
+    /// The person's environment for host commands (ADR-0061 decision 5c),
+    /// captured once per app session by the host ([`crate::host_env`]).
+    /// `None`: host commands get the fallback environment.
+    pub host_environment: Option<Arc<HostEnvironment>>,
+    /// The secrets the host holds (its tokens): never in a host command's
+    /// environment, removed from its output.
+    pub held_secrets: HeldSecrets,
 }
 
 impl ShellConfig {
@@ -167,6 +176,8 @@ impl ShellConfig {
             host_push: true,
             credential_grants: false,
             credentials: CredentialCache::default(),
+            host_environment: None,
+            held_secrets: HeldSecrets::default(),
         }
     }
 
@@ -239,6 +250,19 @@ pub struct CommandSpec {
     /// limited to its hosts (whatever [`Self::network`] says) and, with a
     /// credential, the program's login. Foreground commands only.
     pub grant: Option<CommandGrant>,
+    /// Run on the host: the folder is trusted (ADR-0061 decision 5c,
+    /// [`SandboxRequest::host`]). Set by the session from the folder's
+    /// trust, never by the model; ignored when a grant applies (a grant's
+    /// command keeps its sandbox, decision 5h).
+    pub host: bool,
+}
+
+impl CommandSpec {
+    /// Whether it runs on the host: [`Self::host`] and no grant.
+    #[must_use]
+    pub const fn on_host(&self) -> bool {
+        self.host && self.grant.is_none()
+    }
 }
 
 /// What a command did.
@@ -275,7 +299,18 @@ pub struct CommandOutput {
     /// With a grant: the hosts it was limited to and those it was refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkReport>,
+    /// `host` when it ran on the host in a trusted folder, outside the
+    /// sandbox (ADR-0061 decision 5c); absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<&'static str>,
+    /// A host command got the fallback environment: the person's
+    /// login-shell environment could not be read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub env_fallback: bool,
 }
+
+/// [`CommandOutput::execution`] of a host command.
+pub const EXECUTION_HOST: &str = "host";
 
 /// A stream read with its head and tail kept.
 struct Captured {
@@ -392,28 +427,30 @@ impl Capture {
 
 type SharedCapture = Arc<Mutex<Capture>>;
 
-/// [`capture`] `reader` into `into` on its own task, redacting `secrets`.
+/// [`capture`] `reader` into `into` on its own task, redacting `secrets`
+/// (and, for a host command, the known token formats: `patterns`).
 fn spawn_capture<R: AsyncRead + Unpin + Send + 'static>(
     reader: R,
     config: &ShellConfig,
     into: &SharedCapture,
     secrets: &[Secret],
+    patterns: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(capture(
         reader,
         config.output_cap,
         Arc::clone(into),
-        Redactor::new(secrets),
+        StreamRedactor::new(secrets, patterns),
     ))
 }
 
-/// Read `reader` into `into`, with `redactor` removing the grant's secrets
-/// before anything is kept (so the head and tail cut never splits one).
+/// Read `reader` into `into`, with `redactor` removing the secrets before
+/// anything is kept (so the head and tail cut never splits one).
 async fn capture<R: AsyncRead + Unpin>(
     mut reader: R,
     cap: usize,
     into: SharedCapture,
-    mut redactor: Redactor,
+    mut redactor: StreamRedactor,
 ) {
     let mut buffer = [0u8; 8192];
     while let Ok(read) = reader.read(&mut buffer).await {
@@ -497,6 +534,71 @@ pub fn process_environment(config: &ShellConfig, tty: bool) -> Vec<(String, Stri
         }
     }
     env
+}
+
+/// A host command's environment (ADR-0061 decision 5c): the person's
+/// captured login-shell environment without what a host command never gets
+/// ([`HostEnvironment::for_command`]), else the fallback (the passthrough
+/// list and the real `PATH`), plus the settings every command gets that do
+/// not confine it (`TERM`, `NO_COLOR`, pagers off, no git prompt). Also
+/// whether it is the fallback.
+#[must_use]
+pub fn host_environment(config: &ShellConfig, tty: bool) -> (Vec<(String, String)>, bool) {
+    let held = host_secrets(config);
+    let (vars, fallback) = match config.host_environment.as_deref() {
+        Some(captured) if !captured.fallback() => (captured.vars().to_vec(), false),
+        _ => (host_fallback_environment(config), true),
+    };
+    let mut env = HostEnvironment::for_command(&vars, &held);
+    if let Some(home) = &config.home {
+        env.retain(|(name, _)| name != "HOME");
+        env.push(("HOME".to_owned(), home.display().to_string()));
+    }
+    let fixed: &[(&str, &str)] = &[
+        ("TERM", if tty { "xterm-256color" } else { "dumb" }),
+        ("PAGER", "cat"),
+        ("GIT_PAGER", "cat"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+    ];
+    env.retain(|(name, _)| {
+        !(fixed.iter().any(|(fixed, _)| fixed == name) || (name == "NO_COLOR" && tty))
+    });
+    env.extend(
+        fixed
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned())),
+    );
+    if !tty && !env.iter().any(|(name, _)| name == "NO_COLOR") {
+        env.push(("NO_COLOR".to_owned(), "1".to_owned()));
+    }
+    (env, fallback)
+}
+
+/// The fallback for a host command whose environment could not be
+/// captured: the passthrough list, with the app's own `PATH` as it is (not
+/// narrowed to absolute entries: it is the person's).
+#[must_use]
+pub fn host_fallback_environment(config: &ShellConfig) -> Vec<(String, String)> {
+    let mut env = passthrough_environment(config);
+    if let Ok(path) = std::env::var("PATH") {
+        env.retain(|(name, _)| name != "PATH");
+        env.push(("PATH".to_owned(), path));
+    }
+    env
+}
+
+/// What a host process's output is cleaned of: the host's tokens and the logins fetched for grants.
+#[must_use]
+pub fn host_redacted_secrets(config: &ShellConfig) -> Vec<Secret> {
+    host_secrets(config)
+}
+
+/// What a host command must never see or print: the host's tokens and the
+/// logins fetched for grants.
+fn host_secrets(config: &ShellConfig) -> Vec<Secret> {
+    let mut secrets = config.held_secrets.list();
+    secrets.extend(config.credentials.secrets());
+    secrets
 }
 
 /// [`environment`] over the given passed-through variables.
@@ -607,6 +709,7 @@ pub fn sandbox_request(
         loopback: false,
         allow_keychain: config.allow_keychain,
         network_proxy: None,
+        host: false,
     })
 }
 
@@ -869,6 +972,7 @@ fn granted_request(
     let network = spec.network && spec.grant.is_none();
     let mut request = sandbox_request(workspace, config, spec.mode, network)?;
     request.loopback = spec.loopback;
+    request.host = spec.on_host() && !config.sandbox.container;
     if spec.grant.is_some() {
         request.network_proxy =
             Some(granted.map_or(PLAN_PROXY_PORT, |granted| granted.proxy.port()));
@@ -1028,15 +1132,22 @@ pub async fn run_checked_up_to(
         .timeout
         .unwrap_or(config.default_timeout)
         .min(max_timeout);
-    let secrets = granted
+    let on_host = spec.on_host() && prepared.enforcement == Enforcement::None;
+    let mut secrets = granted
         .as_ref()
         .map_or_else(Vec::new, |g| g.secrets.clone());
+    let (env, env_fallback) = if on_host {
+        secrets.extend(host_secrets(config));
+        host_environment(config, false)
+    } else {
+        (granted_environment(config, granted.as_ref()), false)
+    };
     let mut command = tokio::process::Command::new(&prepared.program);
     command
         .args(&prepared.args)
         .current_dir(workspace.absolute(&spec.cwd))
         .env_clear()
-        .envs(granted_environment(config, granted.as_ref()))
+        .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1061,8 +1172,8 @@ pub async fn run_checked_up_to(
         .ok_or_else(|| ToolError::new(ErrorCode::Io, "no stderr"))?;
     let out_capture = Arc::new(Mutex::new(Capture::filtered(keep_stdout_line)));
     let err_capture = SharedCapture::default();
-    let mut out_reader = spawn_capture(stdout, config, &out_capture, &secrets);
-    let mut err_reader = spawn_capture(stderr, config, &err_capture, &secrets);
+    let mut out_reader = spawn_capture(stdout, config, &out_capture, &secrets, on_host);
+    let mut err_reader = spawn_capture(stderr, config, &err_capture, &secrets, on_host);
 
     let waited = tokio::time::timeout(timeout, child.wait()).await;
     let (status, timed_out) = if let Ok(status) = waited {
@@ -1109,6 +1220,8 @@ pub async fn run_checked_up_to(
         shell,
         grant: granted.as_ref().map(|granted| granted.describe.clone()),
         network: granted.as_ref().map(|granted| granted.proxy.report()),
+        execution: on_host.then_some(EXECUTION_HOST),
+        env_fallback: on_host && env_fallback,
     })
 }
 
@@ -1278,6 +1391,7 @@ mod tests {
             network: false,
             loopback: false,
             grant: None,
+            host: false,
         }
     }
 
@@ -1314,7 +1428,8 @@ mod tests {
     /// keeps no part of it, also where it straddles reads.
     #[tokio::test]
     async fn a_capped_output_keeps_no_part_of_a_secret() {
-        use crate::credentials::{Redactor, Secret};
+        use crate::credentials::Secret;
+        use crate::redact::StreamRedactor;
         let secret = Secret::for_test("gho_0123456789abcdefghij");
         let mut text = String::new();
         for _ in 0..2_000 {
@@ -1323,7 +1438,13 @@ mod tests {
         let into = super::SharedCapture::default();
         // A slow reader: every read returns at most 7 bytes.
         let reader = tokio_test_reader(text.into_bytes(), 7);
-        super::capture(reader, 4_096, into.clone(), Redactor::new(&[secret])).await;
+        super::capture(
+            reader,
+            4_096,
+            into.clone(),
+            StreamRedactor::new(&[secret], false),
+        )
+        .await;
         let captured = super::rendered(&into, false);
         assert!(captured.truncated);
         assert!(!captured.text.contains("gho_"), "{}", captured.text);

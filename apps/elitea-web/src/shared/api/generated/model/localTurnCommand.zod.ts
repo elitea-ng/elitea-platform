@@ -49,6 +49,12 @@ export const LocalTurnCommand = zod.object({
       "The command line; stored cut to 300 bytes, control characters as spaces.",
     ),
   exit_code: zod.int().optional(),
+  execution: zod
+    .enum(["host"])
+    .optional()
+    .describe(
+      "Client contract 1.67 (ADR-0061 decision 5i). `host` when the command ran outside the OS sandbox in a trusted folder; absent for a sandboxed command. Any other value is dropped.",
+    ),
 });
 
 export type LocalTurnCommand = zod.input<typeof LocalTurnCommand>;

@@ -24,6 +24,7 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
+import { SandboxUnavailableOffer } from '@/features/folder-trust';
 import { approval, plan, readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
 import { BrowserDownloadCards, useBrowserEvents } from '@/features/workspace-browser';
 import { HooksProposals } from '@/features/workspace-hooks';
@@ -81,6 +82,10 @@ function useThreadSubject(workspace: Workspace, conversationId: string): string 
 /** The Context tab's figures, after a background idle compaction: none for the cloud copy (its context is the cloud's). */
 const inspectorMeter = (handoff: ThreadHandoff, turn: WorkspaceTurn, history: ThreadHistory, compacted: IdleCompacted | null) =>
   handoff.status?.executor === 'cloud' ? undefined : withIdleCompaction(threadMeter(turn, history), compacted);
+
+/** A command refused for want of a sandbox (Windows) offers "Trust this folder…" under its row, while the policy allows trust. */
+const sandboxOffer = (workspace: Workspace) => (code: string) =>
+  code === 'sandbox_unavailable' ? <SandboxUnavailableOffer workspaceId={workspace.id} workspaceName={workspace.name} /> : null;
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
@@ -165,7 +170,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                 onFork={forking.onFork}
                 resume={{ onResume: (turnId) => void turn.resume(turnId), busy, offers: turn.offersResume }}
               />
-              <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} />
+              <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} toolOffer={sandboxOffer(workspace)} />
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               <BrowserDownloadCards threadId={conversationId} />

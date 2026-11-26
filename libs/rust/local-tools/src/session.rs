@@ -1646,6 +1646,9 @@ impl LocalSession {
         call: ToolCall,
         message: &str,
     ) -> ToolResult<()> {
+        // Its result is content from outside the folder (ADR-0061 decision
+        // 5f): once it runs, the turn's host commands are asked.
+        let untrusted = call.tool.reads_untrusted();
         let mut payload = json!({ PAYLOAD_KEY: call });
         if let Some(asked) = self.hook_ask(call_id) {
             payload[crate::approvals::HOOK_ASK_PAYLOAD_KEY] = asked;
@@ -1662,7 +1665,12 @@ impl LocalSession {
             .await
             .map_err(|error| ToolError::new(ErrorCode::ApprovalPending, error.to_string()))?;
         match outcome {
-            ApprovalOutcome::Decided { action, .. } if action == "approve" => Ok(()),
+            ApprovalOutcome::Decided { action, .. } if action == "approve" => {
+                if untrusted {
+                    self.engine.record_untrusted_read();
+                }
+                Ok(())
+            }
             ApprovalOutcome::Decided { value, .. } => {
                 let reason = value
                     .get("reason")
@@ -1843,6 +1851,38 @@ impl LocalSession {
         }
     }
 
+    /// Whether a command runs on the host: the folder is trusted now
+    /// ([`RulesEngine::folder_trusted`]), the host's sandbox is not a
+    /// container, and the model did not ask for the read-only sandbox.
+    fn runs_on_host(&self, asked: Option<SandboxMode>) -> bool {
+        self.engine.folder_trusted()
+            && !self.shell.sandbox.container
+            && asked != Some(SandboxMode::ReadOnly)
+    }
+
+    /// Trust may have been revoked while the person decided: a host command
+    /// runs only while the folder is still trusted.
+    fn unchanged_trust(&self, spec: &CommandSpec) -> ToolResult<()> {
+        if spec.on_host() && !self.engine.folder_trusted() {
+            return Err(ToolError::new(
+                ErrorCode::Conflict,
+                "this folder is no longer trusted, so the command would not run outside the \
+                 sandbox; nothing ran: run it again",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Set the folder's trust (ADR-0061; `None`: untrusted or suspended).
+    /// Taking trust away also stops every process that runs on the host.
+    pub async fn set_folder_trust(&self, trust: Option<crate::approvals::FolderTrust>) {
+        let was = self.engine.folder_trust().is_some();
+        self.engine.set_folder_trust(trust);
+        if was && trust.is_none() {
+            self.processes.stop_host().await;
+        }
+    }
+
     /// The rules may have changed while the person decided: a command runs
     /// with what they grant it now, or not at all.
     fn unchanged_grant(&self, call: &ToolCall, spec: &CommandSpec) -> ToolResult<()> {
@@ -1874,7 +1914,10 @@ impl LocalSession {
         };
         let max = self.engine.policy().max_sandbox_mode;
         let mode = args.sandbox.unwrap_or(SandboxMode::WorkspaceWrite.min(max));
-        if let Some(refusal) = self.sandboxed_push(&args.command, mode, args.network) {
+        // In a trusted folder a command runs on the host (ADR-0061 decision
+        // 5c), unless the model asked for the read-only sandbox.
+        let host = self.runs_on_host(args.sandbox);
+        if !host && let Some(refusal) = self.sandboxed_push(&args.command, mode, args.network) {
             return Err(refusal);
         }
         let mut spec = CommandSpec {
@@ -1885,6 +1928,7 @@ impl LocalSession {
             network: args.network,
             loopback: args.loopback,
             grant: None,
+            host,
         };
         if background {
             // Refused before the person is asked about a process that
@@ -1907,8 +1951,10 @@ impl LocalSession {
             argv: None,
             computer: None,
             browser: None,
+            host: false,
         };
         self.resolve_grant(&mut call, &mut spec);
+        call.host = spec.on_host();
         let unconfined = call.unconfined;
         let message = match (background, args.tty) {
             (_, true) => "run a command on a terminal".to_owned(),
@@ -1921,6 +1967,7 @@ impl LocalSession {
         };
         self.authorize(call_id, call.clone(), &message).await?;
         self.unchanged_grant(&call, &spec)?;
+        self.unchanged_trust(&spec)?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;
         }
@@ -1996,6 +2043,7 @@ impl LocalSession {
             network,
             loopback: false,
             grant: None,
+            host: self.runs_on_host(None),
         };
         let unconfined = shell::runs_unconfined(&self.workspace, &self.shell, &spec);
         let call = ToolCall {
@@ -2005,9 +2053,11 @@ impl LocalSession {
             unconfined,
             runner: Some(planned.kind.as_str().to_owned()),
             paths: vec![spec.cwd.display_string()],
+            host: spec.on_host(),
             ..ToolCall::new(ToolKind::RunTests)
         };
         self.authorize(call_id, call, "run the tests").await?;
+        self.unchanged_trust(&spec)?;
         if mode != SandboxMode::ReadOnly {
             self.blocking(Self::ensure_checkpoint).await?;
         }
