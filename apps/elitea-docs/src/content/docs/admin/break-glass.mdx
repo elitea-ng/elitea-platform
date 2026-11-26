@@ -88,6 +88,22 @@ An elevation that ends early (by its holder, an approver or the operator command
 
 To end an elevation without the console, see the [break-glass runbook](/deployment/break-glass-runbook).
 
+### What else ends an elevation
+
+An elevation is bound to one browser session and to one person, and it ends with either of them, in the same transaction:
+
+| What happened | End reason |
+|---|---|
+| The person signs out of the elevated session | `logout` |
+| The session is revoked (for example, all of the person's sessions are signed out) | `session_revoked` |
+| The person is suspended | `user_suspended` |
+| The person is deleted | `user_deleted` |
+| The identity provider deactivates the person over SCIM, including a deactivation that is refused because the person is the last administrator | `scim_deactivated` |
+
+A sign-out ends only the elevation of that session: another person's elevation, in another session, goes on. A new session of the same person does not inherit the elevation. A suspension, a deletion and a SCIM deactivation also revoke every unused sealed credential of the person, each with its `credential_revoked` event.
+
+Each end writes its `ended` event and moves the elevation to `review_pending`. This is the one place where a failed audit write does not stop the change: a sign-out or a suspension is never undone because its audit event could not be written. The elevation already grants nothing (its session is revoked, or its person cannot sign in), and the next pass of `main.elevation_reconciler` records the end with the same reason and its event. A sealed credential whose event cannot be written is revoked without the event.
+
 ## Who is told
 
 Break-glass is loud. Each of these events writes its notices in the same transaction as the event, and the platform then sends them by e-mail:

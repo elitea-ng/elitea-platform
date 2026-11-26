@@ -42,7 +42,6 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/audit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/pkg/apierr"
 )
@@ -400,6 +399,20 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 		if err := h.appendRoleAssignment(ctx, tx, r, caller.UserID, id, adminaccess.ModeAdministration,
 			heldBefore, origin.Source); err != nil {
 			slog.ErrorContext(ctx, "could not record the roles of a deleted user", "user_id", id, "err", err)
+			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+			return
+		}
+	}
+	// The deleted people's sessions, elevations and sealed credentials end
+	// before the row goes, in this transaction (ADR-0059 R2.11): the ledger
+	// and the credential store have no foreign key, so nothing cascades to
+	// them.
+	revokedBy := caller.UserID
+	for _, id := range ids {
+		if _, err := adminaccess.RevokePersonAccess(ctx, tx, int64(id), adminaccess.PersonAccessEnd{
+			ElevationEnd: adminaccess.ElevationEndUserDeleted, RevokedBy: &revokedBy,
+		}); err != nil {
+			slog.ErrorContext(ctx, "could not end the access of a deleted user", "user_id", id, "err", err)
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
 			return
 		}
@@ -811,8 +824,11 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 				revokedBy = &id
 			}
 		}
-		if _, err := nativeauth.RevokeUserSessions(r.Context(), tx, int64(userID),
-			nativeauth.ReasonUserDeactivated, revokedBy); err != nil {
+		// The person's sessions, elevations and sealed credentials end with
+		// the suspension, in this transaction (ADR-0025 WP3, ADR-0059 R2.11).
+		if _, err := adminaccess.RevokePersonAccess(r.Context(), tx, int64(userID), adminaccess.PersonAccessEnd{
+			ElevationEnd: adminaccess.ElevationEndUserSuspended, RevokedBy: revokedBy,
+		}); err != nil {
 			apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update user")
 			return
 		}
@@ -926,9 +942,9 @@ func (h *Handler) checkCentralRoles(
 	if err != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the role change was refused"), nil
 	}
-	// An elevated caller demotes nobody who can approve or review
-	// break-glass access (ADR-0059 R2.8b).
 	if len(change.taken) > 0 && change.changes {
+		// An elevated caller demotes nobody who can approve or review
+		// break-glass access (ADR-0059 R2.8b).
 		if refusal, err := adminaccess.ElevationProtectedTargets(ctx, q, caller, int64(change.targetID)); err != nil || refusal != nil {
 			return refusal, err
 		}

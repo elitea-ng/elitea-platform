@@ -36,13 +36,7 @@ const elevatedSessionRef int64 = 920001
 func seedActiveElevation(t *testing.T, pool *pgxpool.Pool, userID, approverID int, sessionRef int64, level string) {
 	t.Helper()
 	ctx := context.Background()
-	ledger, err := migrations.Files.ReadFile("shared/0269_admin_elevations.sql")
-	if err != nil {
-		t.Fatalf("read the elevation ledger migration: %v", err)
-	}
-	if _, err := pool.Exec(ctx, string(ledger)); err != nil {
-		t.Fatalf("apply the elevation ledger migration: %v", err)
-	}
+	applyAccessTables(t, pool)
 	now := time.Now().UTC()
 	if _, err := pool.Exec(ctx, `
 INSERT INTO elitea_auth.admin_elevations
@@ -51,6 +45,24 @@ INSERT INTO elitea_auth.admin_elevations
 VALUES ($1, $2, $3, 'approved', 'incident', 'R2.1b: the standing set', $1, $4, $5, 'approved', $5, $5, $6)`,
 		userID, sessionRef, level, approverID, now.Add(-time.Minute), now.Add(time.Hour)); err != nil {
 		t.Fatalf("seed an active %s elevation: %v", level, err)
+	}
+}
+
+// applyAccessTables applies the tables every write that ends a person's
+// access touches (ADR-0059 R2.11): the browser sessions, the native sessions
+// and the elevation ledger. The shared files are idempotent, so a second call
+// is a no-op. A deployment always has them; the projection fixture does not.
+func applyAccessTables(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, name := range []string{"0117_browser_sessions.sql", "0200_browser_session_lifecycle.sql",
+		"0141_native_auth.sql", "0269_admin_elevations.sql"} {
+		file, err := migrations.Files.ReadFile("shared/" + name)
+		if err != nil {
+			t.Fatalf("read shared %s: %v", name, err)
+		}
+		if _, err := pool.Exec(context.Background(), string(file)); err != nil {
+			t.Fatalf("apply shared %s: %v", name, err)
+		}
 	}
 }
 

@@ -26,6 +26,10 @@ package adminaccess
 // already reconciled matches no state and writes nothing. The time is the
 // injected clock, never the wall clock, so a test clock reaches every row.
 //
+// It also ends the open elevations whose session was revoked or whose
+// person was suspended or deleted when the revocation could not record the
+// end itself (endOrphaned; R2.11, issue 2525).
+//
 // The overdue pass of R2.9b (issue 2603) is added here later.
 
 import (
@@ -74,6 +78,10 @@ type ReconcileResult struct {
 	Expired int
 	// RequestsExpired is the requests recorded as request_expired.
 	RequestsExpired int
+	// Orphaned is the open elevations recorded as ended because their
+	// session was revoked or their person suspended or deleted, when the
+	// revocation could not record the end itself (R2.11).
+	Orphaned int
 }
 
 // NewElevationReconciler builds the reconciler. Every argument is required:
@@ -106,6 +114,11 @@ func (r *ElevationReconciler) Pass(ctx context.Context) (ReconcileResult, error)
 	expired, err := r.expireElevations(ctx, now)
 	result.Expired = expired
 	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	}
+	orphaned, err := r.endOrphaned(ctx, now)
+	result.Orphaned = orphaned
 	if err != nil {
 		errs = append(errs, err)
 	}
@@ -160,6 +173,68 @@ FOR UPDATE SKIP LOCKED`, id, now)
 		}
 	}
 	return expired, errors.Join(errs...)
+}
+
+// orphanedSQL lists the open, unexpired elevations whose access already
+// stopped without the ledger saying so: the bound session is revoked, or the
+// person is suspended or gone (R2.11; the revocation logs and leaves the end
+// to this pass when its event cannot be written). The reason is the one the
+// revocation would have recorded.
+const orphanedSQL = `
+SELECT e.id,
+       CASE WHEN account.id IS NULL THEN 'user_deleted'
+            WHEN account.suspended THEN 'user_suspended'
+            WHEN session.end_reason = 'logout' THEN 'logout'
+            ELSE 'session_revoked' END
+FROM elitea_auth.admin_elevations e
+LEFT JOIN public.auth_core__user account ON account.id = e.user_id
+LEFT JOIN elitea_auth.browser_sessions session ON session.ref = e.browser_session_ref
+WHERE e.started_at IS NOT NULL AND e.ended_at IS NULL AND e.expires_at > $1
+  AND (account.id IS NULL OR account.suspended OR session.revoked_at IS NOT NULL)
+ORDER BY e.started_at, e.id LIMIT $2`
+
+// endOrphaned ends every elevation orphanedSQL lists, one transaction each.
+func (r *ElevationReconciler) endOrphaned(ctx context.Context, now time.Time) (int, error) {
+	rows, err := r.db.Query(ctx, orphanedSQL, now, r.batch)
+	if err != nil {
+		return 0, fmt.Errorf("elevation reconciler: list the orphaned elevations: %w", err)
+	}
+	type orphan struct {
+		id     uuid.UUID
+		reason string
+	}
+	orphans, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (orphan, error) {
+		var o orphan
+		return o, row.Scan(&o.id, &o.reason)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("elevation reconciler: list the orphaned elevations: %w", err)
+	}
+	var errs []error
+	ended := 0
+	for _, o := range orphans {
+		changed, err := r.inTx(ctx, func(tx pgx.Tx) (bool, error) {
+			locked, err := lockRow(ctx, tx, `
+SELECT id FROM elitea_auth.admin_elevations
+WHERE id = $1 AND started_at IS NOT NULL AND ended_at IS NULL
+FOR UPDATE SKIP LOCKED`, o.id)
+			if err != nil || !locked {
+				return false, err
+			}
+			_, changed, err := EndElevation(ctx, tx, r.appender, ElevationEnd{
+				ID: o.id, Reason: o.reason, At: now, Source: securityaudit.ElevationSourceSystem,
+			})
+			return changed, err
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("elevation reconciler: end orphaned elevation %s: %w", o.id, err))
+			continue
+		}
+		if changed {
+			ended++
+		}
+	}
+	return ended, errors.Join(errs...)
 }
 
 // expireRequests decides every undecided request older than lifetime as
