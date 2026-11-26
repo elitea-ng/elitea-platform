@@ -143,8 +143,8 @@ impl PodKind {
 }
 
 /// The cached, single-flight `RuntimeClass` check one backend runs before it
-/// creates a Pod. A success is trusted for [`RUNTIME_CLASS_TTL`], a refusal
-/// for [`REFUSAL_TTL`], so a fixed `RuntimeClass` is picked up without a
+/// creates a Pod. A success is trusted for a minute (`RUNTIME_CLASS_TTL`), a
+/// refusal for five seconds (`REFUSAL_TTL`), so a fixed `RuntimeClass` is picked up without a
 /// restart and a broken one is never trusted. Concurrent callers share one
 /// read: the std mutex is held only to swap a stale cell, never across the
 /// API call.
