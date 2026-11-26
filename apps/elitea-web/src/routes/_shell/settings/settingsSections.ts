@@ -14,6 +14,7 @@
  * makes the reference's slug resolve as well, so a link copied out of
  * production still lands on the right screen.
  */
+import { DESKTOP_SETTINGS_TABS } from '@/shared/ui/settings/desktopSettingsTabs';
 import type { SettingsSection } from '@/shared/ui/settings/SettingsDrawer';
 
 export interface SettingsSectionGates {
@@ -103,16 +104,8 @@ export function buildSettingsSections(gates: SettingsSectionGates): SettingsSect
         { id: 'notifications', label: 'Notifications' },
         // ADR-0029: the desktop app's Doctor. `MODE` is a build-time literal,
         // so the web build drops the row (and its label) entirely.
-        ...(import.meta.env.MODE === 'desktop'
-          ? [
-              { id: 'approval-rules', label: 'Approval rules' },
-              { id: 'mcp-servers', label: 'MCP servers' },
-              { id: 'hooks', label: 'Hooks' },
-              { id: 'computer-use', label: 'Computer use' },
-              { id: 'trusted-folders', label: 'Trusted folders' },
-              { id: 'troubleshoot', label: 'Troubleshoot' },
-            ]
-          : []),
+        // The desktop tabs (#3078, one list with the catch-all and the redirect).
+        ...(import.meta.env.MODE === 'desktop' ? DESKTOP_SETTINGS_TABS.map(({ id, label }) => ({ id, label })) : []),
       ],
     },
   ];
