@@ -27,6 +27,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminUsers } from './Users';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -172,6 +173,9 @@ describe('Admin › Users', () => {
     await screen.findByText('Ada Admin');
 
     await user.click(screen.getAllByRole('button', { name: 'Suspend user' })[0]!);
+    // A suspend is dangerous (ADR-0059 R3.8b): nothing leaves before the dialog.
+    expect(writes()).toHaveLength(0);
+    await confirmDangerousAction(user, 'ada@example.com', { code: 'offboarding' });
 
     await waitFor(() => expect(writes()).toHaveLength(1));
     const request = writes()[0]!;
@@ -179,7 +183,7 @@ describe('Admin › Users', () => {
     // The id is in the PATH, mirroring the legacy
     // `user_suspend/<mode>/<user_id>`.
     expect(request.url).toContain('/admin/user_suspend/administration/11');
-    expect(request.body).toEqual({ suspended: true });
+    expect(request.body).toEqual({ suspended: true, reason_code: 'offboarding', reason: 'ticket 42' });
   });
 
   it('unsuspends the already-suspended user (the toggle reads the row, not a constant)', async () => {
@@ -227,12 +231,15 @@ describe('Admin › Users', () => {
     // Choosing writes nothing; closing the menu saves the set.
     expect(writes()).toHaveLength(0);
     await user.keyboard('{Escape}');
+    await confirmDangerousAction(user, 'bo@example.com');
 
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
       user_id: 12,
       role_names: ['llm_manager', 'security_auditor'],
+      reason_code: 'incident',
+      reason: 'ticket 42',
     });
   });
 
@@ -245,12 +252,15 @@ describe('Admin › Users', () => {
     await user.click((await screen.findAllByRole('combobox', { name: 'Administration roles' }))[0]!);
     await user.click(await screen.findByRole('option', { name: /^e2e_ops/ }));
     await user.keyboard('{Escape}');
+    await confirmDangerousAction(user, 'ada@example.com');
 
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]!.body).toEqual({
       action: 'set_admin_role',
       user_id: 11,
       role_names: ['admin', 'llm_manager', 'e2e_ops'],
+      reason_code: 'incident',
+      reason: 'ticket 42',
     });
   });
 
@@ -298,6 +308,7 @@ describe('Admin › Users', () => {
     await user.click((await screen.findAllByRole('combobox', { name: 'Administration roles' }))[1]!);
     await user.click(await screen.findByRole('option', { name: /^LLM manager/ }));
     await user.keyboard('{Escape}');
+    await confirmDangerousAction(user, 'bo@example.com');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
   });
@@ -340,11 +351,11 @@ describe('Admin › Users', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(writes()).toHaveLength(0);
 
-    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }));
+    await confirmDangerousAction(user, 'ada@example.com', { code: 'offboarding', text: '' });
 
     await waitFor(() => expect(writes()).toHaveLength(1));
     expect(writes()[0]!.method).toBe('POST');
-    expect(writes()[0]!.body).toEqual({ action: 'delete', users: [{ id: 11 }] });
+    expect(writes()[0]!.body).toEqual({ action: 'delete', users: [{ id: 11 }], reason_code: 'offboarding', reason: '' });
   });
 
   it('surfaces a refused write instead of swallowing it', async () => {
@@ -358,6 +369,7 @@ describe('Admin › Users', () => {
     await screen.findByText('Ada Admin');
 
     await user.click(screen.getAllByRole('button', { name: 'Suspend user' })[0]!);
+    await confirmDangerousAction(user, 'ada@example.com');
 
     // The reference page catches and discards every mutation error, so a 403
     // is indistinguishable from success followed by nothing happening.

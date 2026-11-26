@@ -19,8 +19,10 @@
  * no `requests_per_min` does not limit requests. Sending 0 for either would
  * author a ceiling of nothing.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 
+import { governanceDeleteRequest, governanceSaveRequest } from './governanceDangerous';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import {
@@ -294,18 +296,6 @@ export function rowToDraft(row: GovernanceRow): GovernanceDraft {
   };
 }
 
-/**
- * The inline weight-sum hint. UX ONLY — the server re-verifies the sum on every
- * write and rejects a rule that fails, whatever this showed
- * (design-governance-config-authoring §3.1).
- */
-export function targetWeightSum(targets: readonly RoutingTargetDraft[]): number {
-  return targets.reduce((total, target) => {
-    const weight = Number.parseFloat(target.weight);
-    return Number.isFinite(weight) ? total + weight : total;
-  }, 0);
-}
-
 export interface GatewayGovernancePageState {
   readonly rows: readonly GovernanceRow[];
   readonly isLoading: boolean;
@@ -323,6 +313,8 @@ export interface GatewayGovernancePageState {
   readonly onSave: () => void;
   readonly onDelete: (row: GovernanceRow) => void;
   readonly deleteError: string | undefined;
+  /** The confirmation of a write (ADR-0059 R3.8b). */
+  readonly confirmDialog: ReactNode;
 }
 
 export function useGatewayGovernancePage(): GatewayGovernancePageState {
@@ -331,6 +323,7 @@ export function useGatewayGovernancePage(): GatewayGovernancePageState {
   const create = access.guard(useCreateGovernanceRow());
   const update = access.guard(useUpdateGovernanceRow());
   const remove = access.guard(useDeleteGovernanceRow());
+  const { ask, dialog: confirmDialog } = useAdminDangerousConfirm();
 
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<GovernanceDraft | undefined>(undefined);
@@ -368,10 +361,16 @@ export function useGatewayGovernancePage(): GatewayGovernancePageState {
     // The dialog closes only on SUCCESS. A failed save keeps the operator's
     // work on screen with the server's reason beside it; closing would discard
     // a rule they cannot get back.
-    mutation.mutate(payload, { onSuccess: () => setDraft(undefined) });
-  }, [create, draft, update]);
+    ask({
+      ...governanceSaveRequest(payload),
+      run: (reason) => mutation.mutate({ row: payload, reason }, { onSuccess: () => setDraft(undefined) }),
+    });
+  }, [ask, create, draft, update]);
 
-  const onDelete = useCallback((row: GovernanceRow) => remove.mutate(row.id), [remove]);
+  const onDelete = useCallback(
+    (row: GovernanceRow) => ask({ ...governanceDeleteRequest(row), run: (reason) => remove.mutate({ id: row.id, reason }) }),
+    [ask, remove],
+  );
 
   return {
     rows,
@@ -393,5 +392,6 @@ export function useGatewayGovernancePage(): GatewayGovernancePageState {
     onSave,
     onDelete,
     deleteError: governanceFailureReason(remove.error),
+    confirmDialog,
   };
 }

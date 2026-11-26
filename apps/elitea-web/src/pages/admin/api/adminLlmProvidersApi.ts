@@ -76,6 +76,8 @@ import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { platformModelKeys } from './adminLlmPlatformModelsApi';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonFields, reasonHeaders, type Reasoned } from '../adminDangerousAction';
+
 const PROVIDERS_URL = '/admin/gateway/providers';
 
 /**
@@ -213,14 +215,14 @@ export function useAdminLlmProviders(): UseQueryResult<LlmProviderList, Error> {
  * rather than overriding it — so a client that sent the field would either be
  * restating the server's rule or be refused for contradicting it.
  */
-export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, LlmProviderDraft> {
+export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, Reasoned<{ draft: LlmProviderDraft }>> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (draft: LlmProviderDraft) => {
+    mutationFn: async ({ draft, reason }) => {
       await eliteaFetch<unknown>(PROVIDERS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({ ...draft, ...reasonFields('POST /api/v2/admin/gateway/providers', reason) }),
       });
     },
     onSuccess: () => { invalidateProviderResource(queryClient); },
@@ -237,15 +239,18 @@ export function useCreateAdminLlmProvider(): UseMutationResult<void, Error, LlmP
 export function useUpdateAdminLlmProvider(): UseMutationResult<
   void,
   Error,
-  { readonly id: number; readonly draft: Partial<LlmProviderDraft> }
+  Reasoned<{ id: number; draft: Partial<LlmProviderDraft> }>
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, draft }) => {
+    mutationFn: async ({ id, draft, reason }) => {
       await eliteaFetch<unknown>(`${PROVIDERS_URL}/${String(id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draft),
+        body: JSON.stringify({
+          ...draft,
+          ...reasonFields('PUT /api/v2/admin/gateway/providers/{configID} route', reason),
+        }),
       });
     },
     onSuccess: () => { invalidateProviderResource(queryClient); },
@@ -260,11 +265,14 @@ export function useUpdateAdminLlmProvider(): UseMutationResult<
  * — they live in one schema per project — so the dialog says so rather than
  * reporting a number it would have to invent.
  */
-export function useDeleteAdminLlmProvider(): UseMutationResult<void, Error, number> {
+export function useDeleteAdminLlmProvider(): UseMutationResult<void, Error, Reasoned<{ id: number }>> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: number) => {
-      await eliteaFetch<unknown>(`${PROVIDERS_URL}/${String(id)}`, { method: 'DELETE' });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(`${PROVIDERS_URL}/${String(id)}`, {
+        method: 'DELETE',
+        ...reasonHeaders('DELETE /api/v2/admin/gateway/providers/{configID}', reason),
+      });
     },
     onSuccess: () => { invalidateProviderResource(queryClient); },
   });
@@ -327,9 +335,7 @@ export function useCheckAdminLlmProvider(): UseMutationResult<LlmProviderCheckRe
         }
         throw error;
       }
-      throw new Error(
-        `admin llm provider check: unrecognised response shape for configuration ${String(id)}`,
-      );
+      throw new Error(`admin llm provider check: unrecognised response shape for configuration ${String(id)}`);
     },
   });
 }
@@ -366,11 +372,7 @@ function asRevalidateResult(body: unknown): LlmProviderRevalidateResult {
  * row (its endpoint, its settings, its secrets) came from the listing, and
  * revalidation does not touch any of it.
  */
-export function useRevalidateAdminLlmProvider(): UseMutationResult<
-  LlmProviderRevalidateResult,
-  Error,
-  number
-> {
+export function useRevalidateAdminLlmProvider(): UseMutationResult<LlmProviderRevalidateResult, Error, number> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: number): Promise<LlmProviderRevalidateResult> =>

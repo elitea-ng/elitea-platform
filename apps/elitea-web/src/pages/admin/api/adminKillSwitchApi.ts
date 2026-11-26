@@ -14,6 +14,8 @@ import {
 } from '@/shared/api/generated/admin/admin';
 import type { ExecutionSuspensionCreate } from '@/shared/api/generated/model';
 
+import { reasonFieldsKeepText, type AdminReason } from '../adminDangerousAction';
+
 const KEY = ['admin', 'execution-suspensions'] as const;
 
 /** The suspensions: only the active ones, or the history too. */
@@ -26,10 +28,36 @@ export function useAdminSuspensions(activeOnly: boolean, refetchInterval: number
   });
 }
 
+/** A suspension to create; `reason` is the dangerous action's, for the platform scope. */
+export interface AdminSuspensionCreate {
+  readonly body: ExecutionSuspensionCreate;
+  readonly reason?: AdminReason;
+}
+
+/** The server's bound on a suspension's reason (`safety.MaxReasonBytes`). */
+const SUSPENSION_REASON_MAX_BYTES = 1024;
+
 export function useCreateAdminSuspension() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: ExecutionSuspensionCreate) => suspensionRow(await createExecutionSuspension(body)),
+    // A platform stop is a dangerous action (ADR-0059 R3.8b): its reason code
+    // rides in the body beside the suspension's own reason.
+    mutationFn: async ({ body, reason }: AdminSuspensionCreate) =>
+      suspensionRow(
+        await createExecutionSuspension(
+          reason === undefined
+            ? body
+            : {
+                ...body,
+                ...reasonFieldsKeepText(
+                  'POST /api/v2/admin/execution_suspensions platform',
+                  reason,
+                  body.reason,
+                  SUSPENSION_REASON_MAX_BYTES,
+                ),
+              },
+        ),
+      ),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: KEY }),
   });
 }

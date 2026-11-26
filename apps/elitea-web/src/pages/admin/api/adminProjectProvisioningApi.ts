@@ -23,6 +23,7 @@ import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/r
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonHeaders, type AdminReason } from '../adminDangerousAction';
 import { ADMIN_MODE, adminProjectsKeys } from './adminProjectsApi';
 
 /**
@@ -168,7 +169,7 @@ export function useCreateAdminProject(): UseMutationResult<
  * IRREVERSIBLE. The server drops `p_<id> CASCADE`, which takes every prompt,
  * agent, conversation, artifact and audit row in the tenant with it. There is
  * no undo and no soft-delete behind this call; the confirmation in
- * `../AdminProjectDeleteDialog.tsx` is the only thing between an operator and
+ * the dangerous-action dialog is the only thing between an operator and
  * that outcome.
  *
  * One project per call. The dialog loops rather than sending a batch, because
@@ -185,11 +186,16 @@ export function useCreateAdminProject(): UseMutationResult<
  * ONCE, after the loop; see `../useAdminProjectProvisioning.ts`. Any new caller
  * must do the same.
  */
-export function useDeleteAdminProject(): UseMutationResult<void, Error, { projectId: number }> {
+export function useDeleteAdminProject(): UseMutationResult<
+  void,
+  Error,
+  { readonly projectId: number; readonly reason: AdminReason }
+> {
   return useMutation({
-    mutationFn: async ({ projectId }) => {
+    mutationFn: async ({ projectId, reason }) => {
       await eliteaFetch<unknown>(`/projects/project/${ADMIN_MODE}/${projectId}`, {
         method: 'DELETE',
+        ...reasonHeaders('DELETE /api/v2/projects/project/{mode}/{projectID}', reason),
       });
     },
   });

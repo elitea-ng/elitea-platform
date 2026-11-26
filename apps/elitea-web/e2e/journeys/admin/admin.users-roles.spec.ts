@@ -11,6 +11,7 @@
 import { test as adminTest, expect, type APIRequestContext } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { API_BASE } from '../../fixtures/api';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
@@ -65,11 +66,13 @@ adminTest('a global administrator gives a person two roles, and both survive a r
     await page.getByRole('option', { name: /^LLM manager/ }).click();
     await page.getByRole('option', { name: /^Security auditor/ }).click();
 
-    // Closing the menu saves the set: one request with both names.
+    // Closing the menu asks for a reason (R3.8b, issue 2614), and confirming
+    // saves the set: one request with both names.
     const saved = page.waitForRequest(
       (sent) => sent.url().includes('/admin/auth_users/administration') && sent.method() === 'POST',
     );
     await page.keyboard.press('Escape');
+    await confirmDangerousAction(page, subject);
     const body = (await saved).postDataJSON() as { role_names?: readonly string[] };
     expect([...(body.role_names ?? [])].sort()).toEqual(['llm_manager', 'security_auditor']);
     await expect.poll(async () => [...(await listedUser(request, subject)).admin_roles].sort()).toEqual([

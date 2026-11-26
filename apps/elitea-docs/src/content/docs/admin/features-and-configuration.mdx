@@ -32,6 +32,12 @@ description: "Feature toggles and the platform configuration sections not covere
 
 Configuration holds the sections Features does not: some editable directly here, some pointing to a dedicated page.
 
+The section list shows only the sections your roles can open, grouped under the console area each one belongs to (**People and access**, **Models and spend**, **Agents and governance**, **Platform**, and so on, in the order of the sidebar). A section you cannot open is not listed at all. A section that is listed but cannot be served on this deployment is marked **Not available here** and explains why when you open it.
+
+Above the list, a search box filters it as you type. It matches a section's title and the labels of its fields, ignoring case, so searching for a setting finds the section that holds it. When nothing matches, the list says so.
+
+A section you can view but not change opens with a **View only** notice: its fields and **Save** are disabled. The server refuses the save on its own account either way.
+
 <Accordion title="Guardrails (editable here)">
 Blocked toolkit types (a blocked type cannot be listed or created, and is stripped from every agent before it runs — existing toolkits of that type stay visible so an administrator can review and delete them, but stop working); blocked individual tools within an otherwise-allowed toolkit; tools that require the user to authorize each call ("sensitive action" tools, matched per toolkit or with `*` for every toolkit); the company name and message template shown in that authorization dialog.
 
@@ -151,7 +157,7 @@ A request for a section passes on one of two paths:
 - **Narrow path.** The section's read permission opens it; its write permission opens and saves it.
 - **Legacy path.** `runtime.plugins` together with the section's legacy permission (the last column) opens and saves it, as in earlier releases.
 
-The Configuration and Features pages list only the sections the caller can open, and the field suggestions answer only for those sections. A caller who holds neither path for any section gets 403. A holder of only `configuration.governance` is refused, as before.
+The Configuration and Features pages list only the sections the caller can open, and the field suggestions answer only for those sections. Each listed section carries its `level` for the caller: `write` when a save would pass, `read` otherwise. A caller who holds neither path for any section gets 403. A holder of only `configuration.governance` is refused, as before.
 
 | Section | Area | Read permission | Write permission | Legacy permission |
 | --- | --- | --- | --- | --- |

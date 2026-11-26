@@ -24,6 +24,7 @@
  * already carries the new column set, which is what lets the parent re-seed its
  * draft from fresh data instead of from the matrix that still lacks it.
  */
+import type { AdminReason } from './adminDangerousAction';
 import { useCallback, useState } from 'react';
 
 import type { AdminWriteAccess } from './adminWriteAccess';
@@ -61,7 +62,7 @@ export interface AdminRoleDefinitionsState {
 
   readonly onCloseRoleDialog: () => void;
   readonly onSubmitRoleDialog: (name: string) => void;
-  readonly onConfirmDeleteRole: () => void;
+  readonly onConfirmDeleteRole: (reason: AdminReason) => void;
 }
 
 export function useAdminRoleDefinitions(
@@ -126,11 +127,11 @@ export function useAdminRoleDefinitions(
     [roleDialog, target, createRole, renameRole, succeeded, failed],
   );
 
-  const onConfirmDeleteRole = useCallback(() => {
+  const onConfirmDeleteRole = useCallback((reason: AdminReason) => {
     if (roleToDelete === null) return;
     setRoleWriteFailure(undefined);
     deleteRole.mutate(
-      { target, name: roleToDelete },
+      { target, name: roleToDelete, reason },
       {
         onSuccess: () => succeeded('roleDeleted'),
         onError: (error) => failed('roleDelete', error),

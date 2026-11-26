@@ -22,6 +22,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
+import type { AdminReason } from './adminDangerousAction';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { withoutBlankLinks, type ConfigLink } from './ConfigurationLinksEditor';
@@ -55,14 +56,54 @@ export interface AdminConfigurationPageState {
   readonly onFieldChange: (key: string, next: unknown) => void;
   readonly isDirty: boolean;
   readonly isSaving: boolean;
-  /** View-only mode (R3.4b, issue 2613): the page's item is read for this caller. */
+  /**
+   * View-only mode: the page's item is read for this caller (R3.4b, issue
+   * 2613), or the open section is (its `level`, R3.7, issue 2538).
+   */
   readonly readOnly: boolean;
-  readonly onSave: () => void;
+  /** The open section alone is read for this caller, on a page it may write (R3.7). */
+  readonly sectionReadOnly: boolean;
+  /** Saves the draft; `reason` is the dialog's, for a save of the Maintenance section. */
+  readonly onSave: (reason?: AdminReason) => void;
+  /**
+   * A save of the Maintenance section, which asks for a reason (R3.8b):
+   * `on` when it turns maintenance mode on, `other` for any other save.
+   * The server cannot tell the two apart from the request alone (it needs
+   * the stored switch), so it asks a reason of every save of the section.
+   */
+  readonly maintenanceSave: 'on' | 'other' | undefined;
   readonly onDiscard: () => void;
   readonly saveError: string | undefined;
   readonly savedAt: number | undefined;
   readonly onDismissSaved: () => void;
   readonly onDismissError: () => void;
+}
+
+/**
+ * The outcome of saving the draft of the Maintenance section, as the
+ * server's `MaintenanceAction` names it: `on` when the switch is off (or
+ * unset) before and on after.
+ */
+function maintenanceSave(
+  section: AdminConfigSection | undefined,
+  stored: Readonly<Record<string, unknown>> | undefined,
+  draft: Readonly<Record<string, unknown>>,
+): 'on' | 'other' | undefined {
+  if (section?.id !== MAINTENANCE_SECTION) return undefined;
+  const turnsOn = stored?.[MAINTENANCE_ENABLED_KEY] !== true && draft[MAINTENANCE_ENABLED_KEY] === true;
+  return turnsOn ? 'on' : 'other';
+}
+
+const MAINTENANCE_SECTION = 'maintenance';
+const MAINTENANCE_ENABLED_KEY = 'maintenance_enabled';
+
+/** View-only of the page (its item) or of the open section alone (its `level`). */
+function writeFlags(
+  pageWritable: boolean,
+  section: AdminConfigSection | undefined,
+): Pick<AdminConfigurationPageState, 'readOnly' | 'sectionReadOnly'> {
+  const sectionRead = section?.level === 'read';
+  return { readOnly: !pageWritable || sectionRead, sectionReadOnly: pageWritable && sectionRead };
 }
 
 /**
@@ -186,11 +227,15 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     setSaveError(undefined);
   }, []);
 
-  const onSave = useCallback(() => {
+  const onSave = useCallback((reason?: AdminReason) => {
     if (activeSection === undefined) return;
     setSaveError(undefined);
     saveMutation.mutate(
-      { sectionId: activeSection.id, values: cleanForSave(draft, activeSection.fields ?? []) },
+      {
+        sectionId: activeSection.id,
+        values: cleanForSave(draft, activeSection.fields ?? []),
+        ...(reason === undefined ? {} : { reason }),
+      },
       {
         onSuccess: () => {
           setDraft({});
@@ -235,8 +280,9 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     onFieldChange,
     isDirty: Object.keys(draft).length > 0,
     isSaving: saveMutation.isPending,
-    readOnly: !access.writable,
+    ...writeFlags(access.writable, activeSection),
     onSave,
+    maintenanceSave: maintenanceSave(activeSection, serverValues, draft),
     onDiscard,
     saveError,
     savedAt,

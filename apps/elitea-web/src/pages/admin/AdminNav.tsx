@@ -47,6 +47,7 @@ import { Link, useRouterState } from '@tanstack/react-router';
 
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined';
 import Box from '@mui/material/Box';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
@@ -98,6 +99,12 @@ interface AdminNavSection {
 
 type AdminNavLinkItem = Pick<AdminNavItem, 'id' | 'path' | 'label' | 'icon'>;
 
+const HOME_ITEM_ID = 'home';
+
+function homeItem(): AdminNavLinkItem {
+  return { id: HOME_ITEM_ID, path: '/', label: t('pages.admin.home.title', 'Home'), icon: HomeOutlinedIcon };
+}
+
 export interface AdminNavProps {
   /**
    * The six labelled areas the capability document opens (ADR-0059 decision
@@ -137,7 +144,9 @@ export function AdminNav({ areas }: AdminNavProps = {}): ReactNode {
   const activeId = useRouterState({
     select: (state) => {
       const matched = state.matches.map((match) => match.routeId);
-      return labelled ? consoleNavItemForRoute(matched)?.id : activeAdminNavItemId(matched);
+      if (!labelled) return activeAdminNavItemId(matched);
+      // The index is Home under the six areas (R3.3a, issue 2533).
+      return (matched as readonly string[]).includes('/') ? HOME_ITEM_ID : consoleNavItemForRoute(matched)?.id;
     },
   });
 
@@ -174,6 +183,13 @@ export function AdminNav({ areas }: AdminNavProps = {}): ReactNode {
         data-testid="admin-nav-scroll"
         sx={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}
       >
+        {/* Home, the console's index, for a caller it is a page for: one with
+            more than one area (a caller with one lands on that area instead). */}
+        {labelled && groups.length > 1 ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', padding: '0.5rem 0.75rem 0' }}>
+            <AdminNavLink item={homeItem()} active={activeId === HOME_ITEM_ID} collapsed={collapsed} />
+          </Box>
+        ) : null}
         {groups.map((group, index) => (
           <Fragment key={group.id}>
             {index > 0 && !labelled && <AdminNavDivider />}

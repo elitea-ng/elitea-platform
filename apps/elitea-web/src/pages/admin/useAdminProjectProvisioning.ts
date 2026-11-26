@@ -33,7 +33,8 @@ import { t } from '@/shared/i18n';
 
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
-import type { ProjectDeleteFailure } from './AdminProjectDeleteDialog';
+import type { ProjectDeleteFailure } from './AdminProjectDeleteFacts';
+import type { AdminReason } from './adminDangerousAction';
 import {
   failedProvisioningSteps,
   provisioningStepsFromError,
@@ -75,7 +76,7 @@ export interface AdminProjectProvisioningState {
   readonly isDeleting: boolean;
   readonly deleteFailures: readonly ProjectDeleteFailure[];
   readonly onCloseDelete: () => void;
-  readonly onConfirmDelete: () => void;
+  readonly onConfirmDelete: (reason: AdminReason) => void;
 }
 
 function messageOf(error: unknown, fallback: string): string {
@@ -195,7 +196,7 @@ export function useAdminProjectProvisioning(
    * stays open when there are any, and the ids that DID succeed leave the
    * selection so that a retry re-runs only what is left.
    */
-  const onConfirmDelete = useCallback(() => {
+  const onConfirmDelete = useCallback((reason: AdminReason) => {
     const targets = selectedProjects;
     if (targets.length === 0) return;
     setDeleting(true);
@@ -204,7 +205,7 @@ export function useAdminProjectProvisioning(
       const failures: ProjectDeleteFailure[] = [];
       for (const project of targets) {
         try {
-          await deleteProject.mutateAsync({ projectId: project.id });
+          await deleteProject.mutateAsync({ projectId: project.id, reason });
         } catch (error) {
           failures.push({
             projectId: project.id,

@@ -24,11 +24,12 @@ import Typography from "@mui/material/Typography";
 import { t } from "@/shared/i18n";
 
 import { AdminIdentityTrustNotice, useIdentityTrustLocked } from "./AdminIdentityTrustNotice";
-import { AdminScimClientConfirmDialog } from "./AdminScimClientConfirmDialog";
-import type { AdminScimClientPendingAction } from "./AdminScimClientConfirmDialog";
+import { AdminDangerousActionDialog } from "./AdminDangerousActionDialog";
+import type { AdminReason } from "./adminDangerousAction";
+import { scimClientDialog, type AdminScimClientPendingAction } from "./adminScimClientDangerous";
 import { AdminScimClientCreateDialog } from "./AdminScimClientCreateDialog";
 import { AdminScimClientSecretDialog } from "./AdminScimClientSecretDialog";
-import { AdminScimClientTable } from "./AdminScimClientTable";
+import { AdminScimClientTable, type AdminScimClientAction } from "./AdminScimClientTable";
 import { AdminScimCopyField } from "./AdminScimCopyField";
 import { ADMIN_ITEM } from "./adminItemIds";
 import { useAdminWritable } from "./adminWriteAccess";
@@ -64,7 +65,7 @@ function loadErrorMessage(error: unknown): string {
 
 function actionFailure(
   error: unknown,
-  action: AdminScimClientPendingAction["action"],
+  action: AdminScimClientAction,
 ): string {
   const fallback = {
     rotate: t("pages.admin.scimClients.error.rotate", "Failed to rotate that SCIM client's secret."),
@@ -107,14 +108,13 @@ export function AdminScimClientsEditor() {
   const list = listQuery.data;
   const clients = useMemo(() => list?.clients ?? [], [list]);
   const { tenantUrl, tokenEndpoint } = connectionUrls(list);
-  const busy =
-    rotateMutation.isPending ||
-    revokeMutation.isPending ||
-    deleteMutation.isPending;
+  const busy = [rotateMutation, revokeMutation, deleteMutation].some(
+    (mutation) => mutation.isPending,
+  );
 
-  const handleCreate = (draft: AdminScimClientDraft): void => {
+  const handleCreate = (draft: AdminScimClientDraft, reason: AdminReason): void => {
     setCreateError(undefined);
-    createMutation.mutate(draft, {
+    createMutation.mutate({ draft, reason }, {
       onSuccess: (result) => {
         setCreateOpen(false);
         setReveal(result);
@@ -131,8 +131,13 @@ export function AdminScimClientsEditor() {
     });
   };
 
-  const handleConfirm = (): void => {
+  const handleConfirm = (reason: AdminReason): void => {
     if (pending === undefined) return;
+    if (pending.action === "create") {
+      setPending(undefined);
+      handleCreate(pending.draft, reason);
+      return;
+    }
     const { action, client } = pending;
     setActionError(undefined);
     const onError = (error: unknown): void => {
@@ -143,7 +148,7 @@ export function AdminScimClientsEditor() {
       setPending(undefined);
     };
     if (action === "rotate") {
-      rotateMutation.mutate(client.id, {
+      rotateMutation.mutate({ id: client.id, reason }, {
         onSuccess: (result) => {
           setPending(undefined);
           setReveal(result);
@@ -153,7 +158,7 @@ export function AdminScimClientsEditor() {
       return;
     }
     const mutation = action === "revoke" ? revokeMutation : deleteMutation;
-    mutation.mutate(client.id, { onSuccess: onDone, onError });
+    mutation.mutate({ id: client.id, reason }, { onSuccess: onDone, onError });
   };
 
   return (
@@ -254,17 +259,22 @@ export function AdminScimClientsEditor() {
         onClose={() => {
           setCreateOpen(false);
         }}
-        onSubmit={handleCreate}
+        onSubmit={(draft) => {
+          setPending({ action: "create", draft });
+        }}
       />
 
-      <AdminScimClientConfirmDialog
-        pending={pending}
-        busy={busy}
-        onCancel={() => {
-          setPending(undefined);
-        }}
-        onConfirm={handleConfirm}
-      />
+      {pending !== undefined ? (
+        <AdminDangerousActionDialog
+          open
+          {...scimClientDialog(pending)}
+          pending={busy || createMutation.isPending}
+          onClose={() => {
+            setPending(undefined);
+          }}
+          onConfirm={handleConfirm}
+        />
+      ) : null}
 
       <AdminScimClientSecretDialog
         reveal={reveal}
