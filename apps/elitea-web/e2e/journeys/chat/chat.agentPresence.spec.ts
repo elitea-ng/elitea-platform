@@ -7,6 +7,7 @@ import { expect, test } from '@playwright/test';
 
 import { BASE_URL } from '../../../playwright.config';
 import { AUTOTEST_PREFIX, createConversation, deleteConversation } from '../../fixtures/api';
+import { openParticipants } from '../../fixtures/sidePanel';
 import { serveTeamPresence } from '../../fixtures/teamPresence';
 
 test.describe('agent presence in the chat (fixture stream)', () => {
@@ -23,6 +24,8 @@ test.describe('agent presence in the chat (fixture stream)', () => {
   test('a cloud agent running a tool reads "Running <tool>"', async ({ page }) => {
     await serveTeamPresence(page, conversationId);
     await page.goto(`${BASE_URL}/app/chat/${conversationId}`);
+    // The agent rows live in the side panel, which is closed at the default 1280 px window.
+    await openParticipants(page);
 
     const mira = page.locator('[data-testid="participant-state"][data-participant-id="2"]');
     await expect(mira).toContainText('Running jira_get_issue', { timeout: 20_000 });
