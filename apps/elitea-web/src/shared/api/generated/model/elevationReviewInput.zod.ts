@@ -60,6 +60,12 @@ export const ElevationReviewInput = zod
       .describe(
         "Whether a replacement sealed credential was issued. Required for the review of a sealed elevation, refused for any other.\n",
       ),
+    confirm_grant_ids: zod
+      .array(zod.uuid())
+      .optional()
+      .describe(
+        "ADR-0059 R2.12: the provisional grants of the elevation (its `provisional_grants`) the reviewer confirms. Each becomes a standing assignment written by the reviewer with the source `review`. Only with the outcome `justified`: with `unauthorized` it is a 400. An id that is not an unconfirmed grant of this elevation is a 400, and nothing is written.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/adminaccess/reviews.go:169-173 (reviewBody). The attestation of a review.\n",

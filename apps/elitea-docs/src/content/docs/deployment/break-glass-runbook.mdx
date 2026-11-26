@@ -1,6 +1,6 @@
 ---
 title: "Break-glass runbook"
-description: "How to issue, list and revoke the sealed break-glass credentials that work when single sign-on is down, and how to end an elevation from the workload when the console cannot be used."
+description: "How to issue, list and revoke the sealed break-glass credentials that work when single sign-on is down, how to end an elevation from the workload when the console cannot be used, and how to add a note to an elevation."
 ---
 
 This runbook is the operator procedure for the sealed break-glass credentials and for ending a break-glass elevation without the console. [Break-glass access](/admin/break-glass) explains what an elevation is and how it runs out by itself. This page says how to prepare the way in for when the identity provider is down, and what to do when an elevation is misused and the console is the thing that was taken, or cannot be reached.
@@ -125,13 +125,41 @@ Each end is written through the ledger's end function, like an end from the cons
 - the elevation's end reason is `operator`, and it moves to `review_pending`, so it is reviewed like any other elevation;
 - one chained security audit event `admin.elevation` with the action `ended` and the source `operator`, in the same transaction as the end. If the event cannot be written, nothing is ended.
 
+## Add a note to an elevation
+
+When nobody independent could review an elevation (its review state is `unreviewed_no_reviewer`), or whenever the record should carry what you know, attach a note. A note never changes the elevation's state: the record keeps saying that no independent review happened.
+
+<Steps>
+<Step title="Find the elevation">
+```bash
+kubectl -n <ns> exec deploy/elitea-main -- /elitea-main break-glass list --elevations
+```
+
+One line per elevation, newest first: its id, its state, the person, the level, the path and when it was requested. The reason text is never printed.
+</Step>
+<Step title="Write the note">
+The note is read from stdin, or from a file with `--file`, never from an argument, so it lands in no shell history and no process list. At most 4000 characters.
+
+```bash
+kubectl -n <ns> exec -i deploy/elitea-main -- \
+  /elitea-main break-glass note 3f0c9a52-6f0e-4d5b-9b7e-2a8f1c4d6e10 < note.txt
+```
+
+The command prints the note's id and the elevation's state, unchanged.
+</Step>
+</Steps>
+
+The note is stored with the source `operator` and names no platform account. One chained `admin.elevation` event with the action `note_added` is written in the same transaction; it carries the note's id and length, never its text. If it cannot be written, the note is not stored.
+
+The command does not acknowledge the elevation: it cannot name the person acting. A global administrator acknowledges an `unreviewed_no_reviewer` elevation from the console (`POST /api/v2/admin/access/elevations/{elevationID}/acknowledge`, see [Notes and the acknowledgement](/admin/break-glass#notes-and-the-acknowledgement)).
+
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Done: every id was ended or revoked (or `--all` found nothing active), or the credential was issued. |
 | `1` | Failed: the database could not be reached or a write failed. Nothing changed. |
-| `2` | Invalid invocation: no sub-command, an id that is not a UUID, both ids and `--all`, an `issue` without `--user`, an unknown `--level`, or an `--expires` beyond 365 days. Nothing was read. |
+| `2` | Invalid invocation: no sub-command, an id that is not a UUID, both ids and `--all`, an `issue` without `--user`, an unknown `--level`, an `--expires` beyond 365 days, or a `note` with no single id or an empty or too long text. Nothing was read. |
 | `3` | Refused: an id is unknown; an elevation is a request that never started, already ended or already ran out; a credential is already revoked or used; or the person of an `issue` is suspended. Nothing changed, the other ids included. |
 
 An elevation that already ran out needs no command: access stopped at its expiry, and the `main.elevation_reconciler` routine records it as `expired` within a minute (see [When an elevation or a request runs out](/admin/break-glass#when-an-elevation-or-a-request-runs-out)).

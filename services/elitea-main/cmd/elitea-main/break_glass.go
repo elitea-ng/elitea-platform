@@ -21,8 +21,9 @@ package main
 //	elitea-main break-glass issue --unbound --ticket ID --label TEXT
 //	                              [--level admin|super_admin] [--split]
 //	                              [--expires WHEN]
-//	elitea-main break-glass list
+//	elitea-main break-glass list [--elevations]
 //	elitea-main break-glass revoke ID [ID...]
+//	elitea-main break-glass note ID [--file PATH] < note.txt
 //
 // END. ID is an elevation id (a UUID). `end` goes through the ledger's end
 // function (adminaccess.EndElevation) with the end reason `operator`, so the
@@ -56,6 +57,17 @@ package main
 // verifier or its digest. The read is recorded as a decision event
 // (admin.elevation.credential_list) with the source `operator`.
 //
+// LIST --ELEVATIONS (R2.9c). One line per elevation, newest first: its id,
+// person, level, path and state. Never the reason text.
+//
+// NOTE (R2.9c). Attaches a note, read from stdin or --file (never an
+// argument, so it lands in no shell history and no process list), to the
+// record of elevation ID, in any state, with the source `operator`. The state
+// does not change. The text is stored in the items table; the note_added
+// event carries its id and length only. The command takes no --acknowledge:
+// it cannot name the acting person, so the acknowledgement of an
+// unreviewed_no_reviewer elevation is the console route's.
+//
 // REVOKE. Sets the revoked time of each credential, in one transaction, with
 // one credential_revoked event each. Rows are never deleted. An unknown id, or
 // a credential already revoked or used, refuses the whole command.
@@ -70,10 +82,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -92,6 +106,7 @@ const (
 	breakGlassIssue       = "issue"
 	breakGlassList        = "list"
 	breakGlassRevoke      = "revoke"
+	breakGlassNote        = "note"
 )
 
 // The exit codes, as admin-role's.
@@ -118,10 +133,24 @@ type breakGlassRequest struct {
 	// change or incident it is issued under (R2.6b).
 	unbound bool
 	ticket  string
+	// elevations lists the elevations instead of the credentials (R2.9c).
+	elevations bool
+	// file is the note's file; "" reads the note from stdin. note is the
+	// text read, before any connection.
+	file string
+	note string
 }
 
 func runBreakGlass(ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer) int {
-	return runBreakGlassWith(ctx, args, lookup, stdout, stderr, pgxpool.New, time.Now)
+	return runBreakGlassWithInput(ctx, args, lookup, os.Stdin, stdout, stderr, pgxpool.New, time.Now)
+}
+
+// runBreakGlassWith is the test seam: no standard input.
+func runBreakGlassWith(
+	ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer,
+	connect oidcRelinkConnect, now func() time.Time,
+) int {
+	return runBreakGlassWithInput(ctx, args, lookup, strings.NewReader(""), stdout, stderr, connect, now)
 }
 
 func breakGlassUsage(w io.Writer) {
@@ -130,8 +159,9 @@ func breakGlassUsage(w io.Writer) {
   elitea-main %[1]s end --all
   elitea-main %[1]s issue --user USER [--level admin|super_admin] [--label TEXT] [--split] [--expires WHEN] [--ticket ID]
   elitea-main %[1]s issue --unbound --ticket ID --label TEXT [--level admin|super_admin] [--split] [--expires WHEN]
-  elitea-main %[1]s list
+  elitea-main %[1]s list [--elevations]
   elitea-main %[1]s revoke ID [ID...]
+  elitea-main %[1]s note ID [--file PATH] < note.txt
 end: ID is an elevation id. Ends the elevation with the end reason operator.
 issue: creates a sealed credential bound to USER (an id or an e-mail address)
   and prints it once; only its digest is stored. --level defaults to admin.
@@ -140,8 +170,14 @@ issue: creates a sealed credential bound to USER (an id or an e-mail address)
   --unbound binds it to the reserved account break-glass@centry.user instead
   of a person, and needs --ticket and --label (the custodian).
 list: every sealed credential and its state; never a secret.
+  --elevations lists the newest elevations, their ids and states instead;
+  never a reason text.
 revoke: ID is a sealed credential id; the row is kept.
-Every command records a security audit event. Reads DATABASE_URL. Exit codes:
+note: ID is an elevation id. Attaches the note read from stdin (or --file) to
+  its record, in any state, without changing the state. The acknowledgement
+  of an elevation nobody could review is the console's, not this command's.
+Every command but list --elevations records a security audit event. Reads
+DATABASE_URL. Exit codes:
 0 done, 1 failed (nothing changed), 2 invalid invocation, 3 refused (nothing
 changed).
 `, breakGlassCommand)
@@ -175,6 +211,8 @@ type breakGlassFlags struct {
 	all                                 *bool
 	user, level, label, expires, ticket *string
 	split, unbound                      *bool
+	elevations                          *bool
+	file                                *string
 	// idKind names what a positional value is; "" for a sub-command that
 	// takes none.
 	idKind string
@@ -197,8 +235,12 @@ func newBreakGlassFlags(sub string, flags *flag.FlagSet) (breakGlassFlags, bool)
 			"bind the credential to the reserved account "+adminaccess.ReservedBreakGlassEmail+" instead of a person")
 		f.ticket = flags.String("ticket", "", "the change or incident ticket the credential is issued under")
 	case breakGlassList:
+		f.elevations = flags.Bool("elevations", false, "list the elevations and their states instead of the credentials")
 	case breakGlassRevoke:
 		f.idKind = "a sealed credential id"
+	case breakGlassNote:
+		f.file = flags.String("file", "", "read the note from this file instead of stdin")
+		f.idKind = "an elevation id"
 	default:
 		return breakGlassFlags{}, false
 	}
@@ -256,9 +298,60 @@ func parseBreakGlassArgs(args []string, stderr io.Writer, now time.Time) (breakG
 			req.ids = append(req.ids, id)
 		}
 	}
+	if f.elevations != nil {
+		req.elevations = *f.elevations
+	}
+	if req.sub == breakGlassNote {
+		if len(req.ids) != 1 {
+			_, _ = fmt.Fprintln(stderr, "note takes exactly one elevation ID")
+			return breakGlassRequest{}, false
+		}
+		req.file = strings.TrimSpace(*f.file)
+	}
 	if req.sub == breakGlassIssue {
 		return parseBreakGlassIssue(req, f, stderr, now)
 	}
+	return req, true
+}
+
+// breakGlassNoteLimit bounds what is read for a note: more than the longest
+// note in bytes, so a longer one is refused by its length, not cut.
+const breakGlassNoteLimit = 4 * adminaccess.MaxReviewNoteLength
+
+// readBreakGlassNote reads the note of a `note` from its file or stdin and
+// checks it, before any connection. It returns ok=false after it has printed
+// the reason. The text comes from a file or stdin, never an argument, so it
+// lands in no shell history and no process list.
+func readBreakGlassNote(req breakGlassRequest, stdin io.Reader, stderr io.Writer) (breakGlassRequest, bool) {
+	source := "stdin"
+	input := stdin
+	if req.file != "" {
+		file, err := os.Open(req.file)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "note: --file: %v\n", err)
+			return breakGlassRequest{}, false
+		}
+		defer func() { _ = file.Close() }()
+		source, input = req.file, file
+	}
+	raw, err := io.ReadAll(io.LimitReader(input, breakGlassNoteLimit+1))
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "note: read %s: %v\n", source, err)
+		return breakGlassRequest{}, false
+	}
+	text := strings.TrimSpace(string(raw))
+	switch {
+	case !utf8.ValidString(text):
+		_, _ = fmt.Fprintf(stderr, "note: %s is not UTF-8 text\n", source)
+		return breakGlassRequest{}, false
+	case text == "":
+		_, _ = fmt.Fprintf(stderr, "note: the note read from %s is empty; write it on stdin or pass --file\n", source)
+		return breakGlassRequest{}, false
+	case len(raw) > breakGlassNoteLimit || utf8.RuneCountInString(text) > adminaccess.MaxReviewNoteLength:
+		_, _ = fmt.Fprintf(stderr, "note: the note is longer than %d characters\n", adminaccess.MaxReviewNoteLength)
+		return breakGlassRequest{}, false
+	}
+	req.note = text
 	return req, true
 }
 
@@ -345,14 +438,19 @@ func parseSealedExpiry(value string, now time.Time) (time.Duration, error) {
 	return lifetime, nil
 }
 
-func runBreakGlassWith(
-	ctx context.Context, args []string, lookup func(string) (string, bool), stdout, stderr io.Writer,
+func runBreakGlassWithInput(
+	ctx context.Context, args []string, lookup func(string) (string, bool), stdin io.Reader, stdout, stderr io.Writer,
 	connect oidcRelinkConnect, now func() time.Time,
 ) int {
 	at := now().UTC()
 	req, ok := parseBreakGlassArgs(args, stderr, at)
 	if !ok {
 		return breakGlassExitUsage
+	}
+	if req.sub == breakGlassNote {
+		if req, ok = readBreakGlassNote(req, stdin, stderr); !ok {
+			return breakGlassExitUsage
+		}
 	}
 	dsn, _ := lookup("DATABASE_URL")
 	if strings.TrimSpace(dsn) == "" {
@@ -385,7 +483,13 @@ func runBreakGlassWith(
 		case breakGlassIssue:
 			lines, err = breakGlassIssueTx(ctx, tx, appender, req, at)
 		case breakGlassList:
-			lines, err = breakGlassListTx(ctx, tx, appender, at)
+			if req.elevations {
+				lines, err = breakGlassListElevationsTx(ctx, tx, at)
+			} else {
+				lines, err = breakGlassListTx(ctx, tx, appender, at)
+			}
+		case breakGlassNote:
+			lines, err = breakGlassNoteTx(ctx, tx, appender, req, at)
 		case breakGlassRevoke:
 			lines, err = breakGlassRevokeTx(ctx, tx, appender, req.ids, at)
 		default:

@@ -83,6 +83,7 @@ func init() {
 		"/api/v2/admin/access/elevations/{elevationID}/deny",
 		"/api/v2/admin/access/elevations/{elevationID}/review",
 		"/api/v2/admin/access/reverts/{itemID}/handled",
+		"/api/v2/admin/access/elevations/{elevationID}/acknowledge",
 	} {
 		invisibleChecks[adminsurface.InvisibleKey(
 			adminsurface.Route{Method: http.MethodPost, Pattern: pattern},

@@ -48,6 +48,12 @@ export const ModeRoleAssignResult = zod
     id: zod
       .string()
       .describe("The composite id of the assignment that now exists."),
+    provisional: zod
+      .boolean()
+      .optional()
+      .describe(
+        "ADR-0059 R2.12a: true when the role was given under the caller's elevation. It is provisional: in effect while that elevation is active, not in this listing, standing only once the elevation's review confirms it.\n",
+      ),
   })
   .describe("NOTE(W2): internal/api/v2/admin/modes.go:222-225.\n");
 

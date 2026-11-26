@@ -85,6 +85,7 @@ import type {
   DelegationReview,
   DelegationScanResult,
   Elevation,
+  ElevationAcknowledged,
   ElevationList,
   ElevationRevertHandled,
   ElevationRevertList,
@@ -134,6 +135,7 @@ import type {
   UserListResponse,
   UserProjectPermissionsResult,
   UserProjectRoleMap,
+  UserRolesUpdateResult,
   WorkerEgressHostsResponse,
 } from "../model";
 
@@ -250,6 +252,24 @@ export const getUserListResponseMock = (
     ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
   })),
   total: faker.number.int(),
+  provisional: faker.helpers.arrayElement([
+    Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      email: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      roles: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+      elevation_id: faker.string.uuid(),
+      granted_by: faker.number.int(),
+      provisional: faker.datatype.boolean(),
+    })),
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -278,13 +298,15 @@ export const getUserCreateResponseMock = (): UserInviteResult[] =>
       ] as const),
       undefined,
     ]),
+    provisional: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
   }));
 
-export const getUserUpdateResponseMock = (
-  overrideResponse: Partial<Extract<MessageResponse, object>> = {},
-): MessageResponse => ({
-  msg: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  ...overrideResponse,
+export const getUserUpdateResponseMock = (): UserRolesUpdateResult => ({
+  msg: "roles updated",
+  provisional: false,
 });
 
 export const getUserDeleteResponseMock = (
@@ -1100,6 +1122,20 @@ export const getGetElevationReviewResponseMock = (): ElevationReview => ({
     ],
   },
   reverts: [],
+  provisional_grants: [
+    {
+      id: "0193a1c4-9b2e-7d01-8c11-4a5e6f7a8b9c",
+      kind: "role",
+      person: { id: 15, name: "Pat Partner", email: "pat@example.com" },
+      granted_by: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+      role: "admin",
+      project_id: null,
+      project_role: null,
+      granted_at: "2026-11-25T10:20:00Z",
+      confirmed_at: null,
+      confirmed_by: null,
+    },
+  ],
 });
 
 export const getReviewElevationResponseMock = (): ElevationReview => ({
@@ -1137,7 +1173,29 @@ export const getReviewElevationResponseMock = (): ElevationReview => ({
   reviewer_changes: [],
   changes: { total: 0, rows: [] },
   reverts: [],
+  provisional_grants: [
+    {
+      id: "0193a1c4-9b2e-7d01-8c11-4a5e6f7a8b9c",
+      kind: "role",
+      person: { id: 15, name: "Pat Partner", email: "pat@example.com" },
+      granted_by: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+      role: "admin",
+      project_id: null,
+      project_role: null,
+      granted_at: "2026-11-25T10:20:00Z",
+      confirmed_at: "2026-11-25T12:00:00Z",
+      confirmed_by: { id: 14, name: "Sam Auditor", email: "sam@example.com" },
+    },
+  ],
 });
+
+export const getAcknowledgeElevationResponseMock =
+  (): ElevationAcknowledged => ({
+    elevation_id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+    note_id: "0193a1c5-1d2e-7f30-9a41-5b6c7d8e9f01",
+    state: "unreviewed_no_reviewer",
+    acknowledged: true,
+  });
 
 export const getListElevationRevertsResponseMock = (): ElevationRevertList => ({
   total: 1,
@@ -1193,6 +1251,7 @@ export const getListUserModeRolesResponseMock = (
 export const getAssignUserModeRoleResponseMock = (): ModeRoleAssignResult => ({
   ok: true,
   id: "11:administration:llm_manager",
+  provisional: false,
 });
 
 export const getRemoveUserModeRoleResponseMock = (
@@ -1245,6 +1304,10 @@ export const getBulkInviteMembersResponseMock = (
       "failed",
     ] as const),
     msg: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    provisional: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
   })),
   ...overrideResponse,
 });
@@ -5135,10 +5198,10 @@ export const getUserCreateMockHandler = (
 
 export const getUserUpdateMockHandler = (
   overrideResponse?:
-    | MessageResponse
+    | UserRolesUpdateResult
     | ((
         info: Parameters<Parameters<typeof http.put>[1]>[0],
-      ) => Promise<MessageResponse> | MessageResponse),
+      ) => Promise<UserRolesUpdateResult> | UserRolesUpdateResult),
   options?: RequestHandlerOptions,
 ) => {
   return http.put(
@@ -5698,6 +5761,32 @@ export const getReviewElevationMockHandler = (
             ? await overrideResponse(info)
             : overrideResponse
           : getReviewElevationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getAcknowledgeElevationMockHandler = (
+  overrideResponse?:
+    | ElevationAcknowledged
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ElevationAcknowledged> | ElevationAcknowledged),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/elevations/:elevationID/acknowledge",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getAcknowledgeElevationResponseMock(),
         { status: 200 },
       );
     },
@@ -8571,6 +8660,7 @@ export const getAdminMock = () => [
   getDenyElevationRequestMockHandler(),
   getGetElevationReviewMockHandler(),
   getReviewElevationMockHandler(),
+  getAcknowledgeElevationMockHandler(),
   getListElevationRevertsMockHandler(),
   getMarkElevationRevertHandledMockHandler(),
   getListUserModeRolesMockHandler(),

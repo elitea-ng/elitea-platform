@@ -2191,6 +2191,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"PATCH /api/v2/scim/v2/Groups/{id}",
 		"PATCH /api/v2/scim/v2/Users/{id}",
 		"POST /api/v2/admin/access/elevations",
+		"POST /api/v2/admin/access/elevations/{elevationID}/acknowledge",
 		"POST /api/v2/admin/access/elevations/{elevationID}/approve",
 		"POST /api/v2/admin/access/elevations/{elevationID}/deny",
 		"POST /api/v2/admin/access/elevations/{elevationID}/review",

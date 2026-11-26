@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { Elevation } from "./elevation.zod";
 import { ElevationPerson } from "./elevationPerson.zod";
+import { ElevationProvisionalGrant } from "./elevationProvisionalGrant.zod";
 import { ElevationRevert } from "./elevationRevert.zod";
 import { ElevationReviewAttestation } from "./elevationReviewAttestation.zod";
 import { ElevationReviewChanges } from "./elevationReviewChanges.zod";
@@ -61,6 +62,11 @@ export const ElevationReview = zod
     reviewer_changes: zod.array(ElevationReviewerChange),
     changes: ElevationReviewChanges,
     reverts: zod.array(ElevationRevert),
+    provisional_grants: zod
+      .array(ElevationProvisionalGrant)
+      .describe(
+        "The roles and memberships the holder gave to someone else under the elevation (ADR-0059 R2.12), oldest first; confirm them with `confirm_grant_ids`.\n",
+      ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/adminaccess/reviews.go:219-227 (reviewView).\n",

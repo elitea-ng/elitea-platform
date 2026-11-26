@@ -65,6 +65,12 @@ export const UserInviteResult = zod
       .describe(
         "The machine-readable half of `msg`. The legacy runtime carried these four cases only in free English prose, so the reference SPA could not tell them apart and showed one toast for a whole batch. `status` keeps its two original values, so this field is additive: an old client reads the response exactly as before.\n",
       ),
+    provisional: zod
+      .boolean()
+      .optional()
+      .describe(
+        "ADR-0059 R2.12b: true when the membership was given under the caller's elevation. It is provisional: in effect while that elevation is active, not a member row, standing only once the elevation's review confirms it.\n",
+      ),
   })
   .describe(
     "One element of the per-address array the legacy runtime's invite returns. The response carries one of these per requested address, and the whole response is 400 when any of them failed. A 400 therefore still means that the `ok` rows landed — each address is written in its own transaction, and one bad address does not roll back the others.\n",

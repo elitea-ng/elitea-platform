@@ -3062,6 +3062,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Review: central(adminaccess.AccessBreakglassReview),
 					Manage: central(adminaccess.AccessBreakglassManage),
 				})
+				// The acknowledgement of an elevation nobody independent
+				// could review (ADR-0059 R2.9c): a standing global
+				// administrator; the action row's `deny` keeps an elevation
+				// from supplying the permission. A store that writes no
+				// acknowledgement leaves the route answering 503.
+				acknowledgeStore, _ := reviewStore.(v2adminconsole.AcknowledgeStore)
+				v2adminconsole.NewAcknowledgeHandler(acknowledgeStore).
+					Register(r, central(adminaccess.SuperAdminPermission))
 				// The access posture (ADR-0059 R2.14a): what is wrong with the
 				// roles and tokens, and what is only worth knowing, behind the
 				// gate of the other Access reads. A scoped token that holds
