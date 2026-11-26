@@ -33,7 +33,8 @@ describe('audit event schema page', () => {
     assert.ok(PAGE_TEXT.includes('target.release_id'), 'the reference page does not mention target.release_id');
   });
 
-  it('documents the chain.checkpoint event', () => {
+  it('names delivery_seq and the checkpoint event', () => {
+    assert.ok(PAGE_TEXT.includes('delivery_seq'), 'the reference page does not mention delivery_seq');
     assert.ok(PAGE_TEXT.includes('chain.checkpoint'), 'the reference page does not document chain.checkpoint');
   });
 });

@@ -2,9 +2,12 @@ package exporttest
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -62,19 +65,22 @@ func fixedKeys(keys ...SigningKey) func() ([]auditexport.SigningKey, error) {
 func TestWebhookReceiverVerifiesWithBothKeys(t *testing.T) {
 	rcv := NewWebhookReceiver(t, testKey1, testKey2)
 	defer func() { _ = rcv.Stop(t) }()
-	sink := newWebhookSink(t, rcv.URL(), testKey2)
-	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
-	if err := sink.Send(context.Background(), events); err != nil {
-		t.Fatalf("send: %v", err)
+	// Key 1 signs: the receiver must accept.
+	sink1 := newWebhookSink(t, rcv.URL(), testKey1)
+	if err := sink1.Send(context.Background(), []auditexport.Event{testEvent("event-1")}); err != nil {
+		t.Fatalf("send with key 1: %v", err)
 	}
-	for _, e := range events {
-		if rcv.Delivered(e.EventID) != 1 {
-			t.Fatalf("event %s delivered %d times, want 1", e.EventID, rcv.Delivered(e.EventID))
-		}
+	// Key 2 signs: the same receiver must accept too.
+	sink2 := newWebhookSink(t, rcv.URL(), testKey2)
+	if err := sink2.Send(context.Background(), []auditexport.Event{testEvent("event-2")}); err != nil {
+		t.Fatalf("send with key 2: %v", err)
 	}
-	// The receiver saw the batch ids.
-	if len(rcv.BatchIDs()) != 1 {
-		t.Fatalf("batch ids = %v", rcv.BatchIDs())
+	if rcv.Delivered("event-1") != 1 || rcv.Delivered("event-2") != 1 {
+		t.Fatalf("received: %v", rcv.Received())
+	}
+	// The receiver saw both batch ids.
+	if len(rcv.BatchIDs()) != 2 {
+		t.Fatalf("batch ids = %v, want 2 (one per key)", rcv.BatchIDs())
 	}
 }
 
@@ -103,19 +109,42 @@ func TestWebhookReceiverRefusesBadSignature(t *testing.T) {
 }
 
 func TestWebhookReceiverStatusSwitch(t *testing.T) {
-	rcv := NewWebhookReceiver(t, testKey2)
-	defer func() { _ = rcv.Stop(t) }()
-	sink := newWebhookSink(t, rcv.URL(), testKey2)
-	rcv.SetStatus(http.StatusServiceUnavailable, http.StatusTooManyRequests)
-	events := []auditexport.Event{testEvent("event-a")}
-	// The sink retries transient failures; the received set stays complete.
-	for i := 0; i < 3; i++ {
-		if err := sink.Send(context.Background(), events); err != nil {
-			t.Fatalf("pass %d: %v", i, err)
-		}
+	// Transient codes (401, 429, 500) make the sink retry; the received set
+	// stays complete across the switch.
+	for _, code := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			rcv := NewWebhookReceiver(t, testKey2)
+			defer func() { _ = rcv.Stop(t) }()
+			sink := newWebhookSink(t, rcv.URL(), testKey2)
+			rcv.SetStatus(code)
+			events := []auditexport.Event{testEvent("event-a")}
+			for i := 0; i < 3; i++ {
+				if err := sink.Send(context.Background(), events); err != nil {
+					t.Fatalf("pass %d: %v", i, err)
+				}
+			}
+			if rcv.Delivered("event-a") != 3 {
+				t.Fatalf("event-a delivered %d times, want 3 (status %d)", rcv.Delivered("event-a"), code)
+			}
+		})
 	}
-	if rcv.Delivered("event-a") != 3 {
-		t.Fatalf("event-a delivered %d times, want 3", rcv.Delivered("event-a"))
+	// A 400 is a content refusal: the pipeline splits and dead-letters.
+	{
+		rcv := NewWebhookReceiver(t, testKey2)
+		defer func() { _ = rcv.Stop(t) }()
+		sink := newWebhookSink(t, rcv.URL(), testKey2)
+		rcv.Refusals()["event-b"] = http.StatusBadRequest
+		events := []auditexport.Event{testEvent("event-a"), testEvent("event-b")}
+		err := sink.Send(context.Background(), events)
+		if err == nil {
+			t.Fatal("a content refusal must return an error")
+		}
+		if rcv.Delivered("event-a") != 1 {
+			t.Fatalf("event-a delivered %d times, want 1", rcv.Delivered("event-a"))
+		}
+		if rcv.Delivered("event-b") != 0 {
+			t.Fatalf("event-b delivered %d times, want 0", rcv.Delivered("event-b"))
+		}
 	}
 }
 
@@ -144,6 +173,27 @@ func TestWebhookReceiverKillAndRestore(t *testing.T) {
 	}
 }
 
+func TestOTLPReceiverKillAndRestore(t *testing.T) {
+	rcv := NewOTLPReceiver(t)
+	sink := newOTLPSink(t, rcv.URL())
+	events := []auditexport.Event{testEvent("event-1"), testEvent("event-2")}
+	if err := sink.Send(context.Background(), events); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
+	_ = rcv.Stop(t)
+	rcv.Restart(t)
+	sink2 := newOTLPSink(t, rcv.URL())
+	if err := sink2.Send(context.Background(), []auditexport.Event{testEvent("event-3")}); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
+	got := rcv.Received()
+	for _, id := range []string{"event-1", "event-2", "event-3"} {
+		if got[id] != 1 {
+			t.Fatalf("event %s delivered %d times, want 1 (all: %v)", id, got[id], got)
+		}
+	}
+}
+
 func TestOTLPReceiverDecodes(t *testing.T) {
 	rcv := NewOTLPReceiver(t)
 	defer func() { _ = rcv.Stop(t) }()
@@ -164,6 +214,18 @@ func TestOTLPReceiverDecodes(t *testing.T) {
 	}
 	if all[0].Body == "" {
 		t.Fatal("the event body is empty")
+	}
+	// The attributes are the flat fields a SIEM filters on: the event id,
+	// the source and the event type of the first event, asserted from the
+	// decoded record rather than from the fixture.
+	if all[0].Attributes["elitea.audit.event_id"] != "event-1" {
+		t.Fatalf("event_id attribute = %q, want event-1", all[0].Attributes["elitea.audit.event_id"])
+	}
+	if all[0].Attributes["elitea.audit.source"] != "admin_audit" {
+		t.Fatalf("source attribute = %q, want admin_audit", all[0].Attributes["elitea.audit.source"])
+	}
+	if all[0].Attributes["elitea.audit.event_type"] != "api" {
+		t.Fatalf("event_type attribute = %q, want api", all[0].Attributes["elitea.audit.event_type"])
 	}
 }
 
@@ -197,4 +259,110 @@ func newOTLPSink(t *testing.T, endpoint string) *auditexport.OTLPSink {
 		t.Fatal(err)
 	}
 	return sink
+}
+
+func TestWebhookReceiverAllBodiesAndWaitForEvent(t *testing.T) {
+	rcv := NewWebhookReceiver(t, testKey2)
+	defer func() { _ = rcv.Stop(t) }()
+	sink := newWebhookSink(t, rcv.URL(), testKey2)
+	event := auditexport.Event{Schema: auditexport.SchemaVersion, EventID: "event-all", Time: "2026-11-25T09:30:00Z", Source: auditexport.SourceAdminAudit, EventType: "api", Tenant: auditexport.Tenant{ProjectID: nil}, Actor: auditexport.Actor{Type: "user", ID: "1"}, Action: "GET /x", Outcome: auditexport.OutcomeSuccess, Details: map[string]any{}}
+	if err := sink.Send(context.Background(), []auditexport.Event{event}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := rcv.WaitForEvent("event-all", 5*time.Second); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if len(rcv.AllBodies()) != 1 {
+		t.Fatalf("all bodies = %d, want 1", len(rcv.AllBodies()))
+	}
+	_ = rcv.ChainSequences(t)
+	_ = rcv.DeliverySeqs(t)
+}
+
+func TestOTLPReceiverAllBodiesAndWaitForEvent(t *testing.T) {
+	rcv := NewOTLPReceiver(t)
+	defer func() { _ = rcv.Stop(t) }()
+	sink := newOTLPSink(t, rcv.URL())
+	event := auditexport.Event{Schema: auditexport.SchemaVersion, EventID: "event-all", Time: "2026-11-25T09:30:00Z", Source: auditexport.SourceAdminAudit, EventType: "api", Tenant: auditexport.Tenant{ProjectID: nil}, Actor: auditexport.Actor{Type: "user", ID: "1"}, Action: "GET /x", Outcome: auditexport.OutcomeSuccess, Details: map[string]any{}}
+	if err := sink.Send(context.Background(), []auditexport.Event{event}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := rcv.WaitForEvent("event-all", 5*time.Second); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if len(rcv.AllBodies()) != 1 {
+		t.Fatalf("all bodies = %d, want 1", len(rcv.AllBodies()))
+	}
+	_ = rcv.ChainSequences(t)
+	_ = rcv.DeliverySeqs(t)
+}
+
+func TestWebhookReceiverDeadLettersOnBadContent(t *testing.T) {
+	// A receiver that answers 400 for the event is a content refusal: the
+	// pipeline retries a bounded number of times, then records the dead letter.
+	rcv := NewWebhookReceiver(t, testKey2)
+	defer func() { _ = rcv.Stop(t) }()
+	store := &memoryDeadLetters{}
+	sink := auditexport.Wrap(newWebhookSink(t, rcv.URL(), testKey2), auditexport.PipelineConfig{
+		DeadLetters: store,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	rcv.Refusals()["event-bad"] = http.StatusBadRequest
+	events := []auditexport.Event{testEvent("event-ok"), testEvent("event-bad")}
+	// Send repeatedly: the receiver refuses event-bad every pass, so the
+	// pipeline counts it, then dead-letters it once the default bound is met.
+	// The pass that dead-letters returns nil: the dead-lettered event is
+	// settled and the rest is delivered.
+	var err error
+	for i := 0; i < auditexport.DefaultMaxPermanentAttempts+2; i++ {
+		err = sink.Send(context.Background(), events)
+		if len(store.records) > 0 {
+			break
+		}
+	}
+	if len(store.records) == 0 {
+		t.Fatal("the event must be dead-lettered after the default bound")
+	}
+	// The first err of the loop must be a content refusal, proving the
+	// receiver refused the event on its own.
+	if err != nil {
+		var permanent *auditexport.PermanentError
+		if !errors.As(err, &permanent) {
+			t.Fatalf("err = %v, want a permanent error", err)
+		}
+		if len(permanent.Events) != 1 || permanent.Events[0].EventID != "event-bad" {
+			t.Fatalf("permanent events = %v, want only event-bad", permanent.Events)
+		}
+	}
+	// The default attempt bound is DefaultMaxPermanentAttempts: the event is
+	// refused repeatedly, and the dead letter is recorded once the pipeline
+	// has counted enough passes.
+	if len(store.records) != 1 {
+		t.Fatalf("dead letters = %v, want 1", store.records)
+	}
+	if store.records[0].Events[0].EventID != "event-bad" {
+		t.Fatalf("dead letter events = %v, want event-bad", store.records[0].Events)
+	}
+	if store.records[0].Attempts != auditexport.DefaultMaxPermanentAttempts {
+		t.Fatalf("dead-letter attempts = %d, want %d", store.records[0].Attempts, auditexport.DefaultMaxPermanentAttempts)
+	}
+}
+
+// memoryDeadLetters is an in-memory auditexport.DeadLetterStore.
+type memoryDeadLetters struct {
+	records []deadLetterRecord
+}
+
+type deadLetterRecord struct {
+	Events   []auditexport.Event
+	Attempts int
+}
+
+func (m *memoryDeadLetters) RecordDeadLetters(_ context.Context, _ string, events []auditexport.Event, _ string, attempts int) error {
+	if len(events) > 0 {
+		cp := make([]auditexport.Event, len(events))
+		copy(cp, events)
+		m.records = append(m.records, deadLetterRecord{Events: cp, Attempts: attempts})
+	}
+	return nil
 }
