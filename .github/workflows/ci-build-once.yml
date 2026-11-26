@@ -428,7 +428,9 @@ jobs:
           docker pull -q "$image" > /dev/null
           writable="$(docker run --rm --network none --entrypoint sh "$image" -c '
             id -u
-            find $(echo "$PATH" | tr ":" " ") -maxdepth 0 -perm -o+w 2>/dev/null
+            # -L: /bin and /sbin are links to usr/ (merged /usr), and a link's
+            # own mode is always 0777; the directory it names is what counts.
+            find -L $(echo "$PATH" | tr ":" " ") -maxdepth 0 -perm -o+w 2>/dev/null
             for d in $(echo "$PATH" | tr ":" " "); do
               if [ -d "$d" ] && [ -w "$d" ]; then echo "$d"; fi
             done
