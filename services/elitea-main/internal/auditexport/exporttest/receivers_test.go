@@ -219,3 +219,39 @@ func newOTLPSink(t *testing.T, endpoint string) *auditexport.OTLPSink {
 	}
 	return sink
 }
+
+func TestWebhookReceiverAllBodiesAndWaitForEvent(t *testing.T) {
+	rcv := NewWebhookReceiver(t, testKey2)
+	defer func() { _ = rcv.Stop(t) }()
+	sink := newWebhookSink(t, rcv.URL(), testKey2)
+	event := auditexport.Event{Schema: auditexport.SchemaVersion, EventID: "event-all", Time: "2026-11-25T09:30:00Z", Source: auditexport.SourceAdminAudit, EventType: "api", Tenant: auditexport.Tenant{ProjectID: nil}, Actor: auditexport.Actor{Type: "user", ID: "1"}, Action: "GET /x", Outcome: auditexport.OutcomeSuccess, Details: map[string]any{}}
+	if err := sink.Send(context.Background(), []auditexport.Event{event}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := rcv.WaitForEvent("event-all", 5*time.Second); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if len(rcv.AllBodies()) != 1 {
+		t.Fatalf("all bodies = %d, want 1", len(rcv.AllBodies()))
+	}
+	_ = rcv.ChainSequences(t)
+	_ = rcv.DeliverySeqs(t)
+}
+
+func TestOTLPReceiverAllBodiesAndWaitForEvent(t *testing.T) {
+	rcv := NewOTLPReceiver(t)
+	defer func() { _ = rcv.Stop(t) }()
+	sink := newOTLPSink(t, rcv.URL())
+	event := auditexport.Event{Schema: auditexport.SchemaVersion, EventID: "event-all", Time: "2026-11-25T09:30:00Z", Source: auditexport.SourceAdminAudit, EventType: "api", Tenant: auditexport.Tenant{ProjectID: nil}, Actor: auditexport.Actor{Type: "user", ID: "1"}, Action: "GET /x", Outcome: auditexport.OutcomeSuccess, Details: map[string]any{}}
+	if err := sink.Send(context.Background(), []auditexport.Event{event}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := rcv.WaitForEvent("event-all", 5*time.Second); err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if len(rcv.AllBodies()) != 1 {
+		t.Fatalf("all bodies = %d, want 1", len(rcv.AllBodies()))
+	}
+	_ = rcv.ChainSequences(t)
+	_ = rcv.DeliverySeqs(t)
+}
