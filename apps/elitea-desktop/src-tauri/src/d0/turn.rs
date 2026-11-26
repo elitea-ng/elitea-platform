@@ -1356,6 +1356,21 @@ pub fn volatile_context(
     )
 }
 
+/// The turn's team (#3080): the other agents of the thread and how to work
+/// with them, for a local agent that has `hand_floor`; empty otherwise.
+fn team_note(request: &TurnRequest, started: &super::api::LocalTurnStarted) -> String {
+    let question = started.message_question(
+        request
+            .floor_turn
+            .as_ref()
+            .map(|turn| turn.question_id.as_str()),
+    );
+    match (started.participant_id, question) {
+        (Some(from), Some(_)) => super::hand_floor::team_note(from, started.thread_agents()),
+        _ => String::new(),
+    }
+}
+
 /// The cloud's memory splice (`appendCurrentInstructionsMemories`,
 /// services/elitea-main/internal/application/agentexecution/memories.go):
 /// authored text, one blank line, the recall.
@@ -3563,6 +3578,23 @@ impl AgentHost {
             handed_off = true;
             chain_step = Some(ChainStep::Handoff);
         }
+        // The agent handed the floor (#3080): the hand-offs answer next, so
+        // an unattended run's chain ends here instead of continuing. A turn
+        // that failed ends `failed` as before, and starts none of them.
+        let handed_floor = request.unattended.is_some()
+            && failure.is_none()
+            && !handed_off
+            && started
+                .message_question(
+                    request
+                        .floor_turn
+                        .as_ref()
+                        .map(|turn| turn.question_id.as_str()),
+                )
+                .is_some_and(|question| self.exchanges.has_hands(question));
+        if handed_floor {
+            chain_step = Some(ChainStep::End(ChainOutcome::Completed));
+        }
         let continuation = match (&chain_step, &request.unattended) {
             (Some(ChainStep::Continue), Some(turn)) => Some(unattended::continuation(
                 &request,
@@ -3580,6 +3612,8 @@ impl AgentHost {
         // check first (ADR-0045 decision 11), unless the brief is known to
         // have nothing to check.
         let goal_step = match (&chain_step, &request.unattended) {
+            // Handed on: the goal is the handed agents' to reach.
+            _ if handed_floor => None,
             (Some(ChainStep::End(ChainOutcome::Completed)), Some(turn)) => turn
                 .goal()
                 .filter(|goal| goal.may_check())
@@ -3782,7 +3816,7 @@ impl AgentHost {
         if floor_next.is_none()
             && failure.is_none()
             && !handed_off
-            && request.unattended.is_none()
+            && (request.unattended.is_none() || handed_floor)
             && let Some(question) = &message
         {
             floor_next = self.exchanges.next_hand(FloorNext::template(
@@ -5193,7 +5227,8 @@ impl AgentHost {
                 invoked,
                 &started.memory_recall.text,
                 &nonce,
-            ) + &hook_context,
+            ) + &hook_context
+                + &team_note(request, started),
             anchor: question.anchor(),
         });
         // ModelTransport: /llm with the native token and the execution id.
@@ -5604,10 +5639,11 @@ impl AgentHost {
             false,
         )) as Arc<dyn Toolset>);
         // `hand_floor` (ADR-0061 decision 3d, #3064): a local agent of a
-        // thread with another agent may hand it the floor; an unattended
-        // run's chain continues instead.
-        if request.unattended.is_none()
-            && let Some(from) = started.participant_id
+        // thread with another agent may hand it the floor. An unattended
+        // run's turn too (#3080: "Run to completion" is on by default, so a
+        // team's lead never had it): a hand-off ends the chain and the
+        // handed agents answer instead (`handed_floor` below).
+        if let Some(from) = started.participant_id
             && let Some(question) = started.message_question(
                 request
                     .floor_turn

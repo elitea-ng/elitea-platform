@@ -619,10 +619,14 @@ pub fn compaction_idle_hold(
         .idle_hold(&workspace_id, &conversation_id, hold)?)
 }
 
+/// The turn starts by their client `submit_id` (#3077, `src/submit_once.rs`).
+pub type TurnSubmits = crate::submit_once::SubmitOnce<TurnStarted, IpcError>;
+
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list
 #[tauri::command(rename_all = "snake_case")]
 pub async fn agent_turn_start(
     state: State<'_, LocalState>,
+    submits: State<'_, TurnSubmits>,
     workspace_id: String,
     project_id: i64,
     conversation_id: Value,
@@ -641,6 +645,7 @@ pub async fn agent_turn_start(
     addressed_to: Option<Vec<i64>>,
     participant_id: Option<i64>,
     cloud_agent: Option<bool>,
+    submit_id: Option<String>,
 ) -> Result<TurnStarted, IpcError> {
     let bypass = bypass_approvals.unwrap_or(false);
     if bypass && plan_mode {
@@ -682,42 +687,49 @@ pub async fn agent_turn_start(
         ));
     }
     let (skills, project_skills) = crate::d0::skills::split(skills.unwrap_or_default());
-    Ok(state
-        .agents
-        .start(TurnRequest {
-            workspace_id,
-            project_id,
-            conversation_id,
-            application_id,
-            version_id,
-            prompt,
-            plan_mode,
-            bypass,
-            mentions: mentions.unwrap_or_default(),
-            skills,
-            project_skills,
-            compact: compact.unwrap_or(false),
-            model: model
-                .map(|model| {
-                    ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
-                        .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
-                })
-                .transpose()?,
-            command,
-            images: images.unwrap_or_default(),
-            unattended,
-            // The agents the person addressed (ADR-0050 decision 7f): Main
-            // routes the message, the host runs the agents one at a time.
-            addressed_to: addressed_to.unwrap_or_default(),
-            // The participant the UI meant (#1927): the host answers on it
-            // when it is one of this agent version.
-            participant_id: participant_id.filter(|id| *id > 0),
-            floor_turn: None,
-            // The agent's participant runs in the cloud: only the
-            // conversation's text goes to it.
-            cloud: cloud_agent.unwrap_or(false),
+    let scope = workspace_id.clone();
+    let request = TurnRequest {
+        workspace_id,
+        project_id,
+        conversation_id,
+        application_id,
+        version_id,
+        prompt,
+        plan_mode,
+        bypass,
+        mentions: mentions.unwrap_or_default(),
+        skills,
+        project_skills,
+        compact: compact.unwrap_or(false),
+        model: model
+            .map(|model| {
+                ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
+                    .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+            })
+            .transpose()?,
+        command,
+        images: images.unwrap_or_default(),
+        unattended,
+        // The agents the person addressed (ADR-0050 decision 7f): Main
+        // routes the message, the host runs the agents one at a time.
+        addressed_to: addressed_to.unwrap_or_default(),
+        // The participant the UI meant (#1927): the host answers on it
+        // when it is one of this agent version.
+        participant_id: participant_id.filter(|id| *id > 0),
+        floor_turn: None,
+        // The agent's participant runs in the cloud: only the
+        // conversation's text goes to it.
+        cloud: cloud_agent.unwrap_or(false),
+    };
+    // One start per message (#3077): a second call with the message's
+    // `submit_id` (Enter pressed again, a double IPC call) gets the first
+    // call's turn instead of starting another.
+    let agents = Arc::clone(&state.agents);
+    submits
+        .run(&scope, submit_id.as_deref(), || async move {
+            agents.start(request).await.map_err(IpcError::from)
         })
-        .await?)
+        .await
 }
 
 /// Attach the image file at `path` (absolute: a dropped file's path from

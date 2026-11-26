@@ -7,26 +7,30 @@ A **Local work** thread in the Elitea desktop app can hold more than one agent. 
 
 ## Add an agent to a thread
 
+A thread's agents are managed in the **Participants** tab of the inspector, the right sidebar, as a chat's participants are in its side panel.
+
 <Steps>
-1. Open a thread in **Local work**. The composer's agent chip shows the thread's agent, for example **Coder · base**.
-2. Open the agent chip. Under **Also in this thread**, choose **Add an agent ›** or **Add a cloud agent ›**, then the agent.
-3. The chip lists the agents you added: **Coder · base + Reviewer**. Choose the agent again in the same menu to take it out before you send.
+1. Open a thread in **Local work**. The composer's agent chip shows the thread's agent, for example **Coder · base**. Select the chip to open the **Participants** tab.
+2. Choose **Add an agent** or **Add a cloud agent**, type part of the agent's name to find it, and pick it.
+3. The agent is listed in the tab, marked **Local** or **Cloud**, under **Join with your next message** in a thread that already has messages. **Remove from thread** takes it out before you send.
 </Steps>
 
 The agents join the conversation when you send your next message. An agent joins on its first version. An agent of a saved team that names no version answers on its agent's default version.
+
+In a new thread, the tab lists the composer's agent first, with its version and **Change** to pick another agent. Before the first message, **Make lead** on another agent makes it the agent that answers a message that names no agent; the composer's agent then becomes one of the others.
 
 ## Run a thread as a team
 
 A saved [team](/how-tos/agents-pipelines/agent-teams) can run a Local work thread.
 
 <Steps>
-1. Open a new thread in **Local work** and open the agent chip.
-2. Choose **Run as a team ›**, then the team. The chip shows the team and its agents, for example **Review crew: Reviewer · base + Coder**.
+1. Open a new thread in **Local work** and select the agent chip to open the **Participants** tab.
+2. Choose **Add team**, then the team. The tab lists the team's agents, the lead first and marked **Lead**, and **Team: Review crew** above them. The chip shows the team and who your message goes to, for example **Review crew · To: Reviewer (lead)**.
 3. Send your first message. The thread is created with every agent of the team, each on the version the team saved, and the team's lead. This is what **Start conversation** on the **Teams** tab writes for a chat.
 </Steps>
 
 - The composer's agent is the team's lead, or its first agent when the team has no lead.
-- Every agent of the team runs **on this computer**, with the folder and its tools. To have one run in the cloud, add it with **Add a cloud agent ›** instead.
+- Every agent of the team runs **on this computer**, with the folder and its tools. To have one run in the cloud, add it with **Add a cloud agent** instead.
 - An agent that a team member calls as a tool (a nested agent) runs in the cloud and does **not** get the folder. The composer says so above the message box while the team runs the thread.
 - A team is listed but cannot be picked when one of its agents is not an agent of the folder's project (**Agents of another project**) or is a pipeline (**Has a pipeline**): a pipeline never runs on this computer.
 - Picking a team always starts a new thread. You cannot add a team to a thread that already exists; a chat cannot take a team afterwards either. You can still add single agents to it.
@@ -35,10 +39,11 @@ When you send the thread to the cloud, the cloud continues on the agent the floo
 
 ## The Participants tab
 
-The thread's agents have a tab of their own in the inspector, **Participants**. With two or more agents it is the first tab; with one agent it comes after the others.
+The thread's agents have a tab of their own in the inspector, **Participants**. With two or more agents it is the first tab; with one agent it comes after the others. The composer's agent chip opens it. The chip says who the message you are typing goes to: **To: Reviewer (lead)**, or the agent the message names first, for example **To: Coder** for "@Coder fix the test". With one agent it shows the agent and its version.
 
 Each agent row shows:
 
+- its version;
 - where the agent runs: **Local** (on this computer, with the folder) or **Cloud** (the conversation's text only);
 - **Lead** on the thread's lead;
 - what the agent is doing right now, for example **Thinking**, **Running cargo** or **Waiting for you** (see [See who is working](#see-who-is-working)).
@@ -52,6 +57,8 @@ The row's **⋮** menu has:
 | **Run here** / **Run in the cloud** | Moves the agent to this computer or to the cloud for its next answer. Not available while the thread is in the cloud. |
 | **Edit agent** | Opens the agent. |
 | **Remove from thread** | Takes the agent out of the thread. Removing the lead also clears the lead. |
+
+Below the rows, **Add an agent**, **Add a cloud agent** and **Add team** add more agents (see [Add an agent to a thread](#add-an-agent-to-a-thread)). While the thread is in the cloud they are not available.
 
 A Local work thread holds agents only: the tab shows no toolkit, pipeline or MCP sections.
 
@@ -97,6 +104,8 @@ While the agents of a message answer one after another, a strip above the compos
 
 An agent of a team thread can hand the work to other agents of the thread: the lead asks the reviewer to check its change, the reviewer hands back with a question. The thread shows the hand-off as a side message from the agent that handed it, with both avatars, and the agent it was handed to answers next. The strip above the composer adds it under **Next**, so **Stop exchange** and **×** stop a hand-off as they stop any other agent.
 
+Each agent on this computer is told which agents are already in the thread and where each runs, so it hands off or consults instead of asking you to add or address them. With **Run to completion** on (the default), a hand-off ends the run: the agents it was handed to answer next, each once, without the run's grant, and the run's goal check is left to them.
+
 A hand-off is another agent's message, not yours. The agent that receives it reads it as information from a colleague, never as your instruction, and every command it asks for is checked as usual. In a trusted folder, a handed turn always asks before a command, even when the thread runs with **Bypass approvals**: another agent cannot widen what a command may do.
 
 The same limits as in a cloud conversation stop an exchange that goes in circles: at most 6 hand-offs and consults for one of your messages, 2 turns of one agent and 3 exchanges between the same two agents. When a limit is reached the thread says **Loop guard stopped the exchange**, no further hand-off runs, and the agent answers you itself.
@@ -128,7 +137,7 @@ Screen readers announce each change politely, at most once a second for each age
 
 ## Viewing a team thread on the web and mobile
 
-A Local work thread opened in the web app or the mobile app is read-only. Its participants list shows each agent with **Local** or **Cloud** and **Lead** on the lead, without the menu: you change the lead or where an agent runs in the desktop app. The cloud agents' live labels show there as in a chat.
+A Local work thread opened in the web app or the mobile app is read-only. Its participants list shows the same agents with **Local** or **Cloud** and **Lead** on the lead, without the menu or the add buttons: you add agents, change the lead or where an agent runs in the desktop app. The web list also shows each agent's version. The cloud agents' live labels show there as in a chat.
 
 An answer whose turn ran a command outside the sandbox is marked **Ran outside the sandbox**. The marker appears only on answers the desktop app reported that way.
 

@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "ایجنٹ نہیں بنا: {{message}}",
   "workspace.noAgents.createCoding": "مقامی کوڈنگ ایجنٹ بنائیں",
   "workspace.agent": "ایجنٹ",
-  "workspace.version": "ورژن",
   "workspace.composer.files": "اس فولڈر میں فائلیں",
   "workspace.composer.commands": "کمانڈز",
   "workspace.composer.placeholder": "ایجنٹ کو کیا کرنا چاہیے؟ فائل شامل کرنے کے لیے @، کمانڈز اور مہارتوں کے لیے / ٹائپ کریں",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "بغیر منظوری",
   "workspace.mode.planHint": "منصوبہ بندی، کوئی تبدیلی نہیں",
   "workspace.usage.context": "سیاق: ونڈو کا {{percent}}٪ استعمال ہوا",
-  "workspace.team.menu": "ٹیم کے طور پر چلائیں",
   "workspace.team.note": "ٹیم کے ایجنٹس اور لیڈ کے ساتھ نیا تھریڈ شروع کرتا ہے۔ سب اس کمپیوٹر پر اس فولڈر کے ساتھ کام کرتے ہیں۔",
   "workspace.team.otherProject": "کسی دوسرے پروجیکٹ کے ایجنٹس",
   "workspace.team.pipeline": "اس میں پائپ لائن ہے",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(کلاؤڈ میں، فولڈر کے بغیر)",
   "workspace.consult.failed": "کوئی جواب نہیں: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "کلاؤڈ · کوئی فولڈر نہیں",
-  "workspace.team.folderNoticeLocal": "ہر رکن اس کمپیوٹر پر اس فولڈر اور اس کے ٹولز کے ساتھ کام کرتا ہے، تب بھی جب کوئی دوسرا رکن اس سے پوچھے یا اسے باری سونپے۔ صرف وہ ایجنٹ جو اس کمپیوٹر پر نہیں چل سکتا، فولڈر کے بغیر کلاؤڈ میں چلتا ہے۔"
+  "workspace.team.folderNoticeLocal": "ہر رکن اس کمپیوٹر پر اس فولڈر اور اس کے ٹولز کے ساتھ کام کرتا ہے، تب بھی جب کوئی دوسرا رکن اس سے پوچھے یا اسے باری سونپے۔ صرف وہ ایجنٹ جو اس کمپیوٹر پر نہیں چل سکتا، فولڈر کے بغیر کلاؤڈ میں چلتا ہے۔",
+  "workspace.floor.addLocal": "ایجنٹ شامل کریں",
+  "workspace.floor.addCloud": "کلاؤڈ ایجنٹ شامل کریں",
+  "workspace.floor.cloudNote": "کلاؤڈ ایجنٹ کو صرف گفتگو کا متن ملتا ہے، یہ فولڈر کبھی نہیں۔",
+  "workspace.participants.change": "تبدیل کریں",
+  "workspace.participants.joining": "آپ کے اگلے پیغام کے ساتھ شامل ہوں گے",
+  "workspace.participants.noMatch": "کوئی نتیجہ نہیں",
+  "workspace.participants.open": "اس تھریڈ کے ایجنٹ",
+  "workspace.participants.search": "تلاش",
+  "workspace.participants.team": "ٹیم: {{name}}",
+  "workspace.team.add": "ٹیم شامل کریں"
 }

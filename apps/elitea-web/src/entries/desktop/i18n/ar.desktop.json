@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "لم يُنشأ الوكيل: {{message}}",
   "workspace.noAgents.createCoding": "إنشاء وكيل Local coding",
   "workspace.agent": "الوكيل",
-  "workspace.version": "الإصدار",
   "workspace.composer.files": "الملفات في هذا المجلد",
   "workspace.composer.commands": "الأوامر",
   "workspace.composer.placeholder": "ماذا يجب أن يفعل الوكيل؟ اكتب @ لإضافة ملف، و/ للأوامر والمهارات",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "بلا موافقات",
   "workspace.mode.planHint": "يخطط ولا يغيّر شيئًا",
   "workspace.usage.context": "السياق: {{percent}}٪ من النافذة مستخدم",
-  "workspace.team.menu": "التشغيل كفريق",
   "workspace.team.note": "يبدأ سلسلة جديدة مع وكلاء الفريق وقائده. يعملون جميعًا على هذا الكمبيوتر بهذا المجلد.",
   "workspace.team.otherProject": "وكلاء من مشروع آخر",
   "workspace.team.pipeline": "يحتوي على خط معالجة",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(في السحابة، بدون المجلد)",
   "workspace.consult.failed": "لا يوجد رد: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "السحابة · بدون مجلد",
-  "workspace.team.folderNoticeLocal": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته، وكذلك عندما يسأله عضو آخر أو يسلّمه الدور. فقط الوكيل الذي لا يمكنه العمل على هذا الكمبيوتر يعمل في السحابة بدون المجلد."
+  "workspace.team.folderNoticeLocal": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته، وكذلك عندما يسأله عضو آخر أو يسلّمه الدور. فقط الوكيل الذي لا يمكنه العمل على هذا الكمبيوتر يعمل في السحابة بدون المجلد.",
+  "workspace.floor.addLocal": "إضافة وكيل",
+  "workspace.floor.addCloud": "إضافة وكيل سحابي",
+  "workspace.floor.cloudNote": "يحصل الوكيل السحابي على نص المحادثة فقط، وليس هذا المجلد أبدًا.",
+  "workspace.participants.change": "تغيير",
+  "workspace.participants.joining": "ينضمون مع رسالتك التالية",
+  "workspace.participants.noMatch": "لا توجد نتائج",
+  "workspace.participants.open": "وكلاء هذه السلسلة",
+  "workspace.participants.search": "بحث",
+  "workspace.participants.team": "الفريق: {{name}}",
+  "workspace.team.add": "إضافة فريق"
 }

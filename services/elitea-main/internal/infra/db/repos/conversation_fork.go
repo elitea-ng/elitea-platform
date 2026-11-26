@@ -496,6 +496,9 @@ func forkMeta(src forkSource, point *forkPoint, options map[string]any) ([]byte,
 		}
 	}
 	delete(meta, "attachments")
+	// The source's create id is the source's (#3077): a create with it must
+	// replay the source, never the fork.
+	delete(meta, conversations.ClientRequestIDMetaKey)
 	marker := map[string]any{"conversation_id": src.id, "conversation_uuid": src.uuid}
 	if point != nil {
 		marker["message_id"] = point.id

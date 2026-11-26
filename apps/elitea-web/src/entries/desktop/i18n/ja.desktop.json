@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "エージェントは作成されませんでした: {{message}}",
   "workspace.noAgents.createCoding": "ローカルコーディングエージェントを作成",
   "workspace.agent": "エージェント",
-  "workspace.version": "バージョン",
   "workspace.composer.files": "このフォルダー内のファイル",
   "workspace.composer.commands": "コマンド",
   "workspace.composer.placeholder": "エージェントに何をさせますか? @ でファイル、/ でコマンドとスキルを追加できます",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "承認なし",
   "workspace.mode.planHint": "計画のみ、変更しない",
   "workspace.usage.context": "コンテキスト：ウィンドウの {{percent}}% を使用",
-  "workspace.team.menu": "チームで実行",
   "workspace.team.note": "チームのエージェントとリードで新しいスレッドを開始します。全員がこのコンピューターでこのフォルダーを使って作業します。",
   "workspace.team.otherProject": "別のプロジェクトのエージェント",
   "workspace.team.pipeline": "パイプラインを含む",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(クラウドで、フォルダーなし)",
   "workspace.consult.failed": "返答なし: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "クラウド · フォルダーなし",
-  "workspace.team.folderNoticeLocal": "すべてのメンバーは、別のメンバーから質問されたり発言を引き継いだりした場合も含め、このコンピューターでこのフォルダーとそのツールを使って作業します。このコンピューターで実行できないエージェントだけが、フォルダーなしでクラウドで実行されます。"
+  "workspace.team.folderNoticeLocal": "すべてのメンバーは、別のメンバーから質問されたり発言を引き継いだりした場合も含め、このコンピューターでこのフォルダーとそのツールを使って作業します。このコンピューターで実行できないエージェントだけが、フォルダーなしでクラウドで実行されます。",
+  "workspace.floor.addLocal": "エージェントを追加",
+  "workspace.floor.addCloud": "クラウドエージェントを追加",
+  "workspace.floor.cloudNote": "クラウドエージェントが受け取るのは会話のテキストだけで、このフォルダーは受け取りません。",
+  "workspace.participants.change": "変更",
+  "workspace.participants.joining": "次のメッセージで参加します",
+  "workspace.participants.noMatch": "一致するものがありません",
+  "workspace.participants.open": "このスレッドのエージェント",
+  "workspace.participants.search": "検索",
+  "workspace.participants.team": "チーム: {{name}}",
+  "workspace.team.add": "チームを追加"
 }

@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "De agent is niet gemaakt: {{message}}",
   "workspace.noAgents.createCoding": "Een lokale codeeragent maken",
   "workspace.agent": "Agent",
-  "workspace.version": "Versie",
   "workspace.composer.files": "Bestanden in deze map",
   "workspace.composer.commands": "Opdrachten",
   "workspace.composer.placeholder": "Wat moet de agent doen? Typ @ om een bestand toe te voegen, / voor opdrachten en skills",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Geen goedkeuringen",
   "workspace.mode.planHint": "Plant, wijzigt niets",
   "workspace.usage.context": "Context: {{percent}}% van het venster gebruikt",
-  "workspace.team.menu": "Uitvoeren als team",
   "workspace.team.note": "Start een nieuwe thread met de agents en de lead van het team. Ze werken allemaal op deze computer met deze map.",
   "workspace.team.otherProject": "Agents van een ander project",
   "workspace.team.pipeline": "Bevat een pipeline",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(in de cloud, zonder de map)",
   "workspace.consult.failed": "Geen antwoord: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Cloud · geen map",
-  "workspace.team.folderNoticeLocal": "Elk lid werkt op deze computer met deze map en de bijbehorende tools, ook wanneer een ander lid het iets vraagt of het woord geeft. Alleen een agent die niet op deze computer kan draaien, draait in de cloud zonder de map."
+  "workspace.team.folderNoticeLocal": "Elk lid werkt op deze computer met deze map en de bijbehorende tools, ook wanneer een ander lid het iets vraagt of het woord geeft. Alleen een agent die niet op deze computer kan draaien, draait in de cloud zonder de map.",
+  "workspace.floor.addLocal": "Agent toevoegen",
+  "workspace.floor.addCloud": "Cloudagent toevoegen",
+  "workspace.floor.cloudNote": "Een cloudagent krijgt alleen de tekst van het gesprek, nooit deze map.",
+  "workspace.participants.change": "Wijzigen",
+  "workspace.participants.joining": "Doen mee met je volgende bericht",
+  "workspace.participants.noMatch": "Geen resultaat",
+  "workspace.participants.open": "Agents van deze thread",
+  "workspace.participants.search": "Zoeken",
+  "workspace.participants.team": "Team: {{name}}",
+  "workspace.team.add": "Team toevoegen"
 }

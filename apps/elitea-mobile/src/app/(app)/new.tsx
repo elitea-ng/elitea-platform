@@ -47,6 +47,9 @@ export default function NewConversationScreen() {
   const agents = useAgents(projectId, search);
   const models = useModels(projectId);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // A start in flight, decided synchronously (#3077): `busyKey` changes a render later, so a second tap in that window
+  // would create a second conversation.
+  const starting = useRef(false);
   // Suggested agents (client contract 1.3) on the empty screen: no search typed.
   const workspace = useWorkspaceInfo();
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
@@ -56,7 +59,8 @@ export default function NewConversationScreen() {
   const [error, setError] = useState<string | null>(null);
 
   const start = async (choice: Choice) => {
-    if (projectId === null || busyKey !== null) return;
+    if (projectId === null || busyKey !== null || starting.current) return;
+    starting.current = true;
     setBusyKey(choice.key);
     setError(null);
     try {
@@ -74,6 +78,7 @@ export default function NewConversationScreen() {
           ? 'This agent has no published version yet.'
           : "Couldn't start the conversation. Try again.",
       );
+      starting.current = false;
       setBusyKey(null);
     }
   };

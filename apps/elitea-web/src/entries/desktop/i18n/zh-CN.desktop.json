@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "未创建智能体：{{message}}",
   "workspace.noAgents.createCoding": "创建本地编码智能体",
   "workspace.agent": "智能体",
-  "workspace.version": "版本",
   "workspace.composer.files": "此文件夹中的文件",
   "workspace.composer.commands": "命令",
   "workspace.composer.placeholder": "要让智能体做什么？输入 @ 添加文件，输入 / 使用命令和技能",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "无需批准",
   "workspace.mode.planHint": "仅规划，不做更改",
   "workspace.usage.context": "上下文：已用窗口的 {{percent}}%",
-  "workspace.team.menu": "以团队运行",
   "workspace.team.note": "用团队的智能体和负责人开始一个新线程。它们都在这台电脑上使用此文件夹工作。",
   "workspace.team.otherProject": "其他项目的智能体",
   "workspace.team.pipeline": "包含流水线",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "（在云端，无文件夹）",
   "workspace.consult.failed": "没有回复：{{reason}}",
   "workspace.subAgent.cloudNoFolder": "云端 · 无文件夹",
-  "workspace.team.folderNoticeLocal": "每个成员都在这台计算机上使用此文件夹及其工具工作，包括其他成员向其提问或把发言权交给它时。只有无法在这台计算机上运行的智能体才会在云端运行，且没有该文件夹。"
+  "workspace.team.folderNoticeLocal": "每个成员都在这台计算机上使用此文件夹及其工具工作，包括其他成员向其提问或把发言权交给它时。只有无法在这台计算机上运行的智能体才会在云端运行，且没有该文件夹。",
+  "workspace.floor.addLocal": "添加代理",
+  "workspace.floor.addCloud": "添加云端代理",
+  "workspace.floor.cloudNote": "云端代理只获得对话文本，永远不会获得此文件夹。",
+  "workspace.participants.change": "更改",
+  "workspace.participants.joining": "随你的下一条消息加入",
+  "workspace.participants.noMatch": "无匹配项",
+  "workspace.participants.open": "此线程的代理",
+  "workspace.participants.search": "搜索",
+  "workspace.participants.team": "团队：{{name}}",
+  "workspace.team.add": "添加团队"
 }

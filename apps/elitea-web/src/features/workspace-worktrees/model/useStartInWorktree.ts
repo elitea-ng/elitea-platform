@@ -17,14 +17,18 @@ const WORKSPACES_KEY = ['workspace', 'list'] as const;
 
 export class StartInWorktreeError extends Error {}
 
-export function useStartInWorktree(provided?: WorktreeIpc): ((workspaceId: string) => Promise<WorktreeEntry>) | undefined {
+/**
+ * `threadUuid`: the new thread's id, the host's idempotency key (#3077): a second call with the same id answers the
+ * worktree the first made. A fresh one when not given.
+ */
+export function useStartInWorktree(provided?: WorktreeIpc): ((workspaceId: string, threadUuid?: string) => Promise<WorktreeEntry>) | undefined {
   const queryClient = useQueryClient();
   const ipc = provided ?? tauriWorktreeIpc();
   if (ipc === undefined) return undefined;
-  return async (workspaceId) => {
+  return async (workspaceId, threadUuid = crypto.randomUUID()) => {
     let entry: WorktreeEntry;
     try {
-      entry = await ipc.create(workspaceId, crypto.randomUUID());
+      entry = await ipc.create(workspaceId, threadUuid);
     } catch (failure) {
       throw new StartInWorktreeError(describeWorktreeError(failure));
     }

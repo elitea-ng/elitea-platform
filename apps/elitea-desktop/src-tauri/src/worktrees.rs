@@ -185,6 +185,9 @@ pub struct WorktreeHost {
     pub(crate) agents: Arc<AgentHost>,
     workspaces: Arc<WorkspaceStore>,
     preflights: Mutex<HashMap<String, Held>>,
+    /// One `create` at a time (#3077): a repeat for a thread UUID waits for
+    /// the first and answers the worktree it made.
+    creating: tokio::sync::Mutex<()>,
 }
 
 fn now_unix() -> u64 {
@@ -311,6 +314,7 @@ impl WorktreeHost {
             agents,
             workspaces,
             preflights: Mutex::new(HashMap::new()),
+            creating: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -410,10 +414,17 @@ impl WorktreeHost {
     /// at `base` (`head`, the default, or `checkpoint:<n>`: the folder as
     /// its checkpoint `n` holds it, #1234).
     ///
+    /// Idempotent on `thread_uuid` (#3077): the new thread's id is the
+    /// composer's submit id, so a second call for a thread that already has
+    /// its worktree (Enter pressed again, a double IPC call, a retry after a
+    /// lost answer) answers that worktree and makes no other. Calls are
+    /// serialised, so two at once cannot both make one.
+    ///
     /// # Errors
     ///
     /// `workspace_unknown`, `invalid_request`, `not_a_git_repository`,
-    /// `unsafe_repository`, `worktree_exists`, `worktree_failed`, `storage`.
+    /// `unsafe_repository`, `worktree_exists` (the branch or directory is in
+    /// the way), `worktree_failed`, `storage`.
     pub async fn create(
         self: &Arc<Self>,
         parent_id: &str,
@@ -438,15 +449,24 @@ impl WorktreeHost {
                 )
             }
         };
-        if self
+        let _creating = self.creating.lock().await;
+        if let Some(made) = self
             .read(&parent.id)?
-            .iter()
-            .any(|r| r.thread_uuid == thread)
+            .into_iter()
+            .find(|r| r.thread_uuid == thread)
         {
-            return Err(TurnError::new(
-                "worktree_exists",
-                "This thread already has a task worktree.",
-            ));
+            return Ok(Entry {
+                missing: !Path::new(&made.path).is_dir(),
+                workspace_id: made.workspace_id,
+                thread_uuid: made.thread_uuid,
+                path: made.path,
+                branch: made.branch,
+                base_sha: made.base_sha,
+                created_at: made.created_at,
+                ahead: 0,
+                dirty: 0,
+                last_turn_at: None,
+            });
         }
         let this = Arc::clone(self);
         blocking(move || {
