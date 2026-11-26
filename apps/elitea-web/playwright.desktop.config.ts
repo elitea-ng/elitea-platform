@@ -20,6 +20,13 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: process.env['CI'] !== undefined,
   retries: 0,
+  // The harness is Vite's dev server, which compiles a module the first time a
+  // page asks for it. The first step that reaches a new code path (a team's
+  // first send adds its agents, writes the lead, then starts) can outlast the
+  // 5 s default on a runner busy with every worker's first load: a run once
+  // failed with the page still showing "Starting…". 15 s still fails a real
+  // stall quickly.
+  expect: { timeout: 15_000 },
   reporter: process.env['CI'] === undefined ? 'list' : [['list'], ['html', { open: 'never', outputFolder: 'playwright-report-desktop' }]],
   outputDir: 'test-results-desktop',
   use: {
