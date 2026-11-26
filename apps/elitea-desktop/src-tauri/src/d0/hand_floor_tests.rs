@@ -564,21 +564,37 @@ async fn the_persons_skip_of_a_queued_hand_off_tells_main_and_starts_none() {
 
 /// The exchange's wall clock (decision 3f): past 30 minutes the queued
 /// hand-off does not start, Main hears it skipped, and the UI a system line.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_exchange_past_its_wall_clock_starts_no_hand_off() {
-    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), |n| match n {
+    // The handing turn's last model call waits until the test has aged the
+    // exchange, so the turn cannot reach its commit (and start the
+    // hand-off) first.
+    let held = Arc::new(AtomicBool::new(true));
+    let gate = held.clone();
+    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), move |n| match n {
         0 => hand_to(&[99]),
-        _ => say("Handed."),
+        _ => {
+            // block_in_place: a plain blocking wait here starves the
+            // runtime's timer. Bounded at 30 s, a hung test's limit.
+            tokio::task::block_in_place(|| {
+                for _ in 0..3_000 {
+                    if !gate.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+            say("Handed.")
+        }
     });
     let server = serve(platform(thread)).await;
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
-    // The model's first call ages the exchange (the turn has begun it).
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
-    let handed = event_of(&h, "floor_handed", Some(&started.turn_id)).await;
-    let _ = handed;
+    event_of(&h, "floor_handed", Some(&started.turn_id)).await;
     let question = starts(&h)[0]["question_id"].as_str().unwrap().to_owned();
     h.host
         .age_exchange(&question, super::super::exchange::EXCHANGE_WALL_CLOCK);
+    held.store(false, Ordering::SeqCst);
     until_done_of(&h, &started.turn_id).await;
     let stopped = event_of(&h, "floor_stopped", Some(&started.turn_id)).await;
     assert_eq!(stopped.payload["code"], "exchange_timed_out");
