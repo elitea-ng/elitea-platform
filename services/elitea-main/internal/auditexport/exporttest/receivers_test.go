@@ -114,8 +114,8 @@ func TestWebhookReceiverStatusSwitch(t *testing.T) {
 			t.Fatalf("pass %d: %v", i, err)
 		}
 	}
-	if rcv.Delivered("event-a") < 1 {
-		t.Fatalf("event-a delivered %d times", rcv.Delivered("event-a"))
+	if rcv.Delivered("event-a") != 3 {
+		t.Fatalf("event-a delivered %d times, want 3", rcv.Delivered("event-a"))
 	}
 }
 
@@ -139,6 +139,9 @@ func TestWebhookReceiverKillAndRestore(t *testing.T) {
 			t.Fatalf("event %s delivered %d times, want 1", id, rcv.Delivered(id))
 		}
 	}
+	if len(rcv.BatchIDs()) != 2 {
+		t.Fatalf("batch ids = %v, want 2", rcv.BatchIDs())
+	}
 }
 
 func TestOTLPReceiverDecodes(t *testing.T) {
@@ -152,7 +155,10 @@ func TestOTLPReceiverDecodes(t *testing.T) {
 	if rcv.Delivered("event-1") != 1 || rcv.Delivered("event-2") != 1 {
 		t.Fatalf("received: %v", rcv.Received())
 	}
-	all := rcv.AllEvents()
+	if rcv.Received()["event-1"] != 1 || rcv.Received()["event-2"] != 1 {
+		t.Fatalf("received set is not exactly the sent set: %v", rcv.Received())
+	}
+	all := rcv.AllEvents(t)
 	if len(all) != 2 {
 		t.Fatalf("decoded %d events, want 2", len(all))
 	}
@@ -169,6 +175,9 @@ func TestOTLPReceiverStatusSwitch(t *testing.T) {
 	err := sink.Send(context.Background(), []auditexport.Event{testEvent("event-a")})
 	if err == nil {
 		t.Fatal("an unavailable collector must return an error")
+	}
+	if len(rcv.Received()) != 0 {
+		t.Fatalf("received events after a 503: %v", rcv.Received())
 	}
 }
 

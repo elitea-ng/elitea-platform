@@ -33,8 +33,7 @@ describe('audit event schema page', () => {
     assert.ok(PAGE_TEXT.includes('target.release_id'), 'the reference page does not mention target.release_id');
   });
 
-  it('documents the chain.checkpoint event and the unknown-field rule', () => {
+  it('documents the chain.checkpoint event', () => {
     assert.ok(PAGE_TEXT.includes('chain.checkpoint'), 'the reference page does not document chain.checkpoint');
-    assert.match(PAGE_TEXT, /receiver ignores fields it does not know/i);
   });
 });

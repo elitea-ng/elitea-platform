@@ -85,39 +85,6 @@ func start(t *testing.T, h http.Handler) *server {
 	return s
 }
 
-// ServeHTTP is the shared request lifecycle: the down switch, the status
-// switch and the body read. It calls decode, which each receiver implements.
-func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Read the body before taking the lock: a slow client body must not block
-	// Delivered, Received and URL for every other caller.
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.down {
-		w.WriteHeader(http.StatusBadGateway)
-		return
-	}
-	if len(s.status) > 0 {
-		code := s.status[0]
-		s.status = s.status[1:]
-		if code != http.StatusOK {
-			w.WriteHeader(code)
-			return
-		}
-	}
-	s.bodies = append(s.bodies, body)
-	s.decode(w, r, body)
-}
-
-// decode is the part of ServeHTTP each receiver implements.
-func (s *server) decode(w http.ResponseWriter, r *http.Request, body []byte) {
-	w.WriteHeader(http.StatusOK)
-}
-
 // Stop closes the listener; the received set is kept.
 func (s *server) Stop(t *testing.T) error {
 	t.Helper()
@@ -137,12 +104,19 @@ func (s *server) Stop(t *testing.T) error {
 }
 
 // Restart brings the receiver back on a fresh loopback listener; the received
-// set is kept. The URL changes, so the caller reads the new URL.
+// set is kept. The URL changes, so the caller reads the new URL. A live server
+// is closed first so a restart without a prior Stop does not leak the listener.
 func (s *server) Restart(t *testing.T, h http.Handler) {
 	t.Helper()
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.server != nil && !s.down {
+		_ = s.server.Close()
+		if s.listener != nil {
+			_ = s.listener.Close()
+		}
+	}
 	s.down = false
-	s.mu.Unlock()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -574,7 +548,8 @@ func (o *OTLPReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
 				}
 				eventID := attrs["elitea.audit.event_id"]
 				if eventID == "" {
-					eventID = "unknown"
+					resp.WriteHeader(http.StatusBadRequest)
+					return
 				}
 				o.s.got[eventID]++
 			}
@@ -597,14 +572,15 @@ func (o *OTLPReceiver) Delivered(eventID string) int { return o.s.Delivered(even
 func (o *OTLPReceiver) AllBodies() [][]byte { return o.s.AllBodies() }
 
 // AllEvents returns every log record the receiver decoded, in order.
-func (o *OTLPReceiver) AllEvents() []Event {
+func (o *OTLPReceiver) AllEvents(t *testing.T) []Event {
+	t.Helper()
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
 	var out []Event
 	for _, body := range o.s.bodies {
 		req := &collogs.ExportLogsServiceRequest{}
 		if err := proto.Unmarshal(body, req); err != nil {
-			continue
+			t.Fatalf("decode OTLP body: %v", err)
 		}
 		for _, rl := range req.GetResourceLogs() {
 			for _, sl := range rl.GetScopeLogs() {
@@ -649,7 +625,7 @@ func (o *OTLPReceiver) AssertNoEvent(t *testing.T, window time.Duration) {
 // decoded, in the order it recorded them.
 func (o *OTLPReceiver) ChainSequences(t *testing.T) []int64 {
 	t.Helper()
-	ents := o.AllEvents()
+	ents := o.AllEvents(t)
 	bodies := make([]string, 0, len(ents))
 	for _, e := range ents {
 		bodies = append(bodies, e.Body)
@@ -661,7 +637,7 @@ func (o *OTLPReceiver) ChainSequences(t *testing.T) []int64 {
 // decoded, in the order it recorded them.
 func (o *OTLPReceiver) DeliverySeqs(t *testing.T) []int64 {
 	t.Helper()
-	ents := o.AllEvents()
+	ents := o.AllEvents(t)
 	bodies := make([]string, 0, len(ents))
 	for _, e := range ents {
 		bodies = append(bodies, e.Body)

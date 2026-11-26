@@ -229,30 +229,47 @@ func TestSignalCheckpointEventRule(t *testing.T) {
 
 func TestSignalEventTypeIsFreeForm(t *testing.T) {
 	// The event_type field is free-form; the signal.type pattern is what bounds
-	// the dotted name.
+	// the dotted name. An event_type with no signal type component at all
+	// validates, provided the signal object itself is well-formed.
 	schema := compileSchema(t)
 	v := loadSignalFixture(t, "security_signal_full.golden.json")
-	v["event_type"] = "security_signal.content.prompt_injection"
+	v["event_type"] = "custom.free_form_type"
 	if err := validate(t, schema, v); err != nil {
-		t.Fatalf("a checkpoint-like event_type was refused: %v", err)
+		t.Fatalf("a free-form event_type was refused: %v", err)
 	}
 }
 
 func TestSignalUnmappedSourcesRejectSignal(t *testing.T) {
 	// security_audit and run_step events must not carry the signal object.
 	schema := compileSchema(t)
-	v := map[string]any{
-		"schema": "elitea.audit.v1", "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000050",
-		"time": "2026-11-25T09:30:00Z", "source": "run_step", "event_type": "run_step.model_call",
-		"tenant": map[string]any{"project_id": 3},
-		"actor":  map[string]any{"type": "agent", "id": "agent-1"},
-		"action": "run", "outcome": "success",
-		"chain":   map[string]any{"partition": "run:run-1", "sequence": 1, "prev_hash": strings.Repeat("0", 64), "hash": strings.Repeat("1", 64)},
-		"signal":  map[string]any{"type": "access.authn_failed", "taxonomy_version": "1.0.0", "category": "access", "severity": "medium"},
-		"details": map[string]any{},
+	chain := map[string]any{"partition": "run:run-1", "sequence": 1, "prev_hash": strings.Repeat("0", 64), "hash": strings.Repeat("1", 64)}
+	cases := []struct {
+		name   string
+		source string
+		event  string
+	}{
+		{"run_step", "run_step", "run_step.model_call"},
+		{"security_audit", "security_audit", "ai.elitea.security.v1.decision"},
 	}
-	if err := validate(t, schema, v); err == nil {
-		t.Fatal("a run_step event carrying a signal object was accepted")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v := map[string]any{
+				"schema": "elitea.audit.v1", "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000050",
+				"time": "2026-11-25T09:30:00Z", "source": c.source, "event_type": c.event,
+				"tenant": map[string]any{"project_id": 3},
+				"actor":  map[string]any{"type": "agent", "id": "agent-1"},
+				"action": "run", "outcome": "success",
+				"chain":   chain,
+				"signal":  map[string]any{"type": "access.authn_failed", "taxonomy_version": "1.0.0", "category": "access", "severity": "medium"},
+				"details": map[string]any{"reasons": []string{}, "authorization_epoch": 1, "revocation_epoch": 1},
+			}
+			if c.source == "security_audit" {
+				v["ocsf"] = map[string]any{"class_uid": 3003, "category_uid": 3}
+			}
+			if err := validate(t, schema, v); err == nil {
+				t.Fatalf("a %s event carrying a signal object was accepted", c.source)
+			}
+		})
 	}
 }
 
@@ -280,4 +297,19 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+func TestSignalTypeCategoryConsistency(t *testing.T) {
+	// JSON Schema cannot express these invariants; the producer test checks
+	// them. The golden fixture is the only producer surface before E0.8a.
+	full := loadSignalFixture(t, "security_signal_full.golden.json")
+	signal := full["signal"].(map[string]any)
+	type_ := signal["type"].(string)
+	category := signal["category"].(string)
+	if !strings.HasPrefix(type_, category+".") {
+		t.Fatalf("signal.type %q does not start with category %q", type_, category)
+	}
+	if full["event_type"] != "security_signal."+type_ {
+		t.Fatalf("event_type %q is not security_signal.%s", full["event_type"], type_)
+	}
 }
