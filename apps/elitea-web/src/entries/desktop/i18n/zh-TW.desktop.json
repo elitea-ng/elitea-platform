@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "未建立代理：{{message}}",
   "workspace.noAgents.createCoding": "建立本地編碼代理",
   "workspace.agent": "代理",
-  "workspace.version": "版本",
   "workspace.composer.files": "此資料夾中的檔案",
   "workspace.composer.commands": "命令",
   "workspace.composer.placeholder": "要讓代理做什麼？輸入 @ 新增檔案，輸入 / 使用命令和技能",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "無需核准",
   "workspace.mode.planHint": "僅規劃，不做變更",
   "workspace.usage.context": "上下文：已使用視窗的 {{percent}}%",
-  "workspace.team.menu": "以團隊執行",
   "workspace.team.note": "用團隊的代理與負責人開始新的執行緒。它們都在這台電腦上使用此資料夾工作。",
   "workspace.team.otherProject": "其他專案的代理",
   "workspace.team.pipeline": "包含管線",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "（在雲端，無資料夾）",
   "workspace.consult.failed": "沒有回覆：{{reason}}",
   "workspace.subAgent.cloudNoFolder": "雲端 · 無資料夾",
-  "workspace.team.folderNoticeLocal": "每個成員都在這台電腦上使用此資料夾及其工具工作，包括其他成員向其提問或把發言權交給它時。只有無法在這台電腦上執行的代理程式才會在雲端執行，且沒有該資料夾。"
+  "workspace.team.folderNoticeLocal": "每個成員都在這台電腦上使用此資料夾及其工具工作，包括其他成員向其提問或把發言權交給它時。只有無法在這台電腦上執行的代理程式才會在雲端執行，且沒有該資料夾。",
+  "workspace.floor.addLocal": "新增代理",
+  "workspace.floor.addCloud": "新增雲端代理",
+  "workspace.floor.cloudNote": "雲端代理只會取得對話文字，絕不會取得此資料夾。",
+  "workspace.participants.change": "變更",
+  "workspace.participants.joining": "隨你的下一則訊息加入",
+  "workspace.participants.noMatch": "沒有相符項目",
+  "workspace.participants.open": "此討論串的代理",
+  "workspace.participants.search": "搜尋",
+  "workspace.participants.team": "團隊：{{name}}",
+  "workspace.team.add": "新增團隊"
 }

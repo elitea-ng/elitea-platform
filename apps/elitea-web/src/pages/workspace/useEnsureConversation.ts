@@ -140,6 +140,11 @@ export interface EnsureConversationInput extends ConversationAgent {
    */
   onCreated?: (conversationId: string) => void;
   prompt: string;
+  /**
+   * The message's client id (#3077): a conversation this call creates is created once per id (Main answers the one an
+   * earlier create with it made), so a duplicate send makes no second thread.
+   */
+  clientRequestId?: string;
   /** The workspace folder's display name, recorded on the conversation. */
   folderName: string;
   /** The thread's other agents: added on every send (get-or-create), so a companion added later joins too. */
@@ -185,6 +190,11 @@ export function useSignedInUserId(): string | number | undefined {
   return (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.id;
 }
 
+/** The create's `client_request_id`, only when the send has one. */
+function requestIdField(id: string | undefined): { client_request_id?: string } {
+  return id === undefined ? {} : { client_request_id: id };
+}
+
 export function useEnsureConversation(): (input: EnsureConversationInput) => Promise<EnsuredConversation> {
   const { mutateAsync: createConversation } = conversationApi.useCreate();
   const { mutateAsync: addParticipants } = useAddParticipantMutation();
@@ -205,6 +215,7 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
           is_private: true,
           source: LOCAL_WORK_SOURCE,
           meta: localWorkMeta(input.folderName),
+          ...requestIdField(input.clientRequestId),
         });
         id = String(conversation.id);
         input.onCreated?.(id);

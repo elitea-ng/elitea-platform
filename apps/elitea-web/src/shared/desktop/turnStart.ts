@@ -62,6 +62,11 @@ export interface TurnStartRequest {
   participant_id?: number | undefined;
   /** The answering agent is a cloud agent of the thread (participant `executor: cloud`): text only, never the workspace. */
   cloud_agent?: boolean | undefined;
+  /**
+   * The message's client id (#3077, a UUID kept until the message is sent): the host starts one turn per id in the
+   * workspace, so a second call with it (Enter pressed again, a double IPC call) answers the first call's turn.
+   */
+  submit_id?: string | undefined;
 }
 
 /** `agent_turn_start.images[]`: where the image came from, and its token. */

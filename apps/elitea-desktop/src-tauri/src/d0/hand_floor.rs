@@ -90,6 +90,40 @@ pub fn toolset(context: HandFloorContext, agents: &[FloorAgent]) -> Option<Arc<d
     )))
 }
 
+/// What a local agent's turn is told about its team (#3080), in the turn's
+/// tail: the other agents of the thread, and to hand off or consult rather
+/// than ask the person to add agents. Empty with no other agent.
+#[must_use]
+pub fn team_note(from: i64, agents: &[FloorAgent]) -> String {
+    let peers: Vec<String> = agents
+        .iter()
+        .filter(|agent| agent.participant_id != from && agent.participant_id > 0)
+        .map(|agent| {
+            let place = if agent.executor == super::api::EXECUTOR_CLOUD {
+                "cloud agent"
+            } else {
+                "local agent, on this computer with this folder"
+            };
+            format!(
+                "- {} ({place}), participant {}",
+                agent.name, agent.participant_id
+            )
+        })
+        .collect();
+    if peers.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n## Your team in this thread\n\
+         These agents are already in this thread with you:\n{}\n\
+         When one of them is better placed for part of the work, hand it the floor with `hand_floor` \
+         (it answers after your turn, with the message you give it), or, when you have a tool for it, ask it and \
+         go on with its answer: a local agent runs here, with this folder and its tools. Do not ask \
+         the person to add agents or to address them: they are in the thread.",
+        peers.join("\n")
+    )
+}
+
 struct HandFloorTool {
     description: String,
     peers: HashSet<i64>,

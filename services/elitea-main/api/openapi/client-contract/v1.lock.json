@@ -24452,6 +24452,10 @@
           "application/json": {
             "type": "object",
             "properties": {
+              "client_request_id": {
+                "type": "string",
+                "format": "uuid"
+              },
               "instructions": {
                 "type": "string"
               },

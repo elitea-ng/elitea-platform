@@ -3987,6 +3987,17 @@ components:
           type: string
           description: The conversation's origin (`chat` by default; `deepwiki` and similar for hidden ones).
         instructions: { type: string }
+        client_request_id:
+          type: string
+          format: uuid
+          description: >
+            Optional idempotency key (issue 3077): the sending message's
+            client id, a UUID generated once per message and sent again on
+            every retry. A create whose id already made a conversation of the
+            caller in this project answers that conversation (201, with its
+            participants) and makes no second one. Kept as
+            `meta.client_request_id`; a `meta.client_request_id` in the body
+            is ignored. A value that is not a UUID is a 400.
         meta:
           type: object
           additionalProperties: true

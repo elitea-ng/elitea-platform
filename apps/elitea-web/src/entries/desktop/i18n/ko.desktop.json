@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "에이전트가 만들어지지 않았습니다: {{message}}",
   "workspace.noAgents.createCoding": "로컬 코딩 에이전트 만들기",
   "workspace.agent": "에이전트",
-  "workspace.version": "버전",
   "workspace.composer.files": "이 폴더의 파일",
   "workspace.composer.commands": "명령",
   "workspace.composer.placeholder": "에이전트가 무엇을 해야 하나요? @로 파일, /로 명령과 스킬을 추가하세요",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "승인 없음",
   "workspace.mode.planHint": "계획만, 변경 없음",
   "workspace.usage.context": "컨텍스트: 창의 {{percent}}% 사용",
-  "workspace.team.menu": "팀으로 실행",
   "workspace.team.note": "팀의 에이전트와 리드로 새 스레드를 시작합니다. 모두 이 컴퓨터에서 이 폴더로 작업합니다.",
   "workspace.team.otherProject": "다른 프로젝트의 에이전트",
   "workspace.team.pipeline": "파이프라인 포함",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(클라우드에서, 폴더 없이)",
   "workspace.consult.failed": "응답 없음: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "클라우드 · 폴더 없음",
-  "workspace.team.folderNoticeLocal": "모든 멤버는 다른 멤버가 질문하거나 발언권을 넘겨줄 때도 이 컴퓨터에서 이 폴더와 해당 도구로 작업합니다. 이 컴퓨터에서 실행할 수 없는 에이전트만 폴더 없이 클라우드에서 실행됩니다."
+  "workspace.team.folderNoticeLocal": "모든 멤버는 다른 멤버가 질문하거나 발언권을 넘겨줄 때도 이 컴퓨터에서 이 폴더와 해당 도구로 작업합니다. 이 컴퓨터에서 실행할 수 없는 에이전트만 폴더 없이 클라우드에서 실행됩니다.",
+  "workspace.floor.addLocal": "에이전트 추가",
+  "workspace.floor.addCloud": "클라우드 에이전트 추가",
+  "workspace.floor.cloudNote": "클라우드 에이전트는 대화 텍스트만 받으며 이 폴더는 받지 않습니다.",
+  "workspace.participants.change": "변경",
+  "workspace.participants.joining": "다음 메시지와 함께 참여합니다",
+  "workspace.participants.noMatch": "일치 항목 없음",
+  "workspace.participants.open": "이 스레드의 에이전트",
+  "workspace.participants.search": "검색",
+  "workspace.participants.team": "팀: {{name}}",
+  "workspace.team.add": "팀 추가"
 }

@@ -98,7 +98,6 @@
   "workspace.noAgents.createFailed": "Agent nie został utworzony: {{message}}",
   "workspace.noAgents.createCoding": "Utwórz agenta Local coding",
   "workspace.agent": "Agent",
-  "workspace.version": "Wersja",
   "workspace.composer.files": "Pliki w tym folderze",
   "workspace.composer.commands": "Polecenia",
   "workspace.composer.placeholder": "Co ma zrobić agent? Wpisz @, aby dodać plik, / dla poleceń i umiejętności",
@@ -1020,7 +1019,6 @@
   "workspace.mode.bypassHint": "Bez zatwierdzeń",
   "workspace.mode.planHint": "Planuje, niczego nie zmienia",
   "workspace.usage.context": "Kontekst: użyto {{percent}}% okna",
-  "workspace.team.menu": "Uruchom jako zespół",
   "workspace.team.note": "Rozpoczyna nowy wątek z agentami i liderem zespołu. Wszyscy pracują na tym komputerze z tym folderem.",
   "workspace.team.otherProject": "Agenci innego projektu",
   "workspace.team.pipeline": "Zawiera potok",
@@ -1101,5 +1099,15 @@
   "workspace.consult.cloud": "(w chmurze, bez folderu)",
   "workspace.consult.failed": "Brak odpowiedzi: {{reason}}",
   "workspace.subAgent.cloudNoFolder": "Chmura · bez folderu",
-  "workspace.team.folderNoticeLocal": "Każdy członek pracuje na tym komputerze z tym folderem i jego narzędziami, także gdy inny członek go pyta lub przekazuje mu głos. Tylko agent, który nie może działać na tym komputerze, działa w chmurze bez folderu."
+  "workspace.team.folderNoticeLocal": "Każdy członek pracuje na tym komputerze z tym folderem i jego narzędziami, także gdy inny członek go pyta lub przekazuje mu głos. Tylko agent, który nie może działać na tym komputerze, działa w chmurze bez folderu.",
+  "workspace.floor.addLocal": "Dodaj agenta",
+  "workspace.floor.addCloud": "Dodaj agenta w chmurze",
+  "workspace.floor.cloudNote": "Agent w chmurze dostaje tylko tekst rozmowy, nigdy ten folder.",
+  "workspace.participants.change": "Zmień",
+  "workspace.participants.joining": "Dołączą z Twoją następną wiadomością",
+  "workspace.participants.noMatch": "Brak wyników",
+  "workspace.participants.open": "Agenci tego wątku",
+  "workspace.participants.search": "Szukaj",
+  "workspace.participants.team": "Zespół: {{name}}",
+  "workspace.team.add": "Dodaj zespół"
 }

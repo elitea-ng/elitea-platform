@@ -62,6 +62,7 @@ mod seed;
 mod sessions;
 mod settings;
 mod store;
+mod submit_once;
 mod tokens;
 mod trust;
 mod trust_commands;
@@ -166,6 +167,7 @@ pub fn run() {
         .manage(app_events::CommandQueue::default())
         .manage(notices::NoticeFilter::default())
         .manage(window::QuitGate::default())
+        .manage(local_commands::TurnSubmits::default())
         // A (re)loading page is not listening to app://command yet: hold
         // commands until it calls `app_ready`.
         .on_page_load(|webview, payload| {

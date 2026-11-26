@@ -3857,6 +3857,11 @@ export interface components {
         };
         /** @description NOTE(W2): read key by key from a free JSON body by internal/api/v2/conversations/handler.go:653 (`Create`). Unknown keys are ignored. */
         ConversationCreateRequest: {
+            /**
+             * Format: uuid
+             * @description Optional idempotency key (issue 3077): the sending message's client id, a UUID generated once per message and sent again on every retry. A create whose id already made a conversation of the caller in this project answers that conversation (201, with its participants) and makes no second one. Kept as `meta.client_request_id`; a `meta.client_request_id` in the body is ignored. A value that is not a UUID is a 400.
+             */
+            client_request_id?: string;
             instructions?: string;
             /** @description Defaults to private when absent. A non-boolean value is a 400. */
             is_private?: boolean;

@@ -9248,6 +9248,33 @@ async fn two_worktree_turns_run_concurrently() {
     until_done_of(&h, &second.turn_id).await;
 }
 
+/// #3077: Enter pressed three times sent three `worktree_create` calls for
+/// the same new thread: one worktree, and every call answers it.
+#[tokio::test(flavor = "multi_thread")]
+async fn worktree_create_is_idempotent_on_the_thread_uuid() {
+    let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;
+    let worktrees = worktree_host(&h);
+    let thread = "44444444-4444-4444-8444-444444444444";
+    let (a, b, c) = tokio::join!(
+        worktrees.create(&h.workspace_id, thread, None),
+        worktrees.create(&h.workspace_id, thread, None),
+        worktrees.create(&h.workspace_id, thread, None),
+    );
+    let (a, b, c) = (a.unwrap(), b.unwrap(), c.unwrap());
+    assert_eq!(a.workspace_id, b.workspace_id);
+    assert_eq!(a.workspace_id, c.workspace_id);
+    assert_eq!(a.path, c.path);
+    let listed = worktrees.list(&h.workspace_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    // A retry later answers the same worktree too.
+    let again = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
+    assert_eq!(again.workspace_id, a.workspace_id);
+    assert_eq!(worktrees.list(&h.workspace_id).await.unwrap().len(), 1);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn worktree_remove_refuses_dirty_without_force() {
     let h = harness(answering_platform().await, allowed(), UiDecision::AllowOnce).await;

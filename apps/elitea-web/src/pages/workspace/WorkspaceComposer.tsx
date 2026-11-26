@@ -56,6 +56,7 @@ import type { ComposerSkill } from './useAgentSkills';
 import { SkillPinError, skillPinExtras, staleSkillItems, useSkillPinRows, type SkillPinRows } from './skillPinRows';
 import type { SkillPinControls } from './useThreadSkillPins';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
+import { useComposerSubmit } from './useComposerSubmit';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
 import { agentToken, mentionItems, ToSlot, useAddressRequests, useMentionMenu } from './useComposerMentions';
@@ -92,10 +93,9 @@ export interface WorkspaceComposerProps {
   bypass?: boolean;
   /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange?: ((on: boolean) => void) | undefined;
-  /** Offers Full auto in the mode switch (a local thread the organisation allows it for, issue 3079). */
-  fullAuto?: FooterSource['fullAuto'];
-  /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
-  agentPicker?: ReactNode;
+  fullAuto?: FooterSource['fullAuto']; // Full auto in the mode switch: a local thread its organisation allows it for (issue 3079).
+  /** The footer's agent chip (`ComposerControls`), or one drawn for the text being typed (who it goes to, #3081). */
+  agentPicker?: ReactNode | ((draft: string) => ReactNode);
   /** A thread in the cloud: the placeholder says who the message goes to. */
   placeholder?: string | undefined;
   /** Act | Plan | Bypass: off for a cloud thread, whose turns have no plan mode. */
@@ -201,8 +201,9 @@ const takesImages = (accept: boolean | undefined, locked: boolean): boolean => a
 const sameToken = (a: Token, b: Token): boolean => a?.kind === b?.kind && a?.start === b?.start && a?.query === b?.query;
 
 /** The footer row (`composerFooter`) from the composer's props; the + that picks images (`onPick`) when they are taken. */
-function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void): React.JSX.Element {
-  return composerFooter(props, images ? <AttachImagesButton onPick={onPick} /> : null);
+function footerOf(props: WorkspaceComposerProps, images: boolean, onPick: (files: readonly File[]) => void, draft: string): React.JSX.Element {
+  const agentPicker = typeof props.agentPicker === 'function' ? props.agentPicker(draft) : props.agentPicker;
+  return composerFooter({ ...props, agentPicker }, images ? <AttachImagesButton onPick={onPick} /> : null);
 }
 
 export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Element {
@@ -318,6 +319,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     setToken(null);
   };
 
+  const submit = useComposerSubmit(clearInput); // one at a time, #3077
+
   const send = (question: string): void => {
     const steps = props.onStepsCommand === undefined ? null : composer.stepsCommand(question);
     if (steps !== null) {
@@ -333,24 +336,21 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     }
     if (steering) {
       // A steering message is plain text: the images stay for the next turn.
-      void props.onSteer?.(question).then((queued) => queued && clearInput());
+      const { onSteer } = props;
+      if (onSteer !== undefined) void submit(() => onSteer(question));
       return;
     }
     const mentions = composer.referencedPaths(question, picked);
     // The longest name the message starts with; a custom command over a skill of its name.
     const { command, skill } = composer.invokedPick(question, customCommands, skills);
     const images = attachments.sent();
-    const sending = command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images);
-    void sending.then((sent) => {
-      if (!sent) return;
-      clearInput();
-      attachments.clear();
-    });
+    void submit(() => (command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images)), attachments.clear);
   };
 
   const retryUnsent = (): void => {
     const text = inputRef.current?.getInputContent() ?? '';
-    if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
+    const { unsent } = props;
+    if (text.trim() !== '' && unsent !== undefined) void submit(() => unsent.onRetry(text));
   };
 
   return (
@@ -389,7 +389,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
         agentEditor={NO_AGENT_EDITOR}
         slots={{
           // The whole row goes in the model selector's place: the part of the footer that shrinks.
-          modelSelector: footerOf(props, images, attachments.attachPicked),
+          modelSelector: footerOf(props, images, attachments.attachPicked, draft),
           sendControl: ({ disabledSend, question, onSend: submit }) => (
             <WorkspaceSendControl busy={busy} steering={steering} empty={question.trim() === ''} disabled={disabledSend} onSend={submit} onStop={onStop} />
           ),
