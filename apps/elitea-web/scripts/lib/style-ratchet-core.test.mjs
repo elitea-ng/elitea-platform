@@ -79,6 +79,10 @@ describe('kindOf', () => {
     expect(kindOf(dialog('src/a/b/c.tsx'))).toBe('mui-dialog');
   });
 
+  it('reads the table kind', () => {
+    expect(kindOf({ message: '[mui-table] use GridTable from shared/ui/grid-table' })).toBe('mui-table');
+  });
+
   it('reads a kind with a digit in its name', () => {
     expect(kindOf({ message: '[page-h1] a page title comes from PageHeader' })).toBe('page-h1');
   });
@@ -199,7 +203,7 @@ describe('totals and formatting', () => {
     expect(formatCounts(counts)).toEqual([
       'src/app: mui-dialog 1',
       'src/features/foo: spacing-rem 1',
-      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0, legacy-palette 0, page-h1 0',
+      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0, legacy-palette 0, page-h1 0, mui-table 0',
     ]);
   });
 

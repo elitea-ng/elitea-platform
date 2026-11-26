@@ -38,7 +38,9 @@
     "elitea/legacy-palette-id": "error",
     // ADR-0062 decision 4: a page h1 comes from PageHeader in shared/ui.
     "elitea/page-h1": "error",
-    // R-T14: Dialog and Switch go through their shared/ui wrappers.
+    // R-T14: Dialog and Switch go through their shared/ui wrappers; ADR-0062
+    // decision 4: a table is GridTable from shared/ui (DataGrid is not counted,
+    // D35 keeps two tables on it).
     // A type-only import is not counted.
     "no-restricted-imports": [
       "error",
@@ -67,6 +69,18 @@
             "importNames": ["default", "Switch"],
             "allowTypeImports": true,
             "message": "[mui-switch] use BaseSwitch from shared/ui; if it is not enough, extend BaseSwitch in shared/ui"
+          },
+          {
+            "name": "@mui/material",
+            "importNames": ["Table"],
+            "allowTypeImports": true,
+            "message": "[mui-table] use GridTable from shared/ui/grid-table; if it is not enough, extend GridTable in shared/ui"
+          },
+          {
+            "name": "@mui/material/Table",
+            "importNames": ["default", "Table"],
+            "allowTypeImports": true,
+            "message": "[mui-table] use GridTable from shared/ui/grid-table; if it is not enough, extend GridTable in shared/ui"
           }
         ]
       }
