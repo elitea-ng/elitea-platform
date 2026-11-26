@@ -278,6 +278,35 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   );
   if (missing.length > 0) console.error(`\n[style ratchet] bad fixture did not print: ${missing.join(' | ')}\n${badOut}`);
   if (!greenOk) console.error(`\n[style ratchet] good fixture failed:\n${goodOut}`);
+
+  // Decision 3.2, a move git does not pair. RED: Card.tsx moves from
+  // features/foo to features/bar with heavy edits, so git lists it as added
+  // (style-ratchet-unpaired.json); bar grows by the two rem values it carries
+  // and the message names the file with the two fixes. GREEN: the same move
+  // landed unchanged, which git pairs, so the base holds it under its new path.
+  const unpaired = run(join(RATCHET, 'unpaired'));
+  const unpairedOut = unpaired.stdout + unpaired.stderr;
+  const paired = run(join(RATCHET, 'paired'));
+  const pairedOut = paired.stdout + paired.stderr;
+  const expectedUnpaired = [
+    'theme-gate 10-style-ratchet: FAIL',
+    'src/features/bar spacing-rem: 0 → 2',
+    'src/features/bar/ui/Card.tsx (0 → 2 in this file; new at the head: git paired it with no base file)',
+    '1. land the move unchanged in its own PR first (a pure move pairs at 100 %), then edit it; or',
+    '2. move the values it carries onto the system in this PR.',
+  ];
+  const missingUnpaired = expectedUnpaired.filter((line) => !unpairedOut.includes(line));
+  const pairedOk = paired.status === 0 && pairedOut.includes('theme-gate 10-style-ratchet: PASS');
+  record(
+    'THEME/10-style-ratchet-unpaired-move',
+    'scripts/theme-gate.mjs check 10, a move git did not pair (ADR-0062 decision 3.2; style-ratchet-unpaired.json)',
+    unpaired.status !== 0 && missingUnpaired.length === 0,
+    pairedOk,
+  );
+  if (missingUnpaired.length > 0) {
+    console.error(`\n[style ratchet] unpaired fixture did not print: ${missingUnpaired.join(' | ')}\n${unpairedOut}`);
+  }
+  if (!pairedOk) console.error(`\n[style ratchet] paired fixture failed:\n${pairedOut}`);
 }
 
 // ── section 6: R-M5 (vitest fixtures booting the REAL src/test/setup.ts) ──

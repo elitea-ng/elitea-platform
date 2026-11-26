@@ -14,6 +14,10 @@
  * A file the PR renames is written under its HEAD path (git rename
  * detection), so a move between two folders does not make the target folder
  * grow. The file plan is `planBaseTree` in scripts/lib/style-ratchet-core.mjs.
+ *
+ * Next to `src/` it writes `style-ratchet-unpaired.json`: the files git did
+ * not pair (`unpairedFiles`, decision 3.2). theme-gate needs it with --base,
+ * so that a failing folder names its new files and the two fixes.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -21,7 +25,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
-import { planBaseTree } from './lib/style-ratchet-core.mjs';
+import { UNPAIRED_MANIFEST, planBaseTree, unpairedFiles } from './lib/style-ratchet-core.mjs';
 
 const APP_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -81,8 +85,18 @@ function main() {
   const baseFiles = String(git(['ls-tree', '-r', '--name-only', baseSha, '--', src], { cwd: top }))
     .split('\n')
     .filter(Boolean);
-  const nameStatus = String(git(['diff', '--name-status', '-M', baseSha, headSha, '--', src], { cwd: top }));
+  const diff = spawnSync('git', ['diff', '--name-status', '-M', baseSha, headSha, '--', src], {
+    cwd: top,
+    encoding: 'utf8',
+    maxBuffer: 1 << 30,
+  });
+  if (diff.status !== 0) throw new Error(`git diff --name-status failed: ${diff.stderr.trim()}`);
+  // Past diff.renameLimit git skips inexact rename detection and says so on
+  // stderr; every move it did not pair then counts as new (decision 3.2).
+  if (diff.stderr.trim()) console.warn(`style-ratchet-base: git: ${diff.stderr.trim()}`);
+  const nameStatus = diff.stdout;
   const plan = planBaseTree(baseFiles, nameStatus, prefix);
+  const unpaired = unpairedFiles(nameStatus, prefix);
   const blobs = readBlobs(plan.map(({ from }) => `${baseSha}:${from}`));
 
   const outDir = resolve(out);
@@ -92,9 +106,15 @@ function main() {
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, blobs[i]);
   });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(
+    join(outDir, UNPAIRED_MANIFEST),
+    `${JSON.stringify({ base: baseSha, head: headSha, ...unpaired }, null, 2)}\n`,
+  );
   const renamed = plan.filter(({ from, to }) => from !== `${prefix}${to}`).length;
   console.log(
-    `style-ratchet-base: ${plan.length} files of ${baseSha.slice(0, 10)} in ${outDir} (${renamed} under their new path)`,
+    `style-ratchet-base: ${plan.length} files of ${baseSha.slice(0, 10)} in ${outDir} (${renamed} under their new path;` +
+      ` git paired no base file with ${unpaired.added.length} head file(s) and no head file with ${unpaired.removed.length} base file(s))`,
   );
 }
 

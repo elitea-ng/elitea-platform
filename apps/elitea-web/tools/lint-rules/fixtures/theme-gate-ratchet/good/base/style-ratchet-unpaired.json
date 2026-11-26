@@ -1,0 +1,4 @@
+{
+  "added": ["src/features/foo/ui/Footer.tsx", "src/shared/ui/BaseModal/BaseModal.tsx"],
+  "removed": []
+}

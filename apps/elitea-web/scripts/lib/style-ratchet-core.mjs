@@ -11,7 +11,36 @@
  * scripts/style-ratchet-base.mjs builds the base tree. Its file list comes
  * from `planBaseTree` below: a file the PR renames is written under its NEW
  * path, so a move between two folders does not make the target folder grow.
+ * Next to the tree it writes the files git did not pair (`unpairedFiles`),
+ * and a failing folder names the ones that carry counted values.
+ * scripts/style-ratchet-replay.mjs replays this core over merged PRs.
  */
+
+/** Written by scripts/style-ratchet-base.mjs next to the base tree's src/: `{ added, removed }` from `unpairedFiles`. */
+export const UNPAIRED_MANIFEST = 'style-ratchet-unpaired.json';
+
+/**
+ * Reads that manifest's text. Throws when it is not `{ added: [], removed: [] }`
+ * of strings: a base tree without it would drop the names from the message.
+ */
+export function parseUnpairedManifest(text) {
+  let manifest;
+  try {
+    manifest = JSON.parse(text);
+  } catch {
+    throw new Error(`${UNPAIRED_MANIFEST} is not JSON`);
+  }
+  const list = (value) => Array.isArray(value) && value.every((path) => typeof path === 'string');
+  if (!manifest || !list(manifest.added) || !list(manifest.removed)) {
+    throw new Error(`${UNPAIRED_MANIFEST} needs "added" and "removed" lists of paths`);
+  }
+  return { added: manifest.added, removed: manifest.removed };
+}
+
+/** oxlint's arguments for one tree (cwd = the tree), as theme-gate and the replay run it. */
+export function oxlintArgs(config) {
+  return ['-c', config, '-f', 'json', '--no-ignore', 'src'];
+}
 
 /** Kinds in stage 1 (ADR-0062 decision 3.4). A message names its kind as `[kind]`. */
 export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch'];
@@ -129,17 +158,45 @@ export function totals(counts) {
   return sums;
 }
 
-/** Lines for a failing run: each grown folder, then the findings in its grown files. */
-export function formatGrowth(growth) {
+/** The note on a grown file that git paired with no base file (decision 3.2). */
+export const UNPAIRED_NOTE = 'new at the head: git paired it with no base file';
+
+/** The two fixes for a grown folder that holds such files (decision 3.2). */
+export const UNPAIRED_FIXES = [
+  'A file marked "new at the head" counts as new in this folder (git pairs a move at 50 % similarity or more).',
+  'If it was moved, split or merged from another file with edits, either:',
+  '  1. land the move unchanged in its own PR first (a pure move pairs at 100 %), then edit it; or',
+  '  2. move the values it carries onto the system in this PR.',
+];
+
+/**
+ * Lines for a failing run: each grown folder, then the findings in its grown
+ * files. `unpaired.added` (from `unpairedFiles`) marks the grown files git
+ * paired with no base file, and the folder then gets the two fixes.
+ */
+export function formatGrowth(growth, unpaired = { added: [] }) {
+  const added = new Set(unpaired.added);
   const lines = [];
   for (const { folder, kind, before, after, files } of growth) {
     lines.push(`${folder} ${kind}: ${before} → ${after} (the base branch is the ceiling; remove as many as you add)`);
     for (const { path, before: fileBefore, hits } of files) {
-      lines.push(`  ${path} (${fileBefore} → ${hits.length} in this file)`);
+      const note = added.has(path) ? `; ${UNPAIRED_NOTE}` : '';
+      lines.push(`  ${path} (${fileBefore} → ${hits.length} in this file${note})`);
       for (const hit of hits) lines.push(`    ${path}:${hit.line} ${hit.message}`);
+    }
+    if (files.some(({ path }) => added.has(path))) {
+      for (const line of UNPAIRED_FIXES) lines.push(`  ${line}`);
     }
   }
   return lines;
+}
+
+/** The grown files of a failing run that git paired with no base file: the ones the message names. */
+export function namedUnpaired(growth, unpaired) {
+  const added = new Set(unpaired.added);
+  return growth.flatMap(({ folder, kind, files }) =>
+    files.filter(({ path }) => added.has(path)).map(({ path, hits }) => ({ folder, kind, path, count: hits.length })),
+  );
 }
 
 /** Lines for a run with no base (nightly, dispatch): counts per folder, kinds in KINDS order. */
@@ -161,11 +218,11 @@ export function formatCounts(counts) {
  * Only files under `<prefix>src/` are kept; paths are returned relative to `prefix`.
  */
 export function planBaseTree(baseFiles, nameStatus, prefix) {
-  const renames = new Map();
-  for (const line of nameStatus.split('\n')) {
-    const [status, from, to] = line.split('\t');
-    if (status && status.startsWith('R') && from && to) renames.set(from, to);
-  }
+  const renames = new Map(
+    parseNameStatus(nameStatus)
+      .filter(({ status }) => status === 'R')
+      .map(({ from, to }) => [from, to]),
+  );
   const tree = `${prefix}src/`;
   return (
     baseFiles
@@ -175,4 +232,54 @@ export function planBaseTree(baseFiles, nameStatus, prefix) {
       .filter(({ to }) => to.startsWith(tree))
       .map(({ from, to }) => ({ from, to: to.slice(prefix.length) }))
   );
+}
+
+/**
+ * `git diff --name-status -M` lines as { status, from, to }: status is the
+ * letter (R087 → R), `from` the base path, `to` the head path (equal unless
+ * git paired a rename or a copy).
+ */
+export function parseNameStatus(nameStatus) {
+  return nameStatus
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [code, from, to = from] = line.split('\t');
+      return { status: code[0], from, to };
+    });
+}
+
+/**
+ * The files git did not pair between the base and the head (decision 3.2),
+ * from the same `git diff --name-status -M <base> <head>` as `planBaseTree`.
+ *
+ * There is no pairing here but git's. Rename detection at git's default 50 %
+ * similarity pairs each head file with at most one base file; such a pair is
+ * an `R` line, and the base tree holds the file under its head path. A file
+ * git lists as added (`A`) has no base file: it counts as new in its folder.
+ * A file git lists as deleted (`D`) has no head file: it counts as removed
+ * from its folder. A file git pairs across the edge of `src/` is new to the
+ * counted tree on one side or removed from it on the other. Nothing else
+ * reads names, sizes or contents to guess a move: a move with heavy edits, a
+ * split or a merge is whatever git makes of it (a split pairs at most one
+ * part, a merge at most one source), and the failure message names the new
+ * files with the two fixes (`formatGrowth`).
+ *
+ * Returns paths relative to `prefix`, under `src/`, sorted.
+ */
+export function unpairedFiles(nameStatus, prefix) {
+  const tree = `${prefix}src/`;
+  const inTree = (path) => path.startsWith(tree);
+  const added = [];
+  const removed = [];
+  for (const { status, from, to } of parseNameStatus(nameStatus)) {
+    if (status === 'A' || (status === 'R' && inTree(to) && !inTree(from))) added.push(to);
+    if (status === 'D' || (status === 'R' && inTree(from) && !inTree(to))) removed.push(from);
+  }
+  const rel = (paths) =>
+    paths
+      .filter(inTree)
+      .map((path) => path.slice(prefix.length))
+      .sort();
+  return { added: rel(added), removed: rel(removed) };
 }
