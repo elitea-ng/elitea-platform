@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Немає агентів",
   "workspace.team.leadNotice": "Команда {{team}}: повідомлення, у якому не названо агента, отримує {{lead}} (провідний); напишіть @Ім’я, щоб звернутися до іншого учасника.",
   "workspace.team.addressedNotice": "Команда {{team}}: напишіть @Ім’я, щоб звернутися до учасника; повідомлення, у якому не названо агента, отримує агент, що відповів останнім (спочатку {{lead}}).",
-  "workspace.team.folderNotice": "Кожен учасник працює на цьому комп’ютері з цією папкою та її інструментами. Агент, якого учасник викликає як інструмент, працює в хмарі й не отримує папку.",
   "workspace.team.notListed": "Агента немає в цьому списку",
   "desktop.trust.advanced": "Додаткові параметри",
   "desktop.trust.askEvery": "Питати перед кожною командою",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Хмара",
   "workspace.participants.local": "Локально",
   "workspace.participants.title": "Учасники",
-  "workspace.steer.to": "Для {{name}}: {{text}}"
+  "workspace.steer.to": "Для {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} запитав {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(у хмарі, без папки)",
+  "workspace.consult.failed": "Немає відповіді: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Хмара · без папки",
+  "workspace.team.folderNoticeLocal": "Кожен учасник працює на цьому комп’ютері з цією папкою та її інструментами, зокрема коли інший учасник запитує його або передає йому слово. Лише агент, який не може працювати на цьому комп’ютері, працює в хмарі без папки."
 }

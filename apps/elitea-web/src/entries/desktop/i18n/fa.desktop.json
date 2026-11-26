@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "بدون عامل",
   "workspace.team.leadNotice": "تیم {{team}}: پیامی که نام هیچ عاملی را نمی‌برد به {{lead}} (سرپرست) می‌رود؛ برای خطاب به عضوی دیگر ‎@نام بنویسید.",
   "workspace.team.addressedNotice": "تیم {{team}}: برای خطاب به یک عضو ‎@نام بنویسید؛ پیامی که نام هیچ عاملی را نمی‌برد به عاملی می‌رود که آخرین بار پاسخ داد (در آغاز {{lead}}).",
-  "workspace.team.folderNotice": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند. عاملی که یک عضو به‌عنوان ابزار فرا می‌خواند در ابر اجرا می‌شود و پوشه را دریافت نمی‌کند.",
   "workspace.team.notListed": "یکی از عامل‌ها اینجا فهرست نشده است",
   "desktop.trust.advanced": "گزینه‌های پیشرفته",
   "desktop.trust.askEvery": "پرسیدن برای هر فرمان",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "ابر",
   "workspace.participants.local": "محلی",
   "workspace.participants.title": "شرکت‌کنندگان",
-  "workspace.steer.to": "به {{name}}: {{text}}"
+  "workspace.steer.to": "به {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} از {{callee}} پرسید: {{question}}",
+  "workspace.consult.cloud": "(در فضای ابری، بدون پوشه)",
+  "workspace.consult.failed": "بدون پاسخ: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "ابری · بدون پوشه",
+  "workspace.team.folderNoticeLocal": "هر عضو روی این رایانه با این پوشه و ابزارهایش کار می‌کند، حتی وقتی عضو دیگری از او می‌پرسد یا نوبت را به او می‌سپارد. فقط عاملی که نمی‌تواند روی این رایانه اجرا شود، در فضای ابری و بدون پوشه اجرا می‌شود."
 }

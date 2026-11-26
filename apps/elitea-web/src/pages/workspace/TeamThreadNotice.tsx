@@ -1,8 +1,8 @@
 /**
  * Above the composer of a Local work thread run by a saved team (#3053): who answers and where each agent runs. Every
- * member runs on this computer with the folder and its tools. An agent that a member calls as a tool (a nested agent)
- * runs in the cloud as a child turn and gets no folder (ADR-0029 D0): the notice says so, rather than the folder being
- * left out of that agent's turn without a word.
+ * member runs on this computer with the folder and its tools, and so does an agent a member consults or hands the floor
+ * to (ADR-0061 decisions 3d, 3e). Only an agent that cannot run here runs in the cloud as a child turn and gets no folder
+ * (ADR-0029 D0): the notice says so, rather than the folder being left out of that agent's turn without a word.
  */
 import Alert from '@mui/material/Alert';
 
@@ -25,8 +25,8 @@ export function TeamThreadNotice({ team, local }: TeamThreadNoticeProps): React.
         ? t('workspace.team.leadNotice', 'Team {{team}}: a message that names no agent goes to {{lead}} (lead); write @Name to address another member.', { team: team.name, lead })
         : t('workspace.team.addressedNotice', 'Team {{team}}: write @Name to address a member; a message that names no agent goes to the agent that answered last ({{lead}} at first).', { team: team.name, lead })}{' '}
       {t(
-        'workspace.team.folderNotice',
-        'Every member works on this computer with this folder and its tools. An agent a member calls as a tool runs in the cloud and does not get the folder.',
+        'workspace.team.folderNoticeLocal',
+        'Every member works on this computer with this folder and its tools, also when another member asks it or hands it the floor. Only an agent that cannot run on this computer runs in the cloud without the folder.',
       )}
     </Alert>
   );

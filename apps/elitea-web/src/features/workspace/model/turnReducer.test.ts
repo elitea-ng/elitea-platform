@@ -648,6 +648,18 @@ describe('several agents in a thread (ADR-0050 decision 7f)', () => {
     expect(activeView(state).continuation).toBeUndefined();
   });
 
+  it('follows a hand-off (kind hand) to the receiver\'s turn, as a floor turn (ADR-0061 decision 3d)', () => {
+    const handed: AgentEvent = {
+      turn_id: T,
+      seq: 3,
+      kind: 'turn_continued',
+      payload: { next_turn_id: NEXT, execution_id: 'e2', continuation_index: 1, kind: 'hand', participant_id: 88, agent_name: 'Reviewer', executor: 'local', hand_id: 'hand-1' },
+    };
+    const state = run([running(T, 0, 'Coder', 'local'), done, handed]);
+    expect(state.activeTurnId).toBe(NEXT);
+    expect(earlierViews(state)[0]?.view.continuedTo).toEqual({ nextTurnId: NEXT, index: 1, kind: 'hand', agentName: 'Reviewer', executor: 'local' });
+  });
+
   it('keeps the composer busy for the next agent, until it starts or the floor stops', () => {
     const waiting = activeView(run([running(T, 0, 'Coder', 'local'), done]));
     expect(waiting.done?.continuing).toBe(true);

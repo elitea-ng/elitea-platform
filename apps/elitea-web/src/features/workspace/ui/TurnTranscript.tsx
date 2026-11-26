@@ -7,7 +7,7 @@
  * first turn (`RunBriefCard`) and the status line, quiet
  * text with a small spinner while the turn runs. Stop is the composer's (its round button, or Esc Esc).
  */
-import { useState, type MouseEvent } from 'react';
+import { useState, type ComponentType, type MouseEvent } from 'react';
 
 import CheckIcon from '@mui/icons-material/Check';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -217,6 +217,12 @@ export interface TurnTranscriptProps {
   subAgentAvatar?: SubAgentAvatar | undefined;
   /** What a failed tool call offers under its row, by error code (a trusted-folder offer on `sandbox_unavailable`); `null`: nothing. */
   toolOffer?: ((code: string) => React.ReactNode) | undefined;
+  /** The turn's side talk (a hand-off, consults) and a loop guard's stop, drawn as the chat draws them; absent: not shown. */
+  sideTalk?: ComponentType<{ view: TurnView }> | undefined;
+}
+
+function SideTalkSlot({ view, Slot }: { view: TurnView; Slot: TurnTranscriptProps['sideTalk'] }): React.ReactNode {
+  return Slot === undefined ? null : <Slot view={view} />;
 }
 
 /** A failed call's offer, when the row has an error code and the page offers something for it. */
@@ -299,7 +305,7 @@ function RetryNotice({ view }: { view: TurnView }): React.JSX.Element | null {
   );
 }
 
-export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation, subAgentAvatar, toolOffer }: TurnTranscriptProps): React.JSX.Element {
+export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, onRetryTurn, onContinue, continuation, subAgentAvatar, toolOffer, sideTalk }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -327,6 +333,7 @@ export function TurnTranscript({ view, busy, onRetryCommit, onTextContextMenu, o
         ),
       )}
       <DelegationNotices notices={view.delegationNotices} />
+      <SideTalkSlot view={view} Slot={sideTalk} />
       {view.error !== undefined && !delegationRefusalExplainsFailure(view.error.code, view.delegationNotices, view.error.message) && <TurnError error={view.error} onRetry={onRetryTurn} />}
       <RetryNotice view={view} />
       <StopNotices view={view} onContinue={onContinue} />

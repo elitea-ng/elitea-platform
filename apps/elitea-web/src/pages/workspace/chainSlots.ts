@@ -28,9 +28,14 @@ export type TurnSlot = { prompt: number } | { continuation: number } | { resumed
  */
 type SlotView = Pick<WorkspaceTurn['view'], 'continuation' | 'continuedTo' | 'resumed' | 'agent'>;
 
-/** A later agent of a message addressed to several: its name, known from its own status or from the turn before it. */
+/**
+ * A later agent of a message addressed to several, or one another agent handed the floor to (kind `hand`, ADR-0061
+ * decision 3d): its name, known from its own status or from the turn before it.
+ */
+const AGENT_LINKS: ReadonlySet<string | undefined> = new Set(['floor', 'hand']);
+
 function laterAgent(entry: { turnId: string; view: SlotView }, before: SlotView['continuedTo']): string | undefined {
-  const named = before?.kind === 'floor' && before.nextTurnId === entry.turnId;
+  const named = AGENT_LINKS.has(before?.kind) && before?.nextTurnId === entry.turnId;
   if (!named && (entry.view.agent?.position ?? 0) === 0) return undefined;
   return entry.view.agent?.name ?? before?.agentName ?? '';
 }

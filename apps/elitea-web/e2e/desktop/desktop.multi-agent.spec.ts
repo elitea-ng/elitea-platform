@@ -174,7 +174,7 @@ test('a thread run by a team writes its lead and starts on it', async ({ page })
   await expect(chip).toContainText('Review crew: Reviewer · base + Coder');
   const notice = page.getByTestId('workspace-team-notice');
   await expect(notice).toContainText('goes to Reviewer (lead)');
-  await expect(notice).toContainText('does not get the folder');
+  await expect(notice).toContainText('Only an agent that cannot run on this computer runs in the cloud without the folder');
 
   await page.getByRole('textbox').fill('fix the flaky test');
   await page.getByTestId('workspace-send-button').click();

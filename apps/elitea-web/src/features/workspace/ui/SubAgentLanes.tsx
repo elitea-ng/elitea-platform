@@ -12,6 +12,7 @@ import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { t } from '@/shared/i18n';
 import { SubAgentLaneCard } from '@/shared/ui/sub-agent-lane';
 
 import { briefRefsLine, type SubAgentLane } from '../model/subAgentEvents';
@@ -26,6 +27,11 @@ function Lane({ lane, ToolRow, Avatar }: { lane: SubAgentLane; ToolRow: Componen
   const briefLine = briefRefsLine(lane.briefRefs);
   return (
     <SubAgentLaneCard lane={lane} variant="transcript" avatar={Avatar === undefined ? undefined : <Avatar lane={lane} />}>
+      {lane.cloud === true && (
+        <Typography variant="labelSmall" component="p" data-testid="subagent-cloud-no-folder" sx={(theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.secondary })}>
+          {t('workspace.subAgent.cloudNoFolder', 'Cloud · no folder')}
+        </Typography>
+      )}
       {briefLine === undefined ? null : (
         <Typography variant="bodySmall" component="p" data-testid="subagent-brief-refs" sx={(theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.secondary })}>
           {briefLine}

@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "אין סוכנים",
   "workspace.team.leadNotice": "צוות {{team}}: הודעה שלא נוקבת בשם סוכן נשלחת אל {{lead}} (מוביל); כתבו @שם כדי לפנות לחבר אחר.",
   "workspace.team.addressedNotice": "צוות {{team}}: כתבו @שם כדי לפנות לחבר; הודעה שלא נוקבת בשם סוכן נשלחת לסוכן שענה אחרון (בהתחלה {{lead}}).",
-  "workspace.team.folderNotice": "כל חבר עובד במחשב הזה עם התיקייה הזו והכלים שלה. סוכן שחבר קורא לו ככלי רץ בענן ואינו מקבל את התיקייה.",
   "workspace.team.notListed": "סוכן אחד אינו מופיע כאן",
   "desktop.trust.advanced": "אפשרויות מתקדמות",
   "desktop.trust.askEvery": "לשאול על כל פקודה",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "ענן",
   "workspace.participants.local": "מקומי",
   "workspace.participants.title": "משתתפים",
-  "workspace.steer.to": "אל {{name}}: {{text}}"
+  "workspace.steer.to": "אל {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} שאל את {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(בענן, ללא התיקייה)",
+  "workspace.consult.failed": "אין תשובה: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "ענן · ללא תיקייה",
+  "workspace.team.folderNoticeLocal": "כל חבר עובד במחשב הזה עם התיקייה הזו והכלים שלה, גם כשחבר אחר שואל אותו או מעביר אליו את רשות הדיבור. רק סוכן שאינו יכול לרוץ במחשב הזה רץ בענן ללא התיקייה."
 }

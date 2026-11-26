@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Aucun agent",
   "workspace.team.leadNotice": "Équipe {{team}} : un message qui ne nomme aucun agent va à {{lead}} (responsable); écrivez @Nom pour vous adresser à un autre membre.",
   "workspace.team.addressedNotice": "Équipe {{team}} : écrivez @Nom pour vous adresser à un membre; un message qui ne nomme aucun agent va à l’agent qui a répondu en dernier (au début, {{lead}}).",
-  "workspace.team.folderNotice": "Chaque membre travaille sur cet ordinateur avec ce dossier et ses outils. Un agent qu’un membre appelle comme outil s’exécute dans le nuage et ne reçoit pas le dossier.",
   "workspace.team.notListed": "Un agent n’est pas listé ici",
   "desktop.trust.advanced": "Options avancées",
   "desktop.trust.askEvery": "Demander pour chaque commande",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Nuage",
   "workspace.participants.local": "Local",
   "workspace.participants.title": "Participants",
-  "workspace.steer.to": "À {{name}} : {{text}}"
+  "workspace.steer.to": "À {{name}} : {{text}}",
+  "workspace.consult.asked": "{{caller}} a demandé à {{callee}} : {{question}}",
+  "workspace.consult.cloud": "(dans le nuage, sans le dossier)",
+  "workspace.consult.failed": "Aucune réponse : {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Nuage · sans dossier",
+  "workspace.team.folderNoticeLocal": "Chaque membre travaille sur cet ordinateur avec ce dossier et ses outils, même quand un autre membre le consulte ou lui passe la parole. Seul un agent qui ne peut pas s’exécuter sur cet ordinateur s’exécute dans le nuage, sans le dossier."
 }

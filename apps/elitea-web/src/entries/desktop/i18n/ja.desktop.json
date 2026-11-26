@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "エージェントなし",
   "workspace.team.leadNotice": "チーム {{team}}: エージェントを指定しないメッセージは {{lead}}（リード）に届きます。別のメンバーに宛てるには @名前 と書きます。",
   "workspace.team.addressedNotice": "チーム {{team}}: メンバーに宛てるには @名前 と書きます。エージェントを指定しないメッセージは、最後に回答したエージェント（最初は {{lead}}）に届きます。",
-  "workspace.team.folderNotice": "各メンバーはこのコンピューターで、このフォルダーとそのツールを使って作業します。メンバーがツールとして呼び出すエージェントはクラウドで実行され、フォルダーを受け取りません。",
   "workspace.team.notListed": "ここに表示されないエージェントがあります",
   "desktop.trust.advanced": "詳細オプション",
   "desktop.trust.askEvery": "すべてのコマンドで確認する",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "クラウド",
   "workspace.participants.local": "ローカル",
   "workspace.participants.title": "参加者",
-  "workspace.steer.to": "{{name}} 宛て: {{text}}"
+  "workspace.steer.to": "{{name}} 宛て: {{text}}",
+  "workspace.consult.asked": "{{caller}} が {{callee}} に質問: {{question}}",
+  "workspace.consult.cloud": "(クラウドで、フォルダーなし)",
+  "workspace.consult.failed": "返答なし: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "クラウド · フォルダーなし",
+  "workspace.team.folderNoticeLocal": "すべてのメンバーは、別のメンバーから質問されたり発言を引き継いだりした場合も含め、このコンピューターでこのフォルダーとそのツールを使って作業します。このコンピューターで実行できないエージェントだけが、フォルダーなしでクラウドで実行されます。"
 }

@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "沒有代理",
   "workspace.team.leadNotice": "團隊 {{team}}：未指明代理的訊息會送給 {{lead}}（負責人）；寫 @名稱 可傳給其他成員。",
   "workspace.team.addressedNotice": "團隊 {{team}}：寫 @名稱 可傳給某位成員；未指明代理的訊息會送給最後回答的代理（起初是 {{lead}}）。",
-  "workspace.team.folderNotice": "每位成員都在這台電腦上使用此資料夾及其工具工作。成員當作工具呼叫的代理在雲端執行，不會取得此資料夾。",
   "workspace.team.notListed": "有代理未在此列出",
   "desktop.trust.advanced": "進階選項",
   "desktop.trust.askEvery": "每個指令都詢問",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "雲端",
   "workspace.participants.local": "本機",
   "workspace.participants.title": "參與者",
-  "workspace.steer.to": "給 {{name}}: {{text}}"
+  "workspace.steer.to": "給 {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} 詢問了 {{callee}}：{{question}}",
+  "workspace.consult.cloud": "（在雲端，無資料夾）",
+  "workspace.consult.failed": "沒有回覆：{{reason}}",
+  "workspace.subAgent.cloudNoFolder": "雲端 · 無資料夾",
+  "workspace.team.folderNoticeLocal": "每個成員都在這台電腦上使用此資料夾及其工具工作，包括其他成員向其提問或把發言權交給它時。只有無法在這台電腦上執行的代理程式才會在雲端執行，且沒有該資料夾。"
 }

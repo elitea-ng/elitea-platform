@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "没有智能体",
   "workspace.team.leadNotice": "团队 {{team}}：未指明智能体的消息发给 {{lead}}（负责人）；写 @名称 可发给其他成员。",
   "workspace.team.addressedNotice": "团队 {{team}}：写 @名称 可发给某个成员；未指明智能体的消息发给最后回答的智能体（起初是 {{lead}}）。",
-  "workspace.team.folderNotice": "每个成员都在这台电脑上使用此文件夹及其工具工作。成员作为工具调用的智能体在云端运行，不会获得此文件夹。",
   "workspace.team.notListed": "有智能体未在此列出",
   "desktop.trust.advanced": "高级选项",
   "desktop.trust.askEvery": "每条命令都询问",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "云端",
   "workspace.participants.local": "本地",
   "workspace.participants.title": "参与者",
-  "workspace.steer.to": "致 {{name}}: {{text}}"
+  "workspace.steer.to": "致 {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} 询问了 {{callee}}：{{question}}",
+  "workspace.consult.cloud": "（在云端，无文件夹）",
+  "workspace.consult.failed": "没有回复：{{reason}}",
+  "workspace.subAgent.cloudNoFolder": "云端 · 无文件夹",
+  "workspace.team.folderNoticeLocal": "每个成员都在这台计算机上使用此文件夹及其工具工作，包括其他成员向其提问或把发言权交给它时。只有无法在这台计算机上运行的智能体才会在云端运行，且没有该文件夹。"
 }

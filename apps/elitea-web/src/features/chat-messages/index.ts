@@ -128,6 +128,7 @@ export type { ChatContinueProps } from './ui/chat-continue/ChatContinue';
 export { ChatHitlActions } from './ui/chat-hitl-actions/ChatHitlActions';
 export type { ChatHitlActionsProps } from './ui/chat-hitl-actions/ChatHitlActions';
 export { ChatMessageList } from './ui/chat-box/ChatMessageList';
+export { SideTalkRows } from './ui/chat-box/SideTalk';
 export type { ChatMessageListCanvas, ChatMessageListProps } from './ui/chat-box/ChatMessageList.types';
 export { CreatedTimeInfo } from './ui/CreatedTimeInfo';
 export type { CreatedTimeInfoProps } from './ui/CreatedTimeInfo';

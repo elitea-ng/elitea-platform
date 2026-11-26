@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Sin agentes",
   "workspace.team.leadNotice": "Equipo {{team}}: un mensaje que no nombra a ningún agente va a {{lead}} (líder); escribe @Nombre para dirigirte a otro miembro.",
   "workspace.team.addressedNotice": "Equipo {{team}}: escribe @Nombre para dirigirte a un miembro; un mensaje que no nombra a ningún agente va al agente que respondió por última vez (al principio, {{lead}}).",
-  "workspace.team.folderNotice": "Cada miembro trabaja en este equipo con esta carpeta y sus herramientas. Un agente al que un miembro llama como herramienta se ejecuta en la nube y no recibe la carpeta.",
   "workspace.team.notListed": "Un agente no aparece aquí",
   "desktop.trust.advanced": "Opciones avanzadas",
   "desktop.trust.askEvery": "Preguntar en cada comando",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Nube",
   "workspace.participants.local": "Local",
   "workspace.participants.title": "Participantes",
-  "workspace.steer.to": "Para {{name}}: {{text}}"
+  "workspace.steer.to": "Para {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} preguntó a {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(en la nube, sin la carpeta)",
+  "workspace.consult.failed": "Sin respuesta: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Nube · sin carpeta",
+  "workspace.team.folderNoticeLocal": "Cada miembro trabaja en este equipo con esta carpeta y sus herramientas, también cuando otro miembro le pregunta o le cede el turno. Solo un agente que no puede ejecutarse en este equipo se ejecuta en la nube sin la carpeta."
 }

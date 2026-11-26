@@ -1027,7 +1027,6 @@
   "workspace.team.noMembers": "Geen agents",
   "workspace.team.leadNotice": "Team {{team}}: een bericht dat geen agent noemt, gaat naar {{lead}} (lead); schrijf @Naam om een ander lid aan te spreken.",
   "workspace.team.addressedNotice": "Team {{team}}: schrijf @Naam om een lid aan te spreken; een bericht dat geen agent noemt, gaat naar de agent die het laatst antwoordde (eerst {{lead}}).",
-  "workspace.team.folderNotice": "Elk lid werkt op deze computer met deze map en de bijbehorende tools. Een agent die een lid als tool aanroept, draait in de cloud en krijgt de map niet.",
   "workspace.team.notListed": "Een agent staat hier niet in de lijst",
   "desktop.trust.advanced": "Geavanceerde opties",
   "desktop.trust.askEvery": "Bij elke opdracht vragen",
@@ -1097,5 +1096,10 @@
   "workspace.participants.cloud": "Cloud",
   "workspace.participants.local": "Lokaal",
   "workspace.participants.title": "Deelnemers",
-  "workspace.steer.to": "Aan {{name}}: {{text}}"
+  "workspace.steer.to": "Aan {{name}}: {{text}}",
+  "workspace.consult.asked": "{{caller}} vroeg {{callee}}: {{question}}",
+  "workspace.consult.cloud": "(in de cloud, zonder de map)",
+  "workspace.consult.failed": "Geen antwoord: {{reason}}",
+  "workspace.subAgent.cloudNoFolder": "Cloud · geen map",
+  "workspace.team.folderNoticeLocal": "Elk lid werkt op deze computer met deze map en de bijbehorende tools, ook wanneer een ander lid het iets vraagt of het woord geeft. Alleen een agent die niet op deze computer kan draaien, draait in de cloud zonder de map."
 }

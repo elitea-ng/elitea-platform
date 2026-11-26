@@ -28,6 +28,14 @@ describe('turnSlots', () => {
     ]);
     expect(slots).toEqual([{ prompt: 0 }, { floor: 'Reviewer' }, { floor: 'Reviewer' }, { prompt: 1 }]);
   });
+
+  it('gives the agent a hand-off named no prompt of its own (ADR-0061 decision 3d)', () => {
+    const slots = turnSlots([
+      { turnId: 'a', view: { continuedTo: { nextTurnId: 'b', index: 1, kind: 'hand', agentName: 'CI Doctor' } } },
+      { turnId: 'b', view: {} },
+    ]);
+    expect(slots).toEqual([{ prompt: 0 }, { floor: 'CI Doctor' }]);
+  });
 });
 
 describe('isContinuedRecord', () => {

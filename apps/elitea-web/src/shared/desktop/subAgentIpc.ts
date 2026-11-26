@@ -18,6 +18,8 @@ export interface SubAgentStartedPayload {
   profile_digest?: string;
   brief_digest?: string;
   brief_refs?: { message_ids: string[]; attachments: string[]; memory_entries: string[]; facts: number };
+  /** `cloud`: a nested agent the host could not run here runs as a cloud child turn, without the folder (ADR-0061 decision 3e). */
+  executor?: 'local' | 'cloud';
 }
 
 /** A sub-agent's own event, inside `subagent_event`: the turn event's payload with its `kind` beside it. */
