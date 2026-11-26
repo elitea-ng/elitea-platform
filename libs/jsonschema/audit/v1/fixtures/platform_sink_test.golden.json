@@ -1,0 +1,24 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000030",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "security_signal",
+  "event_type": "security_signal.platform.sink_test",
+  "tenant": {
+    "project_id": 0
+  },
+  "actor": {
+    "type": "system",
+    "id": "system",
+    "role": "affected"
+  },
+  "action": "platform.sink_test",
+  "outcome": "success",
+  "signal": {
+    "type": "platform.sink_test",
+    "taxonomy_version": "1.0.0",
+    "category": "platform",
+    "severity": "info"
+  },
+  "details": {}
+}

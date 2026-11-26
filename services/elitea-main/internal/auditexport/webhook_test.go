@@ -2,9 +2,6 @@ package auditexport
 
 import (
 	"context"
-	"crypto/hmac"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auditexport/exporttest"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
@@ -25,103 +23,29 @@ var (
 	newKey = SigningKey{ID: "k2", Secret: []byte("new-secret-new-secret-new-secret-11"), Created: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)}
 )
 
-// receiver is a webhook receiver that verifies signatures with both keys, the
-// way a customer's endpoint does during a rotation.
+// receiver adapts the shared exporttest.WebhookReceiver to the handler shape the
+// webhook tests use: ServeHTTP, script, delivered, refuse and requests.
 type receiver struct {
-	t    *testing.T
-	keys map[string][]byte
-	now  func() time.Time
-
-	mu       sync.Mutex
-	status   []int // scripted answers, then 200
-	requests int
-	got      map[string]int // event_id -> deliveries
-	keyIDs   []string
-	// refuse answers this code to any batch holding the event id.
-	refuse map[string]int
+	*exporttest.WebhookReceiver
 }
 
 func newReceiver(t *testing.T, keys ...SigningKey) *receiver {
-	r := &receiver{t: t, keys: map[string][]byte{}, got: map[string]int{}, refuse: map[string]int{}, now: time.Now}
-	for _, k := range keys {
-		r.keys[k.ID] = k.Secret
+	local := make([]exporttest.SigningKey, len(keys))
+	for i, k := range keys {
+		local[i] = exporttest.SigningKey{ID: k.ID, Secret: k.Secret, Created: k.Created}
 	}
-	return r
+	return &receiver{exporttest.NewWebhookReceiver(t, local...)}
 }
 
-func (r *receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	body, _ := io.ReadAll(req.Body)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.requests++
-	if len(r.status) > 0 {
-		code := r.status[0]
-		r.status = r.status[1:]
-		if code != http.StatusOK {
-			w.WriteHeader(code)
-			return
-		}
-	}
-	// Verify the signature before decoding the body.
-	secret, ok := r.keys[req.Header.Get(HeaderKeyID)]
-	if !ok {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-	parts := strings.Split(req.Header.Get(HeaderSignature), ",")
-	if len(parts) != 2 || !strings.HasPrefix(parts[0], "t=") || !strings.HasPrefix(parts[1], "v1=") {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-	ts, err := strconv.ParseInt(strings.TrimPrefix(parts[0], "t="), 10, 64)
-	if err != nil || r.now().Sub(time.Unix(ts, 0)).Abs() > 5*time.Minute {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-	want := Sign(secret, time.Unix(ts, 0), body)
-	gotSig, _ := hex.DecodeString(strings.TrimPrefix(parts[1], "v1="))
-	wantSig, _ := hex.DecodeString(want)
-	if !hmac.Equal(gotSig, wantSig) {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-	var batch webhookBodyForTest
-	if err := json.Unmarshal(body, &batch); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	for _, e := range batch.Events {
-		if code, ok := r.refuse[e.EventID]; ok {
-			w.WriteHeader(code)
-			return
-		}
-	}
-	r.keyIDs = append(r.keyIDs, req.Header.Get(HeaderKeyID))
-	for _, e := range batch.Events {
-		r.got[e.EventID]++
-	}
-	w.WriteHeader(http.StatusOK)
-}
+func (r *receiver) script(codes ...int) { r.SetStatus(codes...) }
 
-type webhookBodyForTest struct {
-	Schema  string `json:"schema"`
-	BatchID string `json:"batch_id"`
-	Events  []struct {
-		EventID string `json:"event_id"`
-	} `json:"events"`
-}
+func (r *receiver) delivered(id string) int { return r.Delivered(id) }
 
-func (r *receiver) delivered(id string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.got[id]
-}
+func (r *receiver) refuse(id string, code int) { r.Refusals()[id] = code }
 
-func (r *receiver) script(codes ...int) {
-	r.mu.Lock()
-	r.status = codes
-	r.mu.Unlock()
-}
+func (r *receiver) keyIDs() []string { return r.KeyIDs() }
+
+func (r *receiver) requestCount() int { return r.Requests() }
 
 func testEvents(n int, from int) []Event {
 	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
@@ -178,8 +102,8 @@ func TestWebhookSignsWithNewestKeyAndReceiverVerifiesBoth(t *testing.T) {
 			t.Fatalf("event %s delivered %d times", e.EventID, rcv.delivered(e.EventID))
 		}
 	}
-	if rcv.keyIDs[0] != "k2" {
-		t.Fatalf("signed with key %q, want the newest (k2)", rcv.keyIDs[0])
+	if rcv.keyIDs()[0] != "k2" {
+		t.Fatalf("signed with key %q, want the newest (k2)", rcv.keyIDs()[0])
 	}
 
 	// A receiver that has only the retired key rejects the new signature, and
@@ -227,8 +151,8 @@ func TestWebhookRetriesTransientFailuresWithinASend(t *testing.T) {
 	if err := sink.Send(context.Background(), events); err != nil {
 		t.Fatalf("send after two transient failures: %v", err)
 	}
-	if rcv.requests != 3 || len(slept) != 2 {
-		t.Fatalf("requests = %d, sleeps = %d; want 3 and 2", rcv.requests, len(slept))
+	if rcv.requestCount() != 3 || len(slept) != 2 {
+		t.Fatalf("requests = %d, sleeps = %d; want 3 and 2", rcv.requestCount(), len(slept))
 	}
 	if slept[0] > 250*time.Millisecond || slept[1] > 500*time.Millisecond || slept[0] <= 0 {
 		t.Fatalf("backoff out of the jittered exponential bounds: %v", slept)
@@ -249,8 +173,8 @@ func TestWebhookGivesUpAfterMaxAttemptsAndKeepsEventPending(t *testing.T) {
 	if errors.As(err, &permanent) {
 		t.Fatal("a 500 is transient")
 	}
-	if rcv.requests != 3 {
-		t.Fatalf("requests = %d, want MaxAttempts", rcv.requests)
+	if rcv.requestCount() != 3 {
+		t.Fatalf("requests = %d, want MaxAttempts", rcv.requestCount())
 	}
 }
 
@@ -277,7 +201,7 @@ func TestWebhookDefaultGuardRefusesLoopbackAndPrivateReceivers(t *testing.T) {
 	if err := sink.Send(context.Background(), testEvents(1, 1)); err == nil {
 		t.Fatal("a loopback receiver was reached without an allowlist entry")
 	}
-	if rcv.requests != 0 {
+	if rcv.requestCount() != 0 {
 		t.Fatal("the request left the process")
 	}
 }
@@ -293,7 +217,7 @@ func TestWebhookRefusesRedirects(t *testing.T) {
 	if err := newTestWebhook(t, redirector.URL, fixedKeys(newKey), nil).Send(context.Background(), testEvents(1, 1)); err == nil {
 		t.Fatal("a redirect was treated as delivery")
 	}
-	if target.requests != 0 {
+	if target.Requests() != 0 {
 		t.Fatal("the signed body followed a redirect")
 	}
 }
@@ -306,8 +230,8 @@ func TestWebhookSplitsLargeBatches(t *testing.T) {
 	if err := sink.Send(context.Background(), testEvents(5, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if rcv.requests != 3 {
-		t.Fatalf("requests = %d, want 3 POSTs for 5 events at 2 per batch", rcv.requests)
+	if rcv.requestCount() != 3 {
+		t.Fatalf("requests = %d, want 3 POSTs for 5 events at 2 per batch", rcv.requestCount())
 	}
 }
 
@@ -335,7 +259,7 @@ func TestWebhookSplitsARefusedBatchAndDeliversTheNeighbours(t *testing.T) {
 			rcv := newReceiver(t, newKey)
 			events := testEvents(10, 1)
 			bad := events[6]
-			rcv.refuse[bad.EventID] = code
+			rcv.refuse(bad.EventID, code)
 			srv := httptest.NewServer(rcv)
 			defer srv.Close()
 			sink := newTestWebhook(t, srv.URL, fixedKeys(newKey), nil)
@@ -375,7 +299,7 @@ func TestPipelineDeadLettersOnlyTheRefusedEventAndDeliversItsNeighbours(t *testi
 	rcv := newReceiver(t, newKey)
 	events := testEvents(10, 10)
 	bad := events[4]
-	rcv.refuse[bad.EventID] = http.StatusRequestEntityTooLarge
+	rcv.refuse(bad.EventID, http.StatusRequestEntityTooLarge)
 	srv := httptest.NewServer(rcv)
 	defer srv.Close()
 	metrics := NewMetrics()
@@ -424,7 +348,7 @@ func TestPipelineDeadLettersOnlyTheRefusedEventAndDeliversItsNeighbours(t *testi
 func TestPipelineCountsRefusalsPerEventNotPerBatch(t *testing.T) {
 	rcv := newReceiver(t, newKey)
 	events := testEvents(6, 1)
-	rcv.refuse[events[2].EventID] = http.StatusBadRequest
+	rcv.refuse(events[2].EventID, http.StatusBadRequest)
 	srv := httptest.NewServer(rcv)
 	defer srv.Close()
 	store := &memoryDeadLetters{}
