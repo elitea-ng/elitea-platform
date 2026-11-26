@@ -19,9 +19,11 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { AppProviders } from '@/app/providers/AppProviders';
+import { TrustIpcProvider } from '@/features/folder-trust';
 import { recordThread, WorkspaceIpcProvider } from '@/features/workspace';
 import { HandoffIpcProvider } from '@/features/workspace-handoff';
 import { IndexIpcProvider } from '@/features/workspace-index';
+import TrustedFoldersPage from '@/pages/workspace/TrustedFoldersPage';
 import WorkspaceSessionPage from '@/pages/workspace/WorkspaceSessionPage';
 import WorkspacesPage from '@/pages/workspace/WorkspacesPage';
 import ArchivedChatsPage from '@/pages/chat-archived/ArchivedChatsPage';
@@ -39,6 +41,7 @@ import { useSelectedProjectStore } from '@/widgets/app-shell';
 import { AppIpcProvider, DesktopFrame, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 import { FOLDERS, HarnessChat, installApiStub, Placeholder } from './devHarnessData';
 import { floorHarness } from './devHarnessFloor';
+import { harnessTrustIpc, teamTalkHarness } from './devHarnessTeamTalk';
 
 export function mountDesktopHarness(container: HTMLElement): void {
   const params = new URLSearchParams(window.location.search);
@@ -93,6 +96,8 @@ export function mountDesktopHarness(container: HTMLElement): void {
     document.head.append(wallpaper);
     document.documentElement.dataset['harnessWallpaper'] = '';
   }
+  // Settings › Trusted folders (`&at=/settings/trusted-folders`): two folders, `__harness.trust.revoked` lists each Revoke.
+  const trust = harnessTrustIpc();
   const appIpc = createFakeAppIpc(
     params.get('chrome') === 'mac' || vibrancy ? { ...MACOS_PLATFORM, vibrancy } : BROWSER_PLATFORM,
   );
@@ -118,6 +123,7 @@ export function mountDesktopHarness(container: HTMLElement): void {
       createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage }),
       page('/agents', 'Agents'),
       page('/settings', 'Settings'),
+      createRoute({ getParentRoute: () => rootRoute, path: '/settings/trusted-folders', component: TrustedFoldersPage }),
       page('/marketplace', 'Marketplace'),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => <HarnessChat title="New chat" /> }),
       createRoute({ getParentRoute: () => rootRoute, path: '/chat/archived', component: ArchivedChatsPage }),
@@ -166,7 +172,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
     indexIpc,
     handoffIpc,
     compaction,
+    trust,
     ...floorHarness((event) => ipc.emit(event), turnId),
+    ...teamTalkHarness((event) => ipc.emit(event), turnId),
     /** The host summarized a thread in the background while it was idle. */
     compactIdle: (workspaceId = 'w1', conversationId = '71') =>
       compaction.compact({ workspace_id: workspaceId, conversation_id: conversationId, reason: 'idle', before_tokens: 120_000, after_tokens: 24_000 }),
@@ -251,7 +259,9 @@ export function mountDesktopHarness(container: HTMLElement): void {
           <WorkspaceIpcProvider ipc={ipc}>
             <IndexIpcProvider ipc={indexIpc}>
               <HandoffIpcProvider ipc={handoffIpc}>
-                <RouterProvider router={router} />
+                <TrustIpcProvider ipc={trust}>
+                  <RouterProvider router={router} />
+                </TrustIpcProvider>
               </HandoffIpcProvider>
             </IndexIpcProvider>
           </WorkspaceIpcProvider>

@@ -6,4 +6,6 @@
  */
 export { TrustBadge } from './ui/TrustBadge';
 export { TrustedFoldersList } from './ui/TrustedFoldersList';
+/** The desktop harness hands in its own client (`entries/desktop/devHarness.tsx`). */
+export { TrustIpcProvider } from './model/useFolderTrust';
 export { SandboxUnavailableOffer, useFolderTrusted, useFolderTrustMenu } from './ui/trustEntryPoints';
