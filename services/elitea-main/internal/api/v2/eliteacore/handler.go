@@ -949,8 +949,10 @@ func (h *Handler) Users(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0)
 	total := 0
+	provisional := []provisionalMember{}
 
 	if pidNum, err := strconv.Atoi(projectID); err == nil && pidNum > 0 {
+		provisional = h.provisionalMembers(ctx, pidNum)
 		_ = h.pool.QueryRow(ctx, usersCountQuery, pidNum).Scan(&total) // failure leaves total=0, which is safe
 
 		rows, err := h.pool.Query(ctx, usersPageQuery, pidNum, limit, offset)
@@ -973,7 +975,7 @@ func (h *Handler) Users(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": total})
+	writeJSON(w, http.StatusOK, map[string]any{"rows": items, "total": total, "provisional": provisional})
 }
 
 func (h *Handler) Roles(w http.ResponseWriter, r *http.Request) {

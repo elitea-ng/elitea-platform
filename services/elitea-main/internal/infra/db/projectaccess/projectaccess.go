@@ -24,7 +24,11 @@
 // a suspension that lands after the route gate still refuses the write.
 package projectaccess
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
+)
 
 // Membership returns a boolean SQL expression that is true when the user bound
 // at placeholder userParam may act inside the project bound at projectParam.
@@ -36,7 +40,18 @@ import "fmt"
 // closed. A user or project with no row is not refused by the suspension
 // terms: an assignment row cannot outlive its user, and an unknown project is
 // answered by ProjectExists on the administrator branch (404, not 403).
+//
+// A membership given under an elevation that is still active admits too
+// (ADR-0059 R2.12b): the rows of provisionalgrants.MembershipRows, the same
+// fragment the resolver's project queries union, evaluated at now(). The
+// suspension terms above bind it like any member.
 func Membership(projectParam, userParam int) string {
+	return MembershipAt(projectParam, userParam, "now()")
+}
+
+// MembershipAt is Membership with the provisional memberships evaluated at
+// the SQL time expression at (a placeholder such as "$3"), for a test clock.
+func MembershipAt(projectParam, userParam int, at string) string {
 	return fmt.Sprintf(`(NOT EXISTS (
 					SELECT 1 FROM auth_core__user
 					WHERE id = $%[2]d AND suspended IS NOT FALSE
@@ -52,7 +67,10 @@ func Membership(projectParam, userParam int) string {
 					JOIN auth_core__role role ON role.id = ur.role_id
 					WHERE ur.user_id = $%[2]d AND role.name = 'super_admin'
 						AND role.mode = 'administration'
-				))`, projectParam, userParam)
+					UNION ALL
+					SELECT 1 FROM %[3]s AS provisional
+					WHERE provisional.project_id = $%[1]d AND provisional.user_id = $%[2]d
+				))`, projectParam, userParam, provisionalgrants.MembershipRows(at))
 }
 
 // ProjectExists returns a boolean SQL expression that is true when

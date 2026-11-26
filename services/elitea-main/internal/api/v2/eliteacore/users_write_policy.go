@@ -54,7 +54,7 @@ type membershipChange struct {
 	invited []string
 }
 
-// checkMembershipChange returns the refusal of a change, or nil. A super_admin
+// checkMembershipChange returns the caller and the refusal of a change, or nil. A super_admin
 // caller is answered before any query.
 //
 // `q` is a transaction that holds adminaccess.LockRoleWrites: the write's own
@@ -63,28 +63,37 @@ type membershipChange struct {
 // the lock, so the check and the write see the same state.
 func (h *Handler) checkMembershipChange(
 	r *http.Request, q adminaccess.Querier, change membershipChange,
-) *adminaccess.Refusal {
+) (adminaccess.Caller, *adminaccess.Refusal) {
 	if refusal := reservedMembershipRefusal(r, q, change); refusal != nil {
-		return refusal
+		return adminaccess.Caller{}, refusal
 	}
 	caller, refusal := adminaccess.ResolveCaller(r, h.permissionResolver)
 	if refusal != nil {
-		return refusal
+		return adminaccess.Caller{}, refusal
 	}
 	if refusal := h.membershipRefusal(r, q, caller, change); refusal != nil {
-		return refusal
+		return adminaccess.Caller{}, refusal
 	}
 	if change.asMember {
-		return nil
+		return caller, nil
 	}
 	member, err := adminaccess.IsProjectMember(r.Context(), q, caller.UserID, int64(change.projectID))
 	if err != nil {
-		return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
+		return adminaccess.Caller{}, adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
 	}
 	if !member {
 		adminaccess.MarkCentralOverride(r.Context())
 	}
-	return nil
+	return caller, nil
+}
+
+// provisionalMembership reports whether a membership write is provisional
+// (ADR-0059 decision 5; story R2.12b): written through a CENTRAL permission
+// (the administration routes) by a caller under an elevation. A member of the
+// project who is elevated and writes through the project permission (the
+// `{mode}` routes) is not intercepted: the rule is about central writes.
+func provisionalMembership(caller adminaccess.Caller, change membershipChange) bool {
+	return !change.asMember && caller.Elevated
 }
 
 // membershipRefusal is the rule itself, for a resolved caller.

@@ -25,7 +25,12 @@ const (
 // The membership decision is repeated inside the statement ($6 project, $1 user),
 // so a membership revoked after the HTTP gate cannot be used to write. An
 // administrator is a member of every id, so the project must also exist.
-var insertCurrentSocialFeedbackSQL = `
+//
+// Built at call time, not at package init: the predicate reads the
+// provisional memberships only once the composition root switched them on
+// (provisionalgrants.Enable), which runs after init.
+func insertCurrentSocialFeedbackSQL() string {
+	return `
 	INSERT INTO centry.social_feedbacks (
 		user_id,
 		referrer,
@@ -39,6 +44,7 @@ var insertCurrentSocialFeedbackSQL = `
 	WHERE ` + projectaccess.Membership(6, 1) + `
 		AND ` + projectaccess.ProjectExists(6) + `
 	RETURNING id`
+}
 
 // FeedbackPage selects one page of a listing. SortBy is "id" or "created_at".
 type FeedbackPage struct {
@@ -94,26 +100,25 @@ const listCurrentSocialFeedbackSQL = `
 			FROM (SELECT * FROM visible ORDER BY %[2]s LIMIT $4 OFFSET $5) p
 		), '[]'::json)::text`
 
-var listCurrentSocialFeedbackQueries = func() map[string]string {
-	queries := make(map[string]string, 4)
-	for key, order := range map[string]string{
-		"id":              "id ASC",
-		"id desc":         "id DESC",
-		"created_at":      "created_at ASC, id ASC",
-		"created_at desc": "created_at DESC, id DESC",
-	} {
-		queries[key] = fmt.Sprintf(listCurrentSocialFeedbackSQL, projectaccess.Membership(1, 2), order)
-	}
-	return queries
-}()
+// listCurrentSocialFeedbackOrders are the constant ORDER BY clauses by sort
+// key. The statement is built at call time (see insertCurrentSocialFeedbackSQL).
+var listCurrentSocialFeedbackOrders = map[string]string{
+	"id":              "id ASC",
+	"id desc":         "id DESC",
+	"created_at":      "created_at ASC, id ASC",
+	"created_at desc": "created_at DESC, id DESC",
+}
 
 func feedbackListQuery(page FeedbackPage) (string, bool) {
 	key := page.SortBy
 	if page.Desc {
 		key += " desc"
 	}
-	query, ok := listCurrentSocialFeedbackQueries[key]
-	return query, ok
+	order, ok := listCurrentSocialFeedbackOrders[key]
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf(listCurrentSocialFeedbackSQL, projectaccess.Membership(1, 2), order), true
 }
 
 // CurrentSocialFeedbacksRepository preserves the current shared-table storage
@@ -161,7 +166,7 @@ func (repository *CurrentSocialFeedbacksRepository) CreateCurrentFeedback(
 	var id int64
 	if err := repository.store.QueryRow(
 		ctx,
-		insertCurrentSocialFeedbackSQL,
+		insertCurrentSocialFeedbackSQL(),
 		userID,
 		referrer,
 		description,

@@ -162,7 +162,11 @@ type ElevationReview struct {
 	// ReplacementIssued is required for a sealed elevation and refused for
 	// any other.
 	ReplacementIssued *bool
-	At                time.Time
+	// Confirm are the provisional grants of the elevation (R2.12) the
+	// reviewer confirms: each becomes a standing assignment written by the
+	// reviewer with the source `review`. Only with the outcome justified.
+	Confirm []uuid.UUID
+	At      time.Time
 	// Source, AuthenticationRef and CorrelationID are the event's.
 	Source            string
 	AuthenticationRef string
@@ -175,6 +179,8 @@ type ReviewResult struct {
 	// Reverts is the number of revert entries an `unauthorized` outcome
 	// opened.
 	Reverts int
+	// Confirmed is the number of provisional grants the review confirmed.
+	Confirmed int
 }
 
 // ReviewElevation records the attestation, on tx: the ledger row moves to
@@ -197,6 +203,16 @@ func ReviewElevation(ctx context.Context, tx pgx.Tx, appender securityaudit.Appe
 		return ReviewResult{}, ErrElevationNoAppender
 	case tx == nil:
 		return ReviewResult{}, errors.New("review elevation: no transaction")
+	case len(review.Confirm) > 0 && review.Outcome != ReviewOutcomeJustified:
+		return ReviewResult{}, ErrProvisionalConfirmOutcome
+	}
+	if len(review.Confirm) > 0 {
+		// A confirmation is a role write: the role-writes lock comes first,
+		// before the ledger row, which is the order every role write and
+		// person end takes (role writes, then the elevations).
+		if err := LockRoleWrites(ctx, tx); err != nil {
+			return ReviewResult{}, fmt.Errorf("review elevation: %w", err)
+		}
 	}
 	elevation, err := scanElevation(tx.QueryRow(ctx, `
 SELECT `+elevationColumns+` FROM elitea_auth.admin_elevations WHERE id = $1 FOR UPDATE`, review.ID))
@@ -248,6 +264,9 @@ VALUES ($1, '`+ReviewItemReview+`', $2, $3, NULLIF($4, ''), $5, $6)`,
 		return ReviewResult{}, fmt.Errorf("review elevation: record the review: %w", err)
 	}
 	result := ReviewResult{Elevation: elevation}
+	if result.Confirmed, err = ConfirmProvisionalGrants(ctx, tx, review.ID, review.Confirm, review.ReviewerUserID, at); err != nil {
+		return ReviewResult{}, err
+	}
 	if review.Outcome == ReviewOutcomeUnauthorized {
 		result.Reverts, err = openRevertList(ctx, tx, review.ID, at)
 		if err != nil {
@@ -262,6 +281,9 @@ VALUES ($1, '`+ReviewItemReview+`', $2, $3, NULLIF($4, ''), $5, $6)`,
 	reasons := []string{"outcome:" + review.Outcome}
 	if review.ReplacementIssued != nil {
 		reasons = append(reasons, "replacement_issued:"+strconv.FormatBool(*review.ReplacementIssued))
+	}
+	if result.Confirmed > 0 {
+		reasons = append(reasons, "provisional_confirmed:"+strconv.Itoa(result.Confirmed))
 	}
 	source := review.Source
 	if source == "" {

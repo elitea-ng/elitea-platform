@@ -74,6 +74,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 )
@@ -129,6 +130,10 @@ type bulkInviteResult struct {
 	Status      string `json:"status"`
 	Outcome     string `json:"outcome"`
 	Msg         string `json:"msg"`
+	// Provisional says the membership was given under the caller's
+	// elevation (ADR-0059 R2.12b): in effect while it is active, written to
+	// the project only once its review confirms it.
+	Provisional bool `json:"provisional"`
 }
 
 // bulkInviteSummary counts each outcome once, so a console can say "38 added,
@@ -215,9 +220,17 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if refusal := h.checkBulkInviteSelf(r, hold, users, resolvedProjects); refusal != nil {
+	caller, refusal := h.checkBulkInviteSelf(r, hold, users, resolvedProjects)
+	if refusal != nil {
 		adminaccess.Write(w, r, refusal)
 		return
+	}
+
+	// The route's gate is central: under an elevation every membership it
+	// writes is provisional (ADR-0059 R2.12b).
+	var provisional *adminaccess.Caller
+	if caller.Elevated {
+		provisional = &caller
 	}
 
 	summary := bulkInviteSummary{
@@ -228,7 +241,8 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, userID := range users {
 		for _, projectID := range projects {
-			result := h.bulkInvitePair(r, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role)
+			result := h.bulkInvitePair(r, resolvedUsers[userID], userID, resolvedProjects[projectID], projectID, role,
+				provisional)
 			switch result.Outcome {
 			case bulkInviteOutcomeAdded:
 				summary.Added++
@@ -253,6 +267,7 @@ func (h *Handler) BulkInviteMembers(w http.ResponseWriter, r *http.Request) {
 // bulkInvitePair applies one (user, project) pair and describes what happened.
 func (h *Handler) bulkInvitePair(
 	r *http.Request, user *userTarget, userID int64, project *projectTarget, projectID int64, role string,
+	provisional *adminaccess.Caller,
 ) bulkInviteResult {
 	result := bulkInviteResult{UserID: userID, ProjectID: projectID}
 	if user != nil {
@@ -284,7 +299,8 @@ func (h *Handler) bulkInvitePair(
 			fmt.Sprintf("project %s does not define the role %q", project.name, role))
 	}
 
-	added, err := h.addProjectMembership(r, projectID, userID, *project.roleID)
+	added, err := h.addProjectMembership(r, projectID, userID, *project.roleID, provisional)
+	result.Provisional = provisional != nil
 	switch {
 	case err != nil:
 		return refuse(bulkInviteOutcomeFailed,
@@ -311,13 +327,38 @@ func (h *Handler) bulkInvitePair(
 // time would both read "not a member" and one of them would then report an
 // insert it did not make. ON CONFLICT DO NOTHING makes the second one report
 // `already_member`, which is what happened.
-func (h *Handler) addProjectMembership(r *http.Request, projectID, userID int64, roleID int) (bool, error) {
+//
+// provisional is the elevated caller (ADR-0059 R2.12b), nil otherwise: the
+// role is then a provisional grant of the caller's elevation, not a row of
+// auth_core__project_user_role, and a person who already holds it is
+// already a member.
+func (h *Handler) addProjectMembership(
+	r *http.Request, projectID, userID int64, roleID int, provisional *adminaccess.Caller,
+) (bool, error) {
 	ctx := r.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if provisional != nil {
+		var held bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
+               WHERE project_id = $1 AND user_id = $2 AND role_id = $3)`,
+			projectID, userID, roleID).Scan(&held); err != nil {
+			return false, err
+		}
+		if held {
+			return false, nil
+		}
+		if err := adminaccess.GiveProvisionalMembership(ctx, tx, *provisional, projectID, userID,
+			[]int{roleID}, time.Now()); err != nil {
+			return false, err
+		}
+		return true, tx.Commit(ctx)
+	}
 
 	before, err := projectMemberRoles(ctx, tx, projectID, userID)
 	if err != nil {
@@ -470,10 +511,10 @@ func dedupeIDs(ids []int64) []int64 {
 // its audit record central_override (ADR-0059 R0.6a).
 func (h *Handler) checkBulkInviteSelf(
 	r *http.Request, q adminaccess.Querier, users []int64, projects map[int64]*projectTarget,
-) *adminaccess.Refusal {
+) (adminaccess.Caller, *adminaccess.Refusal) {
 	caller, refusal := adminaccess.ResolveCaller(r, h.resolver)
 	if refusal != nil {
-		return refusal
+		return adminaccess.Caller{}, refusal
 	}
 	ids := make([]int64, 0, len(projects))
 	for id := range projects {
@@ -481,7 +522,7 @@ func (h *Handler) checkBulkInviteSelf(
 	}
 	sort.Slice(ids, func(a, b int) bool { return ids[a] < ids[b] })
 	if refusal := bulkInviteSelfRefusal(r, q, caller, users, ids, projects); refusal != nil {
-		return refusal
+		return adminaccess.Caller{}, refusal
 	}
 	for _, id := range ids {
 		if projects[id] == nil {
@@ -489,14 +530,14 @@ func (h *Handler) checkBulkInviteSelf(
 		}
 		member, err := adminaccess.IsProjectMember(r.Context(), q, caller.UserID, id)
 		if err != nil {
-			return adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
+			return adminaccess.Caller{}, adminaccess.Unresolved("the project roles could not be read, so the role change was refused")
 		}
 		if !member {
 			adminaccess.MarkCentralOverride(r.Context())
 			break
 		}
 	}
-	return nil
+	return caller, nil
 }
 
 // bulkInviteSelfRefusal is the rule itself, for a resolved caller and the

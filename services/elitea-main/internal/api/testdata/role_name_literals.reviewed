@@ -33,7 +33,7 @@
 # the listing's single `admin_role` field and its legacyAdminRoleOrder.
 
 # ── The ADR's table ─────────────────────────────────────────────────────────
-internal/infra/db/projectaccess/projectaccess.go | func Membership | sql:super_admin | 1 | kept | The standing administration role named super_admin passes the project access check of every project. An elevation gives permissions, not the name, and a custom role is not the name: neither passes (middleware/project_authorization_elevation_postgres_integration_test.go). Break-glass repairs the platform; it does not open project content.
+internal/infra/db/projectaccess/projectaccess.go | func MembershipAt | sql:super_admin | 1 | kept | The standing administration role named super_admin passes the project access check of every project. An elevation gives permissions, not the name, and a custom role is not the name: neither passes (middleware/project_authorization_elevation_postgres_integration_test.go). Break-glass repairs the platform; it does not open project content.
 internal/api/v2/eliteacore/handler.go | const usersCountQuery | sql:super_admin | 1 | kept | Holders of the standing super_admin are counted as members of every project; same scope as projectaccess.Membership.
 internal/api/v2/eliteacore/handler.go | const usersPageQuery | sql:super_admin | 2 | kept | Holders of the standing super_admin are listed as members of every project (roles ARRAY['super_admin']); same scope as projectaccess.Membership.
 internal/db/queries/auth_provisioning.sql | query HasAuthAdministrationAdminRole | sql:admin | 1 | kept | admin or super_admin gets the extra project roles at public-project enrollment; narrow roles do not.

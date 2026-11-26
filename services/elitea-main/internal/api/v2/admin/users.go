@@ -598,11 +598,14 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 
 	// The difference, as rolegrants applies it (issues 2499 and 2574): each
 	// role taken and each role given writes one history row in this
-	// transaction, and a role in both sets is not touched.
+	// transaction, and a role in both sets is not touched. Under an
+	// elevation the roles given are provisional (ADR-0059 R2.12a,
+	// assignCentralRoles).
 	origin := grantOrigin(r, caller)
-	if _, err := rolegrants.Replace(
-		ctx, transaction, int64(targetID), mode, requested, origin,
-	); err != nil {
+	provisional, err := assignCentralRoles(ctx, transaction, caller, centralAssignment{
+		userID: targetID, mode: mode, given: given, taken: taken, replace: requested,
+	}, origin)
+	if err != nil {
 		if errors.Is(err, rolegrants.ErrRoleNotFound) {
 			apierr.WriteStatus(w, http.StatusBadRequest, "administration role not found")
 			return
@@ -645,12 +648,19 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 
 	// `role_name` echoes the single form, as before, and is null in the set
 	// form. `role_names` is the user's administration set after the request.
+	// `provisional_role_names` are the roles of it given under the caller's
+	// elevation: in effect while it is active, standing only once its review
+	// confirms them (ADR-0059 R2.12a).
 	var roleName any
 	if single && len(requested) == 1 {
 		roleName = requested[0]
 	}
+	if provisional == nil {
+		provisional = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "user_id": targetID, "role_name": roleName, "role_names": requested,
+		"provisional": len(provisional) > 0, "provisional_role_names": provisional,
 	})
 }
 
@@ -1036,7 +1046,16 @@ func (h *Handler) checkCentralRoles(
 		if err != nil {
 			return adminaccess.Unresolved("the permissions of the role could not be read, so the role change was refused"), nil
 		}
-		if refusal := adminaccess.CheckAssignment(caller.Administration, false, role, required); refusal != nil {
+		// A role given under an elevation is provisional (ADR-0059 R2.12a,
+		// assignCentralRoles), and the elevated person gives only what the
+		// elevation's level holds: the subset is measured against the full
+		// set. A role taken, and every role of a caller who is not
+		// elevated, against the standing set.
+		held := caller.Administration
+		if caller.Elevated && slices.Contains(change.given, role) {
+			held = caller.Effective
+		}
+		if refusal := adminaccess.CheckAssignment(held, false, role, required); refusal != nil {
 			return refusal, nil
 		}
 	}

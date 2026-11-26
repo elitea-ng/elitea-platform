@@ -362,6 +362,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+	enableProvisionalGrants(ctx, pool, logger)
 
 	// The credential governance profile (ADR-0039, #1111). Resolved before any
 	// admission path exists, so a refused governed boot admits nothing.

@@ -63,6 +63,7 @@ type ReviewStore interface {
 	Reviewers(ctx context.Context, id uuid.UUID) ([]int64, error)
 	Items(ctx context.Context, id uuid.UUID) ([]registry.ReviewItem, error)
 	Changes(ctx context.Context, id uuid.UUID, limit, offset int) ([]registry.ElevationAuditRow, int, error)
+	ProvisionalGrants(ctx context.Context, id uuid.UUID) ([]registry.ProvisionalGrant, error)
 	Review(ctx context.Context, review registry.ElevationReview) (registry.ReviewResult, error)
 	Reverts(ctx context.Context, open bool, limit, offset int) ([]registry.RevertEntry, int, error)
 	MarkHandled(ctx context.Context, id uuid.UUID, by int64, at time.Time) (bool, error)
@@ -98,6 +99,11 @@ func (p *PostgresReviews) Items(ctx context.Context, id uuid.UUID) ([]registry.R
 // Changes implements ReviewStore.
 func (p *PostgresReviews) Changes(ctx context.Context, id uuid.UUID, limit, offset int) ([]registry.ElevationAuditRow, int, error) {
 	return registry.ElevationAuditRows(ctx, p.pool, id, limit, offset)
+}
+
+// ProvisionalGrants implements ReviewStore.
+func (p *PostgresReviews) ProvisionalGrants(ctx context.Context, id uuid.UUID) ([]registry.ProvisionalGrant, error) {
+	return registry.ElevationProvisionalGrants(ctx, p.pool, id)
 }
 
 // Review implements ReviewStore.
@@ -170,6 +176,23 @@ type reviewBody struct {
 	Outcome           string `json:"outcome"`
 	Note              string `json:"note"`
 	ReplacementIssued *bool  `json:"replacement_issued"`
+	// ConfirmGrantIDs are the provisional grants (R2.12) the reviewer
+	// confirms, with the outcome justified only.
+	ConfirmGrantIDs []string `json:"confirm_grant_ids"`
+}
+
+// provisionalGrantView is one provisional grant of the elevation (R2.12).
+type provisionalGrantView struct {
+	ID          string      `json:"id"`
+	Kind        string      `json:"kind"`
+	Person      personBody  `json:"person"`
+	GrantedBy   personBody  `json:"granted_by"`
+	Role        *string     `json:"role"`
+	ProjectID   *int64      `json:"project_id"`
+	ProjectRole *string     `json:"project_role"`
+	GrantedAt   time.Time   `json:"granted_at"`
+	ConfirmedAt *time.Time  `json:"confirmed_at"`
+	ConfirmedBy *personBody `json:"confirmed_by"`
 }
 
 type attestationView struct {
@@ -217,13 +240,14 @@ type revertView struct {
 }
 
 type reviewView struct {
-	Elevation       elevationView        `json:"elevation"`
-	Reviewers       []personBody         `json:"reviewers"`
-	CanReview       bool                 `json:"can_review"`
-	Review          *attestationView     `json:"review"`
-	ReviewerChanges []reviewerChangeView `json:"reviewer_changes"`
-	Changes         changesView          `json:"changes"`
-	Reverts         []revertView         `json:"reverts"`
+	Elevation         elevationView          `json:"elevation"`
+	Reviewers         []personBody           `json:"reviewers"`
+	CanReview         bool                   `json:"can_review"`
+	Review            *attestationView       `json:"review"`
+	ReviewerChanges   []reviewerChangeView   `json:"reviewer_changes"`
+	Changes           changesView            `json:"changes"`
+	Reverts           []revertView           `json:"reverts"`
+	ProvisionalGrants []provisionalGrantView `json:"provisional_grants"`
 }
 
 type revertListBody struct {
@@ -274,6 +298,22 @@ func (h *ReviewsHandler) Write(w http.ResponseWriter, r *http.Request) {
 			"outcome must be justified or unauthorized")
 		return
 	}
+	// The confirmations of provisional grants (R2.12): only with the outcome
+	// justified, never with unauthorized.
+	confirm := make([]uuid.UUID, 0, len(body.ConfirmGrantIDs))
+	for _, raw := range body.ConfirmGrantIDs {
+		grant, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			writeElevationRefusal(w, http.StatusBadRequest, CodeElevationRequestInvalid,
+				"confirm_grant_ids must hold provisional grant ids")
+			return
+		}
+		confirm = append(confirm, grant)
+	}
+	if len(confirm) > 0 && body.Outcome != registry.ReviewOutcomeJustified {
+		h.writeReviewError(w, r, registry.ErrProvisionalConfirmOutcome)
+		return
+	}
 	principal, _ := auth.UserFromContext(r.Context())
 	result, err := h.store.Review(r.Context(), registry.ElevationReview{
 		ID:                id,
@@ -281,6 +321,7 @@ func (h *ReviewsHandler) Write(w http.ResponseWriter, r *http.Request) {
 		Outcome:           body.Outcome,
 		Note:              strings.TrimSpace(body.Note),
 		ReplacementIssued: body.ReplacementIssued,
+		Confirm:           confirm,
 		At:                h.now().UTC(),
 		Source:            securityaudit.ElevationSourceConsole,
 		AuthenticationRef: browserSessionRef(principal.BrowserSessionRef),
@@ -449,9 +490,17 @@ func (h *ReviewsHandler) writeReview(w http.ResponseWriter, r *http.Request, ele
 		h.writeReviewError(w, r, err)
 		return
 	}
+	grants, err := h.store.ProvisionalGrants(ctx, elevation.ID)
+	if err != nil {
+		h.writeReviewError(w, r, err)
+		return
+	}
 	ids := append([]int64{elevation.UserID, elevation.ApproverUserID}, reviewers...)
 	for _, item := range items {
 		ids = append(ids, item.UserID, item.ActorUserID, item.HandledBy)
+	}
+	for _, grant := range grants {
+		ids = append(ids, grant.UserID, grant.GrantedBy, grant.ConfirmedBy)
 	}
 	people, ok := h.people(w, r, ids)
 	if !ok {
@@ -459,12 +508,16 @@ func (h *ReviewsHandler) writeReview(w http.ResponseWriter, r *http.Request, ele
 	}
 	now := h.now().UTC()
 	view := reviewView{
-		Elevation:       elevationViewOf(elevation, now, 0, people, true),
-		Reviewers:       make([]personBody, 0, len(reviewers)),
-		CanReview:       elevation.ReviewState == registry.ElevationReviewPending && slices.Contains(reviewers, actor),
-		ReviewerChanges: []reviewerChangeView{},
-		Changes:         changesView{Total: total, Rows: make([]changeView, 0, len(changes))},
-		Reverts:         []revertView{},
+		Elevation:         elevationViewOf(elevation, now, 0, people, true),
+		Reviewers:         make([]personBody, 0, len(reviewers)),
+		CanReview:         elevation.ReviewState == registry.ElevationReviewPending && slices.Contains(reviewers, actor),
+		ReviewerChanges:   []reviewerChangeView{},
+		Changes:           changesView{Total: total, Rows: make([]changeView, 0, len(changes))},
+		Reverts:           []revertView{},
+		ProvisionalGrants: make([]provisionalGrantView, 0, len(grants)),
+	}
+	for _, grant := range grants {
+		view.ProvisionalGrants = append(view.ProvisionalGrants, provisionalGrantViewOf(grant, people))
 	}
 	for _, id := range reviewers {
 		view.Reviewers = append(view.Reviewers, personOf(id, people))
@@ -518,6 +571,24 @@ func changeViewOf(c registry.ElevationAuditRow) changeView {
 	if c.EntityID != 0 {
 		id := c.EntityID
 		view.EntityID = &id
+	}
+	return view
+}
+
+func provisionalGrantViewOf(grant registry.ProvisionalGrant, people map[int64]Person) provisionalGrantView {
+	view := provisionalGrantView{
+		ID: grant.ID.String(), Kind: grant.Kind, Person: personOf(grant.UserID, people),
+		GrantedBy: personOf(grant.GrantedBy, people), Role: optionalString(grant.RoleName),
+		ProjectRole: optionalString(grant.ProjectRoleName), GrantedAt: grant.CreatedAt,
+		ConfirmedAt: optionalTime(grant.ConfirmedAt),
+	}
+	if grant.ProjectID > 0 {
+		project := grant.ProjectID
+		view.ProjectID = &project
+	}
+	if grant.ConfirmedBy > 0 {
+		by := personOf(grant.ConfirmedBy, people)
+		view.ConfirmedBy = &by
 	}
 	return view
 }
