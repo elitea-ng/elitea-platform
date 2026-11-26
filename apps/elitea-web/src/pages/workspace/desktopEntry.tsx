@@ -51,7 +51,7 @@ export function WorkspaceSessionEntry(): React.JSX.Element {
 }
 
 /** Settings › Troubleshoot (the Doctor); nothing outside `desktop` (an unknown settings tab renders empty). */
-export function TroubleshootEntry(): React.JSX.Element | null {
+function TroubleshootEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -61,7 +61,7 @@ export function TroubleshootEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Approval rules (#1216); nothing outside `desktop`. */
-export function RulesEntry(): React.JSX.Element | null {
+function RulesEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -71,7 +71,7 @@ export function RulesEntry(): React.JSX.Element | null {
 }
 
 /** Settings › MCP servers (#1230); nothing outside `desktop`. */
-export function McpEntry(): React.JSX.Element | null {
+function McpEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -81,7 +81,7 @@ export function McpEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Hooks (#1237); nothing outside `desktop`. */
-export function HooksEntry(): React.JSX.Element | null {
+function HooksEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -91,7 +91,7 @@ export function HooksEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Computer use (ADR-0047 decision 7, #1584); nothing outside `desktop`. */
-export function ComputerUseEntry(): React.JSX.Element | null {
+function ComputerUseEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>
@@ -101,7 +101,7 @@ export function ComputerUseEntry(): React.JSX.Element | null {
 }
 
 /** Settings › Trusted folders (ADR-0061 decision 5i, #3062); nothing outside `desktop`. */
-export function TrustedFoldersEntry(): React.JSX.Element | null {
+function TrustedFoldersEntry(): React.JSX.Element | null {
   if (import.meta.env.MODE !== 'desktop') return null;
   return (
     <Suspense fallback={null}>

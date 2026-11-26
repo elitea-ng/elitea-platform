@@ -29,7 +29,7 @@ export const DESKTOP_SETTINGS_TABS = [
 export type DesktopSettingsTab = (typeof DESKTOP_SETTINGS_TABS)[number]['id'];
 
 /** The build is the desktop app (`mode` defaults to this build's). */
-export function isDesktopBuild(mode: string = import.meta.env.MODE): boolean {
+function isDesktopBuild(mode: string = import.meta.env.MODE): boolean {
   return mode === 'desktop';
 }
 
