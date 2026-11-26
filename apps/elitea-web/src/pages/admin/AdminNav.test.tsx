@@ -127,6 +127,22 @@ afterEach(() => {
 
 /* ── the drift gate ────────────────────────────────────────────────────── */
 
+/**
+ * The Models and spend pages of R3.5a (issue 2535). The two-group navigation
+ * renders while the `admin_console_areas` switch is off, and then the
+ * Configuration page still mounts the gateway editor whose tabs these pages
+ * are, so the old navigation reaches each of them through Configuration.
+ */
+const SIX_AREA_ONLY_ROUTES = new Set([
+  '/models/providers',
+  '/models/pricing',
+  '/models/tool-prices',
+  '/models/usage',
+  '/models/status',
+  '/models/logs',
+  '/budgets/alerts',
+]);
+
 describe('every nav target is a real route', () => {
   it('points only at paths the admin router actually declares', () => {
     // Derived from the ROUTER, never from a list maintained here — a
@@ -157,7 +173,7 @@ describe('every nav target is a real route', () => {
     // Descriptors is the one this caught — the reference has it in no nav group
     // at all.
     const routed = Object.keys(createAdminRouter().routesById).filter(
-      (id) => id !== '__root__' && id !== '/',
+      (id) => id !== '__root__' && id !== '/' && !SIX_AREA_ONLY_ROUTES.has(id),
     );
     const targets = new Set(adminNavGroups().flatMap((group) => group.items.map((item) => item.path)));
     for (const route of routed) {
@@ -863,7 +879,15 @@ function serveDocument(document: ConsoleDocument): void {
 const EVERYTHING = {
   people_access: ['users', 'access', 'identity-providers', 'scim'],
   projects: ['projects', 'app-requests'],
-  models_spend: ['llm-governance', 'budgets-alerts'],
+  models_spend: [
+    'providers-models',
+    'models-pricing',
+    'tool-prices',
+    'usage',
+    'logs',
+    'llm-governance',
+    'budgets-alerts',
+  ],
   agents_governance: [
     'agent-registry',
     'connector-requests',
@@ -890,8 +914,8 @@ const EVERYTHING = {
 const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>> = {
   super_admin: EVERYTHING,
   admin: EVERYTHING,
-  // The gateway tabs are still tabs of Configuration (R3.5a), which stands for them.
-  llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
+  // The gateway tabs are pages of Models and spend since R3.5a (issue 2535).
+  llm_manager: { projects: ['projects'], models_spend: EVERYTHING.models_spend },
   // SCIM is a page of its own since R3.6 (issue 2537).
   project_administrator: {
     people_access: ['scim'],
@@ -900,8 +924,6 @@ const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>>
   },
   // access.roles.view opens Access, at read (R3.6, R3.9a).
   security_auditor: { people_access: ['access'], security: ['audit-trail'] },
-  // Its one name opens Break-glass, whose page has not shipped.
-  emergency_access: {},
 };
 
 function renderedAreas(): Record<string, string[]> {
@@ -970,6 +992,22 @@ describe('the six labelled areas', () => {
     }, testTimeout(30_000));
   }
 
+  // Its one name opens Break-glass, whose page has not shipped: the document
+  // opens no area, and the console shows no navigation at all (issue 2533).
+  it('shows the emergency_access persona no navigation', async () => {
+    serveDocument(goldenDocument('emergency_access'));
+    window.history.replaceState(null, '', '/admin/app/projects');
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <RouterProvider router={createAdminRouter()} />
+        </ThemeProvider>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('admin-item-denied')).toHaveAttribute('data-item-id', 'projects');
+    expect(screen.queryByTestId('admin-nav')).toBeNull();
+  }, testTimeout(30_000));
+
   it('labels each area', async () => {
     await mountAdmin('/users');
     const area = screen.getByTestId('admin-nav-area-models_spend');
@@ -992,12 +1030,13 @@ describe('the six labelled areas', () => {
     expect(within(denied).getByRole('heading', { level: 1 })).toHaveTextContent('Kill switch');
   }, testTimeout(30_000));
 
-  // The auditor's first item is Access (R3.6), where it lands.
-  it('lands a caller the document does not open Users to on its first item', async () => {
+  // The index is Home (R3.3a, issue 2533), not Users: a caller the document
+  // does not open Users to is neither refused nor sent away.
+  it('renders Home at the index for a caller the document does not open Users to', async () => {
     serveDocument(goldenDocument('security_auditor'));
     await mountAdmin('/');
-    await screen.findByTestId('admin-nav-item-access');
-    await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/access'));
+    expect(await screen.findByTestId('admin-home')).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/admin/app/');
     expect(screen.queryByTestId('admin-item-denied')).toBeNull();
   }, testTimeout(30_000));
 

@@ -417,3 +417,52 @@ func TestTheSchemaListNamesExactlyTheReadableSections(t *testing.T) {
 		}
 	}
 }
+
+// Each listed section's `level` (R3.7, issue 2538) is the answer the save
+// gives: `write` exactly when a PUT of its values is not refused, `read`
+// otherwise. The page disables a `read` section's save from this field, so a
+// level that disagreed with the PUT would either offer a save that is
+// refused or withhold one that would pass.
+func TestTheSchemaListLevelIsTheSaveAnswer(t *testing.T) {
+	holders := [][]string{
+		{adminaccess.RuntimePlugins},
+		{adminaccess.RuntimePlugins, adminaccess.ConfigurationGovernance},
+		legacyAdministratorNames,
+	}
+	for _, name := range adminaccess.Names() {
+		if row, _ := adminaccess.Lookup(name); len(row.Narrows) > 0 {
+			holders = append(holders, []string{name})
+		}
+	}
+	sawRead, sawWrite := false, false
+	for _, holder := range holders {
+		router := newConfigRouter(holder...)
+		rec := serveConfig(t, router, http.MethodGet, configSchemasPath, "")
+		if rec.Code != http.StatusOK {
+			continue
+		}
+		var schemas struct {
+			Sections []struct {
+				ID    string `json:"id"`
+				Level string `json:"level"`
+			} `json:"sections"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &schemas); err != nil {
+			t.Fatalf("decode the schema list: %v", err)
+		}
+		for _, section := range schemas.Sections {
+			want := "write"
+			if sectionAnswer(t, router, http.MethodPut, section.ID) == http.StatusForbidden {
+				want = "read"
+			}
+			if section.Level != want {
+				t.Errorf("holder %v, section %s: level %q, the save answers as %q", holder, section.ID, section.Level, want)
+			}
+			sawRead = sawRead || section.Level == "read"
+			sawWrite = sawWrite || section.Level == "write"
+		}
+	}
+	if !sawRead || !sawWrite {
+		t.Fatalf("the holders never listed both levels (read %v, write %v): the check proves nothing", sawRead, sawWrite)
+	}
+}

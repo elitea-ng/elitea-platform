@@ -26,6 +26,8 @@ import type {
 } from '@/shared/api/generated/model';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonFields, type AdminReason } from '../adminDangerousAction';
+
 export const INVENTORY_PAGE_SIZE = 100;
 
 /** The inventory filters as typed; blank means "any". */
@@ -82,11 +84,24 @@ export function useCredentialInventory(filters: InventoryFilters, offset: number
   });
 }
 
+/** A revocation: a dangerous action whose reason is the one the audit event records (ADR-0059 R3.8b). */
+export interface AdminCredentialRevoke {
+  readonly kind: CredentialRevokeRequest['kind'];
+  readonly credentialId: string;
+  readonly reason: AdminReason;
+}
+
 export function useRevokeCredential() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: CredentialRevokeRequest) =>
-      unwrapBody(await revokeInventoryCredential(body)) as CredentialRevokeResult,
+    mutationFn: async ({ kind, credentialId, reason }: AdminCredentialRevoke) =>
+      unwrapBody(
+        await revokeInventoryCredential({
+          kind,
+          credential_id: credentialId,
+          ...reasonFields('POST /api/v2/admin/credential_inventory/revoke', reason),
+        }),
+      ) as CredentialRevokeResult,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: INVENTORY_KEY }),
   });
 }

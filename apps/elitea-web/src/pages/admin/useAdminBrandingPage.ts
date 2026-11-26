@@ -39,6 +39,7 @@ import {
   useUploadBrandingAsset,
   type BrandingAssetKind,
 } from './api/adminBrandingApi';
+import type { AdminReason } from './adminDangerousAction';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { useBrandingDirtyStore } from './brandingDirty.store';
@@ -116,7 +117,7 @@ export interface AdminBrandingPageState {
   readonly resetOpen: boolean;
   readonly onRequestReset: () => void;
   readonly onCancelReset: () => void;
-  readonly onConfirmReset: () => void;
+  readonly onConfirmReset: (reason: AdminReason) => void;
   readonly uploadingKind: BrandingAssetKind | undefined;
   readonly uploadError: BrandingUploadError | undefined;
   readonly onUploadAsset: (kind: BrandingAssetKind, file: File, target: BrandingUploadTarget) => void;
@@ -247,10 +248,10 @@ export function useAdminBrandingPage(): AdminBrandingPageState {
 
   const onRequestReset = useCallback(() => setResetOpen(true), []);
   const onCancelReset = useCallback(() => setResetOpen(false), []);
-  const onConfirmReset = useCallback(() => {
+  const onConfirmReset = useCallback((reason: AdminReason) => {
     setResetOpen(false);
     save.reset();
-    reset.mutate(undefined, {
+    reset.mutate(reason, {
       onSuccess: () => {
         setDraft({});
         setToast({

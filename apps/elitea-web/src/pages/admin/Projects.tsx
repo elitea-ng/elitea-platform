@@ -51,7 +51,7 @@
  *
  * So the question the issue asked — what should deleting a project do about the
  * tenant schema and data? — is answered by the server, and this page's job is
- * to make the answer legible before the fact: `./AdminProjectDeleteDialog.tsx`
+ * to make the answer legible before the fact: `./AdminProjectDeleteFacts.tsx`
  * lists what is about to be destroyed, and reports which STEP failed when one
  * does. A provisioning failure is a position in a pipeline, not a status code.
  *
@@ -84,7 +84,8 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 
 import { AdminProjectCloudExecutorDialog } from './AdminProjectCloudExecutorDialog';
 import { AdminProjectCreateDialog } from './AdminProjectCreateDialog';
-import { AdminProjectDeleteDialog } from './AdminProjectDeleteDialog';
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
+import { AdminProjectDeleteFacts, projectDeleteCopy } from './AdminProjectDeleteFacts';
 import { AdminProjectsTable } from './AdminProjectsTable';
 import { ProjectActivityDrawer } from './ProjectActivityDrawer';
 import { ProjectMemberDialog } from './ProjectMemberDialog';
@@ -314,14 +315,16 @@ function ProjectsPage() {
         button is safe to press.
       */}
       {selectedCount > 0 ? (
-        <AdminProjectDeleteDialog
+        <AdminDangerousActionDialog
           open={provisioning.isDeleteOpen}
-          projects={provisioning.selectedProjects}
-          isDeleting={provisioning.isDeleting}
-          failures={provisioning.deleteFailures}
+          action="DELETE /api/v2/projects/project/{mode}/{projectID}"
+          {...projectDeleteCopy(provisioning.selectedProjects, provisioning.isDeleting)}
+          pending={provisioning.isDeleting}
           onClose={provisioning.onCloseDelete}
           onConfirm={provisioning.onConfirmDelete}
-        />
+        >
+          <AdminProjectDeleteFacts projects={provisioning.selectedProjects} failures={provisioning.deleteFailures} />
+        </AdminDangerousActionDialog>
       ) : null}
     </DrawerPage>
   );

@@ -1690,19 +1690,22 @@ export async function createAgentThroughForm(
     MAX_AGENT_NAME,
   );
 
-  // Armed BEFORE the navigation: the response is what carries the project id
-  // and the stored version, so the assertions below read what the server
-  // actually wrote rather than what the test constructed.
-  const created = page.waitForResponse(
-    (r) => APPLICATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
-    { timeout: 30_000 },
-  );
-
-  await page.goto(`${BASE_URL}/app/agents/create`);
+  // The form is ready when its input is: waiting for `load` as well spent the
+  // webkit budget on the page's own resources (issue 3052's class of flake).
+  await page.goto(`${BASE_URL}/app/agents/create`, { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('agent-name-input')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('agent-name-input').fill(name);
   await page.getByTestId('agent-description-input').fill(`${name} description`);
   await expect(page.getByTestId('agent-save-button')).toBeEnabled({ timeout: 10_000 });
+
+  // Armed just before the click that sends it, not before the navigation: its
+  // 30 s timer then measures the save, not the page load. The response carries
+  // the project id and the stored version, so the assertions below read what
+  // the server wrote rather than what the test constructed.
+  const created = page.waitForResponse(
+    (r) => APPLICATIONS_RE.test(new URL(r.url()).pathname) && r.request().method() === 'POST',
+    { timeout: 30_000 },
+  );
   await page.getByTestId('agent-save-button').click();
 
   const response = await created;

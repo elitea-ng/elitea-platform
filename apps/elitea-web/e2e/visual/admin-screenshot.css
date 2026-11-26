@@ -12,3 +12,9 @@
 [data-testid='delegation-review-table'] {
   visibility: hidden !important;
 }
+
+/* Home's queue counts follow the rows the other specs leave behind (issue
+   2533): hidden, the cards around them are compared. */
+[data-testid^='admin-home-queue-count-'] {
+  visibility: hidden !important;
+}

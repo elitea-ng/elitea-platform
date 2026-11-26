@@ -589,6 +589,26 @@
     },
     {
       "file": null,
+      "route": "/admin/app/",
+      "targetComponent": "src/pages/admin/Home.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Home (ADR-0059 R3.3a): one card per area the capability document opens, with its items, and the queues the caller decides (App requests, Connector requests, Delegations awaiting review). The counts are hidden in the snapshot: they follow rows other specs leave behind.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-home-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/",
+      "targetComponent": "src/pages/admin/Home.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Home (ADR-0059 R3.3a): one card per area the capability document opens, with its items, and the queues the caller decides (App requests, Connector requests, Delegations awaiting review). The counts are hidden in the snapshot: they follow rows other specs leave behind.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-home-light-visual-linux.png"
+    },
+    {
+      "file": null,
       "route": "/admin/app/users",
       "targetComponent": "src/pages/admin/Users.tsx",
       "theme": "dark",
@@ -836,6 +856,146 @@
       "notes": "Per-project LLM budgets (gap G4): the All/Team/Personal tabs, the search bar and the DataGrid of limit, spend and utilisation. Two states are worth a baseline and neither is the happy path — a project whose authored ceiling is NOT enforced carries a warning chip beside the number, and the G12 banner appears above the table when the seeded gateway reports it holds no NATS counter. The E2E stack runs the gateway without one, so that banner is the DEFAULT state here rather than an edge case.",
       "surface": "admin",
       "baseline": null
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/providers",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Providers and models (ADR-0059 R3.5a): the platform providers and platform models, and the platform default model, formerly the Providers & models tab of Configuration › LLM Proxy.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-providers-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/providers",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Providers and models (ADR-0059 R3.5a): the platform providers and platform models, and the platform default model, formerly the Providers & models tab of Configuration › LLM Proxy.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-providers-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/pricing",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Models and pricing (R3.5a): the gateway model catalogue with its prices and the usage window, formerly the Models & pricing tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-models-pricing-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/pricing",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Models and pricing (R3.5a): the gateway model catalogue with its prices and the usage window, formerly the Models & pricing tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-models-pricing-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/tool-prices",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Tool prices (R3.5a): the metered tool prices, formerly the Tools tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-tool-prices-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/tool-prices",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Tool prices (R3.5a): the metered tool prices, formerly the Tools tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-tool-prices-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/usage",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Usage (R3.5a): the gateway usage report under the Usage | Status strip, formerly the Usage tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-usage-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/usage",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Usage (R3.5a): the gateway usage report under the Usage | Status strip, formerly the Usage tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-usage-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/status",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Gateway status (R3.5a): the Status tab of Usage. The snapshot times are masked.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-status-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/status",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Gateway status (R3.5a): the Status tab of Usage. The snapshot times are masked.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-status-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/logs",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Logs (R3.5a): the gateway request log, formerly the Logs tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-logs-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/models/logs",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Logs (R3.5a): the gateway request log, formerly the Logs tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-llm-logs-light-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/budgets/alerts",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "dark",
+      "wiringStatus": "wired",
+      "notes": "Budget alerts (R3.5a): the soft-alert settings under the Budgets | Budget alerts strip, formerly the Budget alerts tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-budget-alerts-visual-linux.png"
+    },
+    {
+      "file": null,
+      "route": "/admin/app/budgets/alerts",
+      "targetComponent": "src/pages/admin/ModelsSpendPages.tsx",
+      "theme": "light",
+      "wiringStatus": "wired",
+      "notes": "The light half: Budget alerts (R3.5a): the soft-alert settings under the Budgets | Budget alerts strip, formerly the Budget alerts tab.",
+      "surface": "admin",
+      "baseline": "e2e/snapshots/visual/admin.visual.spec.ts-snapshots/admin-budget-alerts-light-visual-linux.png"
     },
     {
       "file": null,

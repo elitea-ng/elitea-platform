@@ -37,6 +37,23 @@ function requestRows(response: unknown): ConnectorRequest[] {
   throw new Error('connector requests: the server answered with an unrecognised body');
 }
 
+function requestTotal(response: unknown): number {
+  const body = unwrapBody(response);
+  if (typeof body === 'object' && body !== null) {
+    const total = (body as { total?: unknown }).total;
+    if (typeof total === 'number') return total;
+  }
+  throw new Error('connector requests: the server answered with an unrecognised body');
+}
+
+/** How many requests of one state the queue holds: the list's own total (Admin › Home, issue 2533). */
+export function useAdminConnectorRequestCount(state: ConnectorRequestState) {
+  return useQuery({
+    queryKey: [...KEY, state, 'total'],
+    queryFn: async () => requestTotal(await listAdminConnectorRequests({ state })),
+  });
+}
+
 /** The queue, of one state or every state (`''`). */
 export function useAdminConnectorRequests(state: ConnectorRequestState | '') {
   return useQuery({

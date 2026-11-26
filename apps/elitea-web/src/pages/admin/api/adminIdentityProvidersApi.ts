@@ -45,6 +45,8 @@ import {
 import { eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
 
+import { reasonFields, reasonHeaders, type AdminReason } from '../adminDangerousAction';
+
 /** Federation is a deployment fact; there is no project-scoped view of it. */
 const ADMIN_MODE = 'administration';
 
@@ -175,15 +177,18 @@ function previousIssuerOf(body: SavedProviderBody): string | undefined {
 export function useSaveAdminIdentityProvider(): UseMutationResult<
   AdminIdentityProviderSaveResult,
   Error,
-  AdminIdentityProviderDraft
+  { readonly draft: AdminIdentityProviderDraft; readonly reason: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (draft: AdminIdentityProviderDraft) => {
+    mutationFn: async ({ draft, reason }) => {
+      // The server tells a trust change, a disable and a settings edit apart
+      // from the stored row, so every save carries the reason (ADR-0059 R3.8b).
       const body: Record<string, unknown> = {
         kind: draft.kind,
         display_name: draft.displayName,
         enabled: draft.enabled,
+        ...reasonFields('PUT /api/v2/admin/identity_providers/administration/{key} trust', reason),
       };
       // Exactly one document is sent, and it is the one the kind names. Sending
       // both would ask the server to store a definition of one protocol
@@ -212,11 +217,18 @@ export function useSaveAdminIdentityProvider(): UseMutationResult<
 }
 
 /** `DELETE /admin/identity_providers/administration/{key}`. */
-export function useDeleteAdminIdentityProvider(): UseMutationResult<void, Error, string> {
+export function useDeleteAdminIdentityProvider(): UseMutationResult<
+  void,
+  Error,
+  { readonly key: string; readonly reason: AdminReason }
+> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (key: string) => {
-      await eliteaFetch<unknown>(providerUrl(key), { method: 'DELETE' });
+    mutationFn: async ({ key, reason }) => {
+      await eliteaFetch<unknown>(providerUrl(key), {
+        method: 'DELETE',
+        ...reasonHeaders('DELETE /api/v2/admin/identity_providers/administration/{key}', reason),
+      });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: adminIdentityProviderKeys.all }),
   });

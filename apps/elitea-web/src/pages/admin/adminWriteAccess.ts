@@ -150,13 +150,16 @@ export function useAdminWriteControl(): AdminWriteControlState {
  * refuses. The action is disabled, never hidden, when the page is view only or
  * when the caller lacks the action's permission. Presentation only, read from
  * `window.admin_ui_config.permissions` as the hiding it replaces was; the
- * server still decides every write. When that list is not the caller's (no
+ * server still decides every write. Further names are alternatives the
+ * server's gate accepts for the same action (a legacy name it narrows).
+ * When that list is not the caller's (no
  * config in dev, or a resolver failure the handler reports), the page's state
  * stands: failure must not read as no access.
  */
-export function useAdminActionControl(permission: string): AdminWriteControlState {
+export function useAdminActionControl(permission: string, ...alternatives: readonly string[]): AdminWriteControlState {
   const page = useAdminWriteControl();
-  if (page.disabled || !adminUiPermissionsKnown() || adminUiShowsControlFor(permission)) return page;
+  const held = [permission, ...alternatives].some((name) => adminUiShowsControlFor(name));
+  if (page.disabled || !adminUiPermissionsKnown() || held) return page;
   return {
     disabled: true,
     reason: t('pages.admin.viewOnly.actionReason', 'Your roles can change this page, but not with this action.'),

@@ -40,8 +40,9 @@ import {
   shareScopeOf,
   sharedWithOf,
 } from './platformModelGrant';
-import { PlatformDefaultModelCard } from './PlatformDefaultModelCard';
-import { ConfirmModelDelete } from './PlatformModelConfirmDelete';
+import { PlatformDefaultModelCard, PlatformModelDeleteImpact } from './PlatformDefaultModelCard';
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
+import type { AdminReason } from './adminDangerousAction';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable, useAdminWriteControl } from './adminWriteAccess';
 import { configFailureReason } from './api/adminConfigurationApi';
@@ -250,6 +251,45 @@ function ModelAlerts({
   );
 }
 
+/**
+ * Deleting a platform model withdraws it from every project at once, and the
+ * next call from any of them answers model_not_found: a dangerous action with
+ * a reason (ADR-0059 R3.8b).
+ */
+function ConfirmModelDelete({
+  model,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  readonly model: PlatformModel | undefined;
+  readonly pending: boolean;
+  readonly onClose: () => void;
+  readonly onConfirm: (model: PlatformModel, reason: AdminReason) => void;
+}): ReactNode {
+  if (model === undefined) return null;
+  return (
+    <AdminDangerousActionDialog
+      open
+      action="DELETE /api/v2/admin/gateway/platform_models/{configID}"
+      title={t('pages.admin.platformModels.confirm.deleteTitle', 'Delete the platform model')}
+      change={t(
+        'pages.admin.platformModels.confirmDelete',
+        'Deleting “{{name}}” withdraws it from every project at once. Calls addressing it then fail with model_not_found.',
+        { name: model.elitea_title },
+      )}
+      reach={{ count: undefined, unit: 'projects' }}
+      target={model.elitea_title}
+      confirmLabel={t('pages.admin.platformModels.delete', 'Delete')}
+      pending={pending}
+      onClose={onClose}
+      onConfirm={(reason) => onConfirm(model, reason)}
+    >
+      <PlatformModelDeleteImpact modelId={model.id} />
+    </AdminDangerousActionDialog>
+  );
+}
+
 export function PlatformModelsPanel(): ReactNode {
   const [editor, setEditor] = useState<{ readonly open: boolean; readonly row: PlatformModel | undefined }>(
     { open: false, row: undefined },
@@ -326,9 +366,10 @@ export function PlatformModelsPanel(): ReactNode {
 
       <ConfirmModelDelete
         model={pendingDelete}
-        onCancel={() => setPendingDelete(undefined)}
-        onConfirm={(row) => {
-          deleteModel.mutate(row.id, { onSuccess: () => setPendingDelete(undefined) });
+        pending={deleteModel.isPending}
+        onClose={() => setPendingDelete(undefined)}
+        onConfirm={(model, reason) => {
+          deleteModel.mutate({ id: model.id, reason }, { onSuccess: () => setPendingDelete(undefined) });
         }}
       />
 

@@ -27,7 +27,9 @@
  * `serverRows` already carries the new column. Bumping first would re-seed from
  * the matrix that still lacks it, and the effect would not fire a second time.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+
+import { t } from '@/shared/i18n';
 
 import { ADMIN_ACTION_PERMISSION, ADMIN_ITEM } from './adminItemIds';
 import { adminUiShowsControlFor } from './adminUiConfig';
@@ -41,6 +43,7 @@ import {
   type PermissionMatrixRow,
   type PermissionMatrixTarget,
 } from './api/adminRolesApi';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 import { useAdminRoleDefinitions, type AdminRoleDefinitionsState } from './useAdminRoleDefinitions';
 
 /** The four tabs, in render order, with the endpoint each addresses. */
@@ -95,6 +98,8 @@ interface AdminRolesMatrixState {
   readonly onSave: () => void;
   /** `undefined` ⇒ "Apply to Projects" is not offered on this tab. */
   readonly onApplyToProjects: (() => void) | undefined;
+  /** The confirmation of a matrix save or apply (ADR-0059 R3.8b: both are critical). */
+  readonly confirmDialog: ReactNode;
 
 }
 
@@ -167,6 +172,8 @@ export function useAdminRolesPage(): AdminRolesPageState {
   const access = useAdminWritable(ADMIN_ITEM.access);
   const saveMatrix = access.guard(useSavePermissionMatrix());
   const syncMatrix = access.guard(useSyncPermissionMatrix());
+  const confirm = useAdminDangerousConfirm();
+  const { ask } = confirm;
 
   const serverRows = matrixQuery.data?.rows;
   const deprecatedList = matrixQuery.data?.deprecated;
@@ -211,25 +218,51 @@ export function useAdminRolesPage(): AdminRolesPageState {
 
   const onSave = useCallback(() => {
     if (!rows) return;
-    setErrorMessage('');
-    setSavedMessage('');
-    saveMatrix.mutate(
-      { target, rows },
-      {
-        onSuccess: () => setSavedMessage('saved'),
-        onError: (error) => reportFailure('save', error),
+    ask({
+      action: 'PUT /api/v2/admin/permissions/{scope}/{mode}',
+      title: t('pages.admin.roles.confirm.saveTitle', 'Save the permission matrix'),
+      change: t(
+        'pages.admin.roles.confirm.saveBody',
+        'Every role of this tab holds exactly the permissions ticked here, from the next request of everyone who holds it.',
+      ),
+      reach: { count: undefined, unit: tab.scope === 'administration' ? 'people' : 'projects' },
+      target: tab.key,
+      confirmLabel: t('pages.admin.roles.action.save', 'Save'),
+      run: (reason) => {
+        setErrorMessage('');
+        setSavedMessage('');
+        saveMatrix.mutate(
+          { target, rows, reason },
+          {
+            onSuccess: () => setSavedMessage('saved'),
+            onError: (error) => reportFailure('save', error),
+          },
+        );
       },
-    );
-  }, [rows, target, saveMatrix, reportFailure]);
+    });
+  }, [rows, target, tab.key, tab.scope, ask, saveMatrix, reportFailure]);
 
   const onApply = useCallback(() => {
-    setErrorMessage('');
-    setSavedMessage('');
-    syncMatrix.mutate(undefined, {
-      onSuccess: () => setSavedMessage('synced'),
-      onError: (error) => reportFailure('sync', error),
+    ask({
+      action: 'POST /api/v2/admin/permissions/{scope}/{mode}',
+      title: t('pages.admin.roles.confirm.applyTitle', 'Apply the matrix to every project'),
+      change: t(
+        'pages.admin.roles.confirm.applyBody',
+        'The standard matrix replaces the role permissions of every shared project.',
+      ),
+      reach: { count: undefined, unit: 'projects' },
+      target: tab.key,
+      confirmLabel: t('pages.admin.roles.action.applyToProjects', 'Apply to Projects'),
+      run: (reason) => {
+        setErrorMessage('');
+        setSavedMessage('');
+        syncMatrix.mutate(reason, {
+          onSuccess: () => setSavedMessage('synced'),
+          onError: (error) => reportFailure('sync', error),
+        });
+      },
     });
-  }, [syncMatrix, reportFailure]);
+  }, [tab.key, ask, syncMatrix, reportFailure]);
 
   // The seed token moves ONLY here, and only after a role write has settled —
   // which, because the three mutations return their invalidation promise from
@@ -282,6 +315,7 @@ export function useAdminRolesPage(): AdminRolesPageState {
     onChange,
     onDiscard,
     onSave,
+    confirmDialog: confirm.dialog,
     // "Apply to Projects" pushes the STANDARD matrix onto shared projects. The
     // server defines it for `administration/default` alone, so offering it on
     // any other tab would be a control with nothing behind it.
