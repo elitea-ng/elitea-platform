@@ -711,6 +711,10 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 	if meta == nil {
 		meta = map[string]any{}
 	}
+	if conv.ClientRequestID != "" {
+		meta = maps.Clone(meta)
+		meta[conversations.ClientRequestIDMetaKey] = conv.ClientRequestID
+	}
 	encodedMeta, err := json.Marshal(meta)
 	if err != nil {
 		return conversations.Conversation{}, fmt.Errorf("conversations: encode metadata: %w", err)
@@ -720,6 +724,14 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		return conversations.Conversation{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if conv.ClientRequestID != "" {
+		// A retry, or a duplicate that raced this request (#3077): the
+		// conversation its id made stands.
+		replayed, found, err := r.replayCreate(ctx, tx, projectID, s, access.ActorID, conv.ClientRequestID)
+		if found || err != nil {
+			return replayed, err
+		}
+	}
 	if source == conversations.EditorTestSource {
 		identity, err := conversations.EditorTestIdentity(conv, access.ActorID, projectID)
 		if err != nil {
@@ -822,6 +834,39 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 	c.Source = source
 	c.Instructions = conv.Instructions
 	return c, nil
+}
+
+// replayCreate finds the conversation a create with clientRequestID made for
+// this caller in this project (#3077), under that id's lock in tx, which the
+// create then holds until it commits: two creates with one id never both
+// insert. found: the earlier conversation, read as a details request reads
+// it (with its participants).
+func (r *ConversationsRepo) replayCreate(ctx context.Context, tx pgx.Tx, projectID, s string, actorID int64, clientRequestID string) (conversations.Conversation, bool, error) {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+		"elitea.conversation_create:"+projectID+":"+strconv.FormatInt(actorID, 10)+":"+clientRequestID); err != nil {
+		return conversations.Conversation{}, false, fmt.Errorf("conversations: create: lock client_request_id: %w", err)
+	}
+	var id string
+	err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT id::text FROM %s.chat_conversations
+ WHERE author_id = $1 AND (meta->>'%s') = $2 ORDER BY id LIMIT 1`, s, conversations.ClientRequestIDMetaKey), actorID, clientRequestID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conversations.Conversation{}, false, nil
+	}
+	if err != nil {
+		return conversations.Conversation{}, false, fmt.Errorf("conversations: create: read client_request_id: %w", err)
+	}
+	_ = tx.Rollback(ctx)
+	existing, err := r.Get(ctx, projectID, id)
+	if err != nil {
+		return conversations.Conversation{}, true, err
+	}
+	participants, err := r.ListParticipants(ctx, projectID, id)
+	if err != nil {
+		return conversations.Conversation{}, true, err
+	}
+	existing.Participants = participants
+	existing.Replayed = true
+	return existing, true, nil
 }
 
 func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {

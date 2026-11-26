@@ -66,6 +66,12 @@ export const ConversationCreateRequest = zod
         "The conversation's origin (`chat` by default; `deepwiki` and similar for hidden ones).",
       ),
     instructions: zod.string().optional(),
+    client_request_id: zod
+      .uuid()
+      .optional()
+      .describe(
+        "Optional idempotency key (issue 3077): the sending message's client id, a UUID generated once per message and sent again on every retry. A create whose id already made a conversation of the caller in this project answers that conversation (201, with its participants) and makes no second one. Kept as `meta.client_request_id`; a `meta.client_request_id` in the body is ignored. A value that is not a UUID is a 400.\n",
+      ),
     meta: zod.record(zod.string(), zod.unknown()).optional(),
     participants: zod
       .array(ConversationParticipant)

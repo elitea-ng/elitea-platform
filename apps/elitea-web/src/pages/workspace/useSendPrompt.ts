@@ -18,7 +18,7 @@ import { useRef, useState } from 'react';
 
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 
-import { addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
+import { addressedTo, createSubmitIds, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
 
 import { conversationApi } from '@/entities/conversation';
 import { defaultRunVersionId } from '@/entities/version';
@@ -302,6 +302,9 @@ export function useSendPrompt(
   // A refused start keeps the person's choice ("new conversation"), but the
   // retry runs in the conversation the first attempt created, not another one.
   const pending = useRef<PendingConversation | null>(null);
+  // The message's client id (#3077): the same on every retry until it is sent. Main creates one conversation per id
+  // and the host starts one turn per id, so a duplicate that got past `inFlight` lands on the same thread and turn.
+  const [submitIds] = useState(createSubmitIds);
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
@@ -313,9 +316,11 @@ export function useSendPrompt(
     const key = `${String(projectId)}:${agent.id}:${String(version.id)}`;
     const startsNew = selection.conversationId === '';
     const reuse = reusable(pending.current, startsNew, key);
+    const submitId = submitIds.current();
     try {
       const ensured = await ensureConversation({
         projectId,
+        clientRequestId: submitId,
         conversationId: reuse === null ? selection.conversationId : reuse.id,
         completeSetup: reuse === null ? false : !reuse.ready,
         onCreated: (id) => {
@@ -347,6 +352,7 @@ export function useSendPrompt(
         ...modelField(model),
         ...commandField(command),
         ...imagesField(images),
+        submit_id: submitId,
       };
       const request = routedRequest({ ...base, ...(await withVersion(projectId, floorFields(prompt, floor.agents, floor.meta))) });
       // Main routed the message to another agent than the one it started on (the lead changed since the thread was
@@ -357,6 +363,7 @@ export function useSendPrompt(
       // prompt and the person's conversation choice as they were.
       if (!started) return false;
       pending.current = null;
+      submitIds.sent();
       showStarted(selection, conversationId, startsNew);
       notifyStarted(onStarted, conversationId, prompt, shownOf(images));
       return true;

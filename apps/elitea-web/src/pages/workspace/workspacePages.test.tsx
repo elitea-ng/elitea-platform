@@ -359,7 +359,10 @@ describe('WorkspaceSessionPage', () => {
       plan_mode: true,
       mentions: [],
       skills: [],
+      submit_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
+    // One client id for the message (#3077): the conversation's create and the turn's start are idempotent on it.
+    expect(createdConversations[0]).toEqual(expect.objectContaining({ client_request_id: (ipc.calls.started[0] as { submit_id: string }).submit_id }));
 
     const at = (seq: number) => ({ turn_id: 'turn-1', seq });
     ipc.emit({ ...at(1), kind: 'status', payload: { phase: 'running' } });

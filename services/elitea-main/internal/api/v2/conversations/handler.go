@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/changesync"
@@ -83,7 +84,17 @@ type Conversation struct {
 	// transaction (a saved team's lead, ADR-0050 decision 8). Server-only:
 	// never read from a request body; 0 leaves the floor alone.
 	LeadParticipant int `json:"-"`
+	// ClientRequestID is the create's idempotency key (#3077): the sending
+	// message's client id, a UUID. A create whose id already made a
+	// conversation of this caller in this project answers that conversation
+	// (Replayed) instead of a second one. Stored as meta.client_request_id.
+	ClientRequestID string `json:"-"`
+	// Replayed: Create answered the conversation ClientRequestID made before.
+	Replayed bool `json:"-"`
 }
+
+// ClientRequestIDMetaKey is where a create's client_request_id is kept.
+const ClientRequestIDMetaKey = "client_request_id"
 
 type Message struct {
 	ID             string `json:"id"`
@@ -826,7 +837,18 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if meta, ok := body["meta"].(map[string]any); ok {
 		// `forked_from` is the server's: only forkConversation writes it.
 		delete(meta, ForkedFromMetaKey)
+		// The idempotency key is the create's own field, never meta's.
+		delete(meta, ClientRequestIDMetaKey)
 		conv.Meta = meta
+	}
+	if raw, present := body[ClientRequestIDMetaKey]; present && raw != nil {
+		text, _ := raw.(string)
+		parsed, err := uuid.Parse(text)
+		if err != nil {
+			apierr.Write(w, apierr.BadRequest("client_request_id must be a UUID"))
+			return
+		}
+		conv.ClientRequestID = parsed.String()
 	}
 	if raw, present := body["is_private"]; present {
 		value, ok := raw.(bool)
@@ -900,7 +922,9 @@ func (h *Handler) CreateConversation(r *http.Request, projectID string, conv Con
 	if err != nil {
 		return Conversation{}, err
 	}
-	if h.events != nil {
+	// A replayed create (its client_request_id made the conversation before)
+	// announces nothing: the first one did.
+	if h.events != nil && !created.Replayed {
 		payload := map[string]any{"conversation_id": created.ID, "name": created.Name, "created_by": created.CreatedBy}
 		if created.Source == EditorTestSource {
 			payload["source"] = EditorTestSource

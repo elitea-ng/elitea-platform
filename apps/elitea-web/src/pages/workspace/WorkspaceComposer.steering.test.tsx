@@ -62,6 +62,53 @@ async function mount(handlers: Handlers, busy = true) {
 
 afterEach(() => useDesktopLayout.getState().setSession(null));
 
+describe('WorkspaceComposer one submit at a time (#3077)', () => {
+  it('sends once however many times Enter is pressed while the send is in flight, and the input stays open', async () => {
+    let release: (sent: boolean) => void = () => undefined;
+    const onSend = vi.fn<OnSend>(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const input = await mount({ onSend }, false);
+    await userEvent.type(input, 'fix the build');
+    // Three presses in one go, before any of them settles.
+    await userEvent.keyboard('{Enter}{Enter}{Enter}');
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(input).not.toBeDisabled();
+    release(true);
+    await waitFor(() => expect(input).toHaveTextContent(''));
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused send opens the gate again for the retry', async () => {
+    const onSend = vi.fn<OnSend>().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const input = await mount({ onSend }, false);
+    await userEvent.type(input, 'fix it');
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+  });
+
+  it('queues a steering message once however many times Enter is pressed', async () => {
+    let release: (queued: boolean) => void = () => undefined;
+    const onSteer = vi.fn<Handler>(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const input = await mount({ onSend: vi.fn<OnSend>(), onSteer });
+    await userEvent.type(input, 'also the docs');
+    await userEvent.keyboard('{Enter}{Enter}{Enter}');
+    expect(onSteer).toHaveBeenCalledTimes(1);
+    release(true);
+    await waitFor(() => expect(onSteer).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe('WorkspaceComposer steering', () => {
   it('reports the draft filling and emptying (the idle-compaction hold), and empty again after a send', async () => {
     const onDraftChange = vi.fn<(hasDraft: boolean) => void>();

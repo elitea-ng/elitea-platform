@@ -56,6 +56,7 @@ import type { ComposerSkill } from './useAgentSkills';
 import { SkillPinError, skillPinExtras, staleSkillItems, useSkillPinRows, type SkillPinRows } from './skillPinRows';
 import type { SkillPinControls } from './useThreadSkillPins';
 import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
+import { useComposerSubmit } from './useComposerSubmit';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
 import { agentToken, mentionItems, ToSlot, useAddressRequests, useMentionMenu } from './useComposerMentions';
@@ -316,6 +317,8 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     setToken(null);
   };
 
+  const submit = useComposerSubmit(clearInput); // one at a time, #3077
+
   const send = (question: string): void => {
     const steps = props.onStepsCommand === undefined ? null : composer.stepsCommand(question);
     if (steps !== null) {
@@ -331,24 +334,21 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
     }
     if (steering) {
       // A steering message is plain text: the images stay for the next turn.
-      void props.onSteer?.(question).then((queued) => queued && clearInput());
+      const { onSteer } = props;
+      if (onSteer !== undefined) void submit(() => onSteer(question));
       return;
     }
     const mentions = composer.referencedPaths(question, picked);
     // The longest name the message starts with; a custom command over a skill of its name.
     const { command, skill } = composer.invokedPick(question, customCommands, skills);
     const images = attachments.sent();
-    const sending = command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images);
-    void sending.then((sent) => {
-      if (!sent) return;
-      clearInput();
-      attachments.clear();
-    });
+    void submit(() => (command === null ? onSend(question, mentions, skillPicks(skill), undefined, images) : onSend(question, mentions, [], command, images)), attachments.clear);
   };
 
   const retryUnsent = (): void => {
     const text = inputRef.current?.getInputContent() ?? '';
-    if (text.trim() !== '') void props.unsent?.onRetry(text).then((sent) => sent && clearInput());
+    const { unsent } = props;
+    if (text.trim() !== '' && unsent !== undefined) void submit(() => unsent.onRetry(text));
   };
 
   return (
