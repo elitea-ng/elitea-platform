@@ -82,7 +82,10 @@ impl<T: Clone, E: Clone> SubmitOnce<T, E> {
         if answer.is_err() {
             // Forgotten (only this attempt's cell): the retry tries again.
             let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
-            if slots.get(&key).is_some_and(|slot| Arc::ptr_eq(&slot.cell, &cell)) {
+            if slots
+                .get(&key)
+                .is_some_and(|slot| Arc::ptr_eq(&slot.cell, &cell))
+            {
                 slots.remove(&key);
             }
         }
@@ -110,7 +113,14 @@ mod tests {
             once.run("w1", Some("s1"), start),
             once.run("w1", Some("s1"), start),
         );
-        assert_eq!((a, b, c), (Ok("turn-1".into()), Ok("turn-1".into()), Ok("turn-1".into())));
+        assert_eq!(
+            (a, b, c),
+            (
+                Ok("turn-1".into()),
+                Ok("turn-1".into()),
+                Ok("turn-1".into())
+            )
+        );
         assert_eq!(runs.load(Ordering::SeqCst), 1);
         // A later repeat answers the same turn without starting.
         assert_eq!(once.run("w1", Some("s1"), start).await, Ok("turn-1".into()));
@@ -133,11 +143,17 @@ mod tests {
     async fn a_refused_start_is_forgotten_so_its_retry_runs() {
         let once = SubmitOnce::<usize, String>::default();
         assert_eq!(
-            once.run("w1", Some("s1"), || async { Err::<usize, _>("refused".to_owned()) })
-                .await,
+            once.run("w1", Some("s1"), || async {
+                Err::<usize, _>("refused".to_owned())
+            })
+            .await,
             Err("refused".into())
         );
-        assert_eq!(once.run("w1", Some("s1"), || async { Ok::<_, String>(7) }).await, Ok(7));
+        assert_eq!(
+            once.run("w1", Some("s1"), || async { Ok::<_, String>(7) })
+                .await,
+            Ok(7)
+        );
     }
 
     #[tokio::test]
@@ -145,7 +161,9 @@ mod tests {
         let once = SubmitOnce::<usize, String>::default();
         for n in 0..=KEPT {
             let id = n.to_string();
-            once.run("w", Some(&id), || async move { Ok::<_, String>(n) }).await.ok();
+            once.run("w", Some(&id), || async move { Ok::<_, String>(n) })
+                .await
+                .ok();
         }
         assert!(once.slots.lock().unwrap().len() <= KEPT);
     }

@@ -689,38 +689,38 @@ pub async fn agent_turn_start(
     let (skills, project_skills) = crate::d0::skills::split(skills.unwrap_or_default());
     let scope = workspace_id.clone();
     let request = TurnRequest {
-            workspace_id,
-            project_id,
-            conversation_id,
-            application_id,
-            version_id,
-            prompt,
-            plan_mode,
-            bypass,
-            mentions: mentions.unwrap_or_default(),
-            skills,
-            project_skills,
-            compact: compact.unwrap_or(false),
-            model: model
-                .map(|model| {
-                    ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
-                        .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
-                })
-                .transpose()?,
-            command,
-            images: images.unwrap_or_default(),
-            unattended,
-            // The agents the person addressed (ADR-0050 decision 7f): Main
-            // routes the message, the host runs the agents one at a time.
-            addressed_to: addressed_to.unwrap_or_default(),
-            // The participant the UI meant (#1927): the host answers on it
-            // when it is one of this agent version.
-            participant_id: participant_id.filter(|id| *id > 0),
-            floor_turn: None,
-            // The agent's participant runs in the cloud: only the
-            // conversation's text goes to it.
-            cloud: cloud_agent.unwrap_or(false),
-        };
+        workspace_id,
+        project_id,
+        conversation_id,
+        application_id,
+        version_id,
+        prompt,
+        plan_mode,
+        bypass,
+        mentions: mentions.unwrap_or_default(),
+        skills,
+        project_skills,
+        compact: compact.unwrap_or(false),
+        model: model
+            .map(|model| {
+                ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
+                    .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+            })
+            .transpose()?,
+        command,
+        images: images.unwrap_or_default(),
+        unattended,
+        // The agents the person addressed (ADR-0050 decision 7f): Main
+        // routes the message, the host runs the agents one at a time.
+        addressed_to: addressed_to.unwrap_or_default(),
+        // The participant the UI meant (#1927): the host answers on it
+        // when it is one of this agent version.
+        participant_id: participant_id.filter(|id| *id > 0),
+        floor_turn: None,
+        // The agent's participant runs in the cloud: only the
+        // conversation's text goes to it.
+        cloud: cloud_agent.unwrap_or(false),
+    };
     // One start per message (#3077): a second call with the message's
     // `submit_id` (Enter pressed again, a double IPC call) gets the first
     // call's turn instead of starting another.

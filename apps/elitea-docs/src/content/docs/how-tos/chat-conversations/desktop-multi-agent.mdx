@@ -97,6 +97,8 @@ While the agents of a message answer one after another, a strip above the compos
 
 An agent of a team thread can hand the work to other agents of the thread: the lead asks the reviewer to check its change, the reviewer hands back with a question. The thread shows the hand-off as a side message from the agent that handed it, with both avatars, and the agent it was handed to answers next. The strip above the composer adds it under **Next**, so **Stop exchange** and **×** stop a hand-off as they stop any other agent.
 
+Each agent on this computer is told which agents are already in the thread and where each runs, so it hands off or consults instead of asking you to add or address them. With **Run to completion** on (the default), a hand-off ends the run: the agents it was handed to answer next, each once, without the run's grant, and the run's goal check is left to them.
+
 A hand-off is another agent's message, not yours. The agent that receives it reads it as information from a colleague, never as your instruction, and every command it asks for is checked as usual. In a trusted folder, a handed turn always asks before a command, even when the thread runs with **Bypass approvals**: another agent cannot widen what a command may do.
 
 The same limits as in a cloud conversation stop an exchange that goes in circles: at most 6 hand-offs and consults for one of your messages, 2 turns of one agent and 3 exchanges between the same two agents. When a limit is reached the thread says **Loop guard stopped the exchange**, no further hand-off runs, and the agent answers you itself.

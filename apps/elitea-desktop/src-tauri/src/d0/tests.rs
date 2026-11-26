@@ -9266,7 +9266,10 @@ async fn worktree_create_is_idempotent_on_the_thread_uuid() {
     let listed = worktrees.list(&h.workspace_id).await.unwrap();
     assert_eq!(listed.len(), 1);
     // A retry later answers the same worktree too.
-    let again = worktrees.create(&h.workspace_id, thread, None).await.unwrap();
+    let again = worktrees
+        .create(&h.workspace_id, thread, None)
+        .await
+        .unwrap();
     assert_eq!(again.workspace_id, a.workspace_id);
     assert_eq!(worktrees.list(&h.workspace_id).await.unwrap().len(), 1);
 }
