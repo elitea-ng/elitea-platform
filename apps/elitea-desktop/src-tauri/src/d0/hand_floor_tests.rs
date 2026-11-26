@@ -592,3 +592,35 @@ async fn an_exchange_past_its_wall_clock_starts_no_hand_off() {
         json!([HAND_1])
     );
 }
+
+/// A handing turn that fails after its hand_floor call starts none of the
+/// hand-offs it queued: Main hears them stopped, and the UI's queue empties.
+#[tokio::test]
+async fn a_failed_handing_turn_starts_no_hand_off() {
+    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), |n| match n {
+        0 => hand_to(&[99]),
+        _ => Res::json(400, &json!({"error": {"message": "bad request"}})),
+    });
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    done_event_of(&h.emitter, &started.turn_id).await;
+    commits_settled(&h.host).await;
+    let question = starts(&h)[0]["question_id"].as_str().unwrap().to_owned();
+    let skip_path =
+        format!("/api/v2/elitea_core/local_turn_hand_floor_skip/prompt_lib/1/{question}");
+    for _ in 0..SETTLE_POLLS {
+        if !bodies(&h.server, &skip_path).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        bodies(&h.server, &skip_path),
+        vec![json!({"hand_ids": [HAND_1], "code": "stopped_by_person"})]
+    );
+    let queue = event_of(&h, "exchange", Some(&started.turn_id)).await;
+    assert_eq!(queue.payload["hands"], json!([]));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(starts(&h).len(), 1);
+}

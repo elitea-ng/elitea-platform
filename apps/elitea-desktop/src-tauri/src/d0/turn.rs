@@ -3499,6 +3499,15 @@ impl AgentHost {
                     super::exchange::STOPPED_MESSAGE,
                 );
             }
+            // Nor do the hand-offs it queued (#3064).
+            if let Some(question) = started.message_question(
+                request
+                    .floor_turn
+                    .as_ref()
+                    .map(|turn| turn.question_id.as_str()),
+            ) {
+                self.drop_hands(question, request.project_id, None, &events);
+            }
             // A cancelled turn commits nothing: the chain ends here, and
             // nothing is left to resume.
             self.forget_resume(&request.workspace_id, events.turn_id());
@@ -3782,6 +3791,15 @@ impl AgentHost {
                 &conversation_uuid,
             ));
         }
+        // A turn that failed or went to the cloud starts none of the
+        // hand-offs queued for its message.
+        if floor_next.is_none()
+            && (failure.is_some() || handed_off)
+            && let Some(question) = &message
+        {
+            self.drop_hands(question, request.project_id, None, &events);
+        }
+        let hand_message = message.clone();
         // The person stopped the exchange before this turn's end.
         let floor_next_stopped = floor_next.is_none()
             && message
@@ -3986,6 +4004,13 @@ impl AgentHost {
                             awake.again(),
                         ));
                     } else {
+                        // Not saved: none of the message's hand-offs start.
+                        host.drop_hands(
+                            &next.question_id,
+                            next.project_id,
+                            next.hand_id.clone(),
+                            &events,
+                        );
                         floor::commit_failed(&events);
                     }
                 }
@@ -4008,6 +4033,9 @@ impl AgentHost {
                 // A `done` that said the run or the message goes on is
                 // answered: the UI stops waiting for a next turn (#1886).
                 if floor_owed && !floor_settled.load(std::sync::atomic::Ordering::SeqCst) {
+                    if let Some(question) = &hand_message {
+                        host.drop_hands(question, project_id, None, &events);
+                    }
                     floor::commit_failed(&events);
                 }
                 if chain_owed
@@ -4258,6 +4286,8 @@ impl AgentHost {
                         "the next agent of a message did not start: {}",
                         log_reason(&error.code, error.status)
                     );
+                    // Nor do the hand-offs queued after it.
+                    self.drop_hands(&question, project_id, next.hand_id.clone(), &previous);
                     floor::stopped(&previous, &error.code, &error.message);
                 }
             }
@@ -5768,11 +5798,6 @@ impl AgentHost {
     /// # Errors
     ///
     /// `turn_unknown` for a turn in no exchange that the host does not know.
-    #[cfg(test)]
-    pub fn age_exchange(&self, question: &str, by: Duration) {
-        self.exchanges.age(question, by);
-    }
-
     pub fn exchange_stop(&self, turn_id: &str) -> Result<(), TurnError> {
         match self.exchanges.stop(turn_id) {
             // The turn may be past its run already: its commit or the next
@@ -5792,6 +5817,46 @@ impl AgentHost {
             }
             None => self.cancel(turn_id),
         }
+    }
+
+    /// Age the exchange of `question` by `by` (tests of its wall clock).
+    #[cfg(test)]
+    pub fn age_exchange(&self, question: &str, by: Duration) {
+        self.exchanges.age(question, by);
+    }
+
+    /// The queued hand-offs of the message `question` will not start (the
+    /// handing turn failed, was cancelled, or a later turn did not start):
+    /// Main records them `stopped_by_person`, with `extra` (a hand-off
+    /// reserved already), and `events` says the queue changed.
+    fn drop_hands(
+        &self,
+        question: &str,
+        project_id: i64,
+        extra: Option<String>,
+        events: &TurnEvents,
+    ) {
+        let mut hands = self.exchanges.drain_hands(question);
+        hands.extend(extra);
+        if hands.is_empty() {
+            return;
+        }
+        super::hand_floor::skip_hands(
+            self.api.clone(),
+            project_id,
+            question.to_owned(),
+            hands,
+            super::exchange::STOPPED_BY_PERSON,
+        );
+        let turn_id = events.turn_id();
+        events.send(
+            "exchange",
+            json!({
+                "remaining": self.exchanges.remaining_of(turn_id),
+                "queue": self.exchanges.queue_of(turn_id),
+                "hands": self.exchanges.hands_of(turn_id),
+            }),
+        );
     }
 
     /// Skip `participant_id`, an agent still queued in the exchange of

@@ -214,3 +214,33 @@ async fn a_consults_host_command_is_asked_even_under_bypass() {
     );
     let _ = UUID;
 }
+
+/// A thread member that runs in the cloud is consulted in the cloud, never
+/// with the folder, and nothing is recorded in the commit.
+#[tokio::test]
+async fn a_cloud_member_is_consulted_in_the_cloud() {
+    let mut thread = Thread::new(handed(&[]), |n| match n {
+        0 => ask("Reviewer", "Review it"),
+        _ => say("Done."),
+    });
+    thread.tools = json!([
+        {"kind": "application", "type": "application", "agent_type": "agent",
+         "name": "Reviewer", "application_id": 6, "application_version_id": 10}
+    ]);
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let child = bodies(
+        &h.server,
+        &format!("/api/v2/elitea_core/local_child_turn/prompt_lib/1/{EXECUTION}"),
+    );
+    assert_eq!(child.len(), 1);
+    assert_eq!(child[0]["application_id"], 6);
+    let asked = event_of(&h, "consult_started", Some(&started.turn_id)).await;
+    assert_eq!(asked.payload["local"], false);
+    assert_eq!(asked.payload["callee"], 88);
+    // Only the caller asked the model: the callee never ran here.
+    assert_eq!(bodies(&h.server, "/llm/v1/chat/completions").len(), 2);
+    assert!(commit(&h).get("consults").is_none());
+}

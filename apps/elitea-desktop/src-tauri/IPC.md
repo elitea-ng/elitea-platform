@@ -1099,14 +1099,19 @@ so a lead thread's chain stays on its agent.
   from_name, participant_id, agent_name, executor, exchange, queue, hands}`,
   beside `continued_automatically: true`, `continuation_kind: "hand"` and
   `host_prompt` (the handing agent's message): the host started it, so
-  history never shows its model input as the person's prompt.
+  history never shows its model input as the person's prompt. A handing
+  turn that fails, is cancelled, goes to the cloud or is not saved, or a
+  hand-off whose start is refused, starts none of the hand-offs still
+  queued: Main records them `stopped_by_person` and the turn sends an
+  `exchange` event with the emptied queue.
 - **Local consults** (ADR-0061 decisions 3e/3f, #3065; `src/d0/consult.rs`).
   In a thread with other agents, a local agent's nested-agent
   (`application`) tool call runs the callee on this computer when the
   desktop may run it (not a pipeline, no withheld secret, no project MCP
   server; checked once per turn), whether it is a thread member (its
   application is a `floor.agents[].application_id`) or another nested agent
-  of the caller's version. The callee runs in the caller's session (its
+  of the caller's version (a member whose executor is `cloud` is always
+  consulted in the cloud, never with the folder). The callee runs in the caller's session (its
   folder, sandbox, rules, approvals and checkpoint, on the caller's model,
   quiet), with the caller's local and index tools and the caller's remote
   tools its definition also names (toolkit type and tool name); never

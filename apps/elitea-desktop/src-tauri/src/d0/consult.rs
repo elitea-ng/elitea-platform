@@ -106,6 +106,9 @@ pub struct LocalConsults {
     started: AtomicUsize,
     /// Admission per (application, version), per turn: `None` refused.
     admitted: Mutex<HashMap<(i64, i64), Option<definition::Admitted>>>,
+    /// The session's profile while consults run (one turn runs on a
+    /// session at a time, so the turn's consults are the session's).
+    profile: Arc<ProfileHold<LocalSession>>,
 }
 
 /// What a consult answered.
@@ -154,11 +157,12 @@ impl LocalConsults {
             remote_specs,
             remote,
             observer,
-            session,
+            session: session.clone(),
             nonce,
             recorded,
             started: AtomicUsize::new(0),
             admitted: Mutex::new(HashMap::new()),
+            profile: Arc::new(ProfileHold::new(session)),
         }
     }
 
@@ -221,7 +225,16 @@ impl LocalConsults {
                 &format!("One message asks other agents at most {MAX_PER_MESSAGE} times."),
             ));
         }
-        let Some(admitted) = self.admit(spec).await else {
+        // A cloud member runs in the cloud, never with the folder.
+        let cloud_member = self
+            .member(spec)
+            .is_some_and(|agent| agent.executor == super::api::EXECUTOR_CLOUD);
+        let admitted = if cloud_member {
+            None
+        } else {
+            self.admit(spec).await
+        };
+        let Some(admitted) = admitted else {
             self.started_event(spec, task, false);
             return Consulted::Cloud;
         };
@@ -235,15 +248,13 @@ impl LocalConsults {
         let Ok(text) = answer else {
             return Consulted::Result(error("consult_failed", &reply));
         };
-        if let Some(participant_id) = member {
+        if let Some(participant_id) = member
+            && let Some(entry) = commit_entry(participant_id, task, &text)
+        {
             self.recorded
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(json!({
-                    "participant_id": participant_id,
-                    "question": clip_bytes(task, MAX_QUESTION_BYTES),
-                    "reply": clip_bytes(&text, MAX_REPLY_BYTES),
-                }));
+                .push(entry);
         }
         let name = self
             .member(spec)
@@ -316,7 +327,7 @@ impl LocalConsults {
         // Decision 5f: the callee reads another agent's text; the caller's
         // host commands are asked from here on.
         self.session.rules().record_untrusted_read();
-        let _build = BuildForConsult::enter(&self.session);
+        let _build = self.profile.enter();
         let transport = GatewayTransport {
             quiet: true,
             recorder: None,
@@ -441,30 +452,97 @@ fn error(code: &str, message: &str) -> Value {
     json!({ "status": "error", "code": code, "message": message })
 }
 
-/// Bypass never carries into a consult: the session runs it in Build and
-/// goes back to Bypass when it ends.
-struct BuildForConsult {
-    session: Arc<LocalSession>,
-    restore: bool,
+/// A consult's commit record (`{participant_id, question, reply}`): bounded,
+/// NUL and the other C0 controls but newline and tab removed; `None` when the
+/// question is left empty.
+#[must_use]
+pub fn commit_entry(participant_id: i64, question: &str, reply: &str) -> Option<Value> {
+    let question = clean(clip_bytes(question, MAX_QUESTION_BYTES));
+    if question.trim().is_empty() {
+        return None;
+    }
+    Some(json!({
+        "participant_id": participant_id,
+        "question": question,
+        "reply": clean(clip_bytes(reply, MAX_REPLY_BYTES)),
+    }))
 }
 
-impl BuildForConsult {
-    fn enter(session: &Arc<LocalSession>) -> Self {
-        let restore = session.profile() == PermissionProfile::Bypass;
-        if restore {
-            session.set_profile(PermissionProfile::Build);
-        }
-        Self {
-            session: session.clone(),
-            restore,
-        }
+fn clean(text: &str) -> String {
+    text.chars()
+        .filter(|c| *c == '\n' || *c == '\t' || !('\u{0}'..='\u{1f}').contains(c))
+        .collect()
+}
+
+/// A session's permission profile, read and set.
+pub trait ProfileSwitch: Send + Sync {
+    fn profile(&self) -> PermissionProfile;
+    fn set_profile(&self, profile: PermissionProfile);
+}
+
+impl ProfileSwitch for LocalSession {
+    fn profile(&self) -> PermissionProfile {
+        LocalSession::profile(self)
+    }
+
+    fn set_profile(&self, profile: PermissionProfile) {
+        LocalSession::set_profile(self, profile);
     }
 }
 
-impl Drop for BuildForConsult {
+/// Bypass never carries into a consult: while any consult runs, a Bypass
+/// session runs in Build. The first consult to enter switches it; the last
+/// to leave switches it back, and only when the profile is still the Build
+/// it set (a person's change while consults ran stands).
+pub struct ProfileHold<S: ProfileSwitch + ?Sized> {
+    session: Arc<S>,
+    /// Active consults, and whether the first one switched Bypass off.
+    state: Mutex<(usize, bool)>,
+}
+
+impl<S: ProfileSwitch + ?Sized> ProfileHold<S> {
+    #[must_use]
+    pub fn new(session: Arc<S>) -> Self {
+        Self {
+            session,
+            state: Mutex::new((0, false)),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, bool)> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// One consult runs until the guard drops.
+    pub fn enter(self: &Arc<Self>) -> ProfileGuard<S> {
+        let mut state = self.lock();
+        if state.0 == 0 {
+            state.1 = self.session.profile() == PermissionProfile::Bypass;
+            if state.1 {
+                self.session.set_profile(PermissionProfile::Build);
+            }
+        }
+        state.0 += 1;
+        ProfileGuard { hold: self.clone() }
+    }
+}
+
+/// One running consult's hold on its session's profile.
+pub struct ProfileGuard<S: ProfileSwitch + ?Sized> {
+    hold: Arc<ProfileHold<S>>,
+}
+
+impl<S: ProfileSwitch + ?Sized> Drop for ProfileGuard<S> {
     fn drop(&mut self) {
-        if self.restore && self.session.profile() == PermissionProfile::Build {
-            self.session.set_profile(PermissionProfile::Bypass);
+        let mut state = self.hold.lock();
+        state.0 = state.0.saturating_sub(1);
+        if state.0 == 0 {
+            if state.1 && self.hold.session.profile() == PermissionProfile::Build {
+                self.hold.session.set_profile(PermissionProfile::Bypass);
+            }
+            state.1 = false;
         }
     }
 }
@@ -497,6 +575,73 @@ mod tests {
         assert_eq!(shared[0].toolkit_type, "jira");
         // Same toolkit, another tool: not shared.
         assert!(shared_remote(&caller, &[spec("github", Some("write"))]).is_empty());
+    }
+
+    struct FakeSession(Mutex<PermissionProfile>);
+
+    impl ProfileSwitch for FakeSession {
+        fn profile(&self) -> PermissionProfile {
+            *self.0.lock().unwrap()
+        }
+
+        fn set_profile(&self, profile: PermissionProfile) {
+            *self.0.lock().unwrap() = profile;
+        }
+    }
+
+    /// Two consults at once: Bypass comes back only when the last one
+    /// leaves; a person's change while they ran stands.
+    #[test]
+    fn concurrent_consults_restore_bypass_once_the_last_leaves() {
+        let session = Arc::new(FakeSession(Mutex::new(PermissionProfile::Bypass)));
+        let hold = Arc::new(ProfileHold::new(session.clone()));
+        let first = hold.enter();
+        let second = hold.enter();
+        assert_eq!(session.profile(), PermissionProfile::Build);
+        drop(first);
+        assert_eq!(
+            session.profile(),
+            PermissionProfile::Build,
+            "one still runs"
+        );
+        drop(second);
+        assert_eq!(session.profile(), PermissionProfile::Bypass);
+
+        // Concurrently, from threads.
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let hold = hold.clone();
+                let session = session.clone();
+                std::thread::spawn(move || {
+                    let _guard = hold.enter();
+                    assert_eq!(session.profile(), PermissionProfile::Build);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(session.profile(), PermissionProfile::Bypass);
+
+        // The person chose Plan while a consult ran: it stays Plan.
+        let guard = hold.enter();
+        session.set_profile(PermissionProfile::Plan);
+        drop(guard);
+        assert_eq!(session.profile(), PermissionProfile::Plan);
+        // A Build session is left as it is.
+        session.set_profile(PermissionProfile::Build);
+        drop(hold.enter());
+        assert_eq!(session.profile(), PermissionProfile::Build);
+    }
+
+    #[test]
+    fn commit_entries_are_clean_and_never_empty() {
+        let entry = commit_entry(99, "Lint\u{0}\u{1b} it\n\tnow", "ok\u{7}").expect("kept");
+        assert_eq!(entry["question"], "Lint it\n\tnow");
+        assert_eq!(entry["reply"], "ok");
+        assert!(commit_entry(99, " \u{0}\n ", "ok").is_none());
+        assert!(commit_entry(99, "", "ok").is_none());
     }
 
     #[test]

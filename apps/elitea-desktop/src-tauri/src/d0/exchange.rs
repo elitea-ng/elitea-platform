@@ -361,6 +361,28 @@ impl Exchanges {
             .unwrap_or_else(|| serde_json::json!([]))
     }
 
+    /// The hand-offs still queued for `question`, taken from the queue (the
+    /// caller tells Main they will not start).
+    pub fn drain_hands(&self, question: &str) -> Vec<String> {
+        self.inner()
+            .by_question
+            .get_mut(question)
+            .map(|exchange| exchange.hands.drain(..).map(|hand| hand.hand_id).collect())
+            .unwrap_or_default()
+    }
+
+    /// The participant ids still queued in the exchange `turn_id` belongs to.
+    #[must_use]
+    pub fn remaining_of(&self, turn_id: &str) -> Vec<i64> {
+        let inner = self.inner();
+        inner
+            .by_turn
+            .get(turn_id)
+            .and_then(|question| inner.by_question.get(question))
+            .map(Exchange::remaining)
+            .unwrap_or_default()
+    }
+
     /// The queue of the exchange `turn_id` belongs to, as the UI reads it
     /// (`[{participant_id, hand_id?}]`); `null` when it is in none.
     #[must_use]
