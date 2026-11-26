@@ -86,6 +86,9 @@ import type {
   DelegationScanResult,
   Elevation,
   ElevationList,
+  ElevationRevertHandled,
+  ElevationRevertList,
+  ElevationReview,
   EntitlementGrantList,
   ExecutionSuspension,
   ExecutionSuspensionList,
@@ -1050,6 +1053,124 @@ export const getDenyElevationRequestResponseMock = (): Elevation => ({
   review_state: null,
   time_left_seconds: 0,
 });
+
+export const getGetElevationReviewResponseMock = (): ElevationReview => ({
+  elevation: {
+    id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+    state: "review_pending",
+    path: "approved",
+    level: "admin",
+    reason_code: "incident",
+    reason: "The model provider is down and the routing must be changed now.",
+    ticket: "INC-4711",
+    duration_minutes: 60,
+    person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+    approver: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+    denial_reason_code: null,
+    requested_at: "2026-11-25T10:00:00Z",
+    request_expires_at: null,
+    decided_at: "2026-11-25T10:05:00Z",
+    started_at: "2026-11-25T10:06:00Z",
+    expires_at: "2026-11-25T11:06:00Z",
+    ended_at: "2026-11-25T10:40:00Z",
+    end_reason: "holder",
+    review_state: "review_pending",
+    time_left_seconds: 0,
+  },
+  reviewers: [{ id: 14, name: "Sam Auditor", email: "sam@example.com" }],
+  can_review: true,
+  review: null,
+  reviewer_changes: [],
+  changes: {
+    total: 1,
+    rows: [
+      {
+        id: 90211,
+        at: "2026-11-25T10:12:00Z",
+        user_id: 12,
+        action: "gateway.provider.update",
+        method: "PUT",
+        route: "/api/v2/admin/gateway/providers/administration/{providerID}",
+        status: 200,
+        entity_type: "provider",
+        entity_id: 7,
+        entity_name: "primary",
+        flagged: true,
+      },
+    ],
+  },
+  reverts: [],
+});
+
+export const getReviewElevationResponseMock = (): ElevationReview => ({
+  elevation: {
+    id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+    state: "reviewed",
+    path: "approved",
+    level: "admin",
+    reason_code: "incident",
+    reason: "The model provider is down and the routing must be changed now.",
+    ticket: "INC-4711",
+    duration_minutes: 60,
+    person: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+    approver: { id: 11, name: "Ada Admin", email: "ada@example.com" },
+    denial_reason_code: null,
+    requested_at: "2026-11-25T10:00:00Z",
+    request_expires_at: null,
+    decided_at: "2026-11-25T10:05:00Z",
+    started_at: "2026-11-25T10:06:00Z",
+    expires_at: "2026-11-25T11:06:00Z",
+    ended_at: "2026-11-25T10:40:00Z",
+    end_reason: "holder",
+    review_state: "reviewed",
+    time_left_seconds: 0,
+  },
+  reviewers: [{ id: 14, name: "Sam Auditor", email: "sam@example.com" }],
+  can_review: false,
+  review: {
+    outcome: "justified",
+    note: "The routing change matches the incident ticket.",
+    replacement_issued: null,
+    reviewer: { id: 14, name: "Sam Auditor", email: "sam@example.com" },
+    reviewed_at: "2026-11-25T12:00:00Z",
+  },
+  reviewer_changes: [],
+  changes: { total: 0, rows: [] },
+  reverts: [],
+});
+
+export const getListElevationRevertsResponseMock = (): ElevationRevertList => ({
+  total: 1,
+  rows: [
+    {
+      id: "5f0c2a7e-2f7b-4a8e-9a1d-6d3e2b9c1f00",
+      elevation_id: "0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a",
+      holder: { id: 12, name: "Rui Responder", email: "rui@example.com" },
+      change: {
+        id: 90211,
+        at: "2026-11-25T10:12:00Z",
+        user_id: 12,
+        action: "gateway.provider.update",
+        method: "PUT",
+        route: "/api/v2/admin/gateway/providers/administration/{providerID}",
+        status: 200,
+        entity_type: "provider",
+        entity_id: 7,
+        entity_name: "primary",
+        flagged: true,
+      },
+      opened_at: "2026-11-25T12:00:00Z",
+      handled_at: null,
+      handled_by: null,
+    },
+  ],
+});
+
+export const getMarkElevationRevertHandledResponseMock =
+  (): ElevationRevertHandled => ({
+    id: "5f0c2a7e-2f7b-4a8e-9a1d-6d3e2b9c1f00",
+    changed: true,
+  });
 
 export const getListUserModeRolesResponseMock = (
   overrideResponse: Partial<Extract<ModeRoleListing, object>> = {},
@@ -5532,6 +5653,110 @@ export const getDenyElevationRequestMockHandler = (
   );
 };
 
+export const getGetElevationReviewMockHandler = (
+  overrideResponse?:
+    | ElevationReview
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ElevationReview> | ElevationReview),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/elevations/:elevationID/review",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetElevationReviewResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getReviewElevationMockHandler = (
+  overrideResponse?:
+    | ElevationReview
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ElevationReview> | ElevationReview),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/elevations/:elevationID/review",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getReviewElevationResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getListElevationRevertsMockHandler = (
+  overrideResponse?:
+    | ElevationRevertList
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ElevationRevertList> | ElevationRevertList),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/admin/access/reverts",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getListElevationRevertsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
+export const getMarkElevationRevertHandledMockHandler = (
+  overrideResponse?:
+    | ElevationRevertHandled
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<ElevationRevertHandled> | ElevationRevertHandled),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/admin/access/reverts/:itemID/handled",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getMarkElevationRevertHandledResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getListUserModeRolesMockHandler = (
   overrideResponse?:
     | ModeRoleListing
@@ -8344,6 +8569,10 @@ export const getAdminMock = () => [
   getListPendingElevationRequestsMockHandler(),
   getApproveElevationRequestMockHandler(),
   getDenyElevationRequestMockHandler(),
+  getGetElevationReviewMockHandler(),
+  getReviewElevationMockHandler(),
+  getListElevationRevertsMockHandler(),
+  getMarkElevationRevertHandledMockHandler(),
   getListUserModeRolesMockHandler(),
   getAssignUserModeRoleMockHandler(),
   getRemoveUserModeRoleMockHandler(),

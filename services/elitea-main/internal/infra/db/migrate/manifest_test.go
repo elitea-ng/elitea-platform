@@ -1309,7 +1309,13 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// hand_floor call queues (elitea_runtime.local_floor_hands) and the guard
 	// that stopped a routed message (local_turn_executions.floor_stopped)
 	// (issue 3063, ADR-0061 decision 3c). No permission.
-	require.EqualValues(t, 282, Head(shared))
+	//
+	// 283: shared/0283_admin_elevation_items.sql, the items of an elevation's
+	// review (elitea_auth.admin_elevation_items): the reviewers recorded at
+	// the end, the attestation, the revert list and the notes; append-only
+	// but for marking a revert entry handled (issue 2523, ADR-0059 R2.9a). No
+	// permission.
+	require.EqualValues(t, 283, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

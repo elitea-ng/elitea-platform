@@ -49,7 +49,7 @@ export const ElevationRefusal = zod
       .string()
       .optional()
       .describe(
-        "`elevation_credential_refused` (403: not a browser session), `elevation_request_invalid` (400), `elevation_duration_over_cap` (400), `elevation_requester_not_eligible` (403), `elevation_request_pending` (409), `elevation_not_found` (404), `elevation_request_decided` (409), `elevation_request_expired` (410), `elevation_own_request` (403), `elevation_approver_elevated` (403), `elevation_approver_not_eligible` (403), or `elevation_restricted` (403, ADR-0059 R2.8a: an elevation may not answer or ask).\n",
+        "`elevation_credential_refused` (403: not a browser session), `elevation_request_invalid` (400), `elevation_duration_over_cap` (400), `elevation_requester_not_eligible` (403), `elevation_request_pending` (409), `elevation_not_found` (404), `elevation_request_decided` (409), `elevation_request_expired` (410), `elevation_own_request` (403), `elevation_approver_elevated` (403), `elevation_approver_not_eligible` (403), `elevation_reviewer_involved` (403), `elevation_reviewer_not_eligible` (403), `elevation_not_reviewable` (409), `revert_not_found` (404), or `elevation_restricted` (403, ADR-0059 R2.8a: an elevation may not answer, ask or review).\n",
       ),
   })
   .describe(

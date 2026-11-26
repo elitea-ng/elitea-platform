@@ -20329,9 +20329,169 @@ components:
             `elevation_request_decided` (409), `elevation_request_expired`
             (410), `elevation_own_request` (403),
             `elevation_approver_elevated` (403),
-            `elevation_approver_not_eligible` (403), or
-            `elevation_restricted` (403, ADR-0059 R2.8a: an elevation may
-            not answer or ask).
+            `elevation_approver_not_eligible` (403),
+            `elevation_reviewer_involved` (403), `elevation_reviewer_not_eligible`
+            (403), `elevation_not_reviewable` (409), `revert_not_found`
+            (404), or `elevation_restricted` (403, ADR-0059 R2.8a: an
+            elevation may not answer, ask or review).
+
+    ElevationReviewInput:
+      type: object
+      required: [outcome]
+      additionalProperties: false
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:169-173
+        (reviewBody). The attestation of a review.
+      properties:
+        outcome:
+          type: string
+          description: "`justified` or `unauthorized`."
+        note:
+          type: string
+          maxLength: 4000
+          description: Free text, kept in the review only; never in a security event.
+        replacement_issued:
+          type: boolean
+          nullable: true
+          description: >
+            Whether a replacement sealed credential was issued. Required for
+            the review of a sealed elevation, refused for any other.
+
+    ElevationReviewAttestation:
+      type: object
+      required: [outcome, note, replacement_issued, reviewer, reviewed_at]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:175-181
+        (attestationView).
+      properties:
+        outcome:
+          type: string
+          description: "`justified` or `unauthorized`."
+        note: { type: string, nullable: true }
+        replacement_issued:
+          type: boolean
+          nullable: true
+          description: Set on the review of a sealed elevation only.
+        reviewer: { $ref: '#/components/schemas/ElevationPerson' }
+        reviewed_at: { type: string, format: date-time }
+
+    ElevationReviewerChange:
+      type: object
+      required: [person, actor, action, at]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:183-188
+        (reviewerChangeView). A change to a reviewer while the review was
+        pending, by a super_admin; the person stays eligible.
+      properties:
+        person: { $ref: '#/components/schemas/ElevationPerson' }
+        actor: { $ref: '#/components/schemas/ElevationPerson' }
+        action:
+          type: string
+          description: "`role_removed`, `suspended` or `deleted`."
+        at: { type: string, format: date-time }
+
+    ElevationReviewChange:
+      type: object
+      required: [id, at, user_id, action, method, route, status, entity_type, entity_id, entity_name, flagged]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:190-202
+        (changeView). One admin audit row made under the elevation.
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        user_id: { type: integer, format: int64 }
+        action: { type: string }
+        method: { type: string }
+        route: { type: string }
+        status: { type: integer }
+        entity_type: { type: string, nullable: true }
+        entity_id: { type: integer, format: int64, nullable: true }
+        entity_name: { type: string, nullable: true }
+        flagged:
+          type: boolean
+          description: The action is flagged for the review under an elevation (its `flag` value).
+
+    ElevationReviewChanges:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:204-207
+        (changesView).
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ElevationReviewChange' }
+
+    ElevationRevert:
+      type: object
+      required: [id, elevation_id, holder, change, opened_at, handled_at, handled_by]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:209-217
+        (revertView). One entry of the revert list. In a review the change
+        carries its id, action and time only.
+      properties:
+        id: { type: string, format: uuid }
+        elevation_id: { type: string, format: uuid }
+        holder: { $ref: '#/components/schemas/ElevationPerson' }
+        change: { $ref: '#/components/schemas/ElevationReviewChange' }
+        opened_at: { type: string, format: date-time }
+        handled_at: { type: string, format: date-time, nullable: true }
+        handled_by:
+          allOf:
+            - $ref: '#/components/schemas/ElevationPerson'
+          nullable: true
+
+    ElevationReview:
+      type: object
+      required: [elevation, reviewers, can_review, review, reviewer_changes, changes, reverts]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:219-227
+        (reviewView).
+      properties:
+        elevation: { $ref: '#/components/schemas/Elevation' }
+        reviewers:
+          type: array
+          description: The reviewers recorded when the elevation ended.
+          items: { $ref: '#/components/schemas/ElevationPerson' }
+        can_review:
+          type: boolean
+          description: The caller is a recorded reviewer and the review is pending.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ElevationReviewAttestation'
+          nullable: true
+        reviewer_changes:
+          type: array
+          items: { $ref: '#/components/schemas/ElevationReviewerChange' }
+        changes: { $ref: '#/components/schemas/ElevationReviewChanges' }
+        reverts:
+          type: array
+          items: { $ref: '#/components/schemas/ElevationRevert' }
+
+    ElevationRevertList:
+      type: object
+      required: [total, rows]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:229-232
+        (revertListBody).
+      properties:
+        total: { type: integer }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ElevationRevert' }
+
+    ElevationRevertHandled:
+      type: object
+      required: [id, changed]
+      description: >
+        NOTE(W2): internal/api/v2/adminaccess/reviews.go:234-237
+        (revertHandledBody).
+      properties:
+        id: { type: string, format: uuid }
+        changed:
+          type: boolean
+          description: False when the entry was handled already; it keeps its first mark.
 
     TokenExpiration:
       type: object
@@ -25610,6 +25770,48 @@ components:
             elevation_credential_refused:
               summary: A personal access token of an approver
               value: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
+    ElevationReviewRefused:
+      description: >-
+        403: the credential is not a browser session
+        (`elevation_credential_refused`), the caller lacks
+        `access.breakglass.review` (`error` only), the caller is the holder,
+        the requester or the approver of the elevation
+        (`elevation_reviewer_involved`), the caller is not a reviewer
+        recorded when the elevation ended (a write only;
+        `elevation_reviewer_not_eligible`), or the caller's active elevation
+        took part in the session's permissions (a write only;
+        `elevation_restricted`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          examples:
+            elevation_reviewer_involved:
+              summary: The approver opens the review
+              value:
+                error: the holder, the requester and the approver of an elevation do not review it
+                code: elevation_reviewer_involved
+            elevation_credential_refused:
+              summary: A personal access token of a reviewer
+              value: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
+    ElevationRevertRefused:
+      description: >-
+        403: the credential is not a browser session
+        (`elevation_credential_refused`), the caller lacks
+        `access.breakglass.manage` (`error` only), or the caller's active
+        elevation took part in the session's permissions (a write only;
+        `elevation_restricted`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ElevationRefusal'
+          examples:
+            route_gate:
+              summary: A security auditor marks an entry
+              value: { error: insufficient permissions }
+            elevation_credential_refused:
+              summary: A personal access token
+              value: { error: an elevation route takes a browser session only, code: elevation_credential_refused }
     ElevationNotFound:
       description: '404: no such elevation request (`elevation_not_found`).'
       content:
@@ -27883,6 +28085,318 @@ paths:
         '500': { $ref: '#/components/responses/500' }
         '503':
           description: The elevation requests are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/elevations/{elevationID}/review:
+    get:
+      operationId: getElevationReview
+      summary: The review of one elevation
+      description: |
+        The review after use (ADR-0059 decision 5, R2.9a): the elevation,
+        the reviewers recorded when it ended, the changes made under it
+        (its admin audit rows, flagged rows first, then by time, paged), the
+        changes to a reviewer while the review was pending, the attestation
+        once it is written, and the revert list an `unauthorized` outcome
+        opened.
+
+        For a holder of `access.breakglass.review`, in a browser session (a
+        token, a native session, a run token and a sealed session are
+        refused with `elevation_credential_refused`). The holder, the
+        requester and the approver of the elevation are refused with
+        `elevation_reviewer_involved`. `can_review` is true for a reviewer
+        recorded at the end while the review is pending: eligibility is
+        that record, not the current roles.
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/ElevationID'
+        - name: limit
+          in: query
+          required: false
+          description: Changes per page, 1 to 200 (default 50).
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: The review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationReview'
+              example:
+                elevation:
+                  id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                  state: review_pending
+                  path: approved
+                  level: admin
+                  reason_code: incident
+                  reason: The model provider is down and the routing must be changed now.
+                  ticket: INC-4711
+                  duration_minutes: 60
+                  person: { id: 12, name: Rui Responder, email: rui@example.com }
+                  approver: { id: 11, name: Ada Admin, email: ada@example.com }
+                  denial_reason_code: null
+                  requested_at: '2026-11-25T10:00:00Z'
+                  request_expires_at: null
+                  decided_at: '2026-11-25T10:05:00Z'
+                  started_at: '2026-11-25T10:06:00Z'
+                  expires_at: '2026-11-25T11:06:00Z'
+                  ended_at: '2026-11-25T10:40:00Z'
+                  end_reason: holder
+                  review_state: review_pending
+                  time_left_seconds: 0
+                reviewers:
+                  - { id: 14, name: Sam Auditor, email: sam@example.com }
+                can_review: true
+                review: null
+                reviewer_changes: []
+                changes:
+                  total: 1
+                  rows:
+                    - id: 90211
+                      at: '2026-11-25T10:12:00Z'
+                      user_id: 12
+                      action: gateway.provider.update
+                      method: PUT
+                      route: /api/v2/admin/gateway/providers/administration/{providerID}
+                      status: 200
+                      entity_type: provider
+                      entity_id: 7
+                      entity_name: primary
+                      flagged: true
+                reverts: []
+        '400':
+          description: The limit or the offset is not valid (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: limit must be between 1 and 200, code: elevation_request_invalid }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationReviewRefused' }
+        '404': { $ref: '#/components/responses/ElevationNotFound' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation reviews are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+    post:
+      operationId: reviewElevation
+      summary: Record the review of an elevation
+      description: |
+        The attestation (ADR-0059 decision 5, R2.9a): an outcome,
+        `justified` or `unauthorized`, and a note. It moves the elevation
+        from `review_pending` to `reviewed` and changes no platform state.
+        The `reviewed` security event commits with it and carries the
+        outcome, never the note.
+
+        `unauthorized` opens a revert list of the flagged changes for the
+        platform administrators (see `listElevationReverts`) and notifies as
+        an activation does. The review of a sealed elevation says whether a
+        replacement credential was issued (`replacement_issued`, required
+        there and refused anywhere else).
+
+        Only a reviewer recorded when the elevation ended writes it
+        (`elevation_reviewer_not_eligible`), never the holder, the requester
+        or the approver (`elevation_reviewer_involved`). Under an elevation
+        the write is refused (`elevation_restricted`). The answer is the
+        review as `getElevationReview` reads it.
+      tags: [admin]
+      parameters:
+        - $ref: '#/components/parameters/ElevationID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ElevationReviewInput'
+            example:
+              outcome: justified
+              note: The routing change matches the incident ticket.
+      responses:
+        '200':
+          description: The review with its attestation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationReview'
+              example:
+                elevation:
+                  id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                  state: reviewed
+                  path: approved
+                  level: admin
+                  reason_code: incident
+                  reason: The model provider is down and the routing must be changed now.
+                  ticket: INC-4711
+                  duration_minutes: 60
+                  person: { id: 12, name: Rui Responder, email: rui@example.com }
+                  approver: { id: 11, name: Ada Admin, email: ada@example.com }
+                  denial_reason_code: null
+                  requested_at: '2026-11-25T10:00:00Z'
+                  request_expires_at: null
+                  decided_at: '2026-11-25T10:05:00Z'
+                  started_at: '2026-11-25T10:06:00Z'
+                  expires_at: '2026-11-25T11:06:00Z'
+                  ended_at: '2026-11-25T10:40:00Z'
+                  end_reason: holder
+                  review_state: reviewed
+                  time_left_seconds: 0
+                reviewers:
+                  - { id: 14, name: Sam Auditor, email: sam@example.com }
+                can_review: false
+                review:
+                  outcome: justified
+                  note: The routing change matches the incident ticket.
+                  replacement_issued: null
+                  reviewer: { id: 14, name: Sam Auditor, email: sam@example.com }
+                  reviewed_at: '2026-11-25T12:00:00Z'
+                reviewer_changes: []
+                changes:
+                  total: 0
+                  rows: []
+                reverts: []
+        '400':
+          description: >
+            The outcome is not `justified` or `unauthorized`, the note is
+            longer than 4000 characters, or `replacement_issued` is missing
+            on a sealed elevation or given on another
+            (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: outcome must be justified or unauthorized, code: elevation_request_invalid }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationReviewRefused' }
+        '404': { $ref: '#/components/responses/ElevationNotFound' }
+        '409':
+          description: >-
+            The elevation is not awaiting review: it has not ended, or it
+            was reviewed already (`elevation_not_reviewable`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example:
+                error: 'the elevation is not awaiting review: it has not ended, or it was reviewed already'
+                code: elevation_not_reviewable
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation reviews are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/reverts:
+    get:
+      operationId: listElevationReverts
+      summary: The revert list
+      description: |
+        The changes of elevations reviewed as `unauthorized`, one entry per
+        flagged change, unhandled entries first, then oldest first (ADR-0059
+        decision 5, R2.9a). A queue for the platform administrators: the
+        platform reverts nothing by itself.
+
+        For a holder of `access.breakglass.manage`, in a browser session.
+      tags: [admin]
+      parameters:
+        - name: open
+          in: query
+          required: false
+          description: true answers only the entries not yet handled.
+          schema: { type: boolean, default: false }
+        - name: limit
+          in: query
+          required: false
+          description: Rows per page, 1 to 200 (default 50).
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: One page of the revert list, with the total
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationRevertList'
+              example:
+                total: 1
+                rows:
+                  - id: 5f0c2a7e-2f7b-4a8e-9a1d-6d3e2b9c1f00
+                    elevation_id: 0193a1c4-7a5e-7cc1-9a51-2f0e8c1d4b6a
+                    holder: { id: 12, name: Rui Responder, email: rui@example.com }
+                    change:
+                      id: 90211
+                      at: '2026-11-25T10:12:00Z'
+                      user_id: 12
+                      action: gateway.provider.update
+                      method: PUT
+                      route: /api/v2/admin/gateway/providers/administration/{providerID}
+                      status: 200
+                      entity_type: provider
+                      entity_id: 7
+                      entity_name: primary
+                      flagged: true
+                    opened_at: '2026-11-25T12:00:00Z'
+                    handled_at: null
+                    handled_by: null
+        '400':
+          description: open, limit or offset is not valid (`elevation_request_invalid`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: open must be true or false, code: elevation_request_invalid }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationRevertRefused' }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation reviews are not configured on this deployment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /admin/access/reverts/{itemID}/handled:
+    post:
+      operationId: markElevationRevertHandled
+      summary: Mark a revert entry handled
+      description: |
+        Marks one entry of the revert list handled, once: a second call
+        changes nothing and answers `changed: false` (ADR-0059 R2.9a). For a
+        holder of `access.breakglass.manage`, in a browser session; refused
+        under an elevation (`elevation_restricted`). No body.
+      tags: [admin]
+      parameters:
+        - name: itemID
+          in: path
+          required: true
+          description: The id of the revert entry (a UUID); any other value answers 404 `revert_not_found`.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The entry is handled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElevationRevertHandled'
+              example:
+                id: 5f0c2a7e-2f7b-4a8e-9a1d-6d3e2b9c1f00
+                changed: true
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/ElevationRevertRefused' }
+        '404':
+          description: No such revert entry (`revert_not_found`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ElevationRefusal' }
+              example: { error: no such revert entry, code: revert_not_found }
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The elevation reviews are not configured on this deployment.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

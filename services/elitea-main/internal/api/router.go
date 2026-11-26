@@ -872,6 +872,9 @@ type RouterConfig struct {
 	// Nil writes to the ledger in Pool; a test router with an unconnected
 	// pool sets a store of its own.
 	ElevationRequests v2adminconsole.ElevationStore
+	// ElevationReviews runs the review routes (ADR-0059 R2.9a). Nil reads
+	// and writes Pool.
+	ElevationReviews v2adminconsole.ReviewStore
 	// BreakGlassSettings reads the break_glass section for the elevation
 	// request routes. Nil reads it from Pool.
 	BreakGlassSettings v2adminconsole.BreakGlassSettingsReader
@@ -3047,6 +3050,18 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Approve: central(adminaccess.AccessBreakglassApprove),
 						History: requireAccessRolesView,
 					})
+				// The review after use (ADR-0059 R2.9a): the review and its
+				// attestation behind access.breakglass.review, the revert list
+				// behind access.breakglass.manage. Only a browser session
+				// reaches a gate.
+				reviewStore := cfg.ElevationReviews
+				if reviewStore == nil && cfg.Pool != nil {
+					reviewStore = v2adminconsole.NewPostgresReviews(cfg.Pool, accessevent.DefaultAppender("elitea-main/admin"))
+				}
+				v2adminconsole.NewReviewsHandler(reviewStore).Register(r, v2adminconsole.ReviewGates{
+					Review: central(adminaccess.AccessBreakglassReview),
+					Manage: central(adminaccess.AccessBreakglassManage),
+				})
 				// The access posture (ADR-0059 R2.14a): what is wrong with the
 				// roles and tokens, and what is only worth knowing, behind the
 				// gate of the other Access reads. A scoped token that holds

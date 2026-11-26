@@ -127,7 +127,31 @@ Break-glass notices need outbound e-mail. Configure it (the **E-mail** section o
 
 A deployment can also send these notices to an out-of-band webhook, for when e-mail is down: see [The out-of-band notice webhook](/deployment/configuration#the-out-of-band-notice-webhook). Every event of the table but the request makes one webhook call, with ids, a type and a time only; it names nobody.
 
-The notice in the bell icon of the application comes in a later release. The request writes its notices today; the start and the review, which write the others, ship in later releases.
+The notice in the bell icon of the application comes in a later release. The request, a critical change and an `unauthorized` review write their notices today; the start ships in a later release.
+
+## The review after use
+
+Every elevation is reviewed after it ends, by someone who was not involved. The review is an attestation: it changes no platform state.
+
+**Who may review.** When an elevation ends, the platform records its reviewers: every holder of `access.breakglass.review` through a standing role (the Security auditor role by default) whose account is not suspended, except the person elevated, the requester and the approver. That record decides who may write the review, not the current roles: a reviewer whose role is taken away afterwards can still review, and a person who gets the role after the end cannot. The holder, the requester and the approver can neither read nor write the review (`403 elevation_reviewer_involved`). A personal access token, a native session, a run token and a sealed session cannot review.
+
+**What the reviewer sees.** `GET /api/v2/admin/access/elevations/{elevationID}/review` answers the elevation with its reason, the recorded reviewers, and every administration audit row made under the elevation, flagged rows first, then by time, paged with `limit` and `offset`.
+
+**The two outcomes.** `POST` on the same path with `outcome` and an optional `note` (at most 4000 characters) records the attestation and moves the elevation to `reviewed`:
+
+- `justified`: the use was right.
+- `unauthorized`: the use was not. The same people as an elevation start are told (see [Who is told](#who-is-told)), and a revert list of the elevation's flagged changes is opened.
+
+The review of an elevation after a sealed sign-in also says whether a replacement credential was issued (`replacement_issued`). The `admin.elevation.reviewed` security event is written in the same transaction; it carries the outcome, never the note. A second review of the same elevation answers `409 elevation_not_reviewable`.
+
+**A reviewer cannot be removed and waited out.** While the review is pending, taking `access.breakglass.review` from one of its reviewers, suspending or deleting them needs `admin.auth.users.super_admin` (`403 elevation_pending_reviewer` otherwise). The change is listed in the review (`reviewer_changes`), and the person stays a reviewer of it.
+
+### The revert list
+
+An `unauthorized` review opens one entry per flagged change of the elevation. The platform reverts nothing by itself: the list is a queue for the platform administrators, the holders of `access.breakglass.manage`.
+
+- `GET /api/v2/admin/access/reverts?open=true`: the entries not handled yet; without `open`, every entry, unhandled ones first.
+- `POST /api/v2/admin/access/reverts/{itemID}/handled`: marks an entry handled, once. A Security auditor can read the review but cannot mark an entry.
 
 ## What an elevation cannot do
 
@@ -149,6 +173,8 @@ The table lists every action whose value is not `allow`, reads included (reading
 | `-` | `POST /api/v2/admin/access/elevations` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/approve` | refused (`deny`) |
 | `-` | `POST /api/v2/admin/access/elevations/{elevationID}/deny` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/elevations/{elevationID}/review` | refused (`deny`) |
+| `-` | `POST /api/v2/admin/access/reverts/{itemID}/handled` | refused (`deny`) |
 | `-` | `GET /api/v2/admin/access/sealed_credentials` | refused (`deny`) |
 | `delete` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |
 | `set_admin_role` | `POST /api/v2/admin/auth_users/{mode}` | allowed and flagged (`flag`) |

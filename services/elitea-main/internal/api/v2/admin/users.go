@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -379,6 +380,16 @@ func (h *Handler) deleteUsers(w http.ResponseWriter, r *http.Request, body authU
 				adminaccess.Write(w, r, refusal)
 				return
 			}
+			// Deleting a reviewer of a pending review needs the standing
+			// super_admin and is listed in the review (ADR-0059 R2.9a).
+			if refusal, err := adminaccess.GuardPendingReviewer(ctx, tx, caller, int64(id),
+				adminaccess.ReviewerChangeDeleted, time.Now()); err != nil {
+				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
+				return
+			} else if refusal != nil {
+				adminaccess.Write(w, r, refusal)
+				return
+			}
 			refusal, err := h.checkAccountDeletion(ctx, tx, caller, id)
 			if err != nil {
 				apierr.WriteStatus(w, http.StatusInternalServerError, "failed to delete users")
@@ -482,7 +493,7 @@ func (h *Handler) checkAccountDeletion(
 		return nil, err
 	}
 	return h.checkCentralRoles(ctx, tx, caller, centralChange{
-		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true,
+		mode: adminaccess.ModeAdministration, taken: held, targetID: id, changes: true, deletion: true,
 	})
 }
 
@@ -863,7 +874,8 @@ func (h *Handler) UserSuspend(w http.ResponseWriter, r *http.Request) {
 
 // checkSuspension applies the rules about people to a suspension of userID:
 // an elevated caller suspends no holder of access.breakglass.approve or
-// access.breakglass.review (ADR-0059 R2.8b). A handler built without a
+// access.breakglass.review (ADR-0059 R2.8b), and only a standing super_admin
+// suspends a reviewer of a pending review (R2.9a). A handler built without a
 // permission resolver (unit fixtures only) applies none.
 func (h *Handler) checkSuspension(r *http.Request, tx pgx.Tx, userID int64) (*adminaccess.Refusal, error) {
 	if h.resolver == nil {
@@ -873,7 +885,12 @@ func (h *Handler) checkSuspension(r *http.Request, tx pgx.Tx, userID int64) (*ad
 	if refusal != nil {
 		return adminaccess.Unresolved("your own permissions could not be read, so the suspension was refused"), nil
 	}
-	return adminaccess.ElevationProtectedTargets(r.Context(), tx, caller, userID)
+	if refusal, err := adminaccess.ElevationProtectedTargets(r.Context(), tx, caller, userID); err != nil || refusal != nil {
+		return refusal, err
+	}
+	// Suspending a reviewer of a pending review needs the standing
+	// super_admin and is listed in the review (ADR-0059 R2.9a).
+	return adminaccess.GuardPendingReviewer(r.Context(), tx, caller, userID, adminaccess.ReviewerChangeSuspended, time.Now())
 }
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
@@ -914,6 +931,9 @@ type centralChange struct {
 	// changes is false when the write would leave the target's roles as they
 	// are; the not-yourself rule refuses only a change.
 	changes bool
+	// deletion is true for the roles an account delete takes: the delete
+	// applies the pending-reviewer rule itself (ADR-0059 R2.9a).
+	deletion bool
 }
 
 // checkCentralRoles is the rule for one central assignment, applied to EACH
@@ -936,7 +956,7 @@ type centralChange struct {
 //     route reads, so clearing a developer-mode row that the legacy runtime
 //     left behind needs no subset.
 func (h *Handler) checkCentralRoles(
-	ctx context.Context, q adminaccess.Querier, caller adminaccess.Caller, change centralChange,
+	ctx context.Context, q adminaccess.ExecQuerier, caller adminaccess.Caller, change centralChange,
 ) (*adminaccess.Refusal, error) {
 	caller, err := caller.Reload(ctx)
 	if err != nil {
@@ -947,6 +967,21 @@ func (h *Handler) checkCentralRoles(
 		// break-glass access (ADR-0059 R2.8b).
 		if refusal, err := adminaccess.ElevationProtectedTargets(ctx, q, caller, int64(change.targetID)); err != nil || refusal != nil {
 			return refusal, err
+		}
+		// Taking the review permission from a reviewer of a pending review
+		// needs the standing super_admin, and is listed in the review
+		// (ADR-0059 R2.9a).
+		if !change.deletion {
+			takesReview, err := adminaccess.RolesGrant(ctx, q, change.mode, change.taken, adminaccess.AccessBreakglassReview)
+			if err != nil {
+				return nil, err
+			}
+			if takesReview {
+				if refusal, err := adminaccess.GuardPendingReviewer(ctx, q, caller, int64(change.targetID),
+					adminaccess.ReviewerChangeRoleRemoved, time.Now()); err != nil || refusal != nil {
+					return refusal, err
+				}
+			}
 		}
 	}
 	// The reserved break-glass account holds no role (ADR-0059 R2.6b), for a
