@@ -40,6 +40,7 @@ struct Fixture {
     prompt: Arc<RecordingPrompt>,
 }
 
+#[cfg(unix)]
 const TOKEN: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
 const APP_TOKEN: &str = "the-apps-own-access-token-value";
 
