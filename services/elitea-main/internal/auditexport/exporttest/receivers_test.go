@@ -210,6 +210,18 @@ func TestOTLPReceiverDecodes(t *testing.T) {
 	if all[0].Body == "" {
 		t.Fatal("the event body is empty")
 	}
+	// The attributes are the flat fields a SIEM filters on: the event id,
+	// the source and the event type of the first event, asserted from the
+	// decoded record rather than from the fixture.
+	if all[0].Attributes["elitea.audit.event_id"] != "event-1" {
+		t.Fatalf("event_id attribute = %q, want event-1", all[0].Attributes["elitea.audit.event_id"])
+	}
+	if all[0].Attributes["elitea.audit.source"] != "admin_audit" {
+		t.Fatalf("source attribute = %q, want admin_audit", all[0].Attributes["elitea.audit.source"])
+	}
+	if all[0].Attributes["elitea.audit.event_type"] != "api" {
+		t.Fatalf("event_type attribute = %q, want api", all[0].Attributes["elitea.audit.event_type"])
+	}
 }
 
 func TestOTLPReceiverStatusSwitch(t *testing.T) {
