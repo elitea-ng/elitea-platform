@@ -999,7 +999,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 604 -> 606 (issue 3063, ADR-0061 decision 3c, 2026-11-25): handLocalFloor and
 // skipLocalFloorHands, the desktop host's hand-off routes. Only the Rust host calls them, so
 // MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 606;
+// 606 -> 610 (issue 2523, ADR-0059 R2.9a, 2026-11-26): getElevationReview, reviewElevation,
+// listElevationReverts and markElevationRevertHandled, the review after use. The review page is
+// R3.11 (issue 2542), so MANIFEST_ENTRY_COUNT is unchanged.
+const GENERATED_OPERATION_COUNT = 610;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

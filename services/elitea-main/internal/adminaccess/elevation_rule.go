@@ -55,11 +55,27 @@ type ElevationCaller struct {
 	// SealedSuperAdmin: the credential is a sealed session and an elevation
 	// on the sealed path at the super_admin level took part.
 	SealedSuperAdmin bool
+	// UserID is the elevated person; ElevationIDs the active elevations
+	// that took part; SessionRef the browser session they are bound to.
+	// The announcement of a critical change names them (R2.8b).
+	UserID       int64
+	ElevationIDs []string
+	SessionRef   int64
+	// Announcer writes the announcement of a critical change; nil refuses
+	// every critical action under an elevation (ArmCriticalChange).
+	Announcer *CriticalAnnouncer
 }
 
 // ElevationCallerOf answers the caller of a resolution of credential.
 func ElevationCallerOf(credential auth.Credential, resolution auth.PermissionResolution) ElevationCaller {
-	caller := ElevationCaller{Elevated: resolution.Elevated(), Standing: resolution.StandingPermissions()}
+	caller := ElevationCaller{Elevated: resolution.Elevated(), Standing: resolution.StandingPermissions(),
+		UserID: resolution.UserID, ElevationIDs: append([]string(nil), resolution.ElevationIDs...),
+		SessionRef: credential.ElevationSessionRef()}
+	if len(caller.ElevationIDs) == 0 {
+		for _, elevation := range resolution.Elevations {
+			caller.ElevationIDs = append(caller.ElevationIDs, elevation.ID)
+		}
+	}
 	if credential.IsSealed() {
 		for _, elevation := range resolution.Elevations {
 			if elevation.Path == ElevationPathSealed && elevation.Level == ElevationLevelSuperAdmin {
@@ -166,8 +182,19 @@ func CheckElevationRule(ctx context.Context, method, pattern, action string) Ele
 // (method, pattern, action) the handler classified: a refusal is written
 // (WriteElevationRefusal) and answers true, so the handler returns without
 // writing; a flag marks the audit row.
+//
+// A critical entry it admits under an elevation arms the announcement of the
+// change (ArmCriticalChange), which the change's write runs in its
+// transaction; one that cannot be announced is refused.
 func RestrictElevation(w http.ResponseWriter, r *http.Request, method, pattern, action string) bool {
 	decision := CheckElevationRule(r.Context(), method, pattern, action)
+	if decision.Refusal == nil {
+		if caller, ok := r.Context().Value(elevationCallerKey{}).(ElevationCaller); ok {
+			if entry, found := ActionFor(method, pattern, action); found {
+				decision.Refusal = ArmCriticalChange(r.Context(), entry, caller)
+			}
+		}
+	}
 	if decision.Refusal != nil {
 		WriteElevationRefusal(w, r, Action{Method: method, Pattern: pattern, Name: action}.Key(), decision.Refusal)
 		return true

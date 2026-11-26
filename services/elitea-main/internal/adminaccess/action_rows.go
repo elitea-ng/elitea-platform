@@ -34,6 +34,14 @@ const (
 	ElevationDenyPattern     = adminPrefix + "/access/elevations/{elevationID}/deny"
 )
 
+// The review after use (ADR-0059 R2.9a): the review of one elevation, its
+// attestation, and the revert list of the platform administrators.
+const (
+	ElevationReviewPattern = adminPrefix + "/access/elevations/{elevationID}/review"
+	RevertsPattern         = adminPrefix + "/access/reverts"
+	RevertHandledPattern   = adminPrefix + "/access/reverts/{itemID}/handled"
+)
+
 // IdentityProviderSavePattern is the identity provider save, whose handler
 // classifies the save and applies the token rule itself (TokenRuleInHandler).
 const IdentityProviderSavePattern = adminPrefix + "/identity_providers/administration/{key}"
@@ -165,6 +173,14 @@ func actionRows() []Action {
 		read(ElevationsMinePattern, AccessBreakglassRequest).tokenNever(),
 		read(ElevationsPendingPattern, AccessBreakglassApprove).tokenNever(),
 		read(ElevationsPattern, AccessRolesView).tokenNever(),
+		// The review after use (R2.9a): an attestation and the revert
+		// list. The review is the elevation ledger's, so `deny` under an
+		// elevation; marking a revert entry handled too, since the revert
+		// list is the record of what an elevation did. No token.
+		read(ElevationReviewPattern, AccessBreakglassReview).tokenNever(),
+		post(ElevationReviewPattern, AccessBreakglassReview).elevation(deny).tokenNever(),
+		read(RevertsPattern, AccessBreakglassManage).tokenNever(),
+		post(RevertHandledPattern, AccessBreakglassManage).elevation(deny).tokenNever(),
 
 		// People and access: users.
 		userAction("delete").dangerous().elevation(flag),

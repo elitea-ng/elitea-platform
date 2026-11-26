@@ -37,7 +37,6 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/cleanupjournal"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/nativeauth"
 )
 
 // ErrNotFound reports that no account carries the identifier.
@@ -804,6 +803,10 @@ func argumentIndex(position int) string {
 // revoked in the same transaction as the suspension, with no operator recorded.
 // Reactivation later restores the account, never the sessions.
 func revokeOnDeactivation(ctx context.Context, tx pgx.Tx, id int) error {
-	_, err := nativeauth.RevokeUserSessions(ctx, tx, int64(id), nativeauth.ReasonUserDeactivated, nil)
+	// The person's elevations end and the sealed credentials bound to them
+	// are revoked too (ADR-0059 R2.11).
+	_, err := adminaccess.RevokePersonAccess(ctx, tx, int64(id), adminaccess.PersonAccessEnd{
+		ElevationEnd: adminaccess.ElevationEndSCIMDeactivated,
+	})
 	return err
 }

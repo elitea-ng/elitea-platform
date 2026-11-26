@@ -72,8 +72,13 @@ func TestAnElevatedCallerIsResolvedFromItsStandingSet(t *testing.T) {
 			if !caller.Administration[adminaccess.AdminAuthUsers] {
 				t.Fatalf("the standing set was lost: %+v", caller.Administration)
 			}
-			if name == "with the standing-set call" && !slices.Equal(calls, []string{"standing"}) {
-				t.Fatalf("the caller was resolved through %v, want the standing-set call alone", calls)
+			// The set is the standing-set call's; the full resolution is read
+			// after it only to learn that the session is elevated (R2.8b).
+			if name == "with the standing-set call" && !slices.Equal(calls, []string{"standing", "full"}) {
+				t.Fatalf("the caller was resolved through %v, want the standing-set call, then the elevation", calls)
+			}
+			if !caller.Elevated || caller.Effective[adminaccess.SuperAdminPermission] != true {
+				t.Fatalf("the elevation was not read beside the standing set: %+v", caller)
 			}
 
 			// Assigning a role to itself.
