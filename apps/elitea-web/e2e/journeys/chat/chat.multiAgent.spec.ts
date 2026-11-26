@@ -189,6 +189,9 @@ test('three-agent chat: address two agents, side talk folds, system line, lead',
     await expect(scribeLead).toBeVisible({ timeout: 20_000 });
     const saved = page.waitForResponse((response) =>
       response.request().method() === 'PUT' && response.url().includes(`/elitea_core/conversation/prompt_lib/${DEFAULT_PROJECT_ID}/${fixture?.conversationId ?? ''}`));
+    // Hover first: the row's hover actions take room and move the menu, so a click aimed before the hover lands on
+    // the row (which picks the agent) instead of the menu.
+    await scribeLead.hover();
     await scribeLead.getByTestId('participant-lead-menu').click();
     await page.getByTestId('participant-lead-make').click();
     expect((await saved).ok()).toBe(true);

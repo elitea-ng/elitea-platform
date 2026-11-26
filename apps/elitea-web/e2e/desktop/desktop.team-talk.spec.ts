@@ -108,6 +108,8 @@ test('Make lead in the Participants tab writes the new lead', async ({ page }) =
   const coder = tab.locator('[data-testid="participant-lead"][data-participant-id="77"]');
   await expect(coder).toBeVisible();
   await expect(coder.getByTestId('participant-lead-badge')).toHaveCount(0);
+  // Hover first: the row's hover actions take room and move the menu (see chat.multiAgent).
+  await coder.hover();
   await coder.getByTestId('participant-lead-menu').click();
   await page.getByTestId('participant-lead-make').click();
 
