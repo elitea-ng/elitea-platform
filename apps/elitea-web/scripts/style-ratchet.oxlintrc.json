@@ -33,6 +33,9 @@
     // the comfortable unit at the 16 px browser default (buildTheme.ts writes
     // 8, or 0.5rem after #3093).
     "elitea/raw-px-spacing": ["error", { "units": ["px", "rem"], "unit": 8 }],
+    // R-T15: reads of a generic legacy palette id, the ids of
+    // src/shared/brand/tokens/legacy-roles.json; the message names the role.
+    "elitea/legacy-palette-id": "error",
     // R-T14: Dialog and Switch go through their shared/ui wrappers.
     // A type-only import is not counted.
     "no-restricted-imports": [
@@ -72,6 +75,12 @@
       // The wrappers themselves.
       "files": ["**/shared/ui/**"],
       "rules": { "no-restricted-imports": "off" }
+    },
+    {
+      // The brand layer maps legacy ids to MUI and to the roles; it is not
+      // counted (decision 3.4).
+      "files": ["**/shared/brand/**"],
+      "rules": { "elitea/legacy-palette-id": "off" }
     }
   ]
 }
