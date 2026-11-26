@@ -24,9 +24,10 @@ export const participantItemStyles = (theme: { vars: { shape: { radiusMd: string
   }),
   nameWrapper: {
     flex: 1,
-    // A flex item's min-width defaults to its content: without 0 the name never ellipsised, and a row with a live
-    // label plus the Lead chip pushed the chip and the menu out of the panel (issue 3067's visual baseline).
-    minWidth: 0,
+    // A flex item's min-width defaults to its content: the name never ellipsised, and a row with a live label plus the
+    // Lead chip pushed the chip and the menu out of the panel (issue 3067's visual baseline). The name keeps 4rem; the
+    // row's live label gives way first.
+    minWidth: '4rem',
     maxWidth: 'calc(100% - 2.125rem)',
     display: 'flex',
     flexDirection: 'row',

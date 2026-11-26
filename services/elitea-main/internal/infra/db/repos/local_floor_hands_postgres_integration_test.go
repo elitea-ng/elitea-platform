@@ -595,10 +595,16 @@ func TestPostgresLocalFloorHandsParallelCallsDoNotDeadlock(t *testing.T) {
 			t.Fatalf("a parallel hand: %v", err)
 		}
 	}
-	// Doctor and Writer each take 2 turns; the fifth call is a third turn,
-	// so the guard stopped the exchange once and skipped the queue.
+	// Whatever order they ran in, some agent's third turn came before the
+	// sixth call (each takes at most 2): the guard stopped the exchange
+	// once and skipped everything it had queued.
 	states := h.statuses(first.QuestionID)
-	if len(states) != 4 || states[0] != "SKIPPED:consecutive_turns" || h.systemMessages() != 1 {
+	if len(states) < 2 || len(states) > 4 || h.systemMessages() != 1 {
 		t.Fatalf("statuses = %v, system messages %d", states, h.systemMessages())
+	}
+	for _, state := range states {
+		if state != "SKIPPED:consecutive_turns" {
+			t.Fatalf("statuses = %v", states)
+		}
 	}
 }
