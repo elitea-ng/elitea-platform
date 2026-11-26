@@ -53,7 +53,7 @@ export const ADDRESSES = {
  */
 export const RUSTFS_BIND = "127.0.0.1";
 export const RUSTFS_ENDPOINT = `http://${RUSTFS_BIND}:9000`;
-/** The non-root nginx port (compose's container listens on 80). ELITEA_WEB_UPSTREAM names it. */
+/** The non-root nginx port, natively and in the image (spa.conf). ELITEA_WEB_UPSTREAM names it. */
 export const WEB_PORT = 8080;
 
 /** Variables only the native table sets, and why. The parity check refuses any other extra. */
@@ -83,7 +83,6 @@ export const NATIVE_ONLY_ENV = {
 export const REWRITTEN_ENV = {
   "elitea-main": {
     ELITEA_TOOLKIT_CHECK_ALLOWLIST: "127.0.0.0/8 added: natively every service is a loopback address (the pod's name map), which the container networks never were",
-    ELITEA_WEB_UPSTREAM: "the non-root nginx listens on 8080 natively (WEB_PORT); the container binds 80",
   },
   "elitea-deepwiki": { ELITEA_DEEPWIKI_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
   "elitea-inventory": { ELITEA_INVENTORY_SCRATCH_PATH: "the container's private /tmp; natively a per-service directory under the stack state, so two services never share one" },
@@ -100,10 +99,10 @@ const need = (cond, msg) => {
   if (!cond) throw new Error(`deploy/native/e2e-standalone.mjs: ${msg}`);
 };
 
-/** spa.conf with the image's paths and its port 80 replaced; each must be found, so a drift fails loudly. */
+/** spa.conf with the image's paths and its port 8080 replaced; each must be found, so a drift fails loudly. */
 export function renderSpaConf(source, { spaDir, htmlDir, snippetsDir, listen }) {
   const rewrites = [
-    [/^(\s*)listen 80;$/m, `$1listen ${listen};`],
+    [/^(\s*)listen 8080;$/m, `$1listen ${listen};`],
     [/\/usr\/share\/nginx\/html\/spa\//g, `${spaDir}/`],
     [/\/usr\/share\/nginx\/html\//g, `${htmlDir}/`],
     [/\/etc\/nginx\/snippets\//g, `${snippetsDir}/`],
@@ -286,6 +285,9 @@ export default function table(ctx) {
           APPLICATION_SECRET_KEY: env.APPLICATION_SECRET_KEY ?? "",
           SKIP_MIGRATIONS: "1",
           OIDC_ISSUER_URL: `http://oidc.localhost:${oidcPort}`,
+          // The mock is on loopback here; the CIDRs keep compose parity.
+          ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+          ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true",
           OIDC_CLIENT_ID: "elitea-e2e-client",
           OIDC_CLIENT_SECRET: "elitea-e2e-secret",
           OIDC_REDIRECT_URI: `http://localhost:${e2ePort}/auth/oidc/callback`,

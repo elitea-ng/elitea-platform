@@ -490,14 +490,15 @@ impl ProfileSwitch for LocalSession {
     }
 }
 
-/// Bypass never carries into a consult: while any consult runs, a Bypass
-/// session runs in Build. The first consult to enter switches it; the last
+/// Bypass and Full auto never carry into a consult: while any consult runs,
+/// a Bypass or Full auto session runs in Build. The first consult to enter switches it; the last
 /// to leave switches it back, and only when the profile is still the Build
 /// it set (a person's change while consults ran stands).
 pub struct ProfileHold<S: ProfileSwitch + ?Sized> {
     session: Arc<S>,
-    /// Active consults, and whether the first one switched Bypass off.
-    state: Mutex<(usize, bool)>,
+    /// Active consults, and the profile the first one switched off (Bypass
+    /// or Full auto) to restore.
+    state: Mutex<(usize, Option<PermissionProfile>)>,
 }
 
 impl<S: ProfileSwitch + ?Sized> ProfileHold<S> {
@@ -505,11 +506,11 @@ impl<S: ProfileSwitch + ?Sized> ProfileHold<S> {
     pub fn new(session: Arc<S>) -> Self {
         Self {
             session,
-            state: Mutex::new((0, false)),
+            state: Mutex::new((0, None)),
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, bool)> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, (usize, Option<PermissionProfile>)> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -519,8 +520,13 @@ impl<S: ProfileSwitch + ?Sized> ProfileHold<S> {
     pub fn enter(self: &Arc<Self>) -> ProfileGuard<S> {
         let mut state = self.lock();
         if state.0 == 0 {
-            state.1 = self.session.profile() == PermissionProfile::Bypass;
-            if state.1 {
+            let profile = self.session.profile();
+            state.1 = matches!(
+                profile,
+                PermissionProfile::Bypass | PermissionProfile::FullAuto
+            )
+            .then_some(profile);
+            if state.1.is_some() {
                 self.session.set_profile(PermissionProfile::Build);
             }
         }
@@ -538,11 +544,13 @@ impl<S: ProfileSwitch + ?Sized> Drop for ProfileGuard<S> {
     fn drop(&mut self) {
         let mut state = self.hold.lock();
         state.0 = state.0.saturating_sub(1);
-        if state.0 == 0 {
-            if state.1 && self.hold.session.profile() == PermissionProfile::Build {
-                self.hold.session.set_profile(PermissionProfile::Bypass);
-            }
-            state.1 = false;
+        // The last consult out restores the profile it switched off (the
+        // `take` clears it either way).
+        if state.0 == 0
+            && let Some(profile) = state.1.take()
+            && self.hold.session.profile() == PermissionProfile::Build
+        {
+            self.hold.session.set_profile(profile);
         }
     }
 }
@@ -633,6 +641,18 @@ mod tests {
         session.set_profile(PermissionProfile::Build);
         drop(hold.enter());
         assert_eq!(session.profile(), PermissionProfile::Build);
+    }
+
+    /// Full auto never carries into a consult either (issue 3079): the
+    /// consult runs in Build and the caller gets Full auto back, not Bypass.
+    #[test]
+    fn a_consult_runs_without_full_auto_and_restores_it() {
+        let session = Arc::new(FakeSession(Mutex::new(PermissionProfile::FullAuto)));
+        let hold = Arc::new(ProfileHold::new(session.clone()));
+        let guard = hold.enter();
+        assert_eq!(session.profile(), PermissionProfile::Build);
+        drop(guard);
+        assert_eq!(session.profile(), PermissionProfile::FullAuto);
     }
 
     #[test]

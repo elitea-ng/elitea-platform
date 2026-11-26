@@ -32,5 +32,7 @@ export const TEAM_COPY = {
   executorLabel: (name: string, cloud: boolean) => (cloud ? `${name} runs in the cloud` : `${name} runs on the laptop`),
   ranOutsideSandbox: 'Ran outside the sandbox',
   ranOutsideSandboxLabel: 'This answer ran commands outside the sandbox, in a folder its owner trusts.',
+  fullAuto: 'Ran in Full auto',
+  fullAutoLabel: 'This answer ran in Full auto: the agent answered every approval for its owner, including those asked after reading outside content.',
   activity: ACTIVITY,
 } as const;

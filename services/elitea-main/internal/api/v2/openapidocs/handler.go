@@ -58,12 +58,29 @@ func (h *Handler) SpecJSON(w http.ResponseWriter, _ *http.Request) {
 }
 
 // UI serves a minimal, self-contained docs page — no external stylesheet,
-// script, font, or image request of any kind.
+// script, font, or image request of any kind. Its one script is a served file
+// (Script), so script-src is 'self' alone: no inline script runs on this page.
 func (h *Handler) UI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'")
+	w.Header().Set("Content-Security-Policy", DocsPagePolicy)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(docsPageHTML))
+}
+
+// DocsScriptPath is where the docs page loads its script from.
+const DocsScriptPath = "/api/docs/app.js"
+
+// DocsPagePolicy is the docs page's Content-Security-Policy. The inline
+// <style> block keeps 'unsafe-inline' for styles only; scripts come from
+// 'self' alone.
+const DocsPagePolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+
+// Script serves the docs page's script.
+func (h *Handler) Script(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(docsPageScript))
 }
 
 // convertYAMLMapKeys rewrites map[interface{}]interface{} to
@@ -126,8 +143,14 @@ const docsPageHTML = `<!doctype html>
   <nav id="nav">Loading spec&hellip;</nav>
   <section id="detail"><p>Select an operation from the list.</p></section>
 </main>
-<script>
-(function () {
+<script src="/api/docs/app.js"></script>
+</body>
+</html>
+`
+
+// docsPageScript is the docs page's only script, served from DocsScriptPath so
+// the page's policy needs no 'unsafe-inline' for scripts.
+const docsPageScript = `(function () {
   "use strict";
   fetch("/api/openapi.json").then(function (r) { return r.json(); }).then(render).catch(function (err) {
     document.getElementById("nav").textContent = "Failed to load spec: " + err;
@@ -184,7 +207,4 @@ const docsPageHTML = `<!doctype html>
     detail.appendChild(responses);
   }
 })();
-</script>
-</body>
-</html>
 `

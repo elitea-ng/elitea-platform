@@ -2,8 +2,8 @@
  * The bottom of a thread: the notice for a thread that is away, the errors,
  * and the composer. Where a message goes depends on where the thread runs:
  *
- * - here: the local agent loop (`session.send`), with Act | Plan | Bypass
- *   (`useComposerModes`, kept per folder; Plan wins), "Run to completion"
+ * - here: the local agent loop (`session.send`), with Act | Plan | Bypass | Full auto
+ *   (`useComposerModes`, Bypass kept per folder, Full auto this thread only; Plan wins), "Run to completion"
  *   (on by default, kept per folder) and the agent·version picker;
  * - `cloud`: the SERVER conversation (`useCloudChat`: the chat's own execution
  *   route and stream). The conversation's own agent answers, so the picker is
@@ -55,6 +55,7 @@ import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { BypassControls } from './BypassControls';
+import { FullAutoControls } from './FullAutoControls';
 import { isContinuedRecord } from './chainSlots';
 import { contextBreakdown, threadMeter } from './contextBreakdown';
 import { IdleCompactedNotice } from './CompactNotices';
@@ -306,6 +307,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <HandoffBanner handoff={handoff} projectId={projectId} />
       <SessionNotices error={modelNotice ?? firstError(turnError, session.sendError, session.rebind.error) ?? cloud.error} commands={commands} customCommands={customCommands} skills={offered} />
       <BypassControls bypass={modes.bypass} active={modes.bypassActive} workspaceId={workspaceId} />
+      <FullAutoControls fullAuto={modes.fullAuto} active={modes.mode === 'full_auto'} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <CloudLeadNotice projectId={projectId} conversationId={conversationId} local={local} />
       <TeamThreadNotice team={session.selection.team} local={local} />

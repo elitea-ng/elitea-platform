@@ -116,3 +116,32 @@ func TestEdgeRoutesEveryBrowserFamily(t *testing.T) {
 		}
 	}
 }
+
+// A relayed answer does not name the web container's software: the upstream's
+// Server and X-Powered-By headers are dropped, its other headers kept.
+func TestRelayedAnswersCarryNoServerHeader(t *testing.T) {
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Server", "nginx/1.99.0")
+		w.Header().Set("X-Powered-By", "something/1.0")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'")
+		_, _ = io.WriteString(w, "<!doctype html>")
+	}))
+	t.Cleanup(web.Close)
+	upstream, err := ParseUpstream(web.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	Middleware(upstream)(http.NotFoundHandler()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/app/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /app/ = %d, want 200 from the web container", recorder.Code)
+	}
+	for _, name := range []string{"Server", "X-Powered-By"} {
+		if got := recorder.Header().Values(name); len(got) != 0 {
+			t.Errorf("relayed %s = %q, want none", name, got)
+		}
+	}
+	if got := recorder.Header().Get("Content-Security-Policy"); got != "default-src 'self'" {
+		t.Errorf("relayed Content-Security-Policy = %q, want the upstream's", got)
+	}
+}

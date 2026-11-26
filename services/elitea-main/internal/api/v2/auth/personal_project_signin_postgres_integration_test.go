@@ -311,6 +311,9 @@ func (p *fakeIdentityProvider) idToken(authorization fakeAuthorization) string {
 // handler builds an OIDC handler federated to this provider.
 func (p *fakeIdentityProvider) handler(t *testing.T, pool *pgxpool.Pool) *OIDCHandler {
 	t.Helper()
+	// The fake provider is an httptest server on loopback, which the guarded
+	// identity-provider client admits only with the development flag.
+	t.Setenv(IdentityProviderAllowLoopbackEnv, "true")
 	handler, err := NewOIDCHandler(context.Background(), &OIDCConfig{
 		IssuerURL:   p.server.URL,
 		ClientID:    p.clientID,

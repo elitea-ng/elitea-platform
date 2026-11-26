@@ -1,4 +1,4 @@
-//! The isolation check on a workspace profile's `RuntimeClass` (ADR-0034).
+//! The isolation check on a sandbox `RuntimeClass` (ADR-0034, ADR-0011): workspace-run, browser-session and code Pods.
 //!
 //! A workspace run executes the agent's `run_command` on the user's project,
 //! so its Pod must run under a sandboxing runtime, never the node's default
@@ -9,6 +9,7 @@
 //! API server refuses (RBAC) or fails, and any other handler (`runc`,
 //! `crun`, ...) all refuse.
 
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use k8s_openapi::api::node::v1::RuntimeClass;
@@ -46,11 +47,11 @@ pub enum RuntimeClassRefusal {
     )]
     Missing(String),
     #[error(
-        "RuntimeClass {name:?} could not be read ({detail}); the supervisor needs `get` on runtimeclasses.node.k8s.io and refuses workspace runs until it can verify the handler"
+        "RuntimeClass {name:?} could not be read ({detail}); the supervisor needs `get` on runtimeclasses.node.k8s.io and refuses sandbox Pods until it can verify the handler"
     )]
     Unreadable { name: String, detail: String },
     #[error(
-        "RuntimeClass {name:?} uses handler {handler:?}, which does not isolate workspace runs; only runsc or gvisor (gVisor) and kata* (Kata) are accepted"
+        "RuntimeClass {name:?} uses handler {handler:?}, which does not isolate sandbox Pods; only runsc or gvisor (gVisor) and kata* (Kata) are accepted"
     )]
     NotIsolating { name: String, handler: String },
 }
@@ -81,6 +82,133 @@ pub async fn verify(client: kube::Client, name: &str) -> Result<String, RuntimeC
             name: name.to_owned(),
             handler: class.handler,
         })
+    }
+}
+
+/// How long a verified `RuntimeClass` is trusted before it is read again. A
+/// `RuntimeClass`'s handler is immutable, but the object can be deleted and
+/// recreated with another one; a Pod never starts on a verdict older than
+/// this.
+pub(crate) const RUNTIME_CLASS_TTL: Duration = Duration::from_mins(1);
+/// How long a refusal is reused before the `RuntimeClass` is read again: long
+/// enough that a burst of Pods against a broken class makes one API call, short
+/// enough that a fixed class is picked up within seconds.
+pub(crate) const REFUSAL_TTL: Duration = Duration::from_secs(5);
+
+/// One `RuntimeClass` verdict and when it was reached.
+struct Verdict {
+    at: tokio::time::Instant,
+    outcome: Result<(), RuntimeClassRefusal>,
+}
+
+impl Verdict {
+    fn fresh(&self) -> bool {
+        let ttl = if self.outcome.is_ok() {
+            RUNTIME_CLASS_TTL
+        } else {
+            REFUSAL_TTL
+        };
+        self.at.elapsed() < ttl
+    }
+}
+
+/// Which pod kind a [`Gate`] guards, for its log lines.
+#[derive(Clone, Copy, Debug)]
+pub enum PodKind {
+    /// Workspace-run Pods (ADR-0034).
+    WorkspaceRun,
+    /// Code-node execution Pods.
+    Code,
+}
+
+impl PodKind {
+    fn verified_event(self) -> &'static str {
+        match self {
+            Self::WorkspaceRun => "workspace_run_runtime_class_verified",
+            Self::Code => "code_pod_runtime_class_verified",
+        }
+    }
+    fn refused_event(self) -> &'static str {
+        match self {
+            Self::WorkspaceRun => "workspace_run_runtime_class_refused",
+            Self::Code => "code_pod_runtime_class_refused",
+        }
+    }
+    fn noun(self) -> &'static str {
+        match self {
+            Self::WorkspaceRun => "workspace runs",
+            Self::Code => "code pods",
+        }
+    }
+}
+
+/// The cached, single-flight `RuntimeClass` check one backend runs before it
+/// creates a Pod. A success is trusted for a minute (`RUNTIME_CLASS_TTL`), a
+/// refusal for five seconds (`REFUSAL_TTL`), so a fixed `RuntimeClass` is picked up without a
+/// restart and a broken one is never trusted. Concurrent callers share one
+/// read: the std mutex is held only to swap a stale cell, never across the
+/// API call.
+pub struct Gate {
+    client: kube::Client,
+    runtime_class: String,
+    kind: PodKind,
+    verdict: std::sync::Mutex<Arc<tokio::sync::OnceCell<Verdict>>>,
+}
+
+impl Gate {
+    #[must_use]
+    pub fn new(client: kube::Client, runtime_class: String, kind: PodKind) -> Self {
+        Self {
+            client,
+            runtime_class,
+            kind,
+            verdict: std::sync::Mutex::new(Arc::new(tokio::sync::OnceCell::new())),
+        }
+    }
+
+    /// Verify the `RuntimeClass`, from a fresh verdict when one exists.
+    ///
+    /// # Errors
+    ///
+    /// [`RuntimeClassRefusal`] unless the handler isolates.
+    pub async fn isolating(&self) -> Result<(), RuntimeClassRefusal> {
+        let cell = {
+            let mut current = self.verdict.lock().unwrap_or_else(PoisonError::into_inner);
+            if current.get().is_some_and(|verdict| !verdict.fresh()) {
+                *current = Arc::new(tokio::sync::OnceCell::new());
+            }
+            Arc::clone(&current)
+        };
+        cell.get_or_init(|| self.check()).await.outcome.clone()
+    }
+
+    async fn check(&self) -> Verdict {
+        let outcome = match verify(self.client.clone(), &self.runtime_class).await {
+            Ok(handler) => {
+                tracing::info!(
+                    event = self.kind.verified_event(),
+                    runtime_class = %self.runtime_class,
+                    handler = %handler,
+                    "The {} RuntimeClass isolates",
+                    self.kind.noun()
+                );
+                Ok(())
+            }
+            Err(refusal) => {
+                tracing::error!(
+                    event = self.kind.refused_event(),
+                    runtime_class = %self.runtime_class,
+                    error = %refusal,
+                    "Refusing {}: the RuntimeClass does not isolate",
+                    self.kind.noun()
+                );
+                Err(refusal)
+            }
+        };
+        Verdict {
+            at: tokio::time::Instant::now(),
+            outcome,
+        }
     }
 }
 

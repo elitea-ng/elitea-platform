@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.68",
+  "client_contract": "1.69",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -22299,6 +22299,9 @@
                         "folder_trust": {
                           "type": "boolean"
                         },
+                        "full_auto": {
+                          "type": "boolean"
+                        },
                         "host_intel": {
                           "type": "boolean"
                         },
@@ -27755,6 +27758,43 @@
                   },
                   "enforcement": {
                     "type": "string"
+                  },
+                  "full_auto": {
+                    "type": "object",
+                    "required": [
+                      "answered",
+                      "asks"
+                    ],
+                    "properties": {
+                      "answered": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "asks": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "command"
+                          ],
+                          "properties": {
+                            "command": {
+                              "type": "string"
+                            },
+                            "held": {
+                              "type": "boolean"
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "tainted": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "max_items": 500
+                      }
+                    }
                   },
                   "host_commands": {
                     "type": "integer",

@@ -1813,8 +1813,8 @@ SQL
     echo "→ browser edge on http://localhost:${PORT} (elitea-main, #1359 P2):"
     # elitea-main IS the browser edge: it redirects `/`, relays /app and /docs
     # to elitea-web (internal/api/webedge) and serves everything else itself.
-    # The relayed answers carry nginx's Server header and elitea-main's do
-    # not, which is what tells the two sides apart here.
+    # The relayed answers carry elitea-web's Permissions-Policy header and
+    # elitea-main's do not, which is what tells the two sides apart here.
     # A browser is not a loopback peer of the edge: natively the probes bind
     # the host's non-loopback address (stack_browser_source), as compose's
     # port forward does, so /readyz below is refused for the same reason.
@@ -1824,8 +1824,12 @@ SQL
     else
       fail "no non-loopback source address for the browser-origin probes"
     fi
-    edge_probe() { # $1 path → "<code> <location> <server>"
-      "${edge_curl[@]}" -o /dev/null -w '%{http_code} %{redirect_url} %header{server}' \
+    # The third field marks an answer from elitea-web. Not `Server`: the edge
+    # drops it from every relayed answer and nginx sends no version (#2955).
+    # `Permissions-Policy` is set by elitea-web's nginx (security-headers.conf,
+    # docs-security-headers.conf) and by nothing in elitea-main.
+    edge_probe() { # $1 path → "<code> <location> <permissions-policy>"
+      "${edge_curl[@]}" -o /dev/null -w '%{http_code} %{redirect_url} %header{permissions-policy}' \
            "http://localhost:${PORT}$1" 2>/dev/null || echo "000"
     }
     edge_root="$(edge_probe '/?utm_source=check')"
@@ -1837,17 +1841,17 @@ SQL
     # Two sites, not a loop: the assertion floor counts `ok` sites.
     edge_web="$(edge_probe /app/)"
     case "$edge_web" in
-      "200 "*nginx*) ok "/app/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      "200 "*interest-cohort*) ok "/app/ is served by elitea-web through elitea-main (${edge_web%% *})" ;;
       *) fail "/app/ did not come from elitea-web: ${edge_web}" ;;
     esac
     edge_web="$(edge_probe /docs/)"
     case "$edge_web" in
-      "200 "*nginx*) ok "/docs/ is served by elitea-web through elitea-main (${edge_web})" ;;
+      "200 "*interest-cohort*) ok "/docs/ is served by elitea-web through elitea-main (${edge_web%% *})" ;;
       *) fail "/docs/ did not come from elitea-web: ${edge_web}" ;;
     esac
     edge_mcp="$(edge_probe '/app/1/mcp')"
     case "$edge_mcp" in
-      000*|*nginx*) fail "/app/1/mcp did not reach elitea-main (the MCP carve-out): ${edge_mcp}" ;;
+      000*|*interest-cohort*) fail "/app/1/mcp did not reach elitea-main (the MCP carve-out): ${edge_mcp}" ;;
       *) ok "/app/1/mcp reaches elitea-main, not the SPA (${edge_mcp%% *})" ;;
     esac
     edge_health="$("${edge_curl[@]}" "http://localhost:${PORT}/healthz" 2>/dev/null || true)"

@@ -92,16 +92,17 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: elitea-code-supervisor
-{{- if or $s.workspaceRuns.enabled $s.browserSessions.enabled }}
 {{- $rc := $s.runtimeClass.name | default "" }}
 {{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$" $rc) }}
-{{- fail "sandboxKubernetes.runtimeClass.name must name the RuntimeClass workspace runs and browser sessions use" }}
+{{- fail "sandboxKubernetes.runtimeClass.name must name the RuntimeClass code Pods, workspace runs and browser sessions use" }}
 {{- end }}
-{{- /* ADR-0034 and ADR-0049: before it creates a workspace-run or
-browser-session Pod the supervisor reads
-the profile's RuntimeClass and refuses unless its handler is runsc or gvisor (gVisor) or
-kata*. RuntimeClasses are cluster-scoped, so this is the chart's one
-ClusterRole: `get` on that one RuntimeClass, nothing else. */}}
+{{- /* ADR-0011, ADR-0034 and ADR-0049: before it creates a code,
+workspace-run or browser-session Pod the supervisor reads the profile's
+RuntimeClass and refuses unless its handler is runsc or gvisor (gVisor) or
+kata*. Code Pods are checked too (#2968), so this renders whenever the
+Kubernetes boundary does. RuntimeClasses are cluster-scoped, so this is the
+chart's one ClusterRole: `get` on that one RuntimeClass, nothing else. A code
+profile's `runtime_class` must be this same name. */}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -125,5 +126,4 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ printf "elitea-sandbox-runtimeclass-%s" .Release.Namespace | trunc 63 | trimSuffix "-" }}
-{{- end }}
 {{- end }}

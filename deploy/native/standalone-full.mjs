@@ -144,7 +144,6 @@ export const NATIVE_ONLY_ENV = {
 export const REWRITTEN_ENV = {
   postgres: { PGDATA: "the cluster directory under the service's data dir; the image's volume path does not exist natively" },
   "elitea-main": {
-    ELITEA_WEB_UPSTREAM: "the non-root nginx listens on 8080 natively (WEB_PORT); the container binds 80",
     DEPLOYMENT_URL: "natively the browser reaches the stack at localhost:8080 (elitea-main's own bind); compose publishes it on 8084",
     OIDC_REDIRECT_URI: "as DEPLOYMENT_URL: localhost:8080 natively, 8084 where compose publishes it",
   },
@@ -539,6 +538,9 @@ export default function table(ctx) {
           ADMIN_UI_STATIC_DIR: path.join(bin, "admin_ui", "static", "dist"),
           APPLICATION_SECRET_KEY: d("APPLICATION_SECRET_KEY", ""),
           OIDC_ISSUER_URL: `http://oidc.localhost:${oidcPort}`,
+          // The mock is on loopback here; the CIDRs keep compose parity.
+          ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
+          ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true",
           OIDC_CLIENT_ID: "elitea-standalone-client",
           OIDC_CLIENT_SECRET: "elitea-standalone-secret",
           OIDC_REDIRECT_URI: `http://${host}:${MAIN_PORT}/auth/oidc/callback`,

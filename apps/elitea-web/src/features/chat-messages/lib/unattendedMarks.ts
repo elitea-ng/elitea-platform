@@ -8,7 +8,7 @@
  * `meta.goal_check` on the answer of a checked run.
  */
 import { readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
-import { ranOutsideSandbox } from '@/shared/lib/localWork';
+import { ranInFullAuto, ranOutsideSandbox } from '@/shared/lib/localWork';
 
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
@@ -20,6 +20,8 @@ export interface UnattendedMarks {
   readonly goalCheck?: GoalCheckView;
   /** `meta.local_work.ran_outside_sandbox` (ADR-0061 decision 5): a Local work turn ran a command outside the sandbox. */
   readonly ranOutsideSandbox?: true;
+  /** `meta.local_work.full_auto` (ADR-0061 amendment of 2026-11-26): a Local work turn ran in Full auto. */
+  readonly fullAuto?: true;
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null;
@@ -37,6 +39,7 @@ export function unattendedMarksOf(meta: unknown): UnattendedMarks {
     ...(runBrief === undefined ? {} : { runBrief }),
     ...(goalCheck === undefined ? {} : { goalCheck }),
     ...(ranOutsideSandbox(meta) ? { ranOutsideSandbox: true } : {}),
+    ...(ranInFullAuto(meta) ? { fullAuto: true } : {}),
   };
 }
 

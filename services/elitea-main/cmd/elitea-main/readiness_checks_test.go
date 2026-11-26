@@ -57,7 +57,10 @@ func (b *syncBuffer) count(level, msgPrefix string) int {
 func readyz(t *testing.T, deps health.Deps) (int, health.Status) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	health.RoutesWithDeps(deps).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	// The probe inside the container: /readyz answers only a loopback peer.
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	request.RemoteAddr = "127.0.0.1:41000"
+	health.RoutesWithDeps(deps).ServeHTTP(rec, request)
 	var status health.Status
 	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
 		t.Fatalf("readiness body %q: %v", rec.Body.String(), err)

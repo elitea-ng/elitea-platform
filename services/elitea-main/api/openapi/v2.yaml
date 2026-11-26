@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.68"
+  x-elitea-client-contract: "1.69"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -7414,6 +7414,53 @@ components:
           description: >-
             Client contract 1.67. The turn's folder was trusted (and not
             suspended) when the turn ran. Absent when it was not.
+        full_auto:
+          $ref: '#/components/schemas/LocalTurnFullAutoReport'
+    LocalTurnFullAutoReport:
+      type: object
+      description: >-
+        Client contract 1.69 (ADR-0061 amendment of 2026-11-26). Present when
+        the turn ran in Full auto: the approval questions it answered for the
+        person. Stored on the answer as `local_work.full_auto` with at most 50
+        asks (command and reason cut to 300 bytes); its presence is the
+        "Full auto" marker viewers show. What the client reports; the server
+        cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:374
+        (`FullAutoReport`).
+      required: [answered, asks]
+      properties:
+        answered:
+          type: integer
+          minimum: 0
+          example: 3
+          description: >-
+            How many questions Full auto answered in the turn (held asks
+            excluded). A commit above 10000 is refused.
+        asks:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/LocalTurnFullAutoAsk'
+    LocalTurnFullAutoAsk:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          example: 'run_command: gh pr view 12'
+          description: The tool and what it ran; stored cut to 300 bytes.
+        reason:
+          type: string
+          description: Why it would have been asked; stored cut to 300 bytes.
+        tainted:
+          type: boolean
+          description: >-
+            The trusted folder's "read untrusted, then act" gate asked it
+            (Bypass would not have answered it).
+        held:
+          type: boolean
+          description: >-
+            On the hard-deny list: Full auto did not answer it (asked, or
+            declined at once in an unattended turn).
     LocalTurnCommitRequest:
       type: object
       description: >-
@@ -23574,6 +23621,17 @@ components:
             true. When the policy stops allowing it, the desktop suspends every
             trusted folder until the person confirms again. Absent reads as
             false on the desktop.
+        full_auto:
+          type: boolean
+          example: true
+          description: >-
+            Client contract 1.69 (ADR-0061 amendment of 2026-11-26). A person
+            may run a desktop thread in Full auto: it answers every approval
+            question Bypass answers, and also those the trusted folder's
+            "read untrusted, then act" gate asks, except a built-in hard-deny
+            list. Default true. False hides the mode, the desktop refuses a
+            turn in it and decides as Bypass. Absent reads as false on the
+            desktop.
     InvalidQueryParameterError:
       type: object
       description: >-

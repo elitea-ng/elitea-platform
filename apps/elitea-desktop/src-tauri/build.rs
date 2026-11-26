@@ -39,6 +39,7 @@ fn main() {
             "rules_explain",
             "rules_import_proposed",
             "agent_turn_start",
+            "full_auto_status",
             "compaction_settings_get",
             "compaction_settings_set",
             "compaction_idle_hold",

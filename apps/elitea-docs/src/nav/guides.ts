@@ -23,6 +23,7 @@ export const guidesTab: NavTab = {
         { kind: 'page', slug: 'how-tos/chat-conversations/desktop-multi-agent', title: 'Use several agents in a thread (desktop)' },
         { kind: 'page', slug: 'how-tos/chat-conversations/desktop-approval-rules', title: 'Decide which commands run without asking (desktop)' },
         { kind: 'page', slug: 'how-tos/chat-conversations/desktop-trusted-folders', title: "Run a folder's commands without a sandbox (desktop)" },
+        { kind: 'page', slug: 'how-tos/chat-conversations/desktop-full-auto', title: 'Let a long run answer its own approvals: Full auto (desktop)' },
       ],
     },
     {

@@ -61,7 +61,7 @@
 //! resume_turns (workspace_id TEXT PRIMARY KEY, turn_id TEXT, origin TEXT,
 //!         user_id INTEGER, conversation_id TEXT /* JSON */,
 //!         conversation_uuid TEXT NULL, project_id, application_id,
-//!         version_id INTEGER, mode TEXT /* build | plan | bypass */,
+//!         version_id INTEGER, mode TEXT /* build | plan | bypass | full_auto */,
 //!         grant_json TEXT NULL, chain_root_execution_id TEXT NULL,
 //!         continuation_index INTEGER, kind TEXT NULL, execution_id TEXT,
 //!         last_committed_execution_id TEXT NULL, request TEXT NULL,
@@ -302,15 +302,20 @@ pub enum ResumeMode {
     Build,
     Plan,
     Bypass,
+    /// Full auto (issue 3079): a resumed chain keeps it, while the policy
+    /// allows it (the start checks again).
+    FullAuto,
 }
 
 impl ResumeMode {
+    /// The value the history record stores (a mode, not an error code).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn stored(self) -> &'static str {
         match self {
             Self::Build => "build",
             Self::Plan => "plan",
             Self::Bypass => "bypass",
+            Self::FullAuto => "full_auto",
         }
     }
 
@@ -318,6 +323,7 @@ impl ResumeMode {
         match text {
             "plan" => Self::Plan,
             "bypass" => Self::Bypass,
+            "full_auto" => Self::FullAuto,
             _ => Self::Build,
         }
     }
@@ -2251,7 +2257,7 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                     record.project_id,
                     record.application_id,
                     record.version_id,
-                    record.mode.as_str(),
+                    record.mode.stored(),
                     text(record.grant.as_ref()),
                     record.chain_root_execution_id,
                     record.continuation_index,

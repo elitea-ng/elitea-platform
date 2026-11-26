@@ -203,4 +203,18 @@ describe('nginx/spa.conf', () => {
       /^add_header\s+Content-Security-Policy/m,
     );
   });
+
+  it('does not announce the nginx version', () => {
+    expect(withoutComments(SPA_CONF)).toMatch(/^\s*server_tokens\s+off;/m);
+  });
+
+  it('runs unprivileged: an unprivileged port, no user switch, state only in /tmp', () => {
+    const main = withoutComments(readFileSync(resolve(NGINX_DIR, 'nginx.conf'), 'utf8'));
+    expect(withoutComments(SPA_CONF)).toMatch(/^\s*listen 8080;$/m);
+    expect(main).not.toMatch(/^\s*user\s/m);
+    expect(main).toMatch(/^\s*pid \/tmp\//m);
+    for (const temp of ['client_body', 'proxy', 'fastcgi', 'uwsgi', 'scgi']) {
+      expect(main).toMatch(new RegExp(`^\\s*${temp}_temp_path /tmp/`, 'm'));
+    }
+  });
 });

@@ -199,6 +199,22 @@ Turning off one of these egress policies (`worker.networkPolicy.egressEnabled: f
 
 No pod mounts a Kubernetes service-account token unless it calls the Kubernetes API: the sandbox supervisor, the KEDA uninstall hook and the NATS bootstrap Job's `issue` container (through a projected token of its own). The worker runs as its own `elitea-worker` ServiceAccount (`worker.serviceAccount`). For a mesh or sidecar that reads the automounted token, set `<component>.serviceAccount.automountToken: true` for that component (`main`, `web`, `scheduler`, `llmGateway`, `deepwiki`, `inventory`, `otelCollector`, `worker`). GKE Workload Identity, EKS Pod Identity, IRSA and Azure Workload Identity do not need it: they use their own projected tokens or the metadata server.
 
+## Pod security
+
+Every container the chart renders, init containers included, runs with the `restricted` Pod Security settings by default:
+
+- `runAsNonRoot: true` and a `RuntimeDefault` seccomp profile;
+- `allowPrivilegeEscalation: false` and every capability dropped (`capabilities.drop: [ALL]`);
+- `readOnlyRootFilesystem: true`. A path a component writes is an `emptyDir` of its pod (`/tmp`, the worker's output spool and scratch).
+
+Each component reads `<component>.podSecurityContext` and `<component>.securityContext`. `pgbouncer.securityContext` applies to both the PgBouncer container and its `userlist` init container.
+
+- **elitea-web** runs nginx as the image's `nginx` user (uid 101) on container port 8080, with its pid file, temp files and `config.js` under `/tmp`. The `elitea-web` Service still listens on `web.service.port` (80) and targets the named `http` port, so elitea-main's `ELITEA_WEB_UPSTREAM` and anything else that calls the Service are unchanged.
+- **The one exception** is the worker's `material` init container. It runs as uid 0 with only `CHOWN`, `DAC_OVERRIDE` and `FOWNER`, on a read-only root filesystem, to hand the runtime material to the worker's uid, and exits before the worker starts.
+- **Sandbox Pods** that the sandbox supervisor creates at run time (code, workspace runs, browser sessions) are not chart-rendered and carry their own policy. See [Cloud executor on Kubernetes](/deployment/cloud-executor-kubernetes).
+
+Third-party subcharts (NATS, Qdrant) keep their own values. The CI test `deploy/helm/tests/render-pod-security.sh` fails when a chart container drops one of these settings.
+
 ## Post-install checks
 
 <Steps>
@@ -206,7 +222,7 @@ No pod mounts a Kubernetes service-account token unless it calls the Kubernetes 
 ```bash
 curl -si https://elitea.example.com/healthz   # 200 {"status":"ok"} with "vary: Origin"
 ```
-`/readyz` and `/startupz` are deliberately not routed by the edge: their bodies name each dependency's state. The chart's probes reach them on the pod directly.
+`/readyz` and `/startupz` are deliberately not routed by the edge: their bodies name each dependency's state. elitea-main answers them only inside the container, and the chart's startup and readiness probes run `elitea-main -healthcheck <path>` there.
 </Step>
 <Step title="Admin console">
 `/admin/app` — sign in as the account you named above.

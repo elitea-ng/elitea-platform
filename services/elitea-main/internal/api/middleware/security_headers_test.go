@@ -100,3 +100,28 @@ func TestSecurityHeadersReachAResponseTheHandlerWroteImmediately(t *testing.T) {
 		t.Errorf("X-Content-Type-Options = %q, want nosniff on a committed response", got)
 	}
 }
+
+// HSTS is sent only when the public origin is https: a plain-HTTP stack must
+// never pin a browser to TLS.
+func TestStrictTransportSecurityFollowsThePublicOriginScheme(t *testing.T) {
+	t.Parallel()
+
+	for origin, want := range map[string]string{
+		"https://elitea.example.com": apimw.StrictTransportSecurityValue,
+		"HTTPS://Elitea.Example.com": apimw.StrictTransportSecurityValue,
+		"http://localhost:8080":      "",
+		"":                           "",
+	} {
+		handler := apimw.StrictTransportSecurity(origin)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v2/health", nil))
+		if got := recorder.Result().Header.Get("Strict-Transport-Security"); got != want {
+			t.Errorf("origin %q: Strict-Transport-Security = %q, want %q", origin, got, want)
+		}
+	}
+	if want := "max-age=63072000; includeSubDomains"; apimw.StrictTransportSecurityValue != want {
+		t.Errorf("policy = %q, want %q", apimw.StrictTransportSecurityValue, want)
+	}
+}

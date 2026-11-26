@@ -142,6 +142,29 @@ describe('WorkspaceComposer mode picker', () => {
     await view.show({ showMode: false });
     expect(screen.queryByTestId('mode-picker')).toBeNull();
   });
+
+  it('offers Full auto above Bypass only with the page’s say, reads "Full auto" when on, and only asks the page to turn it on (issue 3079)', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    const view = await mount({ onBypassChange: vi.fn(), fullAuto: { on: false, onChange } });
+    await user.click(screen.getByTestId('mode-picker'));
+    let rows = within(await screen.findByRole('menu', { name: 'Mode' })).getAllByRole('menuitemradio');
+    expect(rows.map((row) => row.textContent)).toEqual(['ActEdits with approvals', 'PlanPlans, changes nothing', 'BypassNo approvals', 'Full autoAnswers every approval']);
+    await user.click(screen.getByTestId('mode-full_auto'));
+    expect(onChange).toHaveBeenCalledWith(true);
+
+    await view.show({ onBypassChange: vi.fn(), bypass: true, fullAuto: { on: true, onChange } });
+    expect(screen.getByTestId('mode-picker')).toHaveTextContent('Full auto');
+    await user.click(screen.getByTestId('mode-picker'));
+    rows = within(await screen.findByRole('menu', { name: 'Mode' })).getAllByRole('menuitemradio');
+    expect(rows.map((row) => row.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false', 'true']);
+    await user.keyboard('{Escape}');
+
+    // A forbidden mode is hidden.
+    await view.show({ onBypassChange: vi.fn() });
+    await user.click(screen.getByTestId('mode-picker'));
+    expect(within(await screen.findByRole('menu', { name: 'Mode' })).queryByTestId('mode-full_auto')).toBeNull();
+  });
 });
 
 describe('WorkspaceComposer footer', () => {

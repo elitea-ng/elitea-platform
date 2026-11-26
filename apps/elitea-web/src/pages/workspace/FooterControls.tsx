@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 
 import { ComposerMoreMenu, ComposerRow } from '@/shared/ui/native-composer';
 
-import { ModePicker, type ModePickerProps } from './ModePicker';
+import { ModePicker, type FullAutoSwitch, type ModePickerProps } from './ModePicker';
 
 interface FooterControlsProps extends ModePickerProps {
   showMode: boolean;
@@ -57,6 +57,7 @@ export interface FooterSource {
   onPlanModeChange: (planMode: boolean) => void;
   bypass?: boolean;
   onBypassChange?: ((on: boolean) => void) | undefined;
+  fullAuto?: FullAutoSwitch | undefined;
   showMode?: boolean;
   agentPicker?: ReactNode;
   modelPicker?: ReactNode;
@@ -74,6 +75,7 @@ export function composerFooter(source: FooterSource, attach: ReactNode): React.J
       onPlanModeChange={source.onPlanModeChange}
       bypass={source.bypass === true}
       onBypassChange={source.onBypassChange}
+      fullAuto={source.fullAuto}
       showMode={source.showMode !== false}
       attach={attach}
       agentPicker={source.agentPicker}

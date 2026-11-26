@@ -472,9 +472,14 @@ impl AnswerSink for UiPrompt {
         let Some(binding) = self.binding() else {
             return;
         };
+        // Full auto's answers are recorded as Bypass's (the person chose a
+        // mode: no ledger row), and each one, held ones too, in the commit's
+        // `local_work.full_auto` record (issue 3079).
         let source = match decision.source {
             Source::Grant => SOURCE_GRANT,
-            Source::Bypass => SOURCE_BYPASS,
+            Source::Bypass | Source::FullAuto | Source::FullAutoTaint | Source::FullAutoHold => {
+                SOURCE_BYPASS
+            }
             _ => return,
         };
         let request = ApprovalRequest {
@@ -493,6 +498,22 @@ impl AnswerSink for UiPrompt {
                 described["tool"].as_str().unwrap_or_default()
             )
         };
+        if matches!(
+            decision.source,
+            Source::FullAuto | Source::FullAutoTaint | Source::FullAutoHold
+        ) {
+            binding.recorder.full_auto_ask(
+                &clean(&title),
+                &decision.reason,
+                decision.source == Source::FullAutoTaint,
+                decision.source == Source::FullAutoHold,
+            );
+        }
+        // A held call is the person's question (attended) or a decline
+        // (unattended): it is no inline answer.
+        if decision.source == Source::FullAutoHold {
+            return;
+        }
         let action = if decision.verdict == Verdict::Allow {
             "approve"
         } else {

@@ -7608,5 +7608,6 @@
   "pages.admin.configuration.maintenanceSave.title": "Save the maintenance settings",
   "pages.admin.governance.confirm.deleteGuardrailBody": "The gateway stops applying this guardrail within its refresh interval: it no longer blocks or redacts anything.",
   "pages.admin.projects.delete.target": "{{count}} projects",
-  "pages.admin.users.dangerous.deleteTarget": "{{count}} users"
+  "pages.admin.users.dangerous.deleteTarget": "{{count}} users",
+  "features.chatMessages.fullAuto": "Ran in Full auto"
 }

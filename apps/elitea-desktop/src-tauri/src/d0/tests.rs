@@ -379,6 +379,7 @@ fn request(workspace_id: &str) -> TurnRequest {
         prompt: "Write notes and file a bug".into(),
         plan_mode: false,
         bypass: false,
+        full_auto: false,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,
@@ -11713,3 +11714,7 @@ mod hand_floor_tests;
 /// Local consults (ADR-0061 decision 3e, #3065).
 #[path = "consult_tests.rs"]
 mod consult_tests;
+
+/// Full auto (ADR-0061 amendment of 2026-11-26, #3079).
+#[path = "full_auto_tests.rs"]
+mod full_auto_tests;

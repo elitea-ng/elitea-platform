@@ -254,7 +254,7 @@ services:
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       # Relay /app and /docs to elitea-web and redirect `/` to /app/
       # (internal/api/webedge). Compose only; the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:8080"
       # The brand pack's FILE layer (ADR-0024); empty means the journeys brand
       # from the database layer over the product default, as a fresh install
       # does. See docker-compose.standalone-full.yml for the mount recipe.
@@ -270,6 +270,10 @@ services:
       # browser — see the oidc-mock service's comment for why that symmetry is
       # a hard requirement and not a convenience.
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
+      # Identity-provider egress guard: the mock sits on the compose network
+      # (a private address) here and on loopback natively. Development only.
+      ELITEA_IDENTITY_PROVIDER_EGRESS_ALLOWLIST: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      ELITEA_IDENTITY_PROVIDER_ALLOW_LOOPBACK: "true"
       OIDC_CLIENT_ID: "elitea-e2e-client"
       OIDC_CLIENT_SECRET: "elitea-e2e-secret"
       OIDC_REDIRECT_URI: "http://localhost:${E2E_PORT:-8082}/auth/oidc/callback"
@@ -584,7 +588,7 @@ services:
       elitea-main:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

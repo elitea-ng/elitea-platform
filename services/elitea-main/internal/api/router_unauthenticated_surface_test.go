@@ -100,6 +100,7 @@ var publicByDesign = map[string]string{
 	"/api/openapi.yaml": "the OpenAPI document. Static, tenant-free, and public on purpose (router.go:903).",
 	"/api/openapi.json": "the same document as JSON.",
 	"/api/docs":         "the page that renders the document above. It fetches /api/openapi.json and nothing else.",
+	"/api/docs/app.js":  "the docs page's script, a static file served so the page's policy allows no inline script.",
 
 	// Native authorization (ADR-0025 WP2). A native public client calls these
 	// before it holds any credential (RFC 8252): /authorize starts a sign-in

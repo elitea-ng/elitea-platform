@@ -137,9 +137,9 @@ keepawake = { version = "=0.6.1", default-features = false }
 # private WKContentWorld, CGEvent trusted input. Its own crate because it is
 # FFI, which this crate forbids.
 elitea-browser-driver-macos = { path = "browser-driver-macos", features = ["tauri"] }
-# `NSProcessInfo`: the macOS version, which picks the browser pane's data
+# `NSValue`: `NSNumber`, a managed boolean (src/managed.rs). `NSProcessInfo`: the macOS version, which picks the browser pane's data
 # store (src/browser_pane.rs).
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSProcessInfo"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSProcessInfo", "NSValue"] }
 # The origin of a browser pane download (`com.apple.metadata:kMDItemWhereFroms`,
 # a binary plist). Already in the tree through tauri-codegen (MIT); `Value`
 # only, no serde.

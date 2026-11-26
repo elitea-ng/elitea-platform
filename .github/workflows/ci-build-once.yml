@@ -297,6 +297,22 @@ jobs:
           if-no-files-found: error
           # The images themselves are pruned after 7 days (ci-image-cleanup.yml).
           retention-days: 7
+      # #2954: the web image runs nginx unprivileged. Its config user must not
+      # be root, or the chart's runAsNonRoot pod would refuse to start.
+      # (image-matrix.yml checks the Containerfile statically on every PR.)
+      - name: The elitea-web image does not run as root
+        if: matrix.image == 'elitea-web'
+        env:
+          DIGESTS_FILE: ${{ runner.temp }}/stack-image-digests/${{ matrix.image }}.json
+        run: |
+          set -euo pipefail
+          image="$(node -e 'const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["elitea-web"]; console.log(e.ref + "@" + e.digest)' "$DIGESTS_FILE")"
+          docker pull -q "$image" > /dev/null
+          user="$(docker image inspect --format '{{.Config.User}}' "$image")"
+          echo "elitea-web config user: '${user}'"
+          case "${user%%:*}" in
+            "" | root | 0) echo "::error::elitea-web runs as root (config user '${user}')"; exit 1 ;;
+          esac
 
   # The same job over the rest of the stack (YAML anchors: one definition of
   # the gate, the permissions and the steps). Kept a SEPARATE job, not one
@@ -399,3 +415,32 @@ jobs:
           path: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
           if-no-files-found: error
           retention-days: 7
+      # #2954: the upstream Rust image leaves its toolchain world-writable; the
+      # rust-runtime stage removes that. As the image's own user (10001), no
+      # directory on PATH may be writable. `find -L`: /bin and /sbin are links
+      # to usr/ (merged /usr), and a link's own mode is always 0777; the
+      # directory it names is what counts.
+      - name: The rust-runtime image puts no writable directory on PATH
+        env:
+          DIGESTS_FILE: ${{ runner.temp }}/code-runner-image-digests/code-runner.json
+        run: |
+          set -euo pipefail
+          digest="$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["rust-runtime"].digest)' "$DIGESTS_FILE")"
+          image="ghcr.io/elitea-ng/ci-elitea-code-runner@${digest}"
+          docker pull -q "$image" > /dev/null
+          writable="$(docker run --rm --network none --entrypoint sh "$image" -c '
+            id -u
+            find -L $(echo "$PATH" | tr ":" " ") -maxdepth 0 -perm -o+w 2>/dev/null
+            for d in $(echo "$PATH" | tr ":" " "); do
+              if [ -d "$d" ] && [ -w "$d" ]; then echo "$d"; fi
+            done
+            exit 0
+          ')"
+          uid="$(printf '%s\n' "$writable" | head -n 1)"
+          dirs="$(printf '%s\n' "$writable" | tail -n +2 | sort -u)"
+          echo "rust-runtime runs as uid ${uid}"
+          if [ "$uid" = "0" ]; then echo "::error::rust-runtime runs as root"; exit 1; fi
+          if [ -n "$dirs" ]; then
+            echo "::error::writable directories on PATH in rust-runtime: ${dirs}"
+            exit 1
+          fi

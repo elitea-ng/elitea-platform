@@ -6,7 +6,6 @@
 //! a label).
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -15,6 +14,8 @@ use kube::Api;
 use kube::api::{AttachParams, DeleteParams, ListParams, PostParams};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
+#[cfg(test)]
+use super::runtime_class::REFUSAL_TTL;
 use super::runtime_class::{self, RuntimeClassRefusal};
 use crate::sandbox::workspace_run::{
     ACTIVATION_BINDING, CONTAINER_NAME, EXPIRES_BINDING, KIND_LABEL, KIND_WORKSPACE_RUN,
@@ -28,45 +29,17 @@ const API_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a new Pod may take to run (image pull included).
 const READY_TIMEOUT: Duration = Duration::from_mins(3);
 const MAX_STDERR_BYTES: usize = 8 * 1024;
-/// How long a verified `RuntimeClass` is trusted before it is read again. A
-/// `RuntimeClass`'s handler is immutable, but the object can be deleted and
-/// recreated with another one; a run never starts on a verdict older than
-/// this.
-const RUNTIME_CLASS_TTL: Duration = Duration::from_mins(1);
-/// How long a refusal is reused before the `RuntimeClass` is read again: long
-/// enough that a burst of runs against a broken class makes one API call, short
-/// enough that a fixed class is picked up within seconds.
-const REFUSAL_TTL: Duration = Duration::from_secs(5);
-
-/// One `RuntimeClass` verdict and when it was reached.
-struct Verdict {
-    at: tokio::time::Instant,
-    outcome: Result<(), RuntimeClassRefusal>,
-}
-
-impl Verdict {
-    fn fresh(&self) -> bool {
-        let ttl = if self.outcome.is_ok() {
-            RUNTIME_CLASS_TTL
-        } else {
-            REFUSAL_TTL
-        };
-        self.at.elapsed() < ttl
-    }
-}
 
 /// The Kubernetes backend of one workspace profile.
 pub struct KubernetesWorkspaceRuns {
-    client: kube::Client,
     pods: Api<Pod>,
     namespace: String,
     runtime_class: String,
     node_selector: BTreeMap<String, String>,
     tolerations: Vec<k8s_openapi::api::core::v1::Toleration>,
-    /// The current `RuntimeClass` check. Callers share one in-flight read
-    /// through the `OnceCell` (single-flight) and the std mutex is held only
-    /// to swap a stale cell, never across the API call.
-    verdict: std::sync::Mutex<Arc<tokio::sync::OnceCell<Verdict>>>,
+    /// The cached, single-flight `RuntimeClass` check (`runtime_class::Gate`),
+    /// shared in shape with code Pods.
+    gate: runtime_class::Gate,
 }
 
 impl KubernetesWorkspaceRuns {
@@ -79,12 +52,15 @@ impl KubernetesWorkspaceRuns {
     ) -> Self {
         Self {
             pods: Api::namespaced(client.clone(), &namespace),
-            client,
+            gate: runtime_class::Gate::new(
+                client,
+                runtime_class.clone(),
+                runtime_class::PodKind::WorkspaceRun,
+            ),
             namespace,
             runtime_class,
             node_selector,
             tolerations: Vec::new(),
-            verdict: std::sync::Mutex::new(Arc::new(tokio::sync::OnceCell::new())),
         }
     }
 
@@ -121,45 +97,11 @@ impl KubernetesWorkspaceRuns {
     }
 
     /// Verify the profile's `RuntimeClass`, from a verdict at most
-    /// [`RUNTIME_CLASS_TTL`] old (a success) or [`REFUSAL_TTL`] old (a
+    /// `RUNTIME_CLASS_TTL` old (a success) or [`REFUSAL_TTL`] old (a
     /// refusal), so a fixed `RuntimeClass` is picked up without a restart and
     /// a broken one is never trusted. Concurrent callers share one read.
     async fn isolating(&self) -> Result<(), RuntimeClassRefusal> {
-        let cell = {
-            let mut current = self.verdict.lock().unwrap_or_else(PoisonError::into_inner);
-            if current.get().is_some_and(|verdict| !verdict.fresh()) {
-                *current = Arc::new(tokio::sync::OnceCell::new());
-            }
-            Arc::clone(&current)
-        };
-        cell.get_or_init(|| self.verify()).await.outcome.clone()
-    }
-
-    async fn verify(&self) -> Verdict {
-        let outcome = match runtime_class::verify(self.client.clone(), &self.runtime_class).await {
-            Ok(handler) => {
-                tracing::info!(
-                    event = "workspace_run_runtime_class_verified",
-                    runtime_class = %self.runtime_class,
-                    handler = %handler,
-                    "The workspace RuntimeClass isolates"
-                );
-                Ok(())
-            }
-            Err(refusal) => {
-                tracing::error!(
-                    event = "workspace_run_runtime_class_refused",
-                    runtime_class = %self.runtime_class,
-                    error = %refusal,
-                    "Refusing workspace runs: the RuntimeClass does not isolate"
-                );
-                Err(refusal)
-            }
-        };
-        Verdict {
-            at: tokio::time::Instant::now(),
-            outcome,
-        }
+        self.gate.isolating().await
     }
 
     /// The Pod of one run, binding annotations included.
@@ -414,6 +356,7 @@ impl WorkspaceRunBackend for KubernetesWorkspaceRuns {
 pub(crate) mod tests {
     use super::*;
     use crate::sandbox::workspace_run::WorkspaceRunContainer;
+    use std::sync::Arc;
 
     pub(crate) fn launch() -> WorkspaceRunLaunch {
         WorkspaceRunLaunch {

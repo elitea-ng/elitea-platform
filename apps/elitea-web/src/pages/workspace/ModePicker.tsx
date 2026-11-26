@@ -2,8 +2,11 @@
  * The composer's mode picker, "Act ⌄": the mode the next turn starts in, as a
  * native pop-up button (`ComposerPicker`). Act edits with approvals, Plan
  * changes nothing, Bypass (a local thread only, `onBypassChange`) asks for no
- * approvals; the current one carries a check. Bypass keeps its first-time
- * warning (`useBypassMode`): picking it asks the page, which turns it on, and
+ * approvals, and Full auto (a local thread whose organisation allows it,
+ * `fullAuto`; issue 3079) also answers the questions asked after reading
+ * outside content; the current one carries a check. Bypass keeps its
+ * first-time warning (`useBypassMode`) and Full auto asks every time
+ * (`useFullAutoMode`): picking either asks the page, which turns it on, and
  * leaves plan mode, only once the person confirms. "Run to completion" is not
  * a mode: it is its own control in the composer and works with each mode.
  */
@@ -13,7 +16,13 @@ import { t } from '@/shared/i18n';
 import { ComposerPicker } from '@/shared/ui/native-composer';
 import { MenuRow, MenuRowHint, MenuRowIcon, MenuRowText } from '@/shared/ui/native-menu';
 
-type ModeValue = 'act' | 'plan' | 'bypass';
+type ModeValue = 'act' | 'plan' | 'bypass' | 'full_auto';
+
+/** Full auto in the picker: whether it is on, and the page's switch (`true` asks for the confirmation). */
+export interface FullAutoSwitch {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}
 
 export interface ModePickerProps {
   planMode: boolean;
@@ -21,6 +30,8 @@ export interface ModePickerProps {
   bypass: boolean;
   /** Offers Bypass (a local thread): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange: ((on: boolean) => void) | undefined;
+  /** Offers Full auto (a local thread, allowed by the organisation); undefined hides it. */
+  fullAuto?: FullAutoSwitch | undefined;
 }
 
 interface ModeOption {
@@ -31,12 +42,13 @@ interface ModeOption {
   hint: string;
 }
 
-const modeValue = (planMode: boolean, bypass: boolean): ModeValue => {
+function modeValue(planMode: boolean, bypass: boolean, fullAuto: boolean): ModeValue {
   if (planMode) return 'plan';
+  if (fullAuto) return 'full_auto';
   return bypass ? 'bypass' : 'act';
-};
+}
 
-function modeOptions(withBypass: boolean): ModeOption[] {
+function modeOptions(withBypass: boolean, withFullAuto: boolean): ModeOption[] {
   const options: ModeOption[] = [
     { value: 'act', label: t('workspace.mode.act', 'Act'), name: t('workspace.actMode', 'Act mode (edits with approvals)'), hint: t('workspace.mode.actHint', 'Edits with approvals') },
     { value: 'plan', label: t('workspace.mode.plan', 'Plan'), name: t('workspace.planMode', 'Plan mode (no changes)'), hint: t('workspace.mode.planHint', 'Plans, changes nothing') },
@@ -44,14 +56,26 @@ function modeOptions(withBypass: boolean): ModeOption[] {
   if (withBypass) {
     options.push({ value: 'bypass', label: t('workspace.mode.bypass', 'Bypass'), name: t('workspace.bypassMode', 'Bypass mode (no approvals)'), hint: t('workspace.mode.bypassHint', 'No approvals') });
   }
+  if (withBypass && withFullAuto) {
+    options.push({
+      value: 'full_auto',
+      label: t('workspace.mode.fullAuto', 'Full auto'),
+      name: t('workspace.fullAutoMode', 'Full auto (answers every approval, also after reading outside content)'),
+      hint: t('workspace.mode.fullAutoHint', 'Answers every approval'),
+    });
+  }
   return options;
 }
 
-export function ModePicker({ planMode, onPlanModeChange, bypass, onBypassChange }: ModePickerProps): React.JSX.Element {
-  const options = modeOptions(onBypassChange !== undefined);
-  const current = modeValue(planMode, bypass);
-  // Bypass turns plan mode off only once it is on (after the warning): a cancelled warning keeps the mode.
+export function ModePicker({ planMode, onPlanModeChange, bypass, onBypassChange, fullAuto }: ModePickerProps): React.JSX.Element {
+  const options = modeOptions(onBypassChange !== undefined, fullAuto !== undefined);
+  const current = modeValue(planMode, bypass, fullAuto?.on === true);
+  // Bypass and Full auto turn plan mode off only once they are on (after the warning): a cancelled warning keeps the mode.
   const change = (next: ModeValue): void => {
+    if (next === 'full_auto') {
+      fullAuto?.onChange(true);
+      return;
+    }
     if (next === 'bypass') {
       onBypassChange?.(true);
       return;

@@ -549,6 +549,7 @@ pub fn continuation(
         prompt,
         plan_mode: false,
         bypass: request.bypass,
+        full_auto: request.full_auto,
         mentions: Vec::new(),
         skills: Vec::new(),
         compact: false,

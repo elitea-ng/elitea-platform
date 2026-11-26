@@ -42,7 +42,7 @@ use crate::execpolicy::{PrefixRule, RuleDecision, RuleOrigin, RuleScope};
 
 /// Why a host command is asked after the turn read untrusted content.
 pub const TAINT_REASON: &str = "after reading content from outside this folder, a command \
-     that runs outside the sandbox is asked (only you, or an allow rule you wrote, can answer \
+     that runs outside the sandbox is asked (only you, an allow rule you wrote, or Full auto can answer \
      it; bypass mode does not)";
 
 /// Why every host command is asked in a folder that asks for every command.

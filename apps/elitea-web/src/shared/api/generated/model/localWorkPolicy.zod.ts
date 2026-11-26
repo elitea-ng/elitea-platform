@@ -195,6 +195,12 @@ export const LocalWorkPolicy = zod
       .describe(
         "Client contract 1.67 (ADR-0061 decision 5b). A person may mark one desktop folder trusted (\"no sandbox\"): its commands then run as the person's own processes, still under approvals, the person's rules and `command_deny`. Default true, but effective only while `max_sandbox_mode` is `full-access` and `network` and `shell` are true. When the policy stops allowing it, the desktop suspends every trusted folder until the person confirms again. Absent reads as false on the desktop.",
       ),
+    full_auto: zod
+      .boolean()
+      .optional()
+      .describe(
+        'Client contract 1.69 (ADR-0061 amendment of 2026-11-26). A person may run a desktop thread in Full auto: it answers every approval question Bypass answers, and also those the trusted folder\'s "read untrusted, then act" gate asks, except a built-in hard-deny list. Default true. False hides the mode, the desktop refuses a turn in it and decides as Bypass. Absent reads as false on the desktop.',
+      ),
   })
   .describe(
     "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",

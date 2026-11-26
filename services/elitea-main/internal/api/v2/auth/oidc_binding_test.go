@@ -148,7 +148,7 @@ func TestTheNotBoundRefusalNamesTheRemedy(t *testing.T) {
 // OIDC_ISSUER_URL.
 func TestTheEnvironmentRuntimeCarriesTheEnvironmentBinding(t *testing.T) {
 	issuer := newFakeIdentityProvider(t).server.URL
-	runtime, err := newOIDCRuntimeFromEnvironment(context.Background(), &OIDCConfig{
+	runtime, err := newOIDCRuntimeFromEnvironment(context.Background(), loopbackIdentityClient(t), &OIDCConfig{
 		IssuerURL: issuer, ClientID: "elitea", RedirectURI: "https://elitea.example/auth/oidc/callback",
 	})
 	if err != nil {
