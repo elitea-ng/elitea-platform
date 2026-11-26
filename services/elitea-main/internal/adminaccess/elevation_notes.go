@@ -76,6 +76,8 @@ func (n ElevationNote) validate() error {
 	switch {
 	case text == "":
 		return fmt.Errorf("%w: a note needs its text", ErrElevationInvalid)
+	case !utf8.ValidString(text) || strings.ContainsRune(text, 0):
+		return fmt.Errorf("%w: a note is UTF-8 text without a NUL byte", ErrElevationInvalid)
 	case utf8.RuneCountInString(text) > MaxReviewNoteLength:
 		return fmt.Errorf("%w: the note is longer than %d characters", ErrElevationInvalid, MaxReviewNoteLength)
 	case n.At.IsZero():

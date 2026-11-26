@@ -9,8 +9,11 @@ package admin_test
 import (
 	"context"
 	"net/http"
+	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
@@ -24,6 +27,38 @@ SELECT count(*) FROM elitea_auth.admin_provisional_grants WHERE kind = $1 AND us
 		t.Fatalf("read the provisional grants: %v", err)
 	}
 	return n
+}
+
+// provisionalEvents are the `after` sets, comma-joined, of the
+// admin.access.changed events of kind with the source `provisional` whose
+// subject is userID.
+func provisionalEvents(t *testing.T, pool *pgxpool.Pool, kind string, userID int) []string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `
+SELECT COALESCE(string_agg(name, ',' ORDER BY ordinality), '')
+FROM elitea_runtime.security_audit_outbox AS outbox
+LEFT JOIN LATERAL jsonb_array_elements_text(outbox.event -> 'data' -> 'access' -> 'after')
+     WITH ORDINALITY AS after_set(name, ordinality) ON true
+WHERE outbox.event -> 'data' -> 'access' ->> 'source' = 'provisional'
+  AND outbox.event -> 'data' -> 'access' ->> 'kind' = $1
+  AND outbox.event -> 'data' ->> 'resource_id' = $2
+  AND outbox.event -> 'data' -> 'access' ->> 'elevation_id' IS NOT NULL
+GROUP BY outbox.seq ORDER BY outbox.seq`, kind, strconv.Itoa(userID))
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	events, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	return events
+}
+
+func expectProvisionalEvents(t *testing.T, pool *pgxpool.Pool, kind string, userID int, want ...string) {
+	t.Helper()
+	if got := provisionalEvents(t, pool, kind, userID); !slices.Equal(got, want) {
+		t.Fatalf("the provisional %s events of %d = %q, want %q", kind, userID, got, want)
+	}
 }
 
 func TestAnElevatedRoleAssignmentIsProvisional(t *testing.T) {
@@ -49,6 +84,7 @@ func TestAnElevatedRoleAssignmentIsProvisional(t *testing.T) {
 	if n := provisionalRows(t, env.pool, provisionalgrants.KindRole, plain); n != 1 {
 		t.Fatalf("%d provisional role rows, want 1", n)
 	}
+	expectProvisionalEvents(t, env.pool, "role_assignment", plain, "editor")
 
 	// The modes route gives provisionally too.
 	other := env.ids[escalationUsersAdmin]
@@ -68,6 +104,7 @@ func TestAnElevatedRoleAssignmentIsProvisional(t *testing.T) {
 	if n := provisionalRows(t, env.pool, provisionalgrants.KindRole, other); n != 1 {
 		t.Fatalf("%d provisional role rows of the modes target, want 1", n)
 	}
+	expectProvisionalEvents(t, env.pool, "role_assignment", other, "editor,users_operator")
 }
 
 // A standing assignment (no elevation) is unchanged: it writes the role.
@@ -114,4 +151,5 @@ func TestAnElevatedBulkInviteIsProvisional(t *testing.T) {
 	if n := provisionalRows(t, env.pool, provisionalgrants.KindMembership, plain); n != 1 {
 		t.Fatalf("%d provisional membership rows, want 1", n)
 	}
+	expectProvisionalEvents(t, env.pool, "project_membership", plain, "editor")
 }

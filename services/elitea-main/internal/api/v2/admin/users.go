@@ -633,6 +633,13 @@ func (h *Handler) setAdminRole(w http.ResponseWriter, r *http.Request, body auth
 		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}
+	// The roles given provisionally are recorded too, with the source
+	// `provisional`.
+	if err := h.appendProvisionalRoles(ctx, transaction, r, caller, targetID, provisional); err != nil {
+		slog.ErrorContext(ctx, "admin: the provisional roles could not be recorded", "err", err)
+		apierr.WriteStatus(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
 	// A critical change under an elevation is announced in this
 	// transaction (ADR-0059 R2.8b).
 	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {

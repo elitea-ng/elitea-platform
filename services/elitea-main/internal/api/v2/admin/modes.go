@@ -271,6 +271,12 @@ func (h *Handler) ModesAssign(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
 		return
 	}
+	// A provisional role is recorded too, with the source `provisional`.
+	if err := h.appendProvisionalRoles(ctx, transaction, r, caller, userID, provisional); err != nil {
+		slog.ErrorContext(ctx, "admin: the provisional role could not be recorded", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to assign role"})
+		return
+	}
 	// A critical change under an elevation is announced in this
 	// transaction (ADR-0059 R2.8b).
 	if err := securityaudit.RunTransactionHooks(ctx, transaction); err != nil {

@@ -300,7 +300,8 @@ func (h *Handler) bulkInvitePair(
 	}
 
 	added, err := h.addProjectMembership(r, projectID, userID, *project.roleID, provisional)
-	result.Provisional = provisional != nil
+	// Provisional only when this pair wrote the provisional grant.
+	result.Provisional = provisional != nil && err == nil && added
 	switch {
 	case err != nil:
 		return refuse(bulkInviteOutcomeFailed,
@@ -352,6 +353,10 @@ SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
 		}
 		if held {
 			return false, nil
+		}
+		// The event first: it reads the standing set the gift adds to.
+		if err := h.appendProvisionalMembership(ctx, tx, r, *provisional, projectID, userID, []int{roleID}, true); err != nil {
+			return false, err
 		}
 		if err := adminaccess.GiveProvisionalMembership(ctx, tx, *provisional, projectID, userID,
 			[]int{roleID}, time.Now()); err != nil {

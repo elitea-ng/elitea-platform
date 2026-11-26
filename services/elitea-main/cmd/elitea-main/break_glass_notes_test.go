@@ -48,6 +48,7 @@ func TestBreakGlassNoteRefusesBadInvocationsBeforeConnecting(t *testing.T) {
 		"a bad id":        {[]string{"note", "42"}, "a note", `"42" is not an elevation id`},
 		"empty stdin":     {[]string{"note", uuid.NewString()}, "  \n", "is empty"},
 		"too long":        {[]string{"note", uuid.NewString()}, long, "longer than"},
+		"a NUL byte":      {[]string{"note", uuid.NewString()}, "a\x00note", "is not UTF-8 text"},
 		"a missing file":  {[]string{"note", uuid.NewString(), "--file", "/nonexistent/note.txt"}, "", "--file"},
 		"list with an id": {[]string{"list", "--elevations", uuid.NewString()}, "", "takes no positional argument"},
 	} {

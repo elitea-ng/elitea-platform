@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess/rolegrants"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // The kinds of a provisional grant.
@@ -78,8 +80,10 @@ type ProvisionalGrant struct {
 }
 
 // provisionalElevation is the elevation a caller's provisional write is
-// bound to: the first of its active elevations (they are sorted by id). A
-// caller with no elevation gives nothing provisionally.
+// bound to: the first of its active elevations, which is the caller's own
+// when it has one (the resolver lists a grantor's elevation, through which a
+// provisional role reaches the caller, after the caller's own). A caller
+// with no elevation gives nothing provisionally.
 func provisionalElevation(caller Caller) (uuid.UUID, error) {
 	if !caller.Elevated || len(caller.Elevations) == 0 {
 		return uuid.Nil, ErrProvisionalNoElevation
@@ -89,6 +93,17 @@ func provisionalElevation(caller Caller) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("provisional grant: the elevation id %q: %w", caller.Elevations[0].ID, err)
 	}
 	return id, nil
+}
+
+// ProvisionalElevationID is the id of the elevation a provisional write of
+// caller binds to, "" when the caller is under none: the elevation its
+// security audit event names.
+func ProvisionalElevationID(caller Caller) string {
+	id, err := provisionalElevation(caller)
+	if err != nil {
+		return ""
+	}
+	return id.String()
 }
 
 // GiveProvisionalRoles records the administration roles `roles` that the
@@ -107,6 +122,9 @@ func GiveProvisionalRoles(ctx context.Context, q ExecQuerier, caller Caller, use
 	}
 	if mode != ModeAdministration {
 		return nil, fmt.Errorf("provisional grant: only an administration role is provisional, not %q", mode)
+	}
+	if err := provisionalgrants.EnsureEnabled(ctx, q); err != nil {
+		return nil, err
 	}
 	reserved, err := IsReservedAccount(ctx, q, userID)
 	if err != nil {
@@ -146,6 +164,9 @@ ON CONFLICT (elevation_id, user_id, role_mode, role_name) WHERE kind = '`+Provis
 func GiveProvisionalMembership(ctx context.Context, q ExecQuerier, caller Caller, projectID, userID int64, roleIDs []int, at time.Time) error {
 	elevation, err := provisionalElevation(caller)
 	if err != nil {
+		return err
+	}
+	if err := provisionalgrants.EnsureEnabled(ctx, q); err != nil {
 		return err
 	}
 	for _, roleID := range roleIDs {
@@ -244,10 +265,14 @@ ORDER BY grant_row.user_id, grant_row.project_role_id`, projectID, at.UTC())
 // statement): each writes the standing assignment with reviewerID as the
 // actor and the source `review`, and is marked confirmed. A grant that is
 // not the elevation's, or was confirmed already, refuses all of them
-// (ErrProvisionalGrantNotFound). It answers the number of grants confirmed.
+// (ErrProvisionalGrantNotFound), and so does a grant given to the reviewer
+// (ErrReviewerInvolved). Each confirmation that changes the grantee's
+// standing set appends its admin.access.changed event (source `review`)
+// through appender. It answers the number of grants confirmed.
 //
 // Only ReviewElevation calls it, after the outcome `justified` was checked.
-func ConfirmProvisionalGrants(ctx context.Context, tx pgx.Tx, elevation uuid.UUID, ids []uuid.UUID, reviewerID int64, at time.Time) (int, error) {
+func ConfirmProvisionalGrants(ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, review ElevationReview, at time.Time) (int, error) {
+	elevation, ids, reviewerID := review.ID, review.Confirm, review.ReviewerUserID
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -269,6 +294,13 @@ FOR UPDATE`, elevation, ids)
 	if len(grants) != len(ids) {
 		return 0, ErrProvisionalGrantNotFound
 	}
+	for _, grant := range grants {
+		// A reviewer never confirms what was given to them: that would make
+		// their own standing set out of the elevation they review.
+		if grant.UserID == reviewerID {
+			return 0, fmt.Errorf("%w: grant %s was given to the reviewer", ErrReviewerInvolved, grant.ID)
+		}
+	}
 	origin := rolegrants.Origin{ActorUserID: reviewerID, Source: rolegrants.SourceReview, Reason: "confirmed by the review of elevation " + elevation.String()}
 	for _, grant := range grants {
 		origin.SourceRef = grant.ID.String()
@@ -279,6 +311,10 @@ FOR UPDATE`, elevation, ids)
 		}
 		if !account {
 			return 0, fmt.Errorf("%w: the account of grant %s no longer exists", ErrElevationInvalid, grant.ID)
+		}
+		before, err := grantSubjectSet(ctx, tx, grant)
+		if err != nil {
+			return 0, err
 		}
 		switch grant.Kind {
 		case ProvisionalKindRole:
@@ -310,6 +346,93 @@ UPDATE `+provisionalgrants.Table+` SET confirmed_at = $2, confirmed_by = $3 WHER
 			grant.ID, at.UTC(), reviewerID); err != nil {
 			return 0, fmt.Errorf("mark the provisional grant confirmed: %w", err)
 		}
+		if err := appendConfirmedGrant(ctx, tx, appender, review, grant, before); err != nil {
+			return 0, err
+		}
 	}
 	return len(grants), nil
+}
+
+// grantSubjectSet is the grantee's standing set the grant adds to: the
+// administration roles of a role grant, the project roles of a membership.
+func grantSubjectSet(ctx context.Context, q Querier, grant ProvisionalGrant) ([]string, error) {
+	if grant.Kind == ProvisionalKindRole {
+		return UserCentralRoles(ctx, q, int(grant.UserID), ModeAdministration)
+	}
+	rows, err := q.Query(ctx, `
+SELECT DISTINCT role.name
+FROM public.auth_core__project_user_role assignment
+JOIN public.auth_core__project_role role ON role.id = assignment.role_id
+WHERE assignment.project_id = $1 AND assignment.user_id = $2
+ORDER BY 1`, grant.ProjectID, grant.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("confirm the provisional membership: read the project roles: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("confirm the provisional membership: read the project roles: %w", err)
+	}
+	return names, nil
+}
+
+// appendConfirmedGrant appends the admin.access.changed event of one
+// confirmation, in tx, when it changed the grantee's standing set: the
+// reviewer is the actor, the source is `review` and the elevation is the
+// reviewed one. A membership event is partitioned by its project.
+func appendConfirmedGrant(
+	ctx context.Context, tx pgx.Tx, appender securityaudit.Appender, review ElevationReview,
+	grant ProvisionalGrant, before []string,
+) error {
+	after, err := grantSubjectSet(ctx, tx, grant)
+	if err != nil {
+		return err
+	}
+	before, after = sortedNames(before), sortedNames(after)
+	if slices.Equal(before, after) {
+		return nil
+	}
+	change := securityaudit.AdminAccessChanged{
+		ActorUserID:       review.ReviewerUserID,
+		SubjectType:       "user",
+		SubjectID:         strconv.FormatInt(grant.UserID, 10),
+		AuthenticationRef: review.AuthenticationRef,
+		CorrelationID:     review.CorrelationID,
+		Change: securityaudit.AccessChange{
+			Kind: securityaudit.AccessRoleAssignment, Mode: ModeAdministration,
+			Source: rolegrants.SourceReview, Before: before, After: after,
+			ElevationID: review.ID.String(),
+		},
+	}
+	if grant.Kind == ProvisionalKindMembership {
+		var member bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role WHERE project_id = $1 AND user_id = $2)`,
+			grant.ProjectID, review.ReviewerUserID).Scan(&member); err != nil {
+			return fmt.Errorf("confirm the provisional membership: read the reviewer's membership: %w", err)
+		}
+		held, err := UserCentralRoles(ctx, tx, int(grant.UserID), ModeAdministration)
+		if err != nil {
+			return err
+		}
+		change.TenantProjectID = grant.ProjectID
+		change.Change.Kind, change.Change.Mode = securityaudit.AccessProjectMembership, ""
+		change.Change.Membership = &securityaudit.MembershipFacts{ActorIsMember: member, MemberHoldsAdminRole: len(held) > 0}
+	}
+	if err := appender.Append(ctx, tx, securityaudit.NewAdminAccessChanged(change)); err != nil {
+		return fmt.Errorf("confirm the provisional grant: append the access event: %w", err)
+	}
+	return nil
+}
+
+// sortedNames is a sorted copy of names without duplicates or empty names,
+// never nil.
+func sortedNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }

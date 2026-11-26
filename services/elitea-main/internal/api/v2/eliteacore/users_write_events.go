@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/adminaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit/accessevent"
 )
@@ -51,6 +52,24 @@ type centralMembership struct {
 	projectID int64
 	bulk      bool
 	before    map[int64][]string
+	// given are the project roles each person was given provisionally under
+	// the caller's elevation (ADR-0059 R2.12b): their event has the source
+	// `provisional`.
+	given map[int64][]int
+	// caller is the elevated caller of a provisional write.
+	caller adminaccess.Caller
+}
+
+// gave records the roles caller gave a person provisionally.
+func (m *centralMembership) gave(caller adminaccess.Caller, userID int, roleIDs []int) {
+	if len(roleIDs) == 0 {
+		return
+	}
+	m.caller = caller
+	if m.given == nil {
+		m.given = map[int64][]int{}
+	}
+	m.given[int64(userID)] = append(m.given[int64(userID)], roleIDs...)
 }
 
 // beginCentralMembership reads, in tx, the roles of userIDs in the project
@@ -83,6 +102,10 @@ func (h *Handler) appendChanges(ctx context.Context, tx pgx.Tx, r *http.Request,
 	for _, userID := range userIDs {
 		if err := accessevent.AppendMembershipChange(ctx, tx, h.accessAppender(), r.Context(),
 			m.projectID, int64(userID), m.before[int64(userID)], m.bulk); err != nil {
+			return errors.Join(errMembershipEvent, err)
+		}
+		if err := accessevent.AppendProvisionalMembership(ctx, tx, h.accessAppender(), r.Context(),
+			m.caller, m.projectID, int64(userID), m.given[int64(userID)], m.bulk); err != nil {
 			return errors.Join(errMembershipEvent, err)
 		}
 	}

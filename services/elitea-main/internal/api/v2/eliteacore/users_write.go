@@ -441,6 +441,7 @@ func (h *Handler) inviteOne(
 			roleIDs, time.Now()); err != nil {
 			return 0, false, err
 		}
+		membership.gave(*provisional, userID, roleIDs)
 	} else {
 		for _, roleID := range roleIDs {
 			if _, err := tx.Exec(ctx,
@@ -613,11 +614,15 @@ func (h *Handler) usersUpdate(w http.ResponseWriter, r *http.Request, mode strin
 	// provisional (ADR-0059 R2.12b): a role the member does not hold yet is a
 	// provisional grant of the caller's elevation, and a role taken away is a
 	// standing removal, flagged for the review.
-	provisional := provisionalMembership(caller, change)
+	elevated := provisionalMembership(caller, change)
+	provisional := false
 	for _, userID := range userIDs {
 		var err error
-		if provisional {
-			err = replaceMemberRolesProvisionally(ctx, tx, caller, projectID, userID, roleIDs)
+		if elevated {
+			var given []int
+			given, err = replaceMemberRolesProvisionally(ctx, tx, caller, projectID, userID, roleIDs)
+			membership.gave(caller, userID, given)
+			provisional = provisional || len(given) > 0
 		} else {
 			err = replaceMemberRoles(ctx, tx, projectID, userID, roleIDs)
 		}

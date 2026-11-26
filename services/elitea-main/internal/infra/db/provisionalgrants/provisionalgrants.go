@@ -30,6 +30,7 @@ package provisionalgrants
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -81,6 +82,30 @@ func EnableIfPresent(ctx context.Context, q Querier) (bool, error) {
 	}
 	Enable(present)
 	return present, nil
+}
+
+// ErrUnavailable refuses a provisional write while the readers are off and
+// the table is still absent: a grant nobody reads would be a gift that says
+// it was given and grants nothing.
+var ErrUnavailable = errors.New("provisional grants are not available yet: the shared migrations have not created " + Table)
+
+// EnsureEnabled is the writers' check: with the readers on it answers nil;
+// with them off it probes again, switches them on when the table now exists
+// (the migrations ran after the boot), and answers ErrUnavailable when it
+// still does not. It never switches the readers off.
+func EnsureEnabled(ctx context.Context, q Querier) error {
+	if Enabled() {
+		return nil
+	}
+	present, err := Present(ctx, q)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return ErrUnavailable
+	}
+	Enable(true)
+	return nil
 }
 
 // ActiveElevation is the boolean SQL predicate "the elevation row aliased

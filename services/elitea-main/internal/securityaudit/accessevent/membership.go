@@ -75,23 +75,10 @@ func AppendMembershipChange(
 	if slices.Equal(before, after) {
 		return nil
 	}
-	facts := securityaudit.MembershipFacts{Bulk: bulk}
-	if principal, ok := auth.UserFromContext(requestContext); ok {
-		if actor, resolved := principal.OwningUserID(); resolved && actor > 0 {
-			var member bool
-			if err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
-               WHERE project_id = $1 AND user_id = $2)`, projectID, actor).Scan(&member); err != nil {
-				return fmt.Errorf("read the actor's membership: %w", err)
-			}
-			facts.ActorIsMember = member
-		}
-	}
-	held, err := adminaccess.UserCentralRoles(ctx, tx, int(userID), adminaccess.ModeAdministration)
+	facts, err := membershipFacts(ctx, tx, requestContext, projectID, userID, bulk)
 	if err != nil {
 		return err
 	}
-	facts.MemberHoldsAdminRole = len(held) > 0
 	change := FromRequest(requestContext, securityaudit.AdminAccessChanged{
 		SubjectType:     "user",
 		SubjectID:       strconv.FormatInt(userID, 10),
@@ -104,4 +91,29 @@ SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
 		},
 	})
 	return appender.Append(ctx, tx, securityaudit.NewAdminAccessChanged(change))
+}
+
+// membershipFacts are the facts of a membership of userID in projectID
+// written by the request's actor, read in tx.
+func membershipFacts(
+	ctx context.Context, tx pgx.Tx, requestContext context.Context, projectID, userID int64, bulk bool,
+) (securityaudit.MembershipFacts, error) {
+	facts := securityaudit.MembershipFacts{Bulk: bulk}
+	if principal, ok := auth.UserFromContext(requestContext); ok {
+		if actor, resolved := principal.OwningUserID(); resolved && actor > 0 {
+			var member bool
+			if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.auth_core__project_user_role
+               WHERE project_id = $1 AND user_id = $2)`, projectID, actor).Scan(&member); err != nil {
+				return facts, fmt.Errorf("read the actor's membership: %w", err)
+			}
+			facts.ActorIsMember = member
+		}
+	}
+	held, err := adminaccess.UserCentralRoles(ctx, tx, int(userID), adminaccess.ModeAdministration)
+	if err != nil {
+		return facts, err
+	}
+	facts.MemberHoldsAdminRole = len(held) > 0
+	return facts, nil
 }

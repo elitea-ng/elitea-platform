@@ -93,20 +93,27 @@ func replaceMemberRoles(ctx context.Context, tx pgx.Tx, projectID, userID int, r
 // of roleIDs the user does not hold in the project is a provisional grant of
 // the caller's elevation, and a held role that is not in roleIDs is removed,
 // a standing removal that the restriction rule flags for the review. A role
-// held and asked for is left as it is.
+// held and asked for is left as it is. It answers the roles given
+// provisionally, none when the person held them all.
 func replaceMemberRolesProvisionally(
 	ctx context.Context, tx pgx.Tx, caller adminaccess.Caller, projectID, userID int, roleIDs []int,
-) error {
+) ([]int, error) {
 	held, err := adminaccess.MembersProjectRoleIDs(ctx, tx, projectID, []int{userID})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM auth_core__project_user_role
 		 WHERE project_id = $1 AND user_id = $2 AND NOT (role_id = ANY($3::int[]))`,
 		projectID, userID, roleIDs); err != nil {
-		return err
+		return nil, err
 	}
 	given := slices.DeleteFunc(slices.Clone(roleIDs), func(id int) bool { return slices.Contains(held, id) })
-	return adminaccess.GiveProvisionalMembership(ctx, tx, caller, int64(projectID), int64(userID), given, time.Now())
+	if len(given) == 0 {
+		return nil, nil
+	}
+	if err := adminaccess.GiveProvisionalMembership(ctx, tx, caller, int64(projectID), int64(userID), given, time.Now()); err != nil {
+		return nil, err
+	}
+	return given, nil
 }

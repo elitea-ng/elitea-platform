@@ -132,6 +132,7 @@ func TestAnOperatorNoteLeavesTheStateAsItIs(t *testing.T) {
 	}
 	for name, note := range map[string]adminaccess.ElevationNote{
 		"empty":                 {ID: active.ID, Text: " ", Source: adminaccess.NoteSourceOperator, At: now},
+		"a NUL byte":            {ID: active.ID, Text: "a\x00b", Source: adminaccess.NoteSourceOperator, At: now},
 		"operator with person":  {ID: active.ID, Text: "x", Source: adminaccess.NoteSourceOperator, AuthorUserID: 3, At: now},
 		"operator acknowledges": {ID: active.ID, Text: "x", Source: adminaccess.NoteSourceOperator, Acknowledge: true, At: now},
 		"console without one":   {ID: active.ID, Text: "x", Source: adminaccess.NoteSourceConsole, At: now},

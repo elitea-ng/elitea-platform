@@ -322,7 +322,11 @@ WHERE grant_row.user_id = $1`,
 		return auth.PermissionResolution{}, fmt.Errorf("resolve the provisional roles: %w", err)
 	}
 	defer rows.Close()
-	elevations := append([]auth.ElevationGrant(nil), resolution.Elevations...)
+	// The person's own elevations stay first, in the resolver's order, so
+	// ElevationID (and the elevation a provisional write of the person binds
+	// to) is the person's own; the grantors' elevations follow, by id.
+	own := resolution.Elevations
+	var grantors []auth.ElevationGrant
 	granted := append([]string(nil), resolution.ElevatedPermissions...)
 	found := false
 	for rows.Next() {
@@ -332,7 +336,9 @@ WHERE grant_row.user_id = $1`,
 			return auth.PermissionResolution{}, fmt.Errorf("scan a provisional role: %w", err)
 		}
 		found = true
-		elevations = append(elevations, elevation)
+		if !slices.ContainsFunc(own, func(e auth.ElevationGrant) bool { return e.ID == elevation.ID }) {
+			grantors = append(grantors, elevation)
+		}
 		if permission != nil {
 			granted = append(granted, *permission)
 		}
@@ -344,8 +350,9 @@ WHERE grant_row.user_id = $1`,
 		return resolution, nil
 	}
 	resolution.Permissions, resolution.ElevatedPermissions = UnionElevation(resolution.StandingPermissions(), granted)
-	slices.SortFunc(elevations, func(a, b auth.ElevationGrant) int { return strings.Compare(a.ID, b.ID) })
-	elevations = slices.CompactFunc(elevations, func(a, b auth.ElevationGrant) bool { return a.ID == b.ID })
+	slices.SortFunc(grantors, func(a, b auth.ElevationGrant) int { return strings.Compare(a.ID, b.ID) })
+	grantors = slices.CompactFunc(grantors, func(a, b auth.ElevationGrant) bool { return a.ID == b.ID })
+	elevations := append(append([]auth.ElevationGrant(nil), own...), grantors...)
 	ids := make([]string, 0, len(elevations))
 	for _, elevation := range elevations {
 		ids = append(ids, elevation.ID)

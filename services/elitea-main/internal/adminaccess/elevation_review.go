@@ -264,7 +264,7 @@ VALUES ($1, '`+ReviewItemReview+`', $2, $3, NULLIF($4, ''), $5, $6)`,
 		return ReviewResult{}, fmt.Errorf("review elevation: record the review: %w", err)
 	}
 	result := ReviewResult{Elevation: elevation}
-	if result.Confirmed, err = ConfirmProvisionalGrants(ctx, tx, review.ID, review.Confirm, review.ReviewerUserID, at); err != nil {
+	if result.Confirmed, err = ConfirmProvisionalGrants(ctx, tx, appender, review, at); err != nil {
 		return ReviewResult{}, err
 	}
 	if review.Outcome == ReviewOutcomeUnauthorized {

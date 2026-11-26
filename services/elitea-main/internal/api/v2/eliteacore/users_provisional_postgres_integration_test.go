@@ -11,8 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
+	"strconv"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
@@ -35,6 +38,38 @@ WHERE kind = 'membership' AND user_id = $1 AND project_id = $2`, userID, usersWr
 		t.Fatalf("read the provisional grants: %v", err)
 	}
 	return n
+}
+
+// provisionalEvents are the `after` sets, comma-joined, of the
+// admin.access.changed events of kind with the source `provisional` whose
+// subject is userID.
+func provisionalEvents(t *testing.T, pool *pgxpool.Pool, kind string, userID int) []string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `
+SELECT COALESCE(string_agg(name, ',' ORDER BY ordinality), '')
+FROM elitea_runtime.security_audit_outbox AS outbox
+LEFT JOIN LATERAL jsonb_array_elements_text(outbox.event -> 'data' -> 'access' -> 'after')
+     WITH ORDINALITY AS after_set(name, ordinality) ON true
+WHERE outbox.event -> 'data' -> 'access' ->> 'source' = 'provisional'
+  AND outbox.event -> 'data' -> 'access' ->> 'kind' = $1
+  AND outbox.event -> 'data' ->> 'resource_id' = $2
+  AND outbox.event -> 'data' -> 'access' ->> 'elevation_id' IS NOT NULL
+GROUP BY outbox.seq ORDER BY outbox.seq`, kind, strconv.Itoa(userID))
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	events, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	return events
+}
+
+func expectProvisionalEvents(t *testing.T, pool *pgxpool.Pool, kind string, userID int, want ...string) {
+	t.Helper()
+	if got := provisionalEvents(t, pool, kind, userID); !slices.Equal(got, want) {
+		t.Fatalf("the provisional %s events of %d = %q, want %q", kind, userID, got, want)
+	}
 }
 
 func TestAnElevatedMemberWriteIsProvisional(t *testing.T) {
@@ -70,6 +105,7 @@ func TestAnElevatedMemberWriteIsProvisional(t *testing.T) {
 	if n := provisionalMemberships(t, pool, id); n != 1 {
 		t.Fatalf("%d provisional membership rows, want 1", n)
 	}
+	expectProvisionalEvents(t, pool, "project_membership", id, "editor")
 
 	// The update of a standing member's roles: the role it gains is
 	// provisional, the role it keeps stays standing.
@@ -98,6 +134,7 @@ func TestAnElevatedMemberWriteIsProvisional(t *testing.T) {
 	if n := provisionalMemberships(t, pool, memberID); n != 1 {
 		t.Fatalf("%d provisional membership rows of the member, want 1", n)
 	}
+	expectProvisionalEvents(t, pool, "project_membership", memberID, "admin,viewer")
 
 	// The listing shows the provisional newcomer apart from the members.
 	recorder = usersWriteDo(t, super, http.MethodGet,

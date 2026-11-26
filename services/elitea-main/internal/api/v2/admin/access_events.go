@@ -152,3 +152,33 @@ func (h *Handler) appendMembershipChange(
 	}
 	return accessevent.AppendMembershipChange(ctx, tx, h.accessAudit, r.Context(), projectID, userID, before, bulk)
 }
+
+// appendProvisionalRoles appends the role_assignment event of the
+// administration roles given provisionally under the caller's elevation
+// (ADR-0059 R2.12a, accessevent.AppendProvisionalRoles); nothing when none
+// was given.
+func (h *Handler) appendProvisionalRoles(
+	ctx context.Context, tx pgx.Tx, r *http.Request, caller adminaccess.Caller, userID int, given []string,
+) error {
+	if len(given) == 0 {
+		return nil
+	}
+	if h.accessAudit == nil {
+		return errNoAccessAppender
+	}
+	return accessevent.AppendProvisionalRoles(ctx, tx, h.accessAudit, r.Context(), caller, userID, given)
+}
+
+// appendProvisionalMembership appends the project_membership event of a
+// membership given provisionally under the caller's elevation (ADR-0059
+// R2.12b, accessevent.AppendProvisionalMembership).
+func (h *Handler) appendProvisionalMembership(
+	ctx context.Context, tx pgx.Tx, r *http.Request, caller adminaccess.Caller,
+	projectID, userID int64, roleIDs []int, bulk bool,
+) error {
+	if h.accessAudit == nil {
+		return errNoAccessAppender
+	}
+	return accessevent.AppendProvisionalMembership(ctx, tx, h.accessAudit, r.Context(), caller,
+		projectID, userID, roleIDs, bulk)
+}

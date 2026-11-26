@@ -7,6 +7,8 @@ package adminaccess_test
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/infra/db/provisionalgrants"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/securityaudit"
 )
 
 // holderOf is the holder of e, as a write under the elevation sees it.
@@ -110,6 +113,25 @@ func review(t *testing.T, pool *pgxpool.Pool, r adminaccess.ElevationReview) (ad
 	return result, err
 }
 
+// confirmationEvents are the admin.access.changed events of userID written
+// by a confirmation (source review), as text.
+func confirmationEvents(t *testing.T, pool *pgxpool.Pool, userID int64) []string {
+	t.Helper()
+	rows, err := pool.Query(t.Context(), `
+SELECT event::text FROM elitea_runtime.security_audit_outbox
+WHERE event_type = $1 AND event -> 'data' -> 'access' ->> 'source' = 'review'
+  AND event -> 'data' ->> 'resource_id' = $2
+ORDER BY seq`, string(securityaudit.TypeAdminAccessChanged), strconv.FormatInt(userID, 10))
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	events, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("read the outbox: %v", err)
+	}
+	return events
+}
+
 func grantIDs(grants []adminaccess.ProvisionalGrant) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(grants))
 	for _, grant := range grants {
@@ -182,6 +204,11 @@ WHERE user_id = $1 AND role_name = $2 AND action = 'granted'`, grantee, adminacc
 	}
 	if !found {
 		t.Fatal("the reviewed event does not count the confirmation")
+	}
+	events := confirmationEvents(t, pool, grantee)
+	if len(events) != 1 || !strings.Contains(events[0], `"role_assignment"`) ||
+		!strings.Contains(events[0], ended.ID.String()) || !strings.Contains(events[0], fmt.Sprintf(`"user:%d"`, auditor)) {
+		t.Fatalf("the confirmation's access events = %v, want one role_assignment by the reviewer under the elevation", events)
 	}
 	// The row's one permitted update is the confirmation, once.
 	if _, err := pool.Exec(t.Context(), `
@@ -296,6 +323,37 @@ func TestAProvisionalMembershipLastsTheElevationUntilAJustifiedReviewConfirmsIt(
 	}
 	if n := standingMemberships(t, pool, suspended, grantee); n != 0 {
 		t.Fatal("an unconfirmed membership was written")
+	}
+	events := confirmationEvents(t, pool, grantee)
+	if len(events) != 1 || !strings.Contains(events[0], `"project_membership"`) || !strings.Contains(events[0], ended.ID.String()) {
+		t.Fatalf("the confirmation's access events = %v, want one project_membership under the elevation", events)
+	}
+}
+
+// A reviewer never confirms a grant given to themselves: the review is
+// refused and nothing is confirmed.
+func TestAReviewerCannotConfirmAGrantGivenToThemselves(t *testing.T) {
+	provisionalgrants.EnableForTest(t)
+	pool := newElevationDatabase(t)
+	auditor := seedPerson(t, pool, adminaccess.RoleSecurityAuditor)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	elevation := startAt(t, pool, now.Add(-time.Minute), time.Hour)
+	if _, err := adminaccess.GiveProvisionalRoles(t.Context(), pool, holderOf(elevation), auditor,
+		adminaccess.ModeAdministration, []string{adminaccess.RoleAdmin}, now); err != nil {
+		t.Fatal(err)
+	}
+	ended, _ := endElevation(t, pool, adminaccess.ElevationEnd{ID: elevation.ID, Reason: adminaccess.ElevationEndHolder, At: now})
+	if _, err := review(t, pool, adminaccess.ElevationReview{
+		ID: ended.ID, ReviewerUserID: auditor, Outcome: adminaccess.ReviewOutcomeJustified,
+		Confirm: grantIDs(grantsOf(t, pool, ended.ID)), At: now,
+	}); !errors.Is(err, adminaccess.ErrReviewerInvolved) {
+		t.Fatalf("a self-confirmation: %v, want %v", err, adminaccess.ErrReviewerInvolved)
+	}
+	if n := standingRoles(t, pool, auditor); n != 1 {
+		t.Fatalf("the reviewer holds %d standing roles, want only security_auditor", n)
+	}
+	if grantsOf(t, pool, ended.ID)[0].ConfirmedBy != 0 {
+		t.Fatal("a self-confirmation confirmed the grant")
 	}
 }
 

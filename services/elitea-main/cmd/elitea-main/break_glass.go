@@ -341,7 +341,8 @@ func readBreakGlassNote(req breakGlassRequest, stdin io.Reader, stderr io.Writer
 	}
 	text := strings.TrimSpace(string(raw))
 	switch {
-	case !utf8.ValidString(text):
+	case !utf8.ValidString(text) || strings.ContainsRune(text, 0):
+		// PostgreSQL text holds no NUL byte: refuse it here, as usage.
 		_, _ = fmt.Fprintf(stderr, "note: %s is not UTF-8 text\n", source)
 		return breakGlassRequest{}, false
 	case text == "":
