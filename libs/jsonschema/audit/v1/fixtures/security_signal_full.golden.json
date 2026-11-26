@@ -4,6 +4,7 @@
   "time": "2026-11-25T09:30:00Z",
   "source": "security_signal",
   "event_type": "security_signal.content.prompt_injection",
+  "delivery_seq": 7,
   "tenant": {
     "project_id": 3
   },
@@ -59,11 +60,15 @@
       "byte_end": 42
     },
     "attribution": "resolved",
-    "labels": ["reason:injection"],
+    "labels": [
+      "reason:injection"
+    ],
     "count": 1,
     "first_seen": "2026-11-25T09:29:00Z",
     "last_seen": "2026-11-25T09:30:00Z",
-    "folded": ["0192f0c1-7b6e-7c3a-8f00-000000000012"],
+    "folded": [
+      "0192f0c1-7b6e-7c3a-8f00-000000000012"
+    ],
     "dedup_key": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
     "origin": "server",
     "evidence": {
