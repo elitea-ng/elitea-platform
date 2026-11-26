@@ -36,6 +36,8 @@
     // R-T15: reads of a generic legacy palette id, the ids of
     // src/shared/brand/tokens/legacy-roles.json; the message names the role.
     "elitea/legacy-palette-id": "error",
+    // ADR-0062 decision 4: a page h1 comes from PageHeader in shared/ui.
+    "elitea/page-h1": "error",
     // R-T14: Dialog and Switch go through their shared/ui wrappers.
     // A type-only import is not counted.
     "no-restricted-imports": [
@@ -74,7 +76,7 @@
     {
       // The wrappers themselves.
       "files": ["**/shared/ui/**"],
-      "rules": { "no-restricted-imports": "off" }
+      "rules": { "no-restricted-imports": "off", "elitea/page-h1": "off" }
     },
     {
       // The brand layer maps legacy ids to MUI and to the roles; it is not

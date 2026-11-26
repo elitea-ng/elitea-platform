@@ -42,10 +42,10 @@ export function oxlintArgs(config) {
   return ['-c', config, '-f', 'json', '--no-ignore', 'src'];
 }
 
-/** Kinds counted now (ADR-0062 decision 3.4). A message names its kind as `[kind]`. */
-export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch', 'legacy-palette'];
+/** Kinds counted now (ADR-0062 decisions 3.4 and 4). A message names its kind as `[kind]`. */
+export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch', 'legacy-palette', 'page-h1'];
 
-const KIND_RE = /\[([a-z][a-z-]*)\]/;
+const KIND_RE = /\[([a-z][a-z0-9-]*)\]/;
 
 /**
  * Files the ratchet does not count: tests, stories, mocks, type declarations
