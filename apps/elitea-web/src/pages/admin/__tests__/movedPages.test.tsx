@@ -30,6 +30,16 @@ function golden(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(GO_TESTDATA, path), 'utf8')) as Record<string, unknown>;
 }
 
+/** The super_admin document with `itemIds` left out, as for a role that does not open them. */
+function withoutItems(...itemIds: readonly string[]): Record<string, unknown> {
+  const document = golden('console/super_admin.golden.json') as { areas: { items: { id: string }[] }[] };
+  const areas = document.areas.map((area) => ({
+    ...area,
+    items: area.items.filter((entry) => !itemIds.includes(entry.id)),
+  }));
+  return { ...document, areas };
+}
+
 interface AdminUiConfigWindow {
   admin_ui_config?: { permissions?: readonly string[]; user_name?: string };
 }
@@ -170,11 +180,11 @@ describe('the Configuration sections whose editors moved', () => {
     await vi.waitFor(() => expect(window.location.pathname).toBe('/admin/app/client-applications'));
   }, testTimeout(30_000));
 
-  // The LLM manager opens Configuration (its gateway tabs) but not Identity
-  // providers: the row stays a plain row, and the card says why.
+  // A caller whose document opens Configuration but not Identity providers:
+  // the row stays a plain row, and the card says why.
   it('does not link a caller to a page its roles do not open', async () => {
     serveSections();
-    server.use(http.get('*/admin/console', () => HttpResponse.json(golden('console/llm_manager.golden.json'))));
+    server.use(http.get('*/admin/console', () => HttpResponse.json(withoutItems('identity-providers', 'identity-trust'))));
     await mountAdmin('/configuration');
 
     expect(await screen.findByTestId('admin-configuration-moved-closed')).toHaveTextContent('Identity providers');

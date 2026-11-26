@@ -5,16 +5,16 @@
  * Until R0.16 the navigation showed Configuration and LLM Governance only to
  * a holder of the legacy `runtime.plugins` and `configuration.governance`, so
  * an LLM manager saw Budgets and Projects and had to type every other URL.
- * Here the person opens `/admin/app/`, reaches the gateway editor
- * (Configuration, LLM Proxy) by clicking, and adds a platform provider, which
+ * Here the person opens `/admin/app/`, reaches Providers and models by
+ * clicking, and adds a platform provider, which
  * the server admits on `llm.catalogue.manage`. A typed URL to Users shows
  * the access-denied page for that item.
  *
  * Since R3.2 (ADR-0059 decision 6, issue 2532) the navigation is the six
  * labelled areas of the capability document: the LLM manager's document
- * opens Projects, LLM Governance, Budgets and the gateway tabs, which are
- * still tabs of Configuration, so those four items and their three areas are
- * all it shows, and the landing page is the first of them.
+ * opens Projects and the seven items of Models and spend, whose gateway
+ * pages were tabs of Configuration until R3.5a (issue 2535), so those eight
+ * items and their two areas are all it shows.
  *
  * The subject is a seeded row (`scripts/e2e-stack.sh seed`, "administration
  * role fixtures"), one per browser project. The admin persona gives it the
@@ -66,7 +66,7 @@ async function sweepProvider(request: APIRequestContext): Promise<void> {
   }
 }
 
-adminTest('an LLM manager reaches the gateway editor through the navigation and adds a provider', async ({ browser, request }, testInfo) => {
+adminTest('an LLM manager reaches Providers and models through the navigation and adds a provider', async ({ browser, request }, testInfo) => {
   adminTest.setTimeout(120_000);
   const subject = subjectFor(testInfo.project.name);
   const id = await userId(request, subject);
@@ -87,11 +87,20 @@ adminTest('an LLM manager reaches the gateway editor through the navigation and 
     // The navigation shows the pages the role opens, and no other.
     const nav = page.getByTestId('admin-nav');
     await expect(nav).toBeVisible({ timeout: 30_000 });
-    const expected = ['admin-nav-item-projects', 'admin-nav-item-llm-governance', 'admin-nav-item-budgets-alerts', 'admin-nav-item-configuration'];
+    const expected = [
+      'admin-nav-item-projects',
+      'admin-nav-item-providers-models',
+      'admin-nav-item-models-pricing',
+      'admin-nav-item-tool-prices',
+      'admin-nav-item-usage',
+      'admin-nav-item-logs',
+      'admin-nav-item-llm-governance',
+      'admin-nav-item-budgets-alerts',
+    ];
     await expect(nav.getByRole('link')).toHaveCount(expected.length);
     const ids = await nav.getByRole('link').evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute('data-testid')));
     expect(ids).toEqual(expected);
-    for (const area of ['projects', 'models_spend', 'platform']) {
+    for (const area of ['projects', 'models_spend']) {
       await expect(nav.getByTestId(`admin-nav-area-${area}`)).toBeVisible();
     }
     // The index renders Users, which the role does not open: it lands on the
@@ -99,13 +108,9 @@ adminTest('an LLM manager reaches the gateway editor through the navigation and 
     await page.waitForURL((url) => url.pathname === '/admin/app/projects', { timeout: 20_000 });
     await expect(page.getByTestId('admin-nav-item-projects')).toHaveAttribute('aria-current', 'page');
 
-    // Configuration → LLM Proxy → Providers & models, by clicking.
-    await page.getByTestId('admin-nav-item-configuration').click();
-    const llmProxy = page.getByRole('button', { name: /LLM Proxy/ });
-    await expect(llmProxy).toBeVisible({ timeout: 30_000 });
-    await llmProxy.click();
-    await expect(page.getByTestId('llm-proxy-tabs')).toBeVisible({ timeout: 20_000 });
-    await page.getByRole('tab', { name: 'Providers & models' }).click();
+    // Models and spend → Providers and models, by clicking.
+    await page.getByTestId('admin-nav-item-providers-models').click();
+    await page.waitForURL((url) => url.pathname === '/admin/app/models/providers', { timeout: 20_000 });
     await expect(page.getByTestId('llm-providers-table').or(page.getByTestId('llm-providers-empty'))).toBeVisible({
       timeout: 20_000,
     });

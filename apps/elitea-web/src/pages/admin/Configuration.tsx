@@ -150,8 +150,8 @@ import { LLM_PROXY_MANAGED_SURFACE } from './api/adminLlmProxyApi';
 import { MCP_SERVERS_MANAGED_SURFACE } from './api/adminMcpServersApi';
 import {
   ConfigurationMovedSection,
-  movedSectionPath,
   movedSectionRow,
+  useMovedSectionPath,
   useMovedSectionReach,
 } from './ConfigurationMovedSection';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
@@ -214,7 +214,9 @@ function managedEditorFor(
   return surface === undefined ? undefined : MANAGED_SECTION_EDITORS[surface];
 }
 
-function SectionBody({ state }: { readonly state: AdminConfigurationPageState }) {
+type MovedPathOf = ReturnType<typeof useMovedSectionPath>;
+
+function SectionBody({ state, movedPath }: { readonly state: AdminConfigurationPageState; readonly movedPath: MovedPathOf }) {
   if (state.activeSection === undefined) {
     return (
       <Typography variant="bodyMedium" color="text.secondary">
@@ -228,7 +230,7 @@ function SectionBody({ state }: { readonly state: AdminConfigurationPageState })
   // plugin-config value endpoints, which cannot serve this data — so a build
   // that does not recognise the surface still explains itself.
   // The identity and client editors have pages of their own (R3.6).
-  const moved = movedSectionPath(state.activeSection);
+  const moved = movedPath(state.activeSection);
   if (moved !== undefined) return <ConfigurationMovedSection path={moved} />;
   const ManagedEditor = managedEditorFor(state.activeSection);
   if (ManagedEditor !== undefined) {
@@ -322,6 +324,7 @@ export function AdminConfiguration() {
 function ConfigurationPage() {
   const state = useAdminConfigurationPage();
   const reaches = useMovedSectionReach();
+  const movedPath = useMovedSectionPath();
 
   return (
     <DrawerPage sx={{ padding: '1rem 1.5rem', gap: '0.75rem' }}>
@@ -368,7 +371,7 @@ function ConfigurationPage() {
             <ListItemButton
               key={section.id}
               selected={section.id === state.activeSection?.id}
-              {...movedSectionRow(section, () => state.onSelectSection(section.id), reaches)}
+              {...movedSectionRow(movedPath(section), () => state.onSelectSection(section.id), reaches)}
             >
               <ListItemText
                 primary={section.title}
@@ -377,7 +380,7 @@ function ConfigurationPage() {
                 secondary={
                   section.unavailable_reason === undefined ||
                   managedEditorFor(section) !== undefined ||
-                  movedSectionPath(section) !== undefined
+                  movedPath(section) !== undefined
                     ? undefined
                     : t('pages.admin.configuration.sectionUnavailable', 'Not available here')
                 }
@@ -386,7 +389,7 @@ function ConfigurationPage() {
           ))}
         </List>
         <Box sx={{ flex: '1 1 24rem', minWidth: '18rem' }}>
-          <SectionBody state={state} />
+          <SectionBody state={state} movedPath={movedPath} />
         </Box>
       </Box>
     </DrawerPage>

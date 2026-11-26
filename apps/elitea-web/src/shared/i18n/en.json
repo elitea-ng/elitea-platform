@@ -7518,5 +7518,12 @@
   "chat.presence.waitingForYou": "Waiting for you",
   "chat.presence.waking": "Resuming",
   "chat.presence.working": "Working",
-  "features.chatMessages.ranOutsideSandbox": "Ran outside the sandbox"
+  "features.chatMessages.ranOutsideSandbox": "Ran outside the sandbox",
+  "pages.admin.console.item.budgets-alerts": "Budgets and alerts",
+  "pages.admin.console.item.logs": "Logs",
+  "pages.admin.console.item.models-pricing": "Models and pricing",
+  "pages.admin.console.item.providers-models": "Providers and models",
+  "pages.admin.console.item.tool-prices": "Tool prices",
+  "pages.admin.console.item.usage": "Usage",
+  "pages.admin.llmProxy.page.status": "Gateway status"
 }

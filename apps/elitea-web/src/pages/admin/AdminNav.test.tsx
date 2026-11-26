@@ -127,6 +127,22 @@ afterEach(() => {
 
 /* ── the drift gate ────────────────────────────────────────────────────── */
 
+/**
+ * The Models and spend pages of R3.5a (issue 2535). The two-group navigation
+ * renders while the `admin_console_areas` switch is off, and then the
+ * Configuration page still mounts the gateway editor whose tabs these pages
+ * are, so the old navigation reaches each of them through Configuration.
+ */
+const SIX_AREA_ONLY_ROUTES = new Set([
+  '/models/providers',
+  '/models/pricing',
+  '/models/tool-prices',
+  '/models/usage',
+  '/models/status',
+  '/models/logs',
+  '/budgets/alerts',
+]);
+
 describe('every nav target is a real route', () => {
   it('points only at paths the admin router actually declares', () => {
     // Derived from the ROUTER, never from a list maintained here — a
@@ -157,7 +173,7 @@ describe('every nav target is a real route', () => {
     // Descriptors is the one this caught — the reference has it in no nav group
     // at all.
     const routed = Object.keys(createAdminRouter().routesById).filter(
-      (id) => id !== '__root__' && id !== '/',
+      (id) => id !== '__root__' && id !== '/' && !SIX_AREA_ONLY_ROUTES.has(id),
     );
     const targets = new Set(adminNavGroups().flatMap((group) => group.items.map((item) => item.path)));
     for (const route of routed) {
@@ -863,7 +879,15 @@ function serveDocument(document: ConsoleDocument): void {
 const EVERYTHING = {
   people_access: ['users', 'access', 'identity-providers', 'scim'],
   projects: ['projects', 'app-requests'],
-  models_spend: ['llm-governance', 'budgets-alerts'],
+  models_spend: [
+    'providers-models',
+    'models-pricing',
+    'tool-prices',
+    'usage',
+    'logs',
+    'llm-governance',
+    'budgets-alerts',
+  ],
   agents_governance: [
     'agent-registry',
     'connector-requests',
@@ -890,8 +914,8 @@ const EVERYTHING = {
 const EXPECTED_AREAS: Record<string, Partial<Record<string, readonly string[]>>> = {
   super_admin: EVERYTHING,
   admin: EVERYTHING,
-  // The gateway tabs are still tabs of Configuration (R3.5a), which stands for them.
-  llm_manager: { projects: ['projects'], models_spend: ['llm-governance', 'budgets-alerts'], platform: ['configuration'] },
+  // The gateway tabs are pages of Models and spend since R3.5a (issue 2535).
+  llm_manager: { projects: ['projects'], models_spend: EVERYTHING.models_spend },
   // SCIM is a page of its own since R3.6 (issue 2537).
   project_administrator: {
     people_access: ['scim'],

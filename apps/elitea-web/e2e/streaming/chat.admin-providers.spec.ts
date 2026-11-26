@@ -180,26 +180,23 @@ async function requireProvider(request: APIRequestContext, title: string): Promi
 }
 
 /**
- * Opens Admin › Configuration › LLM Proxy › Providers & models.
+ * Opens Admin › Models and spend › Providers and models.
  *
  * Waits for a POSITIVE terminal state — the table or the empty notice — rather
  * than for the absence of an error, which is also true while the request is
  * still in flight.
  */
 async function openProvidersPanel(page: Page): Promise<void> {
-  const response = await page.goto(BASE_URL + '/admin/app/configuration', {
+  // The Providers & models tab of the gateway editor is a page of Models and
+  // spend since ADR-0059 R3.5a (issue 2535).
+  const response = await page.goto(BASE_URL + '/admin/app/models/providers', {
     waitUntil: 'domcontentloaded',
   });
   expect(
     response?.status(),
-    'the admin SPA must serve the configuration route, not 404',
+    'the admin SPA must serve the providers route, not 404',
   ).toBeLessThan(400);
-
-  const llmProxy = page.getByRole('button', { name: /LLM Proxy/ });
-  await expect(llmProxy).toBeVisible({ timeout: 30_000 });
-  await llmProxy.click();
-  await expect(page.getByTestId('llm-proxy-tabs')).toBeVisible({ timeout: 20_000 });
-  await page.getByRole('tab', { name: 'Providers & models' }).click();
+  await expect(page.getByTestId('admin-llm-providers-page')).toBeVisible({ timeout: 30_000 });
 
   await expect(
     page.getByTestId('llm-providers-table').or(page.getByTestId('llm-providers-empty')),
