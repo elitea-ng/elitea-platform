@@ -5228,7 +5228,7 @@ impl AgentHost {
                 &started.memory_recall.text,
                 &nonce,
             ) + &hook_context
-                + &team_note(request, &started),
+                + &team_note(request, started),
             anchor: question.anchor(),
         });
         // ModelTransport: /llm with the native token and the execution id.
