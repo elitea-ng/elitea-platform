@@ -144,7 +144,6 @@ export const NATIVE_ONLY_ENV = {
 export const REWRITTEN_ENV = {
   postgres: { PGDATA: "the cluster directory under the service's data dir; the image's volume path does not exist natively" },
   "elitea-main": {
-    ELITEA_WEB_UPSTREAM: "the non-root nginx listens on 8080 natively (WEB_PORT); the container binds 80",
     DEPLOYMENT_URL: "natively the browser reaches the stack at localhost:8080 (elitea-main's own bind); compose publishes it on 8084",
     OIDC_REDIRECT_URI: "as DEPLOYMENT_URL: localhost:8080 natively, 8084 where compose publishes it",
   },

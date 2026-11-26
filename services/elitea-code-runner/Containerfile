@@ -80,6 +80,11 @@ COPY --from=rust-dependencies /opt/elitea-rust /opt/elitea-rust
 COPY --from=rust-dependencies /opt/rust-vendor /opt/rust-vendor
 COPY --from=rust-platform-dependencies /opt/elitea-rust-platform-v1 /opt/elitea-rust-platform-v1
 COPY --from=rust-platform-dependencies /opt/rust-platform-vendor /opt/rust-platform-vendor
+# The upstream Rust image leaves its toolchain world-writable, and
+# /usr/local/cargo/bin is on PATH. Root-owned and not group- or world-writable
+# here (#2954), so code in the container cannot replace a binary on PATH; each
+# run gets its own CARGO_HOME (rust_execute.rs) and only reads RUSTUP_HOME.
+RUN chmod -R go-w /usr/local/cargo /usr/local/rustup
 RUN mkdir -p /workspace/repository && chown -R 10001:10001 /workspace
 WORKDIR /workspace
 USER 10001:10001

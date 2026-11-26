@@ -224,7 +224,7 @@ services:
       # Relay /app and /docs to the SPA container and redirect `/` to /app/
       # (internal/api/webedge). Compose only: a cluster's Gateway API
       # HTTPRoute does this routing, and the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:8080"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       # Signs personal access tokens and is the root of the run, vector and
       # publish-validation token keys. elitea-main refuses a value shorter
@@ -717,7 +717,7 @@ services:
     depends_on:
       - elitea-main
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

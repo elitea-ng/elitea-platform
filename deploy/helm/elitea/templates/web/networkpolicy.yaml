@@ -7,8 +7,8 @@
 # browser that reached the SPA directly would skip the edge's MCP carve-out and
 # root redirect.
 #
-#   80 (http)  elitea-main, networkPolicies.web.extraIngressFrom and
-#              networkPolicies.probeFrom.
+#   8080 (http)  elitea-main, networkPolicies.web.extraIngressFrom and
+#                networkPolicies.probeFrom.
 #
 # Kubelet probes are not subject to the policy on the CNIs this chart is tested
 # with; networkPolicies.probeFrom is for those that apply it to them. Egress is
@@ -30,7 +30,7 @@ spec:
   ingress:
     - ports:
         # The container port: a NetworkPolicy matches the pod's port, not the
-        # Service's, and the image's nginx listens on 80 whatever
+        # Service's, and the image's nginx listens on 8080 whatever
         # web.service.port says.
         - port: http
           protocol: TCP

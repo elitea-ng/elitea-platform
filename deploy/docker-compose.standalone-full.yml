@@ -892,7 +892,7 @@ services:
     environment:
       # Relay /app and /docs to elitea-web and redirect `/` to /app/
       # (internal/api/webedge). Compose only; the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:8080"
       # main reaches Postgres through the pooler (issue #964); the pooler
       # reaches Postgres directly. The migration jobs, db-init, the LLM
       # gateway and the one-shots keep their direct connections on purpose.
@@ -1931,7 +1931,7 @@ services:
       elitea-main:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

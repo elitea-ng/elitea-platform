@@ -254,7 +254,7 @@ services:
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       # Relay /app and /docs to elitea-web and redirect `/` to /app/
       # (internal/api/webedge). Compose only; the chart never sets it.
-      ELITEA_WEB_UPSTREAM: "http://elitea-web:80"
+      ELITEA_WEB_UPSTREAM: "http://elitea-web:8080"
       # The brand pack's FILE layer (ADR-0024); empty means the journeys brand
       # from the database layer over the product default, as a fresh install
       # does. See docker-compose.standalone-full.yml for the mount recipe.
@@ -588,7 +588,7 @@ services:
       elitea-main:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/app/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/app/ || exit 1"]
       interval: 3s
       timeout: 3s
       retries: 10

@@ -38,6 +38,20 @@ jobs:
         # without it a broken target first fails in publish.yml
         # at release time.
         run: docker buildx bake --print > /dev/null
+      # #2954: elitea-web's Containerfile ends on a non-root USER, and the code
+      # runner's rust-runtime stage puts no writable toolchain on PATH. From
+      # the Containerfiles; the built images are checked in ci-build-once.yml.
+      # The COUNT is read: a suite that collects nothing exits 0.
+      - name: Images that ran as root stay unprivileged
+        run: |
+          set -euo pipefail
+          node scripts/ci/check-image-users.mjs
+          status=0
+          output="$(node --test --test-reporter=tap scripts/ci/check-image-users.test.mjs 2>&1)" || status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then echo "::error::check-image-users.test.mjs exited ${status}"; exit 1; fi
+          ran="$(printf '%s\n' "$output" | sed -n 's/^# pass //p')"
+          if [ "${ran:-0}" -lt 3 ]; then echo "::error::check-image-users.test.mjs passed ${ran:-none} test(s), expected 3"; exit 1; fi
 
   # The gate publish.yml and nightly-image-scan.yml both run goes red: driven
   # with synthetic trivy reports, every arm (clean, HIGH, CRITICAL, missing,

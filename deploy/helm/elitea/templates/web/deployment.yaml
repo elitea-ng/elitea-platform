@@ -53,7 +53,7 @@ spec:
           {{- end }}
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           envFrom:
             - configMapRef:
@@ -84,6 +84,17 @@ spec:
             failureThreshold: {{ .Values.web.probes.readiness.failureThreshold }}
           resources:
             {{- toYaml .Values.web.resources | nindent 12 }}
+          volumeMounts:
+            # The one writable path (#2954): nginx's pid file and temp files
+            # and the config.js the entrypoint writes at start
+            # (apps/elitea-web/nginx/nginx.conf). The root filesystem is
+            # read-only.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       {{- with .Values.web.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
