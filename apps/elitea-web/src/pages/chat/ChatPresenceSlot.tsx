@@ -75,10 +75,11 @@ export function usePresenceSlot(conversation: PresenceConversation | undefined, 
       const row = rows.find((candidate) => candidate.participantId === props.participantId);
       if (row === undefined) return readOnly ? null : lead?.(props);
       if (readOnly) return <ParticipantRowControls row={row} />;
-      // Only the live label gives way (it ellipsises): the lead control keeps its size (flexShrink 0 in it), so with a
-      // long agent name the lead menu never slides under the row's hover actions, and the name keeps its 4rem.
+      // The wrapper never shrinks (as the lead control alone never did): with a long agent name a shrinking wrapper let
+      // the lead menu button slide under the row's hover actions, where it could not be clicked. The label caps itself
+      // short enough to leave the name room.
       return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 1, minWidth: 0, '& > :not([data-testid="participant-state"])': { flexShrink: 0 } }} data-testid="participant-presence-lead">
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }} data-testid="participant-presence-lead">
           <ParticipantRowControls row={{ ...row, isLead: false }} presenceOnly />
           {lead?.(props)}
         </Box>

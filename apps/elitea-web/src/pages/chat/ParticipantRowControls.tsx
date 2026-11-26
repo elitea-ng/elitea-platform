@@ -96,8 +96,9 @@ function StateBadge({ row }: { readonly row: ParticipantRowView }): ReactNode {
   if (row.label === undefined) return null;
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }} data-testid="participant-state" data-participant-id={row.participantId} data-motion={row.motion}>
-      <Box sx={{ display: 'flex', flexShrink: 0 }}><AgentAvatar motion={row.motion} size="0.875rem" /></Box>
-      <Typography variant="labelSmall" color="text.secondary" noWrap sx={{ fontKerning: 'none', maxWidth: '8rem', minWidth: 0 }}>{row.label}</Typography>
+      <AgentAvatar motion={row.motion} size="0.875rem" />
+      {/* 5rem: beside the chips and the menu the name keeps room in the chat panel (issue 3067's visual baseline). */}
+      <Typography variant="labelSmall" color="text.secondary" noWrap sx={{ fontKerning: 'none', maxWidth: '5rem' }}>{row.label}</Typography>
     </Box>
   );
 }
@@ -113,7 +114,7 @@ export function ParticipantRowControls({ row, actions, presenceOnly = false }: P
   if (presenceOnly) return <StateBadge row={row} />;
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 1, minWidth: 0, '& > :not([data-testid="participant-state"])': { flexShrink: 0 } }}
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0, minWidth: 0 }}
       onClick={(event) => { event.stopPropagation(); }}
       data-testid="participant-lead"
       data-participant-id={row.participantId}
