@@ -73,6 +73,7 @@ pub mod exchange;
 pub mod floor;
 pub mod framing;
 pub mod goal;
+pub mod hand_floor;
 pub mod idle;
 pub mod lsp;
 pub mod memory;

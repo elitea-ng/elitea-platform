@@ -473,15 +473,26 @@ impl TurnEvents {
     /// Sends `kind`, then the `agent_state` it causes, if the agent's state
     /// changed; both in the one critical section, so the state follows its
     /// cause in sequence order.
-    pub fn send(&self, kind: &'static str, payload: Value) {
+    pub fn send(&self, kind: &'static str, mut payload: Value) {
         let Ok(mut seq) = self.seq.lock() else {
             return;
         };
-        let state = self
+        let mut avatar = self
             .avatar
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .observe(kind, &payload);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // An approval names the agent that asks (ADR-0061 decision 3c: in a
+        // hand-off or a consult the person must see whose command it is).
+        if kind == "approval_request"
+            && let (Some(object), Some(participant_id)) =
+                (payload.as_object_mut(), avatar.participant())
+        {
+            object
+                .entry("participant_id")
+                .or_insert_with(|| Value::from(participant_id));
+        }
+        let state = avatar.observe(kind, &payload);
+        drop(avatar);
         self.emitter.emit(AgentEvent {
             turn_id: self.turn_id.clone(),
             seq: *seq,

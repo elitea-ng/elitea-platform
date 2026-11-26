@@ -637,20 +637,26 @@ async fn skip_drops_one_queued_agent_and_the_next_one_answers() {
     let started = h.host.start(to_all_three(&h)).await.unwrap();
     floor_status(&h, &started.turn_id).await;
     assert_eq!(
-        h.host.exchange_skip(&started.turn_id, 88).unwrap(),
+        h.host.exchange_skip(&started.turn_id, 88, None).unwrap(),
         vec![99]
     );
     assert_eq!(
-        h.host.exchange_skip(&started.turn_id, 77).unwrap_err().code,
+        h.host
+            .exchange_skip(&started.turn_id, 77, None)
+            .unwrap_err()
+            .code,
         "exchange_not_queued"
     );
     assert_eq!(
-        h.host.exchange_skip("unknown", 99).unwrap_err().code,
+        h.host.exchange_skip("unknown", 99, None).unwrap_err().code,
         "exchange_unknown"
     );
     let queue = first_event(&h, "exchange").await;
     assert_eq!(queue.turn_id, started.turn_id);
-    assert_eq!(queue.payload, json!({"remaining": [99]}));
+    assert_eq!(
+        queue.payload,
+        json!({"remaining": [99], "queue": [{"participant_id": 99}], "hands": []})
+    );
     until_done_of(&h, &started.turn_id).await;
     let done = settled_done(&h, &started.turn_id);
     assert_eq!(done["floor_next"]["participant_id"], 99);
@@ -687,10 +693,10 @@ async fn skipping_everyone_left_says_skipped_by_person() {
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let started = h.host.start(to_all_three(&h)).await.unwrap();
     floor_status(&h, &started.turn_id).await;
-    h.host.exchange_skip(&started.turn_id, 88).unwrap();
+    h.host.exchange_skip(&started.turn_id, 88, None).unwrap();
     assert!(
         h.host
-            .exchange_skip(&started.turn_id, 99)
+            .exchange_skip(&started.turn_id, 99, None)
             .unwrap()
             .is_empty()
     );

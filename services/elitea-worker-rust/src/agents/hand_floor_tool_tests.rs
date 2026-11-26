@@ -9,6 +9,7 @@ use crate::transport::input_content::content_fake::{
 };
 use crate::transport::runtime_context::{RuntimeContextClient, RuntimeContextConfig};
 use elitea_agent_runtime::toolkits::FrozenToolset;
+use serde_json::json;
 use tonic::Status;
 
 struct HandFloorRpc {

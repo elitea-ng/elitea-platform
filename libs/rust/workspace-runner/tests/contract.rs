@@ -179,3 +179,13 @@ fn memory_tools_are_the_runtimes_not_the_workspaces() {
         );
     }
 }
+
+/// ADR-0061 decision 3d (#3064): `hand_floor` is a turn's tool, never the
+/// workspace's: the worker and the desktop host offer it from the shared
+/// `elitea_agent_runtime::hand_floor` contract, and it is in neither table.
+#[test]
+fn hand_floor_is_a_turn_tool_not_a_workspace_tool() {
+    let name = elitea_agent_runtime::hand_floor::HAND_FLOOR;
+    assert!(TOOLS.iter().all(|spec| spec.name != name));
+    assert!(WORKSPACE_TOOLS.iter().all(|spec| spec.name != name));
+}
