@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
@@ -9,7 +9,7 @@ const PAGE = join(ROOT, 'src/content/docs/reference/audit-event-schema.mdx');
 const PAGE_TEXT = readFileSync(PAGE, 'utf8');
 
 // Read the schema straight from the repo, not the docs.
-const SCHEMA = JSON.parse(readFileSync(new URL('../../../libs/jsonschema/audit/v1/event.schema.json', import.meta.url)), 'utf8');
+const SCHEMA = JSON.parse(readFileSync(new URL('../../../libs/jsonschema/audit/v1/event.schema.json', import.meta.url), 'utf8'));
 
 describe('audit event schema page', () => {
   it('states the unknown-field rule', () => {
@@ -28,12 +28,13 @@ describe('audit event schema page', () => {
   });
 
   it('names the new context fields', () => {
-    assert.ok(PAGE_TEXT.includes('role'), 'the reference page does not mention actor.role');
-    assert.ok(PAGE_TEXT.includes('conversation_id'), 'the reference page does not mention correlation.conversation_id');
-    assert.ok(PAGE_TEXT.includes('release_id'), 'the reference page does not mention target.release_id');
+    assert.ok(PAGE_TEXT.includes('actor.role'), 'the reference page does not mention actor.role');
+    assert.ok(PAGE_TEXT.includes('correlation.conversation_id'), 'the reference page does not mention correlation.conversation_id');
+    assert.ok(PAGE_TEXT.includes('target.release_id'), 'the reference page does not mention target.release_id');
   });
 
   it('documents the chain.checkpoint event and the unknown-field rule', () => {
     assert.ok(PAGE_TEXT.includes('chain.checkpoint'), 'the reference page does not document chain.checkpoint');
+    assert.match(PAGE_TEXT, /receiver ignores fields it does not know/i);
   });
 });

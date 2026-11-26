@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // signalFixtureNames is the set of golden fixtures for the signal stream.
@@ -74,7 +74,12 @@ func TestSignalFixtureRoundTrip(t *testing.T) {
 			if err := validate(t, schema, roundTrip); err != nil {
 				t.Fatalf("event does not validate after a Go round-trip: %v", err)
 			}
-			_ = v
+			if reflect.TypeOf(v) == nil || reflect.TypeOf(roundTrip) == nil {
+				t.Fatal("fixture and round trip did not decode as maps")
+			}
+			if !jsonSemanticEqual(v, roundTrip) {
+				t.Fatalf("round trip differs from the fixture:\n got %s\nwant %s", mustJSON(t, roundTrip), mustJSON(t, v))
+			}
 		})
 	}
 }
@@ -82,15 +87,20 @@ func TestSignalFixtureRoundTrip(t *testing.T) {
 func TestSignalTypePattern(t *testing.T) {
 	schema := compileSchema(t)
 	full := loadSignalFixture(t, "security_signal_full.golden.json")
-	// A new, unregistered type that matches the pattern validates.
+	// A new, unregistered type that matches the pattern validates: the
+	// signal.type changes, as a real forward-compatible rollout would.
+	signal := full["signal"].(map[string]any)
+	signal["type"] = "derived.my_new_type"
+	signal["category"] = "derived"
 	full["event_type"] = "security_signal.derived.my_new_type"
+	full["action"] = "derived.my_new_type"
 	if err := validate(t, schema, full); err != nil {
 		t.Fatalf("an unknown but well-formed signal type was refused: %v", err)
 	}
 	// A signal type that does not match the pattern is refused.
 	bad := loadSignalFixture(t, "security_signal_full.golden.json")
-	signal := bad["signal"].(map[string]any)
-	signal["type"] = "Not-A_dotted_name"
+	signalBad := bad["signal"].(map[string]any)
+	signalBad["type"] = "Not-A_dotted_name"
 	if err := validate(t, schema, bad); err == nil {
 		t.Fatal("a signal type that does not match the pattern was accepted")
 	}
@@ -217,7 +227,7 @@ func TestSignalCheckpointEventRule(t *testing.T) {
 	}
 }
 
-func TestSignalEventTypePatternRejected(t *testing.T) {
+func TestSignalEventTypeIsFreeForm(t *testing.T) {
 	// The event_type field is free-form; the signal.type pattern is what bounds
 	// the dotted name.
 	schema := compileSchema(t)
@@ -246,4 +256,28 @@ func TestSignalUnmappedSourcesRejectSignal(t *testing.T) {
 	}
 }
 
-var _ = jsonschema.Schema{}
+
+// jsonSemanticEqual compares two decoded JSON values semantically: encoding/json
+// sorts map keys, so re-marshalled documents are canonically comparable while
+// key order is free. It is not a strict type check: the schema validation is the
+// strict check, this is the dropped-field check.
+func jsonSemanticEqual(a, b any) bool {
+	aj, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bj, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aj) == string(bj)
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}

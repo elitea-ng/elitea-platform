@@ -3,15 +3,10 @@ package exporttest
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
-
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
-	"go.opentelemetry.io/otel/log"
-	sdklog "go.opentelemetry.io/otel/sdk/log"
 
 	"github.com/elitea-ng/elitea-platform/libs/go/observability"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auditexport"
@@ -194,8 +189,3 @@ func newOTLPSink(t *testing.T, endpoint string) *auditexport.OTLPSink {
 	}
 	return sink
 }
-
-var _ = log.SeverityInfo
-var _ = sdklog.NewLoggerProvider
-var _ = otlploghttp.WithEndpointURL
-var _ = io.ReadAll

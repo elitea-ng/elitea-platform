@@ -12,7 +12,6 @@
 package exporttest
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,8 +34,8 @@ import (
 type Event struct {
 	// EventID is the event id of the envelope.
 	EventID string
-	// Body is the raw envelope body of an OTLP record, or the raw webhook
-	// body of the batch, as a string.
+	// Body is the raw envelope body of an OTLP record or of one webhook event,
+	// as a string.
 	Body string
 	// Attributes are the flat attributes of an OTLP record.
 	Attributes map[string]string
@@ -89,6 +88,13 @@ func start(t *testing.T, h http.Handler) *server {
 // ServeHTTP is the shared request lifecycle: the down switch, the status
 // switch and the body read. It calls decode, which each receiver implements.
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Read the body before taking the lock: a slow client body must not block
+	// Delivered, Received and URL for every other caller.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.down {
@@ -102,11 +108,6 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(code)
 			return
 		}
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
 	}
 	s.bodies = append(s.bodies, body)
 	s.decode(w, r, body)
@@ -220,12 +221,10 @@ func (s *server) AssertNoEvent(t *testing.T, window time.Duration) {
 	}
 }
 
-// ChainSequences returns the chain.sequence values of the events of one
-// partition, in the order the receiver recorded them. The receiver does not
-// parse the envelopes: it returns the ids of the events the sinks recorded,
-// which the caller joins to the sink's own records to find the sequence. Use
-// AllEvents for the bodies and decode them yourself.
-func (s *server) ChainSequences(t *testing.T, bodies [][]byte) []int64 {
+// chainSequences parses the decoded envelopes and returns the chain.sequence
+// values of the events that carry a chain, in the order they were recorded.
+// A body that does not parse is a test failure, not a silent skip.
+func chainSequences(t *testing.T, bodies []string) []int64 {
 	t.Helper()
 	var out []int64
 	for _, body := range bodies {
@@ -234,8 +233,8 @@ func (s *server) ChainSequences(t *testing.T, bodies [][]byte) []int64 {
 				Sequence int64 `json:"sequence"`
 			} `json:"chain"`
 		}
-		if err := json.Unmarshal(body, &envelope); err != nil {
-			continue
+		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+			t.Fatalf("decode event body %q: %v", body, err)
 		}
 		if envelope.Chain != nil {
 			out = append(out, envelope.Chain.Sequence)
@@ -244,18 +243,18 @@ func (s *server) ChainSequences(t *testing.T, bodies [][]byte) []int64 {
 	return out
 }
 
-// DeliverySeqs returns the delivery_seq of the events of one partition, in the
-// order the receiver recorded them. The receiver does not parse envelopes:
-// call the sink's own delivery_seq tracker to get the sequence.
-func (s *server) DeliverySeqs(t *testing.T, bodies [][]byte) []int64 {
+// deliverySeqs parses the decoded envelopes and returns the delivery_seq values
+// of the events that carry one, in the order they were recorded. A body that
+// does not parse is a test failure, not a silent skip.
+func deliverySeqs(t *testing.T, bodies []string) []int64 {
 	t.Helper()
 	var out []int64
 	for _, body := range bodies {
 		var envelope struct {
 			DeliverySeq *int64 `json:"delivery_seq"`
 		}
-		if err := json.Unmarshal(body, &envelope); err != nil {
-			continue
+		if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+			t.Fatalf("decode event body %q: %v", body, err)
 		}
 		if envelope.DeliverySeq != nil {
 			out = append(out, *envelope.DeliverySeq)
@@ -327,6 +326,13 @@ func (w *WebhookReceiver) Refusals() map[string]int { return w.refuse }
 // ServeHTTP verifies the signature before decoding the body and records the
 // events of each delivery.
 func (w *WebhookReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
+	// Read the body before taking the lock: a slow client body must not block
+	// Delivered, Received and URL for every other caller.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	w.s.mu.Lock()
 	defer w.s.mu.Unlock()
 	w.s.requests++
@@ -342,12 +348,6 @@ func (w *WebhookReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		resp.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	w.s.bodies = append(w.s.bodies, body)
 	// Verify the signature before decoding the body.
 	secret, ok := w.keys[r.Header.Get(HeaderKeyID)]
 	if !ok {
@@ -377,16 +377,35 @@ func (w *WebhookReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The refusal check answers the code to any batch holding the event.
-	for _, e := range batch.Events {
+	type event struct {
+		EventID string `json:"event_id"`
+	}
+	events := make([]struct {
+		EventID string
+		Raw     []byte
+	}, 0, len(batch.Events))
+	for _, raw := range batch.Events {
+		var e event
+		if err := json.Unmarshal(raw, &e); err != nil {
+			resp.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		events = append(events, struct {
+			EventID string
+			Raw     []byte
+		}{e.EventID, raw})
+	}
+	for _, e := range events {
 		if code, ok := w.refuse[e.EventID]; ok {
 			resp.WriteHeader(code)
 			return
 		}
 	}
+	w.s.bodies = append(w.s.bodies, body)
 	b := WebhookBatch{BatchID: batch.BatchID, Body: body, Headers: r.Header.Clone()}
-	for _, e := range batch.Events {
+	for _, e := range events {
 		w.s.got[e.EventID]++
-		b.Events = append(b.Events, Event{EventID: e.EventID, Body: string(body), BatchID: batch.BatchID, Headers: r.Header.Clone()})
+		b.Events = append(b.Events, Event{EventID: e.EventID, Body: string(e.Raw), BatchID: batch.BatchID, Headers: r.Header.Clone()})
 	}
 	w.s.batches = append(w.s.batches, b)
 	resp.WriteHeader(http.StatusOK)
@@ -465,25 +484,40 @@ func (w *WebhookReceiver) AssertNoEvent(t *testing.T, window time.Duration) {
 	w.s.AssertNoEvent(t, window)
 }
 
-// ChainSequences returns the chain.sequence values of the raw bodies, in the
-// order the receiver recorded them.
-func (w *WebhookReceiver) ChainSequences(t *testing.T, bodies [][]byte) []int64 {
-	return w.s.ChainSequences(t, bodies)
+// ChainSequences returns the chain.sequence values of the events the receiver
+// recorded, in the order it recorded them.
+func (w *WebhookReceiver) ChainSequences(t *testing.T) []int64 {
+	t.Helper()
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	bodies := make([]string, 0, len(w.s.batches))
+	for _, b := range w.s.batches {
+		for _, e := range b.Events {
+			bodies = append(bodies, e.Body)
+		}
+	}
+	return chainSequences(t, bodies)
 }
 
-// DeliverySeqs returns the delivery_seq values of the raw bodies, in the order
-// the receiver recorded them.
-func (w *WebhookReceiver) DeliverySeqs(t *testing.T, bodies [][]byte) []int64 {
-	return w.s.DeliverySeqs(t, bodies)
+// DeliverySeqs returns the delivery_seq values of the events the receiver
+// recorded, in the order it recorded them.
+func (w *WebhookReceiver) DeliverySeqs(t *testing.T) []int64 {
+	t.Helper()
+	w.s.mu.Lock()
+	defer w.s.mu.Unlock()
+	bodies := make([]string, 0, len(w.s.batches))
+	for _, b := range w.s.batches {
+		for _, e := range b.Events {
+			bodies = append(bodies, e.Body)
+		}
+	}
+	return deliverySeqs(t, bodies)
 }
 
 type webhookBody struct {
-	Schema  string `json:"schema"`
-	BatchID string `json:"batch_id"`
-	Events  []struct {
-		EventID string `json:"event_id"`
-		Body    string `json:"body"`
-	} `json:"events"`
+	Schema  string              `json:"schema"`
+	BatchID string              `json:"batch_id"`
+	Events  []json.RawMessage   `json:"events"`
 }
 
 // OTLPReceiver is an OTLP/HTTP logs receiver.
@@ -503,6 +537,13 @@ func NewOTLPReceiver(t *testing.T) *OTLPReceiver {
 
 // ServeHTTP decodes the OTLP request and records each log record.
 func (o *OTLPReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
+	// Read the body before taking the lock: a slow client body must not block
+	// Delivered, Received and URL for every other caller.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
 	o.s.mu.Lock()
 	defer o.s.mu.Unlock()
 	o.s.requests++
@@ -518,17 +559,12 @@ func (o *OTLPReceiver) ServeHTTP(resp http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		resp.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	o.s.bodies = append(o.s.bodies, body)
 	req := &collogs.ExportLogsServiceRequest{}
 	if err := proto.Unmarshal(body, req); err != nil {
 		resp.WriteHeader(http.StatusBadRequest)
 		return
 	}
+	o.s.bodies = append(o.s.bodies, body)
 	for _, rl := range req.GetResourceLogs() {
 		for _, sl := range rl.GetScopeLogs() {
 			for _, rec := range sl.GetLogRecords() {
@@ -609,20 +645,26 @@ func (o *OTLPReceiver) AssertNoEvent(t *testing.T, window time.Duration) {
 	o.s.AssertNoEvent(t, window)
 }
 
-// ChainSequences returns the chain.sequence values of the raw bodies, in the
-// order the receiver recorded them.
-func (o *OTLPReceiver) ChainSequences(t *testing.T, bodies [][]byte) []int64 {
-	return o.s.ChainSequences(t, bodies)
+// ChainSequences returns the chain.sequence values of the events the receiver
+// decoded, in the order it recorded them.
+func (o *OTLPReceiver) ChainSequences(t *testing.T) []int64 {
+	t.Helper()
+	ents := o.AllEvents()
+	bodies := make([]string, 0, len(ents))
+	for _, e := range ents {
+		bodies = append(bodies, e.Body)
+	}
+	return chainSequences(t, bodies)
 }
 
-// DeliverySeqs returns the delivery_seq values of the raw bodies, in the order
-// the receiver recorded them.
-func (o *OTLPReceiver) DeliverySeqs(t *testing.T, bodies [][]byte) []int64 {
-	return o.s.DeliverySeqs(t, bodies)
+// DeliverySeqs returns the delivery_seq values of the events the receiver
+// decoded, in the order it recorded them.
+func (o *OTLPReceiver) DeliverySeqs(t *testing.T) []int64 {
+	t.Helper()
+	ents := o.AllEvents()
+	bodies := make([]string, 0, len(ents))
+	for _, e := range ents {
+		bodies = append(bodies, e.Body)
+	}
+	return deliverySeqs(t, bodies)
 }
-
-// ensure unused imports are referenced.
-var (
-	_ = sha256.Sum256
-	_ = context.Background
-)

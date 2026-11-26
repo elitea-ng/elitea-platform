@@ -194,19 +194,19 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "event_type": { "const": "chain.checkpoint" } }, "required": ["event_type"] },
+      "if": { "properties": { "source": { "const": "security_signal" }, "event_type": { "const": "chain.checkpoint" } }, "required": ["source", "event_type"] },
       "then": {
         "not": { "required": ["signal"] }
       }
     },
     {
-      "if": { "properties": { "event_type": { "const": "chain.checkpoint" } }, "required": ["event_type"] },
+      "if": { "properties": { "source": { "const": "security_signal" }, "event_type": { "const": "chain.checkpoint" } }, "required": ["source", "event_type"] },
       "then": {
         "not": { "required": ["chain"] }
       }
     },
     {
-      "if": { "properties": { "event_type": { "const": "chain.checkpoint" } }, "required": ["event_type"] },
+      "if": { "properties": { "source": { "const": "security_signal" }, "event_type": { "const": "chain.checkpoint" } }, "required": ["source", "event_type"] },
       "then": {
         "properties": {
           "details": {
@@ -217,8 +217,8 @@
               "partition": { "type": "string", "maxLength": 128 },
               "epoch": { "type": "integer", "minimum": 1 },
               "head_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-              "length": { "type": "integer", "minimum": 1, "description": "The number of rows in the partition up to the checkpoint." },
-              "delivery_seq_high": { "type": "integer", "minimum": 1, "description": "The sink's delivery_seq high-water mark for the partition." },
+              "length": { "type": "integer", "minimum": 0, "description": "The number of rows in the partition up to the checkpoint." },
+              "delivery_seq_high": { "type": "integer", "minimum": 0, "description": "The sink's delivery_seq high-water mark for the partition." },
               "chain_status": { "type": "string", "maxLength": 128, "description": "broken_since=<sequence> on a partition with a break; deleted on the final checkpoint of a removed partition." },
               "key_id": { "type": "string", "maxLength": 128, "description": "The checkpoint key that signed the event." },
               "signature": { "type": "string", "maxLength": 512 }
@@ -253,8 +253,7 @@
     {
       "if": { "properties": { "source": { "const": "security_signal" }, "event_type": { "not": { "const": "chain.checkpoint" } } }, "required": ["source", "event_type"] },
       "then": {
-        "required": ["signal"],
-        "not": { "required": ["ocsf"] }
+        "required": ["signal"]
       }
     },
     {

@@ -24,11 +24,11 @@ How to turn the export on is in [Post-install configuration](/deployment/configu
 | `event_type` | string | The producer's type: a CloudEvents type such as `ai.elitea.security.v1.decision`, or `api`, `socketio`, `rpc`, `agent`, `tool`, `llm`, `schedule`, `admin_task` for the Audit Trail, or `security_signal.<type>` for the signal stream. `chain.checkpoint` is the event_type of a chain checkpoint. |
 | `ocsf` | object, optional | `class_uid` and `category_uid` when an OCSF class fits: 3003 Authorize Session, 3004 Entity Management, 3005 User Access Management, 6003 API Activity. |
 | `tenant.project_id` | integer or null | The tenant project. `0` is the platform partition of the security audit chain. |
-| `actor` | object | `type` (`user`, `principal`, `agent`, `system`, `unknown`), `id`, and optionally `email`, `chain` (the RFC 8693 actor chain, outermost first), `fidelity` (`native_act`, `configured_act`, `azp_only`, `attributed`, `none`) and `role` (`subject` or `affected`, only on the signal stream). |
+| `actor` | object | `type` (`user`, `principal`, `agent`, `system`, `unknown`), `id`, and optionally `email`, `chain` (the RFC 8693 actor chain, outermost first), `fidelity` (`native_act`, `configured_act`, `azp_only`, `attributed`, `none`) and `actor.role` (`subject` or `affected`, only on the signal stream). |
 | `action` | string | The governed operation (`credential.use`, `grant.revoke`) or, for the Audit Trail, `METHOD /route`. |
-| `target` | object, optional | `type`, `id`, `name` and optionally `release_id` of what the action acted on. |
+| `target` | object, optional | `type`, `id`, `name` and optionally `target.release_id` (the agent release next to the application id) of what the action acted on. |
 | `outcome` | enum | `allow` or `deny` for authorisation decisions; `success` or `failure` for operations; `unknown`. |
-| `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id` and optionally `conversation_id` (the conversation uuid as a string). |
+| `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id` and optionally `correlation.conversation_id` (the conversation uuid as a string). |
 | `chain` | object, optional | `partition`, `sequence`, `prev_hash`, `hash` (hex SHA-256) when the source keeps a tamper-evident chain. Present on every `security_audit` and `run_step` event (partition `run:<run id>`, one chain per run), and on `admin_audit` events written since the trail was chained (partition `0`, one platform-wide chain). |
 | `signal` | object, optional | One security signal; present on every `security_signal` event, never on any other source. See [Security signals](#security-signals). |
 | `details` | object | Fields specific to the source, listed below. |
@@ -117,7 +117,7 @@ When a run ends, its chain is anchored by a `security_audit` event of type `ai.e
 
 ## Security signals
 
-The security signal stream carries one event per row of the security signal ledger (ADR-0058). `source` is `security_signal` and `event_type` is `security_signal.<type>`: for example `security_signal.content.prompt_injection`. `signal.type` is a dotted name (`category.subtype`), validated by a pattern, never by an enumeration, so a new type does not break a strict receiver. The `signal` object is never set on another source, and a `security_signal` event always carries it.
+The security signal stream carries one event per row of the security signal ledger (ADR-0058). `source` is `security_signal` and `event_type` is `security_signal.<type>`: for example `security_signal.content.prompt_injection`. `signal.type` is a dotted name (`category.subtype`), validated by a pattern, never by an enumeration, so a new type does not break a strict receiver. The `signal` object is never set on another source, and a `security_signal` event always carries it. The registry of E0.1b owns the types, severities and the OCSF class of a signal type, so a signal event may carry `ocsf` when the class fits; it is optional, never required.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -144,7 +144,7 @@ A signal about untrusted content carries `actor.role` as `affected` (the actor's
 
 `platform.sink_test` is one of the type registry: it is the event of "Send test event". It is sent to the one sink under test with that sink's next `delivery_seq`, is not written to the ledger and carries no `chain` object.
 
-A `chain.checkpoint` event is not a detection. Its `event_type` is `chain.checkpoint` and it carries no `signal` object and no `chain` object. Its `details` carry `partition`, `epoch`, `head_hash` (hex SHA-256), `length`, `delivery_seq_high`, `chain_status` (`broken_since=<sequence>` on a partition with a break, or `deleted` on the final checkpoint of a removed partition), `key_id` and `signature`.
+A `chain.checkpoint` event is not a detection. Its `event_type` is `chain.checkpoint` and it carries no `signal` object and no `chain` object (the checkpoint rules apply to `security_signal` events only). Its `details` carry `partition`, `epoch`, `head_hash` (hex SHA-256), `length`, `delivery_seq_high`, `chain_status` (`broken_since=<sequence>` on a partition with a break, or `deleted` on the final checkpoint of a removed partition), `key_id` and `signature`.
 
 ## Example
 

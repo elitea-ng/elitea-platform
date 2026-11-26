@@ -9,14 +9,17 @@ to the application id). The schema also defines the `chain.checkpoint` event
 object and no `chain` object, carrying `details.partition`, `epoch`,
 `head_hash`, `length`, `delivery_seq_high`, `chain_status`, `key_id` and
 `signature`), and states the rule that a receiver ignores fields it does not
-know. The change is additive; `schema` stays `elitea.audit.v1` and no migration,
-contract or Helm key changes.
+know. `ocsf` is allowed on a signal event when the registry's OCSF class fits;
+it is optional, never required. The change is additive; `schema` stays
+`elitea.audit.v1` and no migration, contract or Helm key changes.
 
 **Who is affected.** Receivers and exporters of the audit evidence. They now
 see a source they have not met (`security_signal`) and a new optional `signal`
 object; they should ignore fields they do not know.
 
-**What to do.** Nothing. A receiver that validates the envelope strictly by
-source keeps working; it refuses an event whose `source` is `security_signal`.
-If you want to receive the new stream, set `main.securitySignals.exportEnabled`
-to `true` (the switch ships in E0.8a).
+**What to do.** A receiver that validates the envelope against a previous
+schema must update its schema or quarantine `security_signal` events before
+`main.securitySignals.exportEnabled` is turned on: a strict `source` enum
+refuses the new source. A receiver that ignores unknown fields keeps working.
+If you want to receive the new stream, set
+`main.securitySignals.exportEnabled` to `true` (the switch ships in E0.8a).
