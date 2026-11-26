@@ -35,9 +35,12 @@ func TestParticipantStampAddsKeysAndDerivesStates(t *testing.T) {
 		{`{"type":"agent_llm_chunk","content":"Hi","response_metadata":{}}`, AgentStateSpeaking},
 		{`{"type":"agent_llm_chunk","content":" there","response_metadata":{}}`, ""},
 		{`{"type":"agent_tool_start","response_metadata":{}}`, AgentStateWorking},
-		{`{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`, ""},
+		// ADR-0061 decision 4b: the caller waits on its sub-agent, and a
+		// pause of the sub-agent waits on a person (a new activity).
+		{`{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWaiting},
 		{`{"type":"agent_hitl_interrupt","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWaiting},
-		{`{"type":"agent_tool_start","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWorking},
+		{`{"type":"agent_tool_start","response_metadata":{"parent_agent_name":"sub"}}`, AgentStateWaiting},
+		{`{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`, ""},
 		{`{"type":"full_message","response_metadata":{"parent_agent_name":"sub"}}`, ""},
 		{`{"type":"agent_tool_end","response_metadata":{}}`, AgentStateThinking},
 		{`{"type":"agent_hitl_interrupt","response_metadata":{}}`, AgentStateWaiting},
@@ -127,7 +130,7 @@ func TestParticipantSeedRestatesTheLatestState(t *testing.T) {
 		agentEvent(5, `{"type":"agent_hitl_interrupt","response_metadata":{}}`),
 		agentEvent(6, `{"type":"agent_llm_chunk","response_metadata":{"parent_agent_name":"sub"}}`),
 	})
-	if seed == nil || seed.Cursor != 0 || decode(t, seed.Data)["state"] != AgentStateWorking {
+	if seed == nil || seed.Cursor != 0 || decode(t, seed.Data)["state"] != AgentStateWaiting {
 		t.Fatalf("seed = %+v", seed)
 	}
 	// The stream goes on from the seeded state: the same state is not

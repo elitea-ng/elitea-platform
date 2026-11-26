@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Zespół {{team}}: wiadomość, która nie wskazuje żadnego agenta, trafia do {{lead}} (lider); napisz @Nazwa, aby zwrócić się do innego członka.",
   "workspace.team.addressedNotice": "Zespół {{team}}: napisz @Nazwa, aby zwrócić się do członka; wiadomość, która nie wskazuje żadnego agenta, trafia do agenta, który odpowiedział ostatni (na początku {{lead}}).",
   "workspace.team.folderNotice": "Każdy członek pracuje na tym komputerze z tym folderem i jego narzędziami. Agent, którego członek wywołuje jako narzędzie, działa w chmurze i nie otrzymuje folderu.",
-  "workspace.team.notListed": "Jeden agent nie jest tu wymieniony"
+  "workspace.team.notListed": "Jeden agent nie jest tu wymieniony",
+  "workspace.approval.agent": "{{name}} pyta",
+  "workspace.composer.agents": "Agenci w tym wątku",
+  "workspace.exchange.label": "Agenci odpowiadają po kolei",
+  "workspace.exchange.next": "Następni:",
+  "workspace.exchange.now": "Teraz: {{name}}",
+  "workspace.exchange.skip": "Pomiń {{name}}",
+  "workspace.exchange.skippedRest": "Pominięto pozostałych agentów.",
+  "workspace.exchange.stop": "Zatrzymaj wymianę",
+  "workspace.exchange.stopped": "Zatrzymano wymianę.",
+  "workspace.participants.cloud": "Chmura",
+  "workspace.participants.local": "Lokalnie",
+  "workspace.participants.title": "Uczestnicy",
+  "workspace.steer.to": "Do {{name}}: {{text}}"
 }

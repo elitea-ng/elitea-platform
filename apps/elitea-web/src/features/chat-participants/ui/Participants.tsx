@@ -101,6 +101,7 @@ export const Participants = memo(
     selectedManager,
     newConversationSelectedManager,
     inspector = false,
+    context = 'chat',
   }: ParticipantsProps) => {
     // Mirrors old-app `Participants.jsx`'s `showTitle`/`showCollapsedParticipants`
     // (adversarial review C5-wrapper #4): on a small window the full section
@@ -225,7 +226,8 @@ export const Participants = memo(
     const sections = useMemo(() => {
       const result: Array<{ key: string; type: string; participants: TransformedParticipant[]; entityType: string }> = [];
 
-      for (const type of entityOrder) {
+      // A Local work thread (ADR-0061 decision 2a) holds agents only: no toolkit, pipeline or MCP attachments.
+      for (const type of context === 'local_work' ? [ChatParticipantType.Applications] : entityOrder) {
         const key = typeof type === 'string' ? type : String(type);
         const group = groupedByType[key];
         if (!group || group.length === 0) continue;
@@ -236,7 +238,7 @@ export const Participants = memo(
       }
 
       return result;
-    }, [groupedByType]);
+    }, [groupedByType, context]);
 
     // -----------------------------------------------------------------------
     // Handlers — prevent re-creation

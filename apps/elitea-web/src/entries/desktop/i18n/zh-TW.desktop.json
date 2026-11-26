@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "團隊 {{team}}：未指明代理的訊息會送給 {{lead}}（負責人）；寫 @名稱 可傳給其他成員。",
   "workspace.team.addressedNotice": "團隊 {{team}}：寫 @名稱 可傳給某位成員；未指明代理的訊息會送給最後回答的代理（起初是 {{lead}}）。",
   "workspace.team.folderNotice": "每位成員都在這台電腦上使用此資料夾及其工具工作。成員當作工具呼叫的代理在雲端執行，不會取得此資料夾。",
-  "workspace.team.notListed": "有代理未在此列出"
+  "workspace.team.notListed": "有代理未在此列出",
+  "workspace.approval.agent": "{{name}} 請求",
+  "workspace.composer.agents": "此對話串中的智慧代理",
+  "workspace.exchange.label": "依序回答的智慧代理",
+  "workspace.exchange.next": "下一個:",
+  "workspace.exchange.now": "目前: {{name}}",
+  "workspace.exchange.skip": "略過 {{name}}",
+  "workspace.exchange.skippedRest": "你已略過其餘智慧代理。",
+  "workspace.exchange.stop": "停止交流",
+  "workspace.exchange.stopped": "你已停止交流。",
+  "workspace.participants.cloud": "雲端",
+  "workspace.participants.local": "本機",
+  "workspace.participants.title": "參與者",
+  "workspace.steer.to": "給 {{name}}: {{text}}"
 }

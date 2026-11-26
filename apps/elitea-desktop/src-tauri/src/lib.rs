@@ -581,6 +581,8 @@ pub fn run() {
             local_commands::agent_prewarm,
             local_commands::turn_commit_retry,
             local_commands::agent_turn_cancel,
+            local_commands::agent_exchange_stop,
+            local_commands::agent_exchange_skip,
             local_commands::agent_turn_resume,
             local_commands::agent_turn_status,
             local_commands::agent_turn_steer,

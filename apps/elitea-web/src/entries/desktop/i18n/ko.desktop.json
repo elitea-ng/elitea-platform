@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "팀 {{team}}: 에이전트를 지정하지 않은 메시지는 {{lead}}(리드)에게 갑니다. 다른 멤버에게 보내려면 @이름을 쓰세요.",
   "workspace.team.addressedNotice": "팀 {{team}}: 멤버에게 보내려면 @이름을 쓰세요. 에이전트를 지정하지 않은 메시지는 마지막으로 답한 에이전트(처음에는 {{lead}})에게 갑니다.",
   "workspace.team.folderNotice": "모든 멤버는 이 컴퓨터에서 이 폴더와 그 도구로 작업합니다. 멤버가 도구로 호출하는 에이전트는 클라우드에서 실행되며 폴더를 받지 않습니다.",
-  "workspace.team.notListed": "여기에 표시되지 않는 에이전트가 있습니다"
+  "workspace.team.notListed": "여기에 표시되지 않는 에이전트가 있습니다",
+  "workspace.approval.agent": "{{name}}의 요청",
+  "workspace.composer.agents": "이 스레드의 에이전트",
+  "workspace.exchange.label": "차례로 답하는 에이전트",
+  "workspace.exchange.next": "다음:",
+  "workspace.exchange.now": "지금: {{name}}",
+  "workspace.exchange.skip": "{{name}} 건너뛰기",
+  "workspace.exchange.skippedRest": "나머지 에이전트를 건너뛰었습니다.",
+  "workspace.exchange.stop": "교환 중지",
+  "workspace.exchange.stopped": "교환을 중지했습니다.",
+  "workspace.participants.cloud": "클라우드",
+  "workspace.participants.local": "로컬",
+  "workspace.participants.title": "참여자",
+  "workspace.steer.to": "{{name}}에게: {{text}}"
 }

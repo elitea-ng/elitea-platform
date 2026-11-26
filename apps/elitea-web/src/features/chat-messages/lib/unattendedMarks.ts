@@ -8,6 +8,7 @@
  * `meta.goal_check` on the answer of a checked run.
  */
 import { readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
+import { ranOutsideSandbox } from '@/shared/lib/localWork';
 
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
@@ -17,6 +18,8 @@ export interface UnattendedMarks {
   readonly stepLimitReached?: true;
   readonly runBrief?: RunBriefView;
   readonly goalCheck?: GoalCheckView;
+  /** `meta.local_work.ran_outside_sandbox` (ADR-0061 decision 5): a Local work turn ran a command outside the sandbox. */
+  readonly ranOutsideSandbox?: true;
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null;
@@ -33,6 +36,7 @@ export function unattendedMarksOf(meta: unknown): UnattendedMarks {
     ...(meta['step_limit_reached'] === true ? { stepLimitReached: true } : {}),
     ...(runBrief === undefined ? {} : { runBrief }),
     ...(goalCheck === undefined ? {} : { goalCheck }),
+    ...(ranOutsideSandbox(meta) ? { ranOutsideSandbox: true } : {}),
   };
 }
 

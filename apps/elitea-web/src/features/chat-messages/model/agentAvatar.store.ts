@@ -100,6 +100,20 @@ export function settleAgentAvatars(conversationUuid: string | undefined, termina
   useAgentAvatarStore.getState().settle(conversationUuid, final, Date.now());
 }
 
+/**
+ * Records one `agent_state` a desktop Local work turn sent (ADR-0061 decision 4b: the host derives it from its own
+ * events, in the frame's shape), under `conversationKey`.
+ */
+export function applyLocalAgentState(conversationKey: string, payload: { readonly participant_id?: unknown; readonly state?: unknown; readonly activity?: unknown }): void {
+  if (conversationKey === '') return;
+  useAgentAvatarStore.getState().apply(conversationKey, { type: SocketMessageType.AgentState, ...payload }, Date.now());
+}
+
+/** Every participant's avatar state of one conversation (the Participants tab's badges and labels, ADR-0061 decision 4c). */
+export function useAgentAvatarStates(conversationKey: string | undefined): AvatarStates {
+  return useAgentAvatarStore((state) => (conversationKey === undefined ? EMPTY : (state.byConversation[conversationKey] ?? EMPTY)));
+}
+
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
 
 /**

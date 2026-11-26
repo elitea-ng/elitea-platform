@@ -12,19 +12,28 @@ import type { RefObject } from 'react';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import { t } from '@/shared/i18n';
 import { QueuedMessages } from '@/shared/ui/queued-messages';
 
 import type { DraftInput } from './SteeringControls';
 import { nextTurnMessage, type Steering } from './useSteering';
 
 /** What the composer's queue needs of `useSteering`. */
-export type SteeringQueueBinding = Pick<Steering, 'pending' | 'error' | 'remove' | 'sendNow'>;
+export type SteeringQueueBinding = Pick<Steering, 'pending' | 'error' | 'remove' | 'sendNow'> & {
+  /** The agent of the running turn, in a message of several agents: each queued message reads "To Mira: …". */
+  readonly agentName?: string;
+};
 
 export interface SteeringQueueProps {
   queue: SteeringQueueBinding | undefined;
   input: RefObject<DraftInput | null>;
   /** The input has text now (an edited message went back into it). */
   onRestored: () => void;
+}
+
+/** A queued message as it shows: "To Mira: …" while a named agent's turn runs. */
+export function addressedText(text: string, agentName: string | undefined): string {
+  return agentName === undefined || agentName === '' ? text : t('workspace.steer.to', 'To {{name}}: {{text}}', { name: agentName, text });
 }
 
 export function SteeringQueue({ queue, input, onRestored }: SteeringQueueProps): React.JSX.Element | null {
@@ -44,7 +53,7 @@ export function SteeringQueue({ queue, input, onRestored }: SteeringQueueProps):
     <>
       <QueuedMessages
         testId="steering-queue"
-        items={pending.map((steer) => ({ id: steer.steerId, text: steer.text, testId: 'steer-pending' }))}
+        items={pending.map((steer) => ({ id: steer.steerId, text: addressedText(steer.text, queue.agentName), testId: 'steer-pending' }))}
         onSendNow={(steerId) => void queue.sendNow(steerId)}
         onEdit={edit}
         onRemove={(steerId) => void queue.remove(steerId)}

@@ -12,7 +12,7 @@ import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/a
 import { server } from '@/test/setup';
 
 import type { ChatMessage } from '../lib/convertMessagesToChatHistory';
-import { applyAgentAvatarFrame, useAgentAvatarMotion, useAgentAvatarStore } from './agentAvatar.store';
+import { applyAgentAvatarFrame, applyLocalAgentState, useAgentAvatarMotion, useAgentAvatarStates, useAgentAvatarStore } from './agentAvatar.store';
 import { useChatStreamTransport, type UseChatStreamTransportResult } from './useChatStreamTransport';
 
 const BASE = '/api/v2';
@@ -126,5 +126,31 @@ describe('useAgentAvatarMotion', () => {
       applyAgentAvatarFrame('uuid-1', { type: 'agent_state', participant_id: 4, state: 'speaking' });
     });
     expect(result.current({ participantId: 4, newest: true })).toBe('still');
+  });
+});
+
+describe('a desktop Local work turn (issue 3057)', () => {
+  it('records the host agent_state events for the right agent of a two-agent thread, activity kept', () => {
+    const { result } = renderHook(() => useAgentAvatarStates('thread-77'));
+    act(() => {
+      applyLocalAgentState('thread-77', { participant_id: 77, state: 'thinking' });
+      applyLocalAgentState('thread-77', { participant_id: 77, state: 'working', activity: { tool: 'run_command', tool_kind: 'code_execution', program: 'cargo' } });
+    });
+    expect(result.current[77]?.state).toBe('working');
+    expect(result.current[77]?.activity).toEqual({ tool: 'run_command', tool_kind: 'code_execution', program: 'cargo' });
+    expect(result.current[88]).toBeUndefined();
+
+    act(() => {
+      applyLocalAgentState('thread-77', { participant_id: 77, state: 'success' });
+      applyLocalAgentState('thread-77', { participant_id: 88, state: 'waiting', activity: { waiting_on: 'person' } });
+    });
+    expect(result.current[77]?.state).toBe('success');
+    expect(result.current[77]?.activity).toBeUndefined();
+    expect(result.current[88]).toMatchObject({ state: 'waiting', activity: { waiting_on: 'person' } });
+  });
+
+  it('ignores a thread without a conversation yet', () => {
+    applyLocalAgentState('', { participant_id: 77, state: 'thinking' });
+    expect(useAgentAvatarStore.getState().byConversation).toEqual({});
   });
 });

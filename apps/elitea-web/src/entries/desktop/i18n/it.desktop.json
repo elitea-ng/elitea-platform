@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Team {{team}}: un messaggio che non nomina alcun agente va a {{lead}} (responsabile); scrivi @Nome per rivolgerti a un altro membro.",
   "workspace.team.addressedNotice": "Team {{team}}: scrivi @Nome per rivolgerti a un membro; un messaggio che non nomina alcun agente va all’agente che ha risposto per ultimo (all’inizio {{lead}}).",
   "workspace.team.folderNotice": "Ogni membro lavora su questo computer con questa cartella e i suoi strumenti. Un agente che un membro chiama come strumento viene eseguito nel cloud e non riceve la cartella.",
-  "workspace.team.notListed": "Un agente non è elencato qui"
+  "workspace.team.notListed": "Un agente non è elencato qui",
+  "workspace.approval.agent": "{{name}} chiede",
+  "workspace.composer.agents": "Agenti in questo thread",
+  "workspace.exchange.label": "Agenti che rispondono a turno",
+  "workspace.exchange.next": "Prossimi:",
+  "workspace.exchange.now": "Ora: {{name}}",
+  "workspace.exchange.skip": "Salta {{name}}",
+  "workspace.exchange.skippedRest": "Hai saltato gli agenti rimanenti.",
+  "workspace.exchange.stop": "Interrompi lo scambio",
+  "workspace.exchange.stopped": "Hai interrotto lo scambio.",
+  "workspace.participants.cloud": "Cloud",
+  "workspace.participants.local": "Locale",
+  "workspace.participants.title": "Partecipanti",
+  "workspace.steer.to": "A {{name}}: {{text}}"
 }

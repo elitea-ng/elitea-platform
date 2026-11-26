@@ -113,7 +113,14 @@ export function tokensDtcg(t) {
     radius: Object.fromEntries(Object.entries(t.shape).map(([k, v]) => [k, { $type: 'dimension', $value: `${v}px` }])),
     chart: { light: t.chart.light.map((v) => colour(v)), dark: t.chart.dark.map((v) => colour(v)), $description: t.chart.rule },
     focus: { $type: 'border', $value: { width: t.focus.width, style: 'solid', color: '{light.signal}' }, $description: `Offset ${t.focus.offset}; colour is the signal token of the scheme.` },
-    duration: { fast: { $type: 'duration', $value: t.motion.fast }, base: { $type: 'duration', $value: t.motion.base } },
+    duration: {
+      fast: { $type: 'duration', $value: t.motion.fast },
+      base: { $type: 'duration', $value: t.motion.base },
+      handoff: { $type: 'duration', $value: t.motion.handoff, $description: 'The hand-off baton between two agent avatars (ADR-0061).' },
+      avatar: Object.fromEntries(
+        Object.entries(t.motion.avatar).map(([k, v]) => [k, { $type: 'duration', $value: v.duration, $description: v.loop ? 'One loop of the state motion.' : 'Plays once and holds its end.' }]),
+      ),
+    },
     easing: { $type: 'cubicBezier', $value: t.motion.easing.match(/[\d.]+/g).map(Number) },
   };
 }
@@ -132,6 +139,10 @@ export function expand(markdown, t, css) {
     space: t.space.steps.join(', '),
     focus: `${t.focus.width} \`signal\`, ${t.focus.offset} offset`,
     motion: `${t.motion.fast} / ${t.motion.base}, \`${t.motion.easing}\``,
+    avatarMotion: Object.entries(t.motion.avatar)
+      .map(([k, v]) => `${k} ${v.duration}${v.loop ? '' : ' once'}`)
+      .join(', '),
+    handoff: `${t.motion.handoff}, \`${t.motion.easing}\``,
     elevationLight: `\`${t.elevation.light}\``,
     'table:palette': table(
       ['Colour', 'Hex', 'Job'],

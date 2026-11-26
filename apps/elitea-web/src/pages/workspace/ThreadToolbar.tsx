@@ -30,7 +30,11 @@ import { t } from '@/shared/i18n';
 import { MenuDivider, MenuHeader, MenuRow, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
+import { ActiveAgentStatus } from '@/pages/chat/agentPresence';
+
 import { PanelToggle } from './sessionParts';
+import { useThreadFloor } from './useComposerMentions';
+import type { ThreadAgent } from './useEnsureConversation';
 
 export interface ThreadToolbarProps {
   workspace: Workspace;
@@ -246,6 +250,14 @@ function Overflow({ conversationId, onIndexSettings, onFork, onCreateAgent, onRe
   );
 }
 
+/** The thread's active agent and what it does (ADR-0061 decision 4c), in a thread of several agents. */
+function ThreadAgentStatus({ projectId, conversationId }: { readonly projectId: number; readonly conversationId: string }): React.JSX.Element {
+  const floor = useThreadFloor(projectId, conversationId);
+  return <ActiveAgentStatus conversationKey={conversationId} agents={floor?.agents ?? NO_AGENTS} />;
+}
+
+const NO_AGENTS: readonly ThreadAgent[] = [];
+
 export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
   // Shown whenever the inspector is not on screen: hidden, or every one of the thread's tabs closed.
   const inspectorShown = useDesktopLayout(selectInspectorShown);
@@ -267,6 +279,7 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         <Box sx={{ flex: '0 1 auto', minWidth: 0 }}>
           <ThreadTitle {...props} renaming={renaming} onRenamingChange={setRenaming} />
         </Box>
+        <ThreadAgentStatus projectId={props.projectId} conversationId={props.conversationId} />
         <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
           <ActivityIsland />
         </Box>

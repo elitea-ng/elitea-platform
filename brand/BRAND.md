@@ -116,6 +116,8 @@ Products read these tokens. One token set, same names in both themes: only the n
 | space | {{space}} | 4 px grid |
 | focus ring | {{focus}} | every interactive element, both themes |
 | motion | {{motion}} | removed under `prefers-reduced-motion` |
+| `motion.avatar` | {{avatarMotion}} | one loop of each agent avatar state (`oneShot`: success and error, played once); removed under `prefers-reduced-motion`, mobile reduce motion and data saver |
+| `motion.handoff` | {{handoff}} | the baton between two agent avatars on a hand-off; an instant change under reduced motion |
 | elevation (light) | {{elevationLight}} | cards, menus, dialogs |
 | elevation (dark) | surface steps, no shadow | `bg` → `surface` → `elevated` |
 
@@ -134,7 +136,7 @@ Every text pair below is measured (WCAG 2.2 relative luminance), not guessed; th
 - **Indicators on dark surfaces**: Indigo on `surface` is 2.97:1, under the 3:1 non-text bar. A selected nav item therefore pairs the Indigo fill with white text, or uses a `signal` indicator bar; a toggle's "on" state relies on its white thumb, not the track alone.
 - **Never colour alone**: status carries an icon or a word as well as a hue.
 - Interactive targets are at least 24 × 24 px.
-- Motion is removed under `prefers-reduced-motion: reduce`.
+- Motion is removed under `prefers-reduced-motion: reduce`. Agent avatars then show their still and a text label, the hand-off baton becomes an instant change, and a polite live region announces state changes (at most once per agent per second), so no meaning rides on motion alone.
 
 ## 08 Guardrails
 

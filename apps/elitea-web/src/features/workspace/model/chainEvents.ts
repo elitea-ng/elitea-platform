@@ -15,7 +15,7 @@ import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
 type EventOf<K extends AgentEvent['kind']> = Extract<AgentEvent, { kind: K }>;
 
-export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'> | EventOf<'resume_offered'> | EventOf<'floor_stopped'>;
+export type ChainEvent = EventOf<'turn_continued'> | EventOf<'chain_ended'> | EventOf<'run_brief'> | EventOf<'goal_checked'> | EventOf<'resume_offered'> | EventOf<'floor_stopped'> | EventOf<'agent_state'> | EventOf<'exchange'>;
 
 /** The agent that answers a turn of a message addressed to several (`status` `running`'s `floor`). */
 interface TurnAgentView {
@@ -26,6 +26,8 @@ interface TurnAgentView {
   position: number;
   /** How many agents answer the message. */
   targets: number;
+  /** The agents still to answer after this one, in the host's order, skips removed (ADR-0061 decision 2c). */
+  exchange?: number[];
 }
 
 /** The part of a turn's view that the chain sets. */
@@ -48,10 +50,12 @@ export interface ChainView {
   runBrief?: RunBriefView;
   /** The goal check of this turn: from `goal_checked`, else the short form of `chain_ended.goal`. */
   goalCheck?: GoalCheckView;
+  /** The answering agent's last avatar state (`agent_state`, ADR-0061 decision 4b): the host's frame, as sent. */
+  agentState?: EventOf<'agent_state'>['payload'];
 }
 
 export function isChainEvent(event: AgentEvent): event is ChainEvent {
-  const kinds: readonly AgentEvent['kind'][] = ['turn_continued', 'chain_ended', 'run_brief', 'goal_checked', 'resume_offered', 'floor_stopped'];
+  const kinds: readonly AgentEvent['kind'][] = ['turn_continued', 'chain_ended', 'run_brief', 'goal_checked', 'resume_offered', 'floor_stopped', 'agent_state', 'exchange'];
   return kinds.includes(event.kind);
 }
 
@@ -65,6 +69,7 @@ function continuedTo(payload: EventOf<'turn_continued'>['payload']): NonNullable
 }
 
 export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent): V {
+  if (isLiveEvent(event)) return applyLiveEvent(view, event);
   switch (event.kind) {
     case 'chain_ended': {
       // The full check of `goal_checked` wins over the short form the chain end repeats.
@@ -89,6 +94,18 @@ export function applyChainEvent<V extends ChainView>(view: V, event: ChainEvent)
   }
 }
 
+type LiveEvent = EventOf<'agent_state'> | EventOf<'exchange'>;
+
+function isLiveEvent(event: ChainEvent): event is LiveEvent {
+  return event.kind === 'agent_state' || event.kind === 'exchange';
+}
+
+/** The host's live-only events (ADR-0061): the agent's state, and the exchange's queue after a skip. Never recorded. */
+function applyLiveEvent<V extends ChainView>(view: V, event: LiveEvent): V {
+  if (event.kind === 'agent_state') return { ...view, agentState: event.payload };
+  return view.agent === undefined ? view : { ...view, agent: { ...view.agent, exchange: event.payload.remaining } };
+}
+
 /**
  * The turn is done, but the host starts the chain's next turn by itself and has not said so yet: the composer stays
  * busy until `turn_continued` or `chain_ended` (the host sends `chain_ended` itself when the next turn does not start
@@ -99,7 +116,7 @@ export function waitsForNextTurn(view: ChainView & { done?: { continuing?: true 
 }
 
 function agentOf(floor: TurnFloorStatus): TurnAgentView {
-  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets };
+  return { name: floor.agent_name, participantId: floor.participant_id, executor: floor.executor, position: floor.position, targets: floor.targets, ...(floor.exchange === undefined ? {} : { exchange: floor.exchange }) };
 }
 
 /** The unattended fields of a `status` event, when it has them. */

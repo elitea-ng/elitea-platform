@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "الفريق {{team}}: الرسالة التي لا تسمّي وكيلًا تذهب إلى {{lead}} (القائد)؛ اكتب @الاسم لمخاطبة عضو آخر.",
   "workspace.team.addressedNotice": "الفريق {{team}}: اكتب @الاسم لمخاطبة عضو؛ الرسالة التي لا تسمّي وكيلًا تذهب إلى الوكيل الذي أجاب أخيرًا ({{lead}} في البداية).",
   "workspace.team.folderNotice": "يعمل كل عضو على هذا الكمبيوتر بهذا المجلد وأدواته. الوكيل الذي يستدعيه عضو كأداة يعمل في السحابة ولا يحصل على المجلد.",
-  "workspace.team.notListed": "أحد الوكلاء غير مدرج هنا"
+  "workspace.team.notListed": "أحد الوكلاء غير مدرج هنا",
+  "workspace.approval.agent": "{{name}} يسأل",
+  "workspace.composer.agents": "الوكلاء في هذه المحادثة",
+  "workspace.exchange.label": "وكلاء يجيبون بالتناوب",
+  "workspace.exchange.next": "التالي:",
+  "workspace.exchange.now": "الآن: {{name}}",
+  "workspace.exchange.skip": "تخطي {{name}}",
+  "workspace.exchange.skippedRest": "لقد تخطيت الوكلاء المتبقين.",
+  "workspace.exchange.stop": "إيقاف التبادل",
+  "workspace.exchange.stopped": "لقد أوقفت التبادل.",
+  "workspace.participants.cloud": "السحابة",
+  "workspace.participants.local": "محلي",
+  "workspace.participants.title": "المشاركون",
+  "workspace.steer.to": "إلى {{name}}: {{text}}"
 }

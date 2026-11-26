@@ -23,6 +23,8 @@ import {
 import { useDesign } from '@/design/DesignProvider';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
 import { floorOf } from '@elitea/client-core/conversation';
+import { agentExecutorOf } from '@/features/localWork/model';
+import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
 import { ProbationBadge } from '@/features/workforce/ProbationBadge';
@@ -74,6 +76,28 @@ export interface ParticipantsSheetProps {
   onAgentMemory?: (agentId: number, name: string) => void;
   /** Opens the agent's delegation grants (client contract 1.59). When given, each agent row offers "Delegations". */
   onAgentDelegations?: (agentId: number, name: string) => void;
+  /**
+   * A Local work thread viewed here (ADR-0061 Parity, #3069): the team is read-only. Each agent
+   * row says where it runs (Local or Cloud) and the lead keeps its badge, but the lead cannot be
+   * changed and nobody is added or removed: the desktop owns the thread.
+   */
+  teamView?: boolean;
+}
+
+/** Where an agent of a team thread runs: a still badge, "Local" or "Cloud" (ADR-0061 Parity). */
+function ExecutorBadge({ name, cloud, participantId }: { name: string; cloud: boolean; participantId: number }) {
+  const { colors, radius } = useDesign();
+  return (
+    <View
+      accessible
+      accessibilityLabel={TEAM_COPY.executorLabel(name, cloud)}
+      testID={`executor-badge-${participantId}`}
+      style={[styles.badge, { backgroundColor: cloud ? colors.accentSoft : colors.surfaceSunken, borderRadius: radius.pill }]}>
+      <Text variant="caption" tone={cloud ? 'accent' : 'secondary'}>
+        {cloud ? TEAM_COPY.executorCloud : TEAM_COPY.executorLocal}
+      </Text>
+    </View>
+  );
 }
 
 /** Agents and pipelines: the participants a lead can be. */
@@ -110,6 +134,7 @@ function SheetBody({
   conversationMeta,
   onAgentMemory,
   onAgentDelegations,
+  teamView = false,
 }: ParticipantsSheetProps) {
   const { colors, radius } = useDesign();
   const insets = useSafeAreaInsets();
@@ -219,8 +244,11 @@ function SheetBody({
               const name = participantName(p) ?? KIND_LABEL[p.entity_name] ?? p.entity_name;
               const me = p.entity_name === 'user' && participantUserId(p) === selfUserId;
               const isLead = leadsShown && p.id === leadId;
-              const leadable = leadsShown && canLead(p) && (agentCount > 1 || isLead);
-              const kind = KIND_LABEL[p.entity_name] ?? p.entity_name;
+              const leadable = !teamView && leadsShown && canLead(p) && (agentCount > 1 || isLead);
+              const removable = !teamView && isRemovable(p, selfUserId);
+              const executor = teamView && canLead(p) ? agentExecutorOf(p) : null;
+              const baseKind = KIND_LABEL[p.entity_name] ?? p.entity_name;
+              const kind = executor === null ? baseKind : `${baseKind} · ${executor === 'cloud' ? TEAM_COPY.executorCloud : TEAM_COPY.executorLocal}`;
               const agentId = onAgentMemory ? participantAgentId(p) : null;
               const remembers = agentId !== null && onAgentMemory ? () => onAgentMemory(agentId, name) : undefined;
               const delegatesId = onAgentDelegations ? participantAgentId(p) : null;
@@ -232,8 +260,9 @@ function SheetBody({
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
                   leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
                   trailing={
-                    leadable || isRemovable(p, selfUserId) || remembers || delegations || (!offline && participantAgentId(p) !== null) ? (
+                    leadable || removable || executor !== null || remembers || delegations || (!offline && participantAgentId(p) !== null) ? (
                       <View style={styles.trailing}>
+                        {executor !== null ? <ExecutorBadge name={name} cloud={executor === 'cloud'} participantId={p.id} /> : null}
                         {/* Draws only for an agent hired automatically and not kept yet (client contract 1.56). */}
                         {!offline ? <ProbationBadge projectId={projectId} agentId={participantAgentId(p)} /> : null}
                         {remembers ? (
@@ -266,7 +295,7 @@ function SheetBody({
                             onPress={() => toggleLead(p)}
                           />
                         ) : null}
-                        {isRemovable(p, selfUserId) ? (
+                        {removable ? (
                       <Button
                         title="Remove"
                         variant="destructivePlain"
@@ -283,6 +312,7 @@ function SheetBody({
               );
             })}
           </ListSection>
+          {teamView ? null : (
           <ListSection>
             {peopleAvailable ? <ListRow icon="personAdd" title="Add people" disabled={offline} onPress={() => setMode('people')} /> : null}
             {canAddAgent ? (
@@ -291,6 +321,7 @@ function SheetBody({
               <ListRow icon="info" title="Agents can't join a conversation with toolkits." />
             )}
           </ListSection>
+          )}
           {pinList !== null ? (
             <ListSection
               title={`Skills (${pinList.length})`}
@@ -413,6 +444,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   flex: { flex: 1 },
   trailing: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  badge: { paddingHorizontal: 8, paddingVertical: 2 },
   note: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderCurve: 'continuous' },
   list: { gap: 20 },
   search: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, borderWidth: 1, borderCurve: 'continuous' },

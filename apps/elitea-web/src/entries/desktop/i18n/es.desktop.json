@@ -1028,5 +1028,18 @@
   "workspace.team.leadNotice": "Equipo {{team}}: un mensaje que no nombra a ningún agente va a {{lead}} (líder); escribe @Nombre para dirigirte a otro miembro.",
   "workspace.team.addressedNotice": "Equipo {{team}}: escribe @Nombre para dirigirte a un miembro; un mensaje que no nombra a ningún agente va al agente que respondió por última vez (al principio, {{lead}}).",
   "workspace.team.folderNotice": "Cada miembro trabaja en este equipo con esta carpeta y sus herramientas. Un agente al que un miembro llama como herramienta se ejecuta en la nube y no recibe la carpeta.",
-  "workspace.team.notListed": "Un agente no aparece aquí"
+  "workspace.team.notListed": "Un agente no aparece aquí",
+  "workspace.approval.agent": "{{name}} pregunta",
+  "workspace.composer.agents": "Agentes de este hilo",
+  "workspace.exchange.label": "Agentes respondiendo por turnos",
+  "workspace.exchange.next": "Siguiente:",
+  "workspace.exchange.now": "Ahora: {{name}}",
+  "workspace.exchange.skip": "Omitir a {{name}}",
+  "workspace.exchange.skippedRest": "Omitiste los agentes restantes.",
+  "workspace.exchange.stop": "Detener intercambio",
+  "workspace.exchange.stopped": "Detuviste el intercambio.",
+  "workspace.participants.cloud": "Nube",
+  "workspace.participants.local": "Local",
+  "workspace.participants.title": "Participantes",
+  "workspace.steer.to": "Para {{name}}: {{text}}"
 }

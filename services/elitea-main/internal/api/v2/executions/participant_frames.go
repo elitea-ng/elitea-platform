@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strconv"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/toolcategory"
 )
 
 // The participant stamp and the `agent_state` frame (client contract 1.38,
@@ -40,10 +42,41 @@ const (
 	AgentStateWaking   = "waking"
 )
 
-// participantStates is the last state written per participant on one
-// stream. The zero value is ready.
+// The `activity.waiting_on` values (ADR-0061 decision 4a).
+const (
+	WaitingOnPerson = "person"
+	WaitingOnAgent  = "agent"
+)
+
+// maxActivityTool is the longest tool display name an activity carries.
+const maxActivityTool = 64
+
+// AgentActivity is the optional detail of an `agent_state` frame (client
+// contract 1.66, ADR-0061 decision 4a): which tool a `working` agent runs,
+// and on whom a `waiting` agent waits. It never carries tool arguments.
+//
+// `handoff_to` (on the frame that ends a turn with a hand-off) is not
+// derived here: the stamp sees one run's node events, while a cloud
+// `hand_floor` is recorded in `agent_floor_exchanges` by the turn-taking
+// listener; the terminal frame of such a turn would read it from there.
+// `peer_participant_id` is not derived either: a sub-agent frame names the
+// sub-agent (`parent_agent_name`), not a participant of the thread.
+type AgentActivity struct {
+	Tool      string `json:"tool,omitempty"`
+	ToolKind  string `json:"tool_kind,omitempty"`
+	WaitingOn string `json:"waiting_on,omitempty"`
+}
+
+// derivedState is what a frame moves its participant to.
+type derivedState struct {
+	state    string
+	activity AgentActivity
+}
+
+// participantStates is the last state and activity written per
+// participant on one stream. The zero value is ready.
 type participantStates struct {
-	last map[int64]string
+	last map[int64]derivedState
 }
 
 type participantFrameFields struct {
@@ -56,6 +89,12 @@ type participantFrameFields struct {
 		ParentAgentName string `json:"parent_agent_name"`
 		FinishReason    string `json:"finish_reason"`
 		IsError         bool   `json:"is_error"`
+		// The tool call entry of agent_tool_start: only the name and the
+		// toolkit type are read, never the arguments.
+		ToolName string `json:"tool_name"`
+		Metadata struct {
+			ToolkitType string `json:"toolkit_type"`
+		} `json:"metadata"`
 	} `json:"response_metadata"`
 }
 
@@ -84,23 +123,27 @@ func (s *participantStates) stamp(event DurableEvent) (DurableEvent, *DurableEve
 		return event, nil
 	}
 
-	state := frameAgentState(event.Type, fields)
+	state, activity := frameAgentState(event.Type, fields)
 	if state == "" {
 		return event, nil
 	}
 	if s.last == nil {
-		s.last = make(map[int64]string, 1)
+		s.last = make(map[int64]derivedState, 1)
 	}
-	if s.last[participant.ID] == state {
+	next := derivedState{state: state, activity: activity}
+	if s.last[participant.ID] == next {
 		return event, nil
 	}
-	s.last[participant.ID] = state
+	s.last[participant.ID] = next
 	frame := map[string]any{
 		"type":              agentStateFrameType,
 		"participant_id":    participant.ID,
 		"addressed_to":      addressedTo,
 		"state":             state,
 		"response_metadata": map[string]any{},
+	}
+	if activity != (AgentActivity{}) {
+		frame["activity"] = activity
 	}
 	copyRawField(frame, "stream_id", fields.StreamID)
 	copyRawField(frame, "message_id", fields.MessageID)
@@ -126,47 +169,90 @@ func (s *participantStates) seed(before []DurableEvent) *DurableEvent {
 	return state
 }
 
-// frameAgentState is the state a frame moves its participant to; empty for a
-// frame that does not move it.
-func frameAgentState(eventType string, fields participantFrameFields) string {
+// frameAgentState is the state a frame moves its participant to, and the
+// activity that goes with it; an empty state for a frame that does not move
+// it. The rows are the cloud column of ADR-0061 decision 4b
+// (libs/proto/contracts/agent-state-activity-v1.json).
+func frameAgentState(eventType string, fields participantFrameFields) (string, AgentActivity) {
 	if eventType == executionFailedType {
-		return AgentStateError
+		return AgentStateError, AgentActivity{}
 	}
 	// A pause waits on a person, whoever in the agent tree asked.
 	switch fields.Type {
 	case "agent_hitl_interrupt", "agent_requires_confirmation", "agent_tool_paused", "mcp_authorization_required":
-		return AgentStateWaiting
+		return AgentStateWaiting, AgentActivity{WaitingOn: WaitingOnPerson}
 	}
-	// Any other sub-agent frame: the participant has delegated and is
-	// working, and a sub-agent's answer is not the participant's.
+	// Any other sub-agent frame: the participant has delegated and waits on
+	// the sub-agent, and a sub-agent's answer is not the participant's.
 	if fields.ResponseMetadata.ParentAgentName != "" {
 		if fields.Type == "full_message" {
-			return ""
+			return "", AgentActivity{}
 		}
-		return AgentStateWorking
+		return AgentStateWaiting, AgentActivity{WaitingOn: WaitingOnAgent}
 	}
 	switch fields.Type {
 	case "agent_start":
 		// A continuation resumes a paused answer.
 		if fields.SIOEvent == "chat_continue_predict" {
-			return AgentStateWaking
+			return AgentStateWaking, AgentActivity{}
 		}
-		return AgentStateThinking
+		return AgentStateThinking, AgentActivity{}
 	case "agent_llm_start", "agent_tool_end", "agent_tool_error":
-		return AgentStateThinking
+		return AgentStateThinking, AgentActivity{}
 	case "agent_llm_chunk", "agent_result_chunk", "agent_response":
-		return AgentStateSpeaking
+		return AgentStateSpeaking, AgentActivity{}
 	case "agent_tool_start":
-		return AgentStateWorking
+		metadata := fields.ResponseMetadata
+		return AgentStateWorking, toolActivity(metadata.ToolName, metadata.Metadata.ToolkitType)
 	case "agent_exception", "error", "llm_error":
-		return AgentStateError
+		return AgentStateError, AgentActivity{}
 	case "full_message":
 		if fields.ResponseMetadata.IsError || fields.ResponseMetadata.FinishReason == "error" {
-			return AgentStateError
+			return AgentStateError, AgentActivity{}
 		}
-		return AgentStateSuccess
+		return AgentStateSuccess, AgentActivity{}
 	}
-	return ""
+	return "", AgentActivity{}
+}
+
+// toolActivity is the activity of a tool call: the tool's display name,
+// sanitised, and its category when the tool-categories contract lists it.
+func toolActivity(toolName, toolkitType string) AgentActivity {
+	tool := sanitizeToolName(toolName)
+	if tool == "" {
+		return AgentActivity{}
+	}
+	activity := AgentActivity{Tool: tool}
+	if toolkitType != "" && toolcategory.Declared(toolkitType, toolName) {
+		activity.ToolKind = string(toolcategory.Of(toolkitType, toolName))
+	}
+	return activity
+}
+
+// sanitizeToolName keeps a tool display name to [A-Za-z0-9_.:-]: any other
+// character becomes `_`, and the name is cut to maxActivityTool bytes. A
+// name with no letter or digit is empty.
+func sanitizeToolName(name string) string {
+	out := make([]byte, 0, min(len(name), maxActivityTool))
+	meaningful := false
+	for _, r := range name {
+		if len(out) == maxActivityTool {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			meaningful = true
+			out = append(out, byte(r))
+		case r == '_' || r == '.' || r == ':' || r == '-':
+			out = append(out, byte(r))
+		default:
+			out = append(out, '_')
+		}
+	}
+	if !meaningful {
+		return ""
+	}
+	return string(out)
 }
 
 // appendParticipantKeys adds the two keys at the end of a JSON object.

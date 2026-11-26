@@ -25,6 +25,7 @@ import type { ChatBoxProps } from '@/widgets/chat-box';
 import { AgentContextMeter, ContextBudget } from '@/widgets/context-budget';
 
 import { useAgentLeadSlot } from './ChatAgentLead';
+import { usePresenceSlot } from './ChatPresenceSlot';
 import { ConversationSkillsSection } from './ConversationSkillsSection';
 
 /**
@@ -41,10 +42,12 @@ export interface ChatParticipantsPanelProps {
   readonly activeParticipant: unknown;
   readonly projectId: string | undefined;
   readonly isMcpVisible: boolean;
+  /** A desktop Local work thread (ADR-0061 decision 6): read-only, agents only. */
+  readonly localWork?: boolean;
   readonly handlers: Pick<WrapperProps, 'onSelectParticipant' | 'onDeleteParticipant' | 'onEditParticipant' | 'onAddParticipants'>;
 }
 
-export function ChatParticipantsPanel({ activeConversation, activeParticipant, projectId, isMcpVisible, handlers }: ChatParticipantsPanelProps): ReactNode {
+export function ChatParticipantsPanel({ activeConversation, activeParticipant, projectId, isMcpVisible, handlers, localWork }: ChatParticipantsPanelProps): ReactNode {
   const inspector = useSidePanelSlot() !== null;
   // The open conversation names itself in the shell's title row (`Chat ▸ name`).
   // The desktop frame's title row reads the chat rail instead and ignores this.
@@ -61,6 +64,8 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   );
   // ADR-0050 7d (issue 1612): the lead badge and menu on each agent row, with two or more agents.
   const leadSlot = useAgentLeadSlot(projectId, activeConversation);
+  // ADR-0061 (#3067, #3069): each agent's live state; a desktop Local work thread is read-only here, agents only.
+  const presence = usePresenceSlot(activeConversation, leadSlot.renderAgentLead, localWork === true);
 
   // ADR-0050 amendment 1, A1.3: the skills pinned to the conversation, in their own section beside
   // the participants and never among them.
@@ -89,7 +94,7 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
        * import `widgets/`, which is why the slot is filled by the page.
        */
       renderAgentContext={renderAgentContext}
-      {...leadSlot}
+      {...presence.panelProps}
       renderContextBudget={({ conversationId: budgetConversationId, collapsed: budgetCollapsed }) => (
         <ContextBudget
           conversationId={activeConversation?.isNew || activeConversation?.isPlayback ? undefined : budgetConversationId}
@@ -103,11 +108,13 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
   return inspector ? (
     <SidePanelTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
       {panel}
+      {presence.announcer}
       {skills}
     </SidePanelTab>
   ) : (
     <>
       {panel}
+      {presence.announcer}
       {skills}
     </>
   );

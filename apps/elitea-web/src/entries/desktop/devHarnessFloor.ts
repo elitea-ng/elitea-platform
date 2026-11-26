@@ -170,13 +170,33 @@ function playFloor(emit: (event: AgentEvent) => void, first: string): void {
 }
 
 /**
- * What `__harness` gains: the adds' bodies, the meta writes, `playFloor()` on the next turn id, and `setLead(id)` (the
- * thread's lead from now on).
+ * A message addressed to Coder and Reviewer whose exchange the person stops (ADR-0061 decision 2c): Coder's turn runs
+ * with Reviewer still queued (`floor.exchange`) and Coder's live state (`agent_state`); `stopped()` then ends it as the
+ * host does after `agent_exchange_stop`: `floor_stopped` `stopped_by_person`, and no turn of Reviewer.
+ */
+function playExchange(emit: (event: AgentEvent) => void, first: string): { stopped: () => void } {
+  const a = (seq: number) => ({ turn_id: first, seq });
+  emit({ ...a(1), kind: 'status', payload: { phase: 'running', floor: { position: 0, targets: 2, participant_id: 77, agent_name: 'Coder', executor: 'local', exchange: [88] } } });
+  emit({ ...a(2), kind: 'agent_state', payload: { participant_id: 77, state: 'working', activity: { tool: 'run_command', tool_kind: 'code_execution', program: 'cargo' } } });
+  emit({ ...a(3), kind: 'text_delta', payload: { text: 'Running the tests first.' } });
+  return {
+    stopped: () => {
+      emit({ ...a(4), kind: 'floor_stopped', payload: { code: 'stopped_by_person', message: 'You stopped the exchange.' } });
+      emit({ ...a(5), kind: 'agent_state', payload: { participant_id: 77, state: 'idle' } });
+      emit({ ...a(6), kind: 'status', payload: { phase: 'cancelled' } });
+    },
+  };
+}
+
+/**
+ * What `__harness` gains: the adds' bodies, the meta writes, `playFloor()` on the next turn id, `playExchange()` and
+ * `stopExchange()` (ADR-0061), and `setLead(id)` (the thread's lead from now on).
  */
 export function floorHarness(
   emit: (event: AgentEvent) => void,
   turnId: () => string,
-): { participantPosts: AddedRow[][]; metaWrites: unknown[]; playFloor: () => void; setLead: (participantId: number) => void } {
+): { participantPosts: AddedRow[][]; metaWrites: unknown[]; playFloor: () => void; playExchange: () => void; stopExchange: () => void; setLead: (participantId: number) => void } {
+  let exchange: { stopped: () => void } | undefined;
   // A new harness starts with no lead, no adds and no writes: nothing carries over from an earlier one in the same page (#1932).
   LEAD = 0;
   PARTICIPANT_POSTS.length = 0;
@@ -185,6 +205,10 @@ export function floorHarness(
     participantPosts: PARTICIPANT_POSTS,
     metaWrites: META_WRITES,
     playFloor: () => playFloor(emit, turnId()),
+    playExchange: () => {
+      exchange = playExchange(emit, turnId());
+    },
+    stopExchange: () => exchange?.stopped(),
     setLead: (participantId) => {
       LEAD = participantId;
     },

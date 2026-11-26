@@ -43,6 +43,17 @@ export function workspaceExecutorOf(conversation: Readonly<Record<string, unknow
 }
 
 /**
+ * The answer's turn ran a command outside the sandbox (ADR-0061 decision 5: Main stamps
+ * `meta.local_work.ran_outside_sandbox: true` from the commit's trust record). Absent, as before the trust record
+ * lands, it is false: the chat shows no marker.
+ */
+export function ranOutsideSandbox(meta: unknown): boolean {
+  if (typeof meta !== 'object' || meta === null) return false;
+  const localWork = (meta as { readonly local_work?: unknown }).local_work;
+  return typeof localWork === 'object' && localWork !== null && (localWork as { readonly ran_outside_sandbox?: unknown }).ran_outside_sandbox === true;
+}
+
+/**
  * The newest answer in the list was produced on a desktop (`meta.executed_by
  * === 'desktop'`). The server refuses to regenerate such an answer
  * (409 `local_work_turn`): the chat does not offer it.

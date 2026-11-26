@@ -11,6 +11,7 @@ import { MESSAGE_CLASS, sideTalkLabel, type MessageClass } from '@elitea/client-
 import { useDesign } from '@/design/DesignProvider';
 import { explainsFailure, GUARDRAIL_STOPPED, noticeText } from '@/features/chat/guardrailNotice';
 import { TURN_TAKING_COPY } from '@/features/chat/turnTakingCopy';
+import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { ThinkingDots } from '@/features/chat/ThinkingDots';
 import { DelegationNoticeCards } from '@/features/chat/DelegationNoticeCards';
 import { ToolActivity } from '@/features/chat/ToolCalls';
@@ -105,8 +106,9 @@ export function PersistedMessage({
       onActions={message.text.trim() !== '' || answer ? onActions : null}
       actions={answer && !message.isStreaming ? actions : undefined}
       footer={
-        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 ? (
+        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 || message.ranOutsideSandbox ? (
           <>
+            {message.ranOutsideSandbox ? <OutsideSandboxMarker /> : null}
             <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
             {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
             <DelegationNoticeCards notices={message.delegationNotices ?? []} />
@@ -115,6 +117,21 @@ export function PersistedMessage({
       }>
       {answer && message.text !== '' ? <Markdown value={message.text} /> : message.text}
     </MessageBubble>
+  );
+}
+
+/**
+ * ADR-0061 decision 5i: the answer ran commands outside the OS sandbox, in a folder its owner
+ * trusts. Shown on the flagged answer only; nothing while the field is absent.
+ */
+export function OutsideSandboxMarker() {
+  return (
+    <View style={styles.sandbox} accessible accessibilityRole="text" accessibilityLabel={TEAM_COPY.ranOutsideSandboxLabel} testID="ran-outside-sandbox">
+      <Icon name="warning" size={14} tone="warning" />
+      <Text variant="footnote" tone="secondary">
+        {TEAM_COPY.ranOutsideSandbox}
+      </Text>
+    </View>
   );
 }
 
@@ -249,6 +266,7 @@ export function LiveReply({
   onOpenTool,
   usageAvailable,
   guardrailStopped = false,
+  activity = null,
 }: {
   live: LiveTurn;
   author: string | null;
@@ -262,6 +280,12 @@ export function LiveReply({
   usageAvailable: boolean;
   /** A content guardrail stopped the turn: its notice row says which, so the failure line is short. */
   guardrailStopped?: boolean;
+  /**
+   * What the answering agent does now (ADR-0061 decision 4c, client-core `activityLabel` from
+   * the stream's `agent_state.activity`): "Running jira_get_issue", "Waiting for you". Text, so
+   * it shows under reduced motion and data saver too, next to the avatar's still.
+   */
+  activity?: string | null;
 }) {
   const { turn } = live;
   const waiting = turn.phase === 'sending' || (turn.phase === 'streaming' && turn.content === '');
@@ -291,7 +315,7 @@ export function LiveReply({
     <MessageBubble
       role="assistant"
       author={author}
-      meta={author}
+      meta={activity ? (author ? `${author} · ${activity}` : activity) : author}
       avatar={avatar}
       status={status}
       error={turn.phase === 'failed' ? (guardrailStopped ? GUARDRAIL_STOPPED : (turn.error?.message ?? null)) : null}
@@ -316,4 +340,5 @@ const styles = StyleSheet.create({
   side: { alignSelf: 'stretch', gap: 6, paddingStart: 40, paddingVertical: 4 },
   sideHeader: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 32, paddingHorizontal: 10 },
   sideRow: { gap: 2, paddingStart: 10, borderStartWidth: 2 },
+  sandbox: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 },
 });

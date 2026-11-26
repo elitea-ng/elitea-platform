@@ -43,6 +43,31 @@ describe('applyAgentStateFrame', () => {
   });
 });
 
+describe('applyAgentStateFrame activity (ADR-0061 decision 4a)', () => {
+  const withActivity = (state: string, activity: unknown) => ({ type: 'agent_state', participant_id: 7, state, activity });
+
+  it('keeps the activity next to the state, and a frame without one clears it', () => {
+    let states = applyAgentStateFrame({}, withActivity('working', { tool: 'run_command', tool_kind: 'code_execution', program: 'cargo' }), 10);
+    assert.deepEqual(states[7], { state: 'working', since: 10, activity: { tool: 'run_command', tool_kind: 'code_execution', program: 'cargo' } });
+    states = applyAgentStateFrame(states, frame(7, 'thinking'), 20);
+    assert.deepEqual(states[7], { state: 'thinking', since: 20 });
+  });
+
+  it('another tool under the same state changes the activity, not since; the same one is a repeat', () => {
+    const first = applyAgentStateFrame({}, withActivity('working', { tool: 'read_file' }), 10);
+    assert.equal(applyAgentStateFrame(first, withActivity('working', { tool: 'read_file' }), 20), first);
+    const second = applyAgentStateFrame(first, withActivity('working', { tool: 'grep' }), 20);
+    assert.deepEqual(second[7], { state: 'working', since: 10, activity: { tool: 'grep' } });
+  });
+
+  it('drops malformed activity fields and never keeps a name outside the sanitised set', () => {
+    const states = applyAgentStateFrame({}, withActivity('working', { tool: 'rm -rf /', waiting_on: 'cat', handoff_to: [0, 'x', 9], extra: 1 }), 10);
+    assert.deepEqual(states[7], { state: 'working', since: 10, activity: { handoff_to: [9] } });
+    const bare = applyAgentStateFrame({}, withActivity('working', 'nope'), 10);
+    assert.deepEqual(bare[7], { state: 'working', since: 10 });
+  });
+});
+
 describe('shownState', () => {
   it('an unknown participant is idle', () => {
     assert.equal(shownState(undefined, 0), AGENT_STATE.Idle);
@@ -91,6 +116,14 @@ describe('settleAvatarStates', () => {
     });
     const quiet: AvatarStates = { 2: { state: 'waiting', since: 11 }, 5: { state: 'idle', since: 1 } };
     assert.equal(settleAvatarStates(quiet, 'idle', 50), quiet);
+  });
+
+  it('a wait on another agent ends with the run; a wait on a person stays', () => {
+    const states: AvatarStates = {
+      1: { state: 'waiting', since: 10, activity: { waiting_on: 'agent', peer_participant_id: 2 } },
+      2: { state: 'waiting', since: 11, activity: { waiting_on: 'person' } },
+    };
+    assert.deepEqual(settleAvatarStates(states, 'idle', 50), { 1: { state: 'idle', since: 50 }, 2: states[2] });
   });
 
   it('newestSince is the latest change, 0 for none', () => {

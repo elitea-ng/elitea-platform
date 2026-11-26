@@ -8,7 +8,7 @@
  * It is pure: the clients pass the clock in and schedule their own re-render
  * at `nextChangeAt`.
  */
-import { AGENT_STATE, FRAME_TYPE, type AgentState } from '../stream/frameTypes';
+import { AGENT_STATE, FRAME_TYPE, WAITING_ON, type AgentActivity, type AgentState } from '../stream/frameTypes';
 
 /** How long a `success` or `error` slot shows before the avatar settles to `idle`. */
 export const ONE_SHOT_MS = 3_000;
@@ -20,10 +20,12 @@ export function agentStateOf(value: unknown): AgentState | undefined {
   return typeof value === 'string' && STATES.has(value) ? (value as AgentState) : undefined;
 }
 
-/** One participant's last state and when it began (the client's clock, ms). */
+/** One participant's last state, when it began (the client's clock, ms), and what it is about. */
 export interface ParticipantAvatarState {
   readonly state: AgentState;
   readonly since: number;
+  /** The frame's `activity` (ADR-0061 decision 4a); absent when the frame had none. */
+  readonly activity?: AgentActivity | undefined;
 }
 
 /** The avatar state of every participant seen on a stream, keyed by participant id. */
@@ -34,20 +36,66 @@ export interface AgentStateFrameFields {
   readonly type?: unknown;
   readonly participant_id?: unknown;
   readonly state?: unknown;
+  readonly activity?: unknown;
+}
+
+const MAX_NAME = 64;
+const NAME = /^[A-Za-z0-9_.:-]+$/;
+
+function nameOf(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_NAME && NAME.test(value) ? value : undefined;
+}
+
+function idOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * A wire `activity` as the reducer keeps it: only the known fields, each
+ * well-formed (a tool or program name outside `[A-Za-z0-9_.:-]{1,64}` is
+ * dropped, never shown); `undefined` when nothing is left.
+ */
+export function activityOf(value: unknown): AgentActivity | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const waitingOn = raw.waiting_on === WAITING_ON.Person || raw.waiting_on === WAITING_ON.Agent ? raw.waiting_on : undefined;
+  const handoff = Array.isArray(raw.handoff_to) ? raw.handoff_to.map(idOf).filter((id): id is number => id !== undefined) : [];
+  const activity: Record<string, unknown> = {};
+  const put = (key: keyof AgentActivity, field: unknown) => {
+    if (field !== undefined) activity[key] = field;
+  };
+  put('tool', nameOf(raw.tool));
+  put('tool_kind', nameOf(raw.tool_kind));
+  put('program', nameOf(raw.program));
+  put('waiting_on', waitingOn);
+  put('peer_participant_id', idOf(raw.peer_participant_id));
+  put('handoff_to', handoff.length > 0 ? handoff : undefined);
+  return Object.keys(activity).length > 0 ? (activity as AgentActivity) : undefined;
+}
+
+function sameActivity(a: AgentActivity | undefined, b: AgentActivity | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**
  * Applies one stream frame. Any frame that is not a well-formed
  * `agent_state` returns the same object, so a caller can compare by
- * reference.
+ * reference. The frame's `activity` is kept next to the state; a frame
+ * without one clears it. A new activity under the same state (another tool)
+ * keeps the state's `since`, so it does not restart the motion.
  */
 export function applyAgentStateFrame(states: AvatarStates, frame: AgentStateFrameFields, now: number): AvatarStates {
   if (frame.type !== FRAME_TYPE.AgentState) return states;
   const id = frame.participant_id;
   const state = agentStateOf(frame.state);
   if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0 || state === undefined) return states;
-  if (states[id]?.state === state) return states;
-  return { ...states, [id]: { state, since: now } };
+  const activity = activityOf(frame.activity);
+  const previous = states[id];
+  if (previous?.state === state && sameActivity(previous.activity, activity)) return states;
+  const since = previous?.state === state ? previous.since : now;
+  return { ...states, [id]: activity === undefined ? { state, since } : { state, since, activity } };
 }
 
 function isOneShot(state: AgentState): boolean {
@@ -98,18 +146,19 @@ export function activeAnimatedParticipant(states: AvatarStates, now: number): nu
   return active;
 }
 
-/** The person's motion preferences. */
 /**
  * The states a run leaves when its stream ends: every participant still in a
  * looping state takes `final` (`success` or `error` from the turn's last
  * frame, `idle` for a cancel or a lost stream), so no avatar loops after its
- * run. `waiting` stays, because the answer is paused on a person, and a
- * one-shot keeps its slot. The same object when nothing changes.
+ * run. `waiting` on a person stays, because the answer is paused on them
+ * (`waiting` on an agent ends with the run), and a one-shot keeps its slot.
+ * The same object when nothing changes.
  */
 export function settleAvatarStates(states: AvatarStates, final: AgentState, now: number): AvatarStates {
   let next: Record<number, ParticipantAvatarState> | undefined;
   for (const [key, entry] of Object.entries(states)) {
-    if (isOneShot(entry.state) || entry.state === AGENT_STATE.Waiting || entry.state === AGENT_STATE.Idle) continue;
+    const pausedOnPerson = entry.state === AGENT_STATE.Waiting && entry.activity?.waiting_on !== WAITING_ON.Agent;
+    if (isOneShot(entry.state) || pausedOnPerson || entry.state === AGENT_STATE.Idle) continue;
     next ??= { ...states };
     next[Number(key)] = { state: final, since: now };
   }
@@ -121,6 +170,7 @@ export function newestSince(states: AvatarStates): number {
   return Object.values(states).reduce((max, entry) => Math.max(max, entry.since), 0);
 }
 
+/** The person's motion preferences. */
 export interface MotionPreferences {
   /** `prefers-reduced-motion` on web and desktop, the system setting on mobile. */
   readonly reducedMotion: boolean;
