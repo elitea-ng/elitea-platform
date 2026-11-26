@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/localprobe"
 )
 
 type Status struct {
@@ -38,9 +40,14 @@ func Routes() chi.Router {
 
 func RoutesWithDeps(deps Deps) chi.Router {
 	r := chi.NewRouter()
+	// /healthz is public and says only {"status":"ok"}. /readyz and /startupz
+	// name each dependency's state, so they answer only a probe inside the
+	// container (the chart's `elitea-main -healthcheck <path>` exec probe, the
+	// compose healthcheck) and 404 to everyone else, whether or not the
+	// browser edge is on (#2955).
 	r.Get("/healthz", livenessHandler)
-	r.Get("/readyz", readinessHandler(deps))
-	r.Get("/startupz", startupHandler)
+	r.Method(http.MethodGet, "/readyz", localprobe.Only(readinessHandler(deps)))
+	r.Method(http.MethodGet, "/startupz", localprobe.Only(http.HandlerFunc(startupHandler)))
 	return r
 }
 

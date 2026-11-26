@@ -64,10 +64,49 @@ func TestUIServesSelfContainedHTMLWithNoExternalReferences(t *testing.T) {
 			t.Fatalf("docs UI references an external resource %q", forbidden)
 		}
 	}
-	if !strings.Contains(body, "/api/openapi.json") {
-		t.Fatal("docs UI does not reference the local spec endpoint")
+	if !strings.Contains(body, `<script src="`+openapidocs.DocsScriptPath+`"></script>`) {
+		t.Fatal("docs UI does not load its served script")
 	}
 	if csp := response.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
 		t.Fatalf("missing restrictive CSP: %q", csp)
+	}
+}
+
+// No inline script may run on the docs page: script-src is 'self' alone, the
+// page carries no inline <script> body or event-handler attribute, and the
+// one script it loads is served with a script content type.
+func TestUIPolicyAllowsNoInlineScriptAndTheScriptIsServed(t *testing.T) {
+	handler := openapidocs.NewHandler()
+	page := httptest.NewRecorder()
+	handler.UI(page, httptest.NewRequest(http.MethodGet, "/api/docs", nil))
+
+	csp := page.Header().Get("Content-Security-Policy")
+	var scriptSrc string
+	for _, directive := range strings.Split(csp, ";") {
+		if fields := strings.Fields(directive); len(fields) > 0 && fields[0] == "script-src" {
+			scriptSrc = strings.Join(fields[1:], " ")
+		}
+	}
+	if scriptSrc != "'self'" {
+		t.Fatalf("script-src = %q, want 'self' alone (policy %q)", scriptSrc, csp)
+	}
+	body := page.Body.String()
+	if strings.Count(body, "<script") != 1 || !strings.Contains(body, `<script src="`+openapidocs.DocsScriptPath+`"></script>`) {
+		t.Fatal("the docs page must carry exactly one <script>, the served file, with no inline body")
+	}
+	if strings.Contains(strings.ToLower(body), " onclick=") || strings.Contains(strings.ToLower(body), " onload=") {
+		t.Fatal("the docs page carries an inline event handler")
+	}
+
+	script := httptest.NewRecorder()
+	handler.Script(script, httptest.NewRequest(http.MethodGet, openapidocs.DocsScriptPath, nil))
+	if script.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d, want 200", openapidocs.DocsScriptPath, script.Code)
+	}
+	if got := script.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/javascript") {
+		t.Fatalf("script Content-Type = %q, want text/javascript", got)
+	}
+	if !strings.Contains(script.Body.String(), `fetch("/api/openapi.json")`) {
+		t.Fatal("the served script does not load the local spec endpoint")
 	}
 }

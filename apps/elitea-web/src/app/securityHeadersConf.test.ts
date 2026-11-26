@@ -203,4 +203,8 @@ describe('nginx/spa.conf', () => {
       /^add_header\s+Content-Security-Policy/m,
     );
   });
+
+  it('does not announce the nginx version', () => {
+    expect(withoutComments(SPA_CONF)).toMatch(/^\s*server_tokens\s+off;/m);
+  });
 });

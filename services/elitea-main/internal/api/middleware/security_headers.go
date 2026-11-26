@@ -1,6 +1,9 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // SecurityHeaders sets the response headers that stop a browser from
 // interpreting an API response as a document.
@@ -49,6 +52,32 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		setIfAbsent(header, "Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// StrictTransportSecurityValue is the HSTS policy elitea-main sends: two
+// years, subdomains included.
+const StrictTransportSecurityValue = "max-age=63072000; includeSubDomains"
+
+// StrictTransportSecurity sends Strict-Transport-Security on every response
+// when the deployment's public origin is https, and is a no-op otherwise, so a
+// plain-HTTP development stack never pins a browser to TLS for localhost.
+//
+// It is a separate middleware from SecurityHeaders because it belongs in front
+// of the browser edge (internal/api/webedge): the `/` redirect and the web
+// container's documents are the responses a first visit sees, and the policy
+// must reach the browser on them too. elitea-main is the single edge
+// (ADR-0036), so a TLS-terminating proxy in front must pass the header through.
+// A handler or upstream that sets its own value keeps it.
+func StrictTransportSecurity(publicOrigin string) func(http.Handler) http.Handler {
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicOrigin)), "https://") {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			setIfAbsent(w.Header(), "Strict-Transport-Security", StrictTransportSecurityValue)
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // setIfAbsent writes value only when the handler has not set the header.

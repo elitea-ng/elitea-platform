@@ -14,7 +14,9 @@
 //     elitea-main itself serves under `/app`: the MCP server at
 //     `/app/<numeric project id>/mcp[/…]` and the two icon file servers
 //     `/app/application_icon/` and `/app/application_tool_icon/`.
-//  3. `/readyz` and `/startupz` are not published at this edge. Their bodies
+//  3. `/readyz` and `/startupz` are not published at this edge (and, since
+//     #2955, not by elitea-main's own health routes either, edge on or off:
+//     internal/api/localprobe holds the rule for both). Their bodies
 //     name each dependency's state; a probe inside the container (loopback,
 //     with no Forwarded, X-Forwarded-For or X-Real-IP header: a proxy on
 //     loopback relays browsers) still reaches them. The chart runs its startup and readiness probes as
@@ -43,12 +45,13 @@ package webedge
 import (
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/localprobe"
 )
 
 // UpstreamEnv names the environment variable that turns the edge on.
@@ -135,6 +138,7 @@ func Middleware(upstream *url.URL) func(http.Handler) http.Handler {
 			request.Out.Host = request.In.Host
 			request.SetXForwarded()
 		},
+		ModifyResponse: dropUpstreamOnlyHeaders,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 			http.Error(w, "web upstream unavailable", http.StatusBadGateway)
 		},
@@ -155,7 +159,7 @@ func Middleware(upstream *url.URL) func(http.Handler) http.Handler {
 				http.Redirect(w, r, target, status)
 			case RoutesToWeb(path):
 				proxy.ServeHTTP(w, r)
-			case isNotPublished(path) && !fromLoopback(r):
+			case isNotPublished(path) && !localprobe.FromLoopback(r):
 				http.NotFound(w, r)
 			default:
 				next.ServeHTTP(w, r)
@@ -173,26 +177,13 @@ func isNotPublished(path string) bool {
 	return false
 }
 
-// forwardingHeaders mark a request a proxy relayed. Any one of them means the
-// loopback peer is a proxy, not a probe inside the container.
-var forwardingHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Real-Ip"}
+// upstreamOnlyHeaders name the web container's software. They describe the
+// upstream, not the edge, and are dropped from every relayed answer.
+var upstreamOnlyHeaders = []string{"Server", "X-Powered-By"}
 
-// fromLoopback answers whether r is a probe inside the container: a loopback
-// peer that no proxy relayed. A reverse proxy on loopback in front of the edge
-// (a mesh sidecar, which forwards inbound traffic from 127.0.0.6, or an nginx
-// on the same host) makes every browser request a loopback peer, so a request
-// carrying a forwarding header is never trusted as one; the -healthcheck exec
-// probe sends none.
-func fromLoopback(r *http.Request) bool {
-	for _, name := range forwardingHeaders {
-		if len(r.Header.Values(name)) > 0 {
-			return false
-		}
+func dropUpstreamOnlyHeaders(response *http.Response) error {
+	for _, name := range upstreamOnlyHeaders {
+		response.Header.Del(name)
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return nil
 }

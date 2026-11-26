@@ -240,6 +240,15 @@ Each provider's scratch space (`deepwiki.scratch` `8Gi`, `inventory.scratch` `20
 
 See [DeepWiki and Inventory](/menus/deepwiki-and-inventory) for the product-facing side.
 
+## The public edge: HSTS, Server header and readiness
+
+elitea-main is the single public edge. It applies these response rules on every install:
+
+- **HSTS.** When `global.publicUrl` (`DEPLOYMENT_URL`) is `https`, every response carries `Strict-Transport-Security: max-age=63072000; includeSubDomains`: the API, the `/` redirect and the web pages it relays. A plain-HTTP origin (a local stack) gets no HSTS. If a TLS-terminating proxy or load balancer sits in front of elitea-main, it must pass the header through, not strip it. Because of `includeSubDomains`, every subdomain of the public host must also serve HTTPS.
+- **No software version.** The web image sends no nginx version (`server_tokens off`), and elitea-main drops the `Server` and `X-Powered-By` headers from every answer it relays from the web container.
+- **The API reference page** (`/api/docs`) runs only its served script (`/api/docs/app.js`). Its policy allows no inline script.
+- **Readiness is container-local.** `/readyz` and `/startupz` name each dependency's state, so they answer only a probe inside the container: a loopback caller with no `Forwarded`, `X-Forwarded-For` or `X-Real-IP` header. Every other caller gets `404`, with or without the web edge (`web.enabled`). The chart's probes run `elitea-main -healthcheck <path>` inside the container, and the compose healthchecks do the same. An external monitor uses `/healthz`, which stays public and answers `{"status":"ok"}`.
+
 ## Observability
 
 Traces flow over OpenTelemetry to the chart's own `otelCollector` (on by default, `otel/opentelemetry-collector-contrib`). The shipped pipeline exports to `debug` (log-only) — swap the `otelCollector.config` exporter for a real sink (an OTLP/HTTP endpoint, a vendor backend) before relying on traces outliving the pod. There is no bundled Langfuse or third-party APM integration.

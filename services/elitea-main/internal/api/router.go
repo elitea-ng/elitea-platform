@@ -1840,6 +1840,10 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	// them. See StripClientIdentityHeaders for the one deliberate exception.
 	// tests/deployedge TestWebRelayCarriesNoClientIdentity holds the order.
 	r.Use(apimw.StripClientIdentityHeaders)
+	// HSTS in front of the browser edge, so the `/` redirect and the web
+	// container's documents carry it too. A no-op unless the public origin is
+	// https (apimw.StrictTransportSecurity).
+	r.Use(apimw.StrictTransportSecurity(cfg.PublicOrigin))
 	// The browser edge goes next, so the web container's answers leave the
 	// API's response middleware untouched (internal/api/webedge). A no-op when
 	// WebUpstream is nil.
@@ -2104,6 +2108,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 	r.Get("/api/openapi.yaml", openapiDocsHandler.Spec)
 	r.Get("/api/openapi.json", openapiDocsHandler.SpecJSON)
 	r.Get("/api/docs", openapiDocsHandler.UI)
+	r.Get(v2openapidocs.DocsScriptPath, openapiDocsHandler.Script)
 
 	// Admin UI SPA — serves the admin panel with server-side config injection
 	if cfg.AdminUI != nil {
