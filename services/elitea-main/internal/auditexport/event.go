@@ -51,6 +51,8 @@ const (
 	// evidence added later; no mapper produces them yet.
 	SourceApproval   Source = "approval"
 	SourceSuspension Source = "suspension"
+	// SourceSecuritySignal is one row of the security signal ledger (ADR-0058).
+	SourceSecuritySignal Source = "security_signal"
 )
 
 // Outcome values.
@@ -71,6 +73,7 @@ type Event struct {
 	Source      Source       `json:"source"`
 	EventType   string       `json:"event_type"`
 	OCSF        *OCSF        `json:"ocsf,omitempty"`
+	Signal      *Signal      `json:"signal,omitempty"`
 	Tenant      Tenant       `json:"tenant"`
 	Actor       Actor        `json:"actor"`
 	Action      string       `json:"action"`
@@ -106,21 +109,26 @@ type Actor struct {
 	Email    string   `json:"email,omitempty"`
 	Chain    []string `json:"chain,omitempty"`
 	Fidelity string   `json:"fidelity,omitempty"`
+	// Role is what the actor has to do with the signal: "subject" or
+	// "affected". Only the security_signal stream sets it.
+	Role string `json:"role,omitempty"`
 }
 
 // Target is what the action acted on.
 type Target struct {
-	Type string `json:"type,omitempty"`
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
+	Type      string `json:"type,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	ReleaseID string `json:"release_id,omitempty"`
 }
 
 // Correlation ties the event to a trace or request.
 type Correlation struct {
-	TraceID       string `json:"trace_id,omitempty"`
-	SpanID        string `json:"span_id,omitempty"`
-	ParentSpanID  string `json:"parent_span_id,omitempty"`
-	CorrelationID string `json:"correlation_id,omitempty"`
+	TraceID        string `json:"trace_id,omitempty"`
+	SpanID         string `json:"span_id,omitempty"`
+	ParentSpanID   string `json:"parent_span_id,omitempty"`
+	CorrelationID  string `json:"correlation_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
 }
 
 // Chain carries the tamper-evident chain fields.
@@ -129,6 +137,77 @@ type Chain struct {
 	Sequence  int64  `json:"sequence"`
 	PrevHash  string `json:"prev_hash"`
 	Hash      string `json:"hash"`
+}
+
+// Signal is one security signal (ADR-0058 decision 1). The fields are
+// optional except type, taxonomy_version, category and severity, matching the
+// schema.
+type Signal struct {
+	Type            string            `json:"type"`
+	TaxonomyVersion string            `json:"taxonomy_version"`
+	Category        string            `json:"category"`
+	Severity        string            `json:"severity"`
+	DefaultSeverity string            `json:"default_severity,omitempty"`
+	Confidence      string            `json:"confidence,omitempty"`
+	Disposition     string            `json:"disposition,omitempty"`
+	Detector        *SignalDetector   `json:"detector,omitempty"`
+	Provenance      *SignalProvenance `json:"provenance,omitempty"`
+	Locator         *SignalLocator    `json:"locator,omitempty"`
+	Attribution     string            `json:"attribution,omitempty"`
+	Labels          []string          `json:"labels,omitempty"`
+	Count           int64             `json:"count,omitempty"`
+	FirstSeen       string            `json:"first_seen,omitempty"`
+	LastSeen        string            `json:"last_seen,omitempty"`
+	Folded          []string          `json:"folded,omitempty"`
+	DedupKey        string            `json:"dedup_key,omitempty"`
+	Origin          string            `json:"origin,omitempty"`
+	Evidence        *SignalEvidence   `json:"evidence,omitempty"`
+}
+
+// SignalDetector is the detector of a signal.
+type SignalDetector struct {
+	Component string `json:"component"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+}
+
+// SignalProvenance is the provenance of the content of a signal.
+type SignalProvenance struct {
+	Kind         string `json:"kind"`
+	Toolkit      string `json:"toolkit,omitempty"`
+	MCPServer    string `json:"mcp_server,omitempty"`
+	DocumentID   string `json:"document_id,omitempty"`
+	URLHost      string `json:"url_host,omitempty"`
+	Author       string `json:"author,omitempty"`
+	SelfSupplied *bool  `json:"self_supplied,omitempty"`
+	Digest       string `json:"digest,omitempty"`
+	Claimed      *bool  `json:"claimed,omitempty"`
+}
+
+// SignalLocator is the content-free locator of the matched span.
+type SignalLocator struct {
+	StepRef   string `json:"step_ref,omitempty"`
+	PartIndex *int   `json:"part_index,omitempty"`
+	ByteStart *int   `json:"byte_start,omitempty"`
+	ByteEnd   *int   `json:"byte_end,omitempty"`
+}
+
+// SignalEvidence is a digest of a whole stored artifact.
+type SignalEvidence struct {
+	Digest string `json:"digest,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+}
+
+// CheckpointDetails is details for a chain.checkpoint event.
+type CheckpointDetails struct {
+	Partition       string `json:"partition"`
+	Epoch           int64  `json:"epoch"`
+	HeadHash        string `json:"head_hash"`
+	Length          int64  `json:"length"`
+	DeliverySeqHigh int64  `json:"delivery_seq_high"`
+	ChainStatus     string `json:"chain_status,omitempty"`
+	KeyID           string `json:"key_id"`
+	Signature       string `json:"signature"`
 }
 
 // SecurityAuditDetails is details for source security_audit.

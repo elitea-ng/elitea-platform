@@ -1,0 +1,30 @@
+{
+  "schema": "elitea.audit.v1",
+  "event_id": "0192f0c1-7b6e-7c3a-8f00-000000000020",
+  "time": "2026-11-25T09:30:00Z",
+  "source": "security_signal",
+  "event_type": "security_signal.access.authn_failed",
+  "tenant": {
+    "project_id": 0
+  },
+  "actor": {
+    "type": "unknown",
+    "id": "unknown",
+    "role": "affected"
+  },
+  "action": "access.authn_failed",
+  "outcome": "failure",
+  "chain": {
+    "partition": "0",
+    "sequence": 1,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "signal": {
+    "type": "access.authn_failed",
+    "taxonomy_version": "1.0.0",
+    "category": "access",
+    "severity": "medium"
+  },
+  "details": {}
+}

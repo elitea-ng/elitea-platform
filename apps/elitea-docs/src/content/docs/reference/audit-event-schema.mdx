@@ -9,7 +9,9 @@ How to turn the export on is in [Post-install configuration](/deployment/configu
 
 ## Versioning
 
-`schema` is always `elitea.audit.v1`. Adding an optional field is not a version change, so ignore fields you do not know. Renaming, removing or retyping a field, or making one required, is a new version (`elitea.audit.v2`); a consumer should quarantine a version it does not recognise rather than guess. A field with no value is omitted, never `null`, except `tenant.project_id`.
+`schema` is always `elitea.audit.v1`. Adding an optional field is not a version change. Renaming, removing or retyping a field, or making one required, is a new version (`elitea.audit.v2`); a consumer should quarantine a version it does not recognise rather than guess. A field with no value is omitted, never `null`, except `tenant.project_id`.
+
+**A receiver ignores fields it does not know.** The schema stays strict for producers so that a producer typo fails CI; a receiver that encounters a field it does not know ignores it rather than rejecting the event.
 
 ## The envelope
 
@@ -18,16 +20,17 @@ How to turn the export on is in [Post-install configuration](/deployment/configu
 | `schema` | string | `elitea.audit.v1`. |
 | `event_id` | string | Stable identifier. Delivery is at least once, so **deduplicate on it**. A security audit event keeps its UUID; an audit trail row has a name-based UUID derived from its row id, so a replay carries the same id. |
 | `time` | RFC 3339 string | When the audited operation happened (UTC). |
-| `source` | enum | `security_audit` (the security audit outbox), `admin_audit` (`centry.audit_events`, the Audit Trail), `run_step` (the [step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) of agent runs). `approval` and `suspension` are reserved for evidence added later. |
-| `event_type` | string | The producer's type: a CloudEvents type such as `ai.elitea.security.v1.decision`, or `api`, `socketio`, `rpc`, `agent`, `tool`, `llm`, `schedule`, `admin_task` for the Audit Trail. |
+| `source` | enum | `security_audit` (the security audit outbox), `admin_audit` (`centry.audit_events`, the Audit Trail), `run_step` (the [step records](/admin/enterprise-controls/audit-evidence-and-retention#run-step-records) of agent runs), `security_signal` (the security signal ledger, ADR-0058). `approval` and `suspension` are reserved for evidence added later. |
+| `event_type` | string | The producer's type: a CloudEvents type such as `ai.elitea.security.v1.decision`, or `api`, `socketio`, `rpc`, `agent`, `tool`, `llm`, `schedule`, `admin_task` for the Audit Trail, or `security_signal.<type>` for the signal stream. `chain.checkpoint` is the event_type of a chain checkpoint. |
 | `ocsf` | object, optional | `class_uid` and `category_uid` when an OCSF class fits: 3003 Authorize Session, 3004 Entity Management, 3005 User Access Management, 6003 API Activity. |
 | `tenant.project_id` | integer or null | The tenant project. `0` is the platform partition of the security audit chain. |
-| `actor` | object | `type` (`user`, `principal`, `agent`, `system`, `unknown`), `id`, and optionally `email`, `chain` (the RFC 8693 actor chain, outermost first) and `fidelity` (`native_act`, `configured_act`, `azp_only`, `attributed`, `none`). |
+| `actor` | object | `type` (`user`, `principal`, `agent`, `system`, `unknown`), `id`, and optionally `email`, `chain` (the RFC 8693 actor chain, outermost first), `fidelity` (`native_act`, `configured_act`, `azp_only`, `attributed`, `none`) and `role` (`subject` or `affected`, only on the signal stream). |
 | `action` | string | The governed operation (`credential.use`, `grant.revoke`) or, for the Audit Trail, `METHOD /route`. |
-| `target` | object, optional | `type`, `id`, `name` of what the action acted on. |
+| `target` | object, optional | `type`, `id`, `name` and optionally `release_id` of what the action acted on. |
 | `outcome` | enum | `allow` or `deny` for authorisation decisions; `success` or `failure` for operations; `unknown`. |
-| `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id`. |
+| `correlation` | object, optional | `trace_id`, `span_id`, `parent_span_id`, `correlation_id` and optionally `conversation_id` (the conversation uuid as a string). |
 | `chain` | object, optional | `partition`, `sequence`, `prev_hash`, `hash` (hex SHA-256) when the source keeps a tamper-evident chain. Present on every `security_audit` and `run_step` event (partition `run:<run id>`, one chain per run), and on `admin_audit` events written since the trail was chained (partition `0`, one platform-wide chain). |
+| `signal` | object, optional | One security signal; present on every `security_signal` event, never on any other source. See [Security signals](#security-signals). |
 | `details` | object | Fields specific to the source, listed below. |
 
 The OCSF mapping, in the schema's own description: `event_id` to `metadata.uid`, `time` to `time`, `source` to `metadata.product.feature.name`, `ocsf.*` to `class_uid` and `category_uid`, `tenant.project_id` to `cloud.project_uid`, `actor.id` to `actor.user.uid`, `actor.email` to `actor.user.email_addr`, `action` to `activity_name`, `target.*` to `resources[]`, `outcome` to `status_id` and the authorization disposition, `correlation.trace_id` to `metadata.correlation_uid`. `chain.*` and `details.*` have no OCSF attribute and travel in `unmapped`.
@@ -111,6 +114,37 @@ On a row chained in the trail's canonical form `elitea.audit_events.v2` (every r
 `row_id`, `run_id`, `step_id`, `seq`, `generation`, `kind` (`model_call`, `tool_call`, `retrieval`, `approval`, `delegation`, `cap`, `error`, `output`), `started_at`, `ended_at`, `summary` (small fields per kind), `cited_step_ids`, `cited_document_ids`, `inputs` and `outputs` (each `digest`, `size`, `original_size`, `truncated`, `filtered`, `media_type` and `ref`, the object-store reference), and, when known: `application_id`, `release_id`, `definition_digest`, `node_id`, `name`, `toolkit_id`, `retrieval` (`index_name`, `query`, `filters_json`, `top_k`, `documents` with `document_id`, `source`, `score`, `rank`). The event carries digests and references, never the content.
 
 When a run ends, its chain is anchored by a `security_audit` event of type `ai.elitea.security.v1.run.steps.anchored` whose `details` carry `chain_head` (the run's last hash) and `chain_length`.
+
+## Security signals
+
+The security signal stream carries one event per row of the security signal ledger (ADR-0058). `source` is `security_signal` and `event_type` is `security_signal.<type>`: for example `security_signal.content.prompt_injection`. `signal.type` is a dotted name (`category.subtype`), validated by a pattern, never by an enumeration, so a new type does not break a strict receiver. The `signal` object is never set on another source, and a `security_signal` event always carries it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `signal.type` | string, pattern | The stable dotted name (`access.authn_failed`, `derived.repeated_prompt_attack`). Never enumerated here; the registry of ADR-0058 decision 2 is the published list. |
+| `signal.taxonomy_version` | string | The version of the registry the producer used. |
+| `signal.category` | string | The first segment of the type. |
+| `signal.severity` | enum | `info`, `low`, `medium`, `high`, `critical`: the value after the deployment's overrides. |
+| `signal.default_severity` | enum | The registry value, before the deployment's overrides. |
+| `signal.confidence` | enum | `low`, `medium`, `high`: the declared confidence of the detector. |
+| `signal.disposition` | enum | `blocked`, `masked`, `flagged`, `warned`, `approval_required`, `rejected`, `throttled`, `suspended`, `error_open`, `error_closed`, `observed`: what the control did. |
+| `signal.detector` | object | `component` (the governance entry), `name` (the detector) and `type` (the detector type). |
+| `signal.provenance` | object | `kind` (`user_turn`, `tool_result`, `retrieval`, `attachment`, `skill`, `participant_message`, `subagent_brief`) and, when known: `toolkit`, `mcp_server`, `document_id`, `url_host`, `author` (the subject surrogate of the uploader, the skill author or the message sender), `self_supplied` (true when the author is the actor), `digest` (the keyed digest of the untrusted part) and `claimed` (true when the client gave the provenance and it is the only one). |
+| `signal.locator` | object, optional | Content-free: `step_ref`, `part_index`, `byte_start` and `byte_end`. Numbers and ids only. |
+| `signal.attribution` | enum | `resolved` (default), `unresolved`, `stale_lease`, `reconciled`. |
+| `signal.labels` | array, at most 16 | Bounded labels: a detector label, a framework tag or a reason code. Never matched text. |
+| `signal.count` | integer | The number of signals a summary replaces. |
+| `signal.first_seen`, `signal.last_seen` | RFC 3339 string | The window of a summary signal. |
+| `signal.folded` | array, at most 20 | The event ids, run ids and conversation ids (uuids) of the signals that a summary replaced. |
+| `signal.dedup_key` | string | A keyed hash of the type, the project, the subject surrogate, the agent, the detector, the disposition and, for a signal with no subject, the client key. |
+| `signal.origin` | enum | `server`, `client` or `client_attested`. A client-reported signal is never treated as verified. |
+| `signal.evidence` | object, optional | `digest` of a whole stored artifact and `ref`, a capability: signed, expiring and bound to this signal. |
+
+A signal about untrusted content carries `actor.role` as `affected` (the actor's run met the thing) or `subject` (the actor did the thing). The actor of a signal is a surrogate or a pseudonym, never a clear user id or email.
+
+`platform.sink_test` is one of the type registry: it is the event of "Send test event". It is sent to the one sink under test with that sink's next `delivery_seq`, is not written to the ledger and carries no `chain` object.
+
+A `chain.checkpoint` event is not a detection. Its `event_type` is `chain.checkpoint` and it carries no `signal` object and no `chain` object. Its `details` carry `partition`, `epoch`, `head_hash` (hex SHA-256), `length`, `delivery_seq_high`, `chain_status` (`broken_since=<sequence>` on a partition with a break, or `deleted` on the final checkpoint of a removed partition), `key_id` and `signature`.
 
 ## Example
 
