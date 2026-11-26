@@ -156,6 +156,17 @@ export interface AdminConfigSection {
    * `service_descriptors` out of the client's section list.
    */
   readonly page?: string;
+  /**
+   * Who may open the section (ADR-0059 R0.5): the console area it belongs
+   * to, under which Configuration groups it (R3.7, issue 2538).
+   */
+  readonly access?: { readonly area?: string };
+  /**
+   * What the caller may do with it (R3.7): `read` when the server would
+   * refuse a save. The PUT refuses on its own account either way; this only
+   * disables the save before the refusal.
+   */
+  readonly level?: 'read' | 'write';
 }
 
 /** The value of `page` for the sections the Features page owns. */

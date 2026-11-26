@@ -43,7 +43,7 @@ import {
 import { ConfigurationToolMapEditor, useConfigToolMapRows } from './ConfigurationToolMapEditor';
 import { ProjectListEditor } from './ProjectListEditor';
 import { useConfigSuggestions, type AdminConfigField } from './api/adminConfigurationApi';
-import { isFieldVisible, listItemTypeFor, widgetFor, type ConfigWidget } from './configurationFields';
+import { fieldLabel, isFieldVisible, listItemTypeFor, widgetFor, type ConfigWidget } from './configurationFields';
 
 // Re-exported so the spec-reading helpers keep ONE import path for their
 // existing consumers (`useAdminConfigurationPage`, and the two page test
@@ -63,9 +63,6 @@ interface FieldProps {
   readonly onChange: (key: string, next: unknown) => void;
 }
 
-function fieldLabel(field: AdminConfigField): string {
-  return field.title === '' ? field.key : field.title;
-}
 
 /**
  * Title + description above a control that cannot carry its own label. The

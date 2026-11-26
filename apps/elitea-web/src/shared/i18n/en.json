@@ -7536,5 +7536,10 @@
   "pages.admin.noAccess.askFallback": "To ask for administration access, contact the people who manage this deployment.",
   "pages.admin.noAccess.askSupport": "To ask for administration access, contact your IT support:",
   "pages.admin.noAccess.explanation": "Your administration roles open no part of this console. The server refuses its pages and changes for you.",
-  "pages.admin.noAccess.title": "You have no administration access"
+  "pages.admin.noAccess.title": "You have no administration access",
+  "pages.admin.configuration.area.other": "Other",
+  "pages.admin.configuration.search": "Search sections and fields",
+  "pages.admin.configuration.searchEmpty": "No section or field matches “{{query}}”.",
+  "pages.admin.configuration.searchLabel": "Search configuration",
+  "pages.admin.configuration.sectionViewOnly": "View only. Your roles can see this section but not change it."
 }

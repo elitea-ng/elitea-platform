@@ -55,14 +55,28 @@ export interface AdminConfigurationPageState {
   readonly onFieldChange: (key: string, next: unknown) => void;
   readonly isDirty: boolean;
   readonly isSaving: boolean;
-  /** View-only mode (R3.4b, issue 2613): the page's item is read for this caller. */
+  /**
+   * View-only mode: the page's item is read for this caller (R3.4b, issue
+   * 2613), or the open section is (its `level`, R3.7, issue 2538).
+   */
   readonly readOnly: boolean;
+  /** The open section alone is read for this caller, on a page it may write (R3.7). */
+  readonly sectionReadOnly: boolean;
   readonly onSave: () => void;
   readonly onDiscard: () => void;
   readonly saveError: string | undefined;
   readonly savedAt: number | undefined;
   readonly onDismissSaved: () => void;
   readonly onDismissError: () => void;
+}
+
+/** View-only of the page (its item) or of the open section alone (its `level`). */
+function writeFlags(
+  pageWritable: boolean,
+  section: AdminConfigSection | undefined,
+): Pick<AdminConfigurationPageState, 'readOnly' | 'sectionReadOnly'> {
+  const sectionRead = section?.level === 'read';
+  return { readOnly: !pageWritable || sectionRead, sectionReadOnly: pageWritable && sectionRead };
 }
 
 /**
@@ -235,7 +249,7 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     onFieldChange,
     isDirty: Object.keys(draft).length > 0,
     isSaving: saveMutation.isPending,
-    readOnly: !access.writable,
+    ...writeFlags(access.writable, activeSection),
     onSave,
     onDiscard,
     saveError,

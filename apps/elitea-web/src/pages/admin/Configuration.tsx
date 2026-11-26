@@ -124,16 +124,16 @@
  * section opens on its narrow read or write permission alone, or on
  * `runtime.plugins` with its `required_permission`. The schema list it serves
  * names only the sections the caller can open, so this page renders that list
- * as given and a narrow holder sees only its own sections.
+ * as given and a narrow holder sees only its own sections. R3.7 (issue 2538)
+ * groups them under their console area, adds a search over titles and field
+ * labels (`./ConfigurationSectionNav`), and disables the save of a section the
+ * list gives at `level: read`.
  */
 import type { ComponentType } from 'react';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import LinearProgress from '@mui/material/LinearProgress';
-import List from '@mui/material/List';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
@@ -155,6 +155,7 @@ import {
   useMovedSectionReach,
 } from './ConfigurationMovedSection';
 import { ConfigurationSectionActions } from './ConfigurationSectionActions';
+import { ConfigurationSectionNav } from './ConfigurationSectionNav';
 import { ConfigurationDelegationStatus } from './ConfigurationDelegationStatus';
 import { ConfigurationSectionForm } from './ConfigurationSectionForm';
 import { WorkerEgressHostsPanel } from './WorkerEgressHostsPanel';
@@ -285,12 +286,23 @@ function SectionExtra({ id }: { readonly id: string | undefined }) {
  * as one function, and the gate was right: the branching was the part that had
  * grown, not the markup.
  */
+/** A section at `level: read` on a page the caller may write (R3.7). */
+function SectionViewOnly({ shown }: { readonly shown: boolean }) {
+  if (!shown) return null;
+  return (
+    <Alert severity="info" data-testid="admin-configuration-section-view-only">
+      {t('pages.admin.configuration.sectionViewOnly', 'View only. Your roles can see this section but not change it.')}
+    </Alert>
+  );
+}
+
 function SectionForm({ state }: { readonly state: AdminConfigurationPageState }) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       {/* The Configuration item's notice sits with its own form: a section
           with a dedicated editor is its own item and brings its own (R3.4b). */}
       <AdminViewOnlyNotice />
+      <SectionViewOnly shown={state.sectionReadOnly} />
       {state.activeSection?.description !== undefined && state.activeSection.description !== '' ? (
         <Typography variant="bodySmall" color="text.secondary">
           {state.activeSection.description}
@@ -357,37 +369,21 @@ function ConfigurationPage() {
       ) : null}
 
       <Box sx={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <List
-          // `component="nav"`, not the default `<ul>`: `ListItemButton`
-          // renders a `<div>`, and a `<ul>` whose children are divs is an axe
-          // `list` violation (serious) — caught by journey 34's a11y check.
-          component="nav"
-          dense
-          aria-label={t('pages.admin.configuration.sections', 'Configuration sections')}
-          sx={{ width: '14rem', flex: '0 0 auto' }}
-        >
-          {state.sections.map((section) => (
-            // A moved section's row is the old anchor: it opens the page (R3.6).
-            <ListItemButton
-              key={section.id}
-              selected={section.id === state.activeSection?.id}
-              {...movedSectionRow(movedPath(section), () => state.onSelectSection(section.id), reaches)}
-            >
-              <ListItemText
-                primary={section.title}
-                // Which sections this deployment serves, before a click. A
-                // section with its own editor or page is available, not marked.
-                secondary={
-                  section.unavailable_reason === undefined ||
-                  managedEditorFor(section) !== undefined ||
-                  movedPath(section) !== undefined
-                    ? undefined
-                    : t('pages.admin.configuration.sectionUnavailable', 'Not available here')
-                }
-              />
-            </ListItemButton>
-          ))}
-        </List>
+        <ConfigurationSectionNav
+          sections={state.sections}
+          activeId={state.activeSection?.id}
+          // A moved section's row is the old anchor: it opens the page (R3.6).
+          rowProps={(section) => movedSectionRow(movedPath(section), () => state.onSelectSection(section.id), reaches)}
+          // Which sections this deployment serves, before a click. A section
+          // with its own editor or page is available, not marked.
+          secondary={(section) =>
+            section.unavailable_reason === undefined ||
+            managedEditorFor(section) !== undefined ||
+            movedPath(section) !== undefined
+              ? undefined
+              : t('pages.admin.configuration.sectionUnavailable', 'Not available here')
+          }
+        />
         <Box sx={{ flex: '1 1 24rem', minWidth: '18rem' }}>
           <SectionBody state={state} movedPath={movedPath} />
         </Box>

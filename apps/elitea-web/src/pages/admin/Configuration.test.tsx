@@ -11,7 +11,7 @@
  *  - that the reason shown is the SERVER's, not one the page invented.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 
@@ -445,5 +445,160 @@ describe('AdminConfiguration — view only', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(enabledWriteControls()).toEqual([]);
     expect(writes()).toEqual([]);
+  });
+});
+
+/*
+ * R3.7 (issue 2538): the sections the server lists, grouped under their
+ * console area, each at its own level, and a search over titles and field
+ * labels.
+ */
+
+const AREA_SECTIONS = [
+  {
+    id: 'guardrails',
+    title: 'Guardrails',
+    access: { area: 'models_spend' },
+    level: 'read',
+    fields: [{ key: 'blocked_toolkits', type: 'array', title: 'Blocked Toolkits' }],
+  },
+  {
+    id: 'resources',
+    title: 'Resources',
+    access: { area: 'platform' },
+    level: 'write',
+    fields: [{ key: 'resources_documentation_title', type: 'string', title: 'Documentation Card Title' }],
+  },
+  {
+    id: 'delegation',
+    title: 'Delegation',
+    access: { area: 'agents_governance' },
+    level: 'write',
+    fields: [{ key: 'delegation_mode', type: 'string', title: 'Enforcement mode' }],
+  },
+  { id: 'future', title: 'Future section', access: { area: 'not_an_area' }, level: 'write', fields: [] },
+];
+
+function serveSections(sections: readonly Record<string, unknown>[]): void {
+  server.use(http.get('*/admin/plugin_config_schemas/administration', () => HttpResponse.json({ sections })));
+}
+
+function sectionNav(): HTMLElement {
+  return screen.getByRole('navigation', { name: 'Configuration sections' });
+}
+
+/** The area groups of the section list, each with the titles of its rows. */
+function renderedGroups(): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const group of within(sectionNav()).queryAllByTestId(/^admin-configuration-area-/)) {
+    const id = group.getAttribute('data-testid')!.replace('admin-configuration-area-', '');
+    out[id] = within(group)
+      .queryAllByRole('button')
+      .map((row) => within(row).getAllByText(/./)[0]!.textContent ?? '');
+  }
+  return out;
+}
+
+describe('AdminConfiguration — sections by area (R3.7)', () => {
+  it('groups the listed sections under their areas, in console order, an unknown area last', async () => {
+    serveSections(AREA_SECTIONS);
+    renderAdminRoute(<AdminConfiguration />);
+    await screen.findByRole('button', { name: /Future section/ });
+    expect(Object.keys(renderedGroups())).toEqual(['models_spend', 'agents_governance', 'platform', 'other']);
+    expect(renderedGroups()).toEqual({
+      models_spend: ['Guardrails'],
+      agents_governance: ['Delegation'],
+      platform: ['Resources'],
+      other: ['Future section'],
+    });
+    const models = within(sectionNav()).getByTestId('admin-configuration-area-models_spend');
+    expect(within(models).getByRole('heading', { name: 'Models and spend' })).toBeInTheDocument();
+  });
+
+  it('shows the LLM manager exactly the sections the server lists for it, and nothing for the rest', async () => {
+    // What the schema list answers a holder of the llm_manager set: the
+    // sections its llm.catalogue.view and llm.policy.* names open (R0.5;
+    // `TestTheSchemaListNamesExactlyTheReadableSections` proves the server's
+    // half). No placeholder stands for a section it cannot read.
+    serveSections([
+      { id: 'guardrails', title: 'Guardrails', access: { area: 'models_spend' }, level: 'read', fields: [] },
+      {
+        id: 'llm_proxy',
+        title: 'LLM Proxy',
+        access: { area: 'models_spend' },
+        level: 'read',
+        unavailable_reason: 'these settings have no equivalent on this platform',
+        fields: [],
+      },
+      {
+        id: 'governance',
+        title: 'LLM Governance',
+        access: { area: 'models_spend' },
+        level: 'write',
+        unavailable_reason: 'authored on its own page',
+        fields: [],
+      },
+    ]);
+    renderAdminRoute(<AdminConfiguration />);
+    await screen.findByRole('button', { name: /LLM Governance/ });
+    expect(renderedGroups()).toEqual({ models_spend: ['Guardrails', 'LLM Proxy', 'LLM Governance'] });
+    expect(within(sectionNav()).queryByText(/Resources|Maintenance|Banner/)).not.toBeInTheDocument();
+  });
+
+  it('gives a section at read no enabled save, on a page the caller may write', async () => {
+    serveConsoleLevel('write', 'configuration');
+    serveSections([
+      {
+        ...AREA_SECTIONS[1],
+        level: 'read',
+        fields: [
+          { key: 'resources_documentation_title', type: 'string', title: 'Documentation Card Title', default: 'Documentation' },
+        ],
+      },
+    ]);
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    expect(await screen.findByTestId('admin-configuration-section-view-only')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Documentation Card Title' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.queryByTestId('admin-view-only')).not.toBeInTheDocument();
+    expect(writes()).toEqual([]);
+  });
+
+  it('keeps the save of a section at write', async () => {
+    serveConsoleLevel('write', 'configuration');
+    serveSections([{ ...AREA_SECTIONS[1], fields: SECTIONS[1]!.fields }]);
+    renderAdminRoute(<AdminConfiguration />);
+    await waitForResources();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Documentation Card Title' }), ' v2');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(screen.queryByTestId('admin-configuration-section-view-only')).not.toBeInTheDocument();
+  });
+
+  it('filters the list by section title and by field label, and says when nothing matches', async () => {
+    serveSections(AREA_SECTIONS);
+    renderAdminRoute(<AdminConfiguration />);
+    await screen.findByRole('button', { name: /Future section/ });
+    const search = screen.getByRole('textbox', { name: 'Search configuration' });
+
+    // By title, ignoring case.
+    await userEvent.type(search, 'deleg');
+    await waitFor(() => expect(renderedGroups()).toEqual({ agents_governance: ['Delegation'] }));
+
+    // By a field label only: no section is titled so.
+    await userEvent.clear(search);
+    await userEvent.type(search, 'blocked toolkits');
+    await waitFor(() => expect(renderedGroups()).toEqual({ models_spend: ['Guardrails'] }));
+
+    await userEvent.clear(search);
+    await userEvent.type(search, 'nothing like this');
+    expect(await screen.findByTestId('admin-configuration-search-empty')).toHaveTextContent(
+      'No section or field matches “nothing like this”.',
+    );
+    expect(renderedGroups()).toEqual({});
+
+    await userEvent.clear(search);
+    await waitFor(() => expect(Object.keys(renderedGroups())).toHaveLength(4));
+    expect(screen.queryByTestId('admin-configuration-search-empty')).not.toBeInTheDocument();
   });
 });

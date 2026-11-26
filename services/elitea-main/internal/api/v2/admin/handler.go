@@ -301,12 +301,15 @@ func (h *Handler) migrationHead(ctx context.Context) (int64, bool) {
 
 // PluginConfigSchemas lists the sections the caller may read (ADR-0059 R0.5):
 // a section the caller can open on neither path is absent, so the list names
-// no section whose values would answer 403.
+// no section whose values would answer 403. Each listed section carries its
+// `level` for the caller (R3.7, issue 2538): `write` when a save would pass
+// the section check, `read` otherwise.
 func (h *Handler) PluginConfigSchemas(w http.ResponseWriter, r *http.Request) {
-	readable := h.readableSections(r)
+	readable, held := h.readableSections(r)
 	sections := make([]map[string]any, 0, len(readable))
 	for _, s := range readable {
 		section := s.raw
+		section[sectionLevelKey] = s.levelFor(held)
 		if s.id == platformconfig.SectionCloudExecutor {
 			if notice := cloudExecutorEncryptionNotice(h.cloudExecutorEncryption); notice != "" {
 				section["notice"] = notice
