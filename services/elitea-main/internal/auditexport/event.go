@@ -72,6 +72,7 @@ type Event struct {
 	Time        string       `json:"time"`
 	Source      Source       `json:"source"`
 	EventType   string       `json:"event_type"`
+	DeliverySeq *int64       `json:"delivery_seq,omitempty"`
 	OCSF        *OCSF        `json:"ocsf,omitempty"`
 	Signal      *Signal      `json:"signal,omitempty"`
 	Tenant      Tenant       `json:"tenant"`
