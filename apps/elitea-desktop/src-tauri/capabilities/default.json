@@ -29,6 +29,7 @@
     "allow-rules-explain",
     "allow-rules-import-proposed",
     "allow-agent-turn-start",
+    "allow-full-auto-status",
     "allow-compaction-settings-get",
     "allow-compaction-settings-set",
     "allow-compaction-idle-hold",

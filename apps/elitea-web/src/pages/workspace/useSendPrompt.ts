@@ -175,9 +175,14 @@ export function routedRequest(request: TurnStartRequest): TurnStartRequest {
   const routed = (request.addressed_to?.length ?? 0) > 1;
   const cloud = request.cloud_agent === true;
   if (!routed && !cloud) return request;
-  const { unattended: _chain, model, bypass_approvals: bypass, ...rest } = request;
+  const { unattended: _chain, model, bypass_approvals: bypass, full_auto: fullAuto, ...rest } = request;
   if (cloud) return { ...rest, plan_mode: false };
-  return { ...rest, ...(model === undefined ? {} : { model }), ...(bypass === undefined ? {} : { bypass_approvals: bypass }) };
+  return {
+    ...rest,
+    ...(model === undefined ? {} : { model }),
+    ...(bypass === undefined ? {} : { bypass_approvals: bypass }),
+    ...(fullAuto === undefined ? {} : { full_auto: fullAuto }),
+  };
 }
 
 /** The thread's other agents, as the conversation adds them (the composer's agent is never its own companion). */

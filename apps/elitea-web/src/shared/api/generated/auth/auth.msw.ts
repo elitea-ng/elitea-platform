@@ -168,6 +168,7 @@ export const getExchangeNativeTokenResponseMock = (
             undefined,
           ]),
           folder_trust: true,
+          full_auto: true,
         },
         support_contact: faker.helpers.arrayElement([
           faker.string.alpha({ length: { min: 10, max: 200 } }),

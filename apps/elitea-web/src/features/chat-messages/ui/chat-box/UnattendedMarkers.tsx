@@ -31,6 +31,18 @@ export function RanOutsideSandboxMarker() {
   );
 }
 
+/**
+ * The answer's Local work turn ran in Full auto (ADR-0061 amendment of 2026-11-26, issue 3079): the agent answered
+ * every approval, including those asked after it read outside content. Main stores `meta.local_work.full_auto`.
+ */
+export function FullAutoMarker() {
+  return (
+    <Typography variant="labelSmall" color="error.main" data-testid="chat-message-full-auto" sx={{ display: 'block', mt: 0.5 }}>
+      {t('features.chatMessages.fullAuto', 'Ran in Full auto')}
+    </Typography>
+  );
+}
+
 /** The answer stopped at its step limit: under a grant that continues the run, a continuation follows. */
 export function StepLimitNotice() {
   return (

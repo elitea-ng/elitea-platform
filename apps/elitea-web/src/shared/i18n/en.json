@@ -7518,5 +7518,6 @@
   "chat.presence.waitingForYou": "Waiting for you",
   "chat.presence.waking": "Resuming",
   "chat.presence.working": "Working",
-  "features.chatMessages.ranOutsideSandbox": "Ran outside the sandbox"
+  "features.chatMessages.ranOutsideSandbox": "Ran outside the sandbox",
+  "features.chatMessages.fullAuto": "Ran in Full auto"
 }

@@ -653,6 +653,7 @@ mod tests {
             conversation_id: serde_json::json!(42),
             conversation_uuid: "u".into(),
             bypass: false,
+            full_auto: false,
             plan_mode: false,
             defaults: crate::d0::turn::DefaultVersions::default(),
             hand_id: None,

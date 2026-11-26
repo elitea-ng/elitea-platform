@@ -229,6 +229,18 @@ pub enum PermissionProfile {
     /// The policy ceiling and every deny (a forbidden rule's included) stay
     /// final, and a `PreToolUse` hook's ask is still asked.
     Bypass,
+    /// Full auto (ADR-0061 amendment of 2026-11-26, issue 3079): Bypass,
+    /// and it also answers a host command the taint gate asked
+    /// ([`Source::FullAutoTaint`]), for long unattended runs. The person
+    /// turns it on per thread, after a warning; it is never a default and
+    /// never carried into a hand-off or a consult. What Bypass leaves to
+    /// the person stays theirs (a `computer` ask, a consequential browser
+    /// action, a browser effect in an unattended turn, a hook's ask), and a
+    /// command on the hard-deny list ([`full_auto::hold`]) is still asked,
+    /// or declined in an unattended turn ([`Source::FullAutoHold`]). Only
+    /// while the policy allows it ([`LocalWorkPolicy::full_auto`]);
+    /// otherwise it decides as Bypass.
+    FullAuto,
 }
 
 /// The local tools, as the rules name them.
@@ -910,8 +922,19 @@ pub enum Source {
     Grant,
     /// A host command asked after the turn read untrusted content
     /// (ADR-0061 decision 5f, [`TAINT_REASON`]): neither bypass mode nor an
-    /// unattended grant answers it.
+    /// unattended grant answers it. Full auto does ([`Self::FullAutoTaint`]).
     Taint,
+    /// [`PermissionProfile::FullAuto`] allowed a call another layer asked
+    /// (what Bypass would have allowed too). The reason is the one the
+    /// call would have been asked with.
+    FullAuto,
+    /// [`PermissionProfile::FullAuto`] allowed a host command the taint
+    /// gate asked ([`Self::Taint`]). The reason is [`TAINT_REASON`].
+    FullAutoTaint,
+    /// [`PermissionProfile::FullAuto`] did not answer a call on its
+    /// hard-deny list ([`full_auto::hold`]): asked, or declined in an
+    /// unattended turn.
+    FullAutoHold,
 }
 
 /// The answers an unattended turn's grant gives (ADR-0045 decision 1) that
@@ -1268,6 +1291,8 @@ pub struct RulesEngine {
     plan: AtomicBool,
     /// `true` is [`PermissionProfile::Bypass`].
     bypass: AtomicBool,
+    /// `true` is [`PermissionProfile::FullAuto`].
+    full_auto: AtomicBool,
     /// The unattended grant of the running turn, if any.
     unattended: RwLock<Option<Unattended>>,
     /// Told of the questions answered inline ([`AnswerSink`]).
@@ -1392,6 +1417,7 @@ impl RulesEngine {
             choices,
             plan: AtomicBool::new(false),
             bypass: AtomicBool::new(false),
+            full_auto: AtomicBool::new(false),
             unattended: RwLock::new(None),
             answers: RwLock::new(None),
             host_intel_session: AtomicBool::new(false),
@@ -1496,6 +1522,8 @@ impl RulesEngine {
             .store(profile == PermissionProfile::Plan, Ordering::SeqCst);
         self.bypass
             .store(profile == PermissionProfile::Bypass, Ordering::SeqCst);
+        self.full_auto
+            .store(profile == PermissionProfile::FullAuto, Ordering::SeqCst);
     }
 
     /// Set the running turn's unattended grant (`None`: the turn is
@@ -1672,6 +1700,8 @@ impl RulesEngine {
     pub fn profile(&self) -> PermissionProfile {
         if self.plan.load(Ordering::SeqCst) {
             PermissionProfile::Plan
+        } else if self.full_auto.load(Ordering::SeqCst) {
+            PermissionProfile::FullAuto
         } else if self.bypass.load(Ordering::SeqCst) {
             PermissionProfile::Bypass
         } else {
@@ -1740,22 +1770,43 @@ impl RulesEngine {
         }
     }
 
+    /// The profile the engine decides by: [`PermissionProfile::FullAuto`]
+    /// decides as [`PermissionProfile::Bypass`] while the policy does not
+    /// allow it ([`LocalWorkPolicy::full_auto`]).
+    fn deciding_profile(&self) -> PermissionProfile {
+        match self.profile() {
+            PermissionProfile::FullAuto if !self.policy.full_auto => PermissionProfile::Bypass,
+            profile => profile,
+        }
+    }
+
     /// Decide one call. In [`PermissionProfile::Bypass`] an ask is an
-    /// allow; a deny stays a deny.
+    /// allow; a deny stays a deny. [`PermissionProfile::FullAuto`] also
+    /// answers the taint gate's ask, except for its hard-deny list.
     #[must_use]
     pub fn decide(&self, call: &ToolCall) -> Decision {
         let decision = self.decide_by_layers(call);
+        let profile = self.deciding_profile();
         // A `computer` ask is the person's (ADR-0047 decisions 4 and 6):
-        // bypass mode does not answer it.
-        // Nor does it answer a host command asked after an untrusted read
-        // (ADR-0061 decision 5g).
-        if decision.verdict == Verdict::Ask
-            && self.profile() == PermissionProfile::Bypass
-            && decision.source != Source::Taint
-            && !call.tool.is_computer()
-            && !Self::browser_consequential(call)
-            && !self.unattended_browser_effect(call)
+        // neither bypass mode nor Full auto answers it, nor a consequential
+        // or (unattended) effectful browser action.
+        if decision.verdict != Verdict::Ask
+            || !matches!(
+                profile,
+                PermissionProfile::Bypass | PermissionProfile::FullAuto
+            )
+            || call.tool.is_computer()
+            || Self::browser_consequential(call)
+            || self.unattended_browser_effect(call)
         {
+            return decision;
+        }
+        if profile == PermissionProfile::FullAuto {
+            return self.decide_full_auto(call, decision);
+        }
+        // Bypass does not answer a host command asked after an untrusted
+        // read (ADR-0061 decision 5g).
+        if decision.source != Source::Taint {
             return Decision {
                 rule: decision.rule,
                 ..Decision::new(
@@ -3479,8 +3530,14 @@ impl ApprovalChannel for RuleApprovals {
                 _ => RulesEngine::with_hook_ask(decision, hook),
             };
         }
-        if matches!(decision.source, Source::Bypass | Source::Grant)
-            && let Some(sink) = self.engine.answer_sink()
+        if matches!(
+            decision.source,
+            Source::Bypass
+                | Source::Grant
+                | Source::FullAuto
+                | Source::FullAutoTaint
+                | Source::FullAutoHold
+        ) && let Some(sink) = self.engine.answer_sink()
         {
             sink.answered(&request.subject, &call, &decision);
         }
@@ -3573,6 +3630,7 @@ mod computer_tests;
 #[cfg(test)]
 mod grant_tests;
 
+pub mod full_auto;
 mod trust;
 pub use trust::{ASK_EVERY_COMMAND_REASON, FolderTrust, TAINT_REASON};
 
@@ -3621,6 +3679,7 @@ mod tests {
             browser_http: false,
             browser_private_network: false,
             folder_trust: false,
+            full_auto: false,
         }
     }
 

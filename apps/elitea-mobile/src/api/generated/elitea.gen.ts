@@ -4,7 +4,7 @@
  * Types derived from services/elitea-main/api/openapi/v2.yaml (this repository), pruned to
  * contract/client-operations.json. scripts/check-generated-client.mjs fails when it is stale.
  *
- * client contract:    1.68
+ * client contract:    1.69
  * operations sha256:  a836121d14038ae2f1db1dde8f4300b624195ee490ebe669220b1372ba3cd2fb
  */
 export interface paths {
@@ -4700,6 +4700,11 @@ export interface components {
              * @example true
              */
             folder_trust?: boolean;
+            /**
+             * @description Client contract 1.69 (ADR-0061 amendment of 2026-11-26). A person may run a desktop thread in Full auto: it answers every approval question Bypass answers, and also those the trusted folder's "read untrusted, then act" gate asks, except a built-in hard-deny list. Default true. False hides the mode, the desktop refuses a turn in it and decides as Bypass. Absent reads as false on the desktop.
+             * @example true
+             */
+            full_auto?: boolean;
             /** @description Client contract 1.22. Local turns may use the host_intel toolkit (internet host search and lookup through Shodan). Absent or false is off (the default); the server refuses a remote host_intel call while it is false. */
             host_intel?: boolean;
             /** @description Client contract 1.9. The user may add vectors to a local index with an embedding model that runs on the device (nothing leaves it). Default true. Embeddings stay off per workspace until the user turns them on and picks a model. */

@@ -113,6 +113,13 @@ const (
 	// full-access and local_work_network and local_work_shell are on; the
 	// default ceiling is workspace-write, so a default deployment has no trust.
 	KeyNativeLocalWorkFolderTrust = "local_work_folder_trust"
+	// KeyNativeLocalWorkFullAuto lets a person run a desktop thread in Full
+	// auto (ADR-0061 amendment of 2026-11-26, issue 3079, client contract
+	// 1.69): it answers every approval question Bypass answers and the
+	// "read untrusted, then act" gate's too, except a built-in hard-deny
+	// list. On by default; off hides the mode and the desktop refuses a turn
+	// in it.
+	KeyNativeLocalWorkFullAuto = "local_work_full_auto"
 )
 
 // MaxBrowserDomains and MaxBrowserDomainBytes bound the browser pane's domain
@@ -329,6 +336,10 @@ type LocalWorkPolicy struct {
 	// with Allowed, Shell, Network and MaxSandboxMode full-access too, and
 	// suspends every trusted folder when the policy stops allowing it.
 	FolderTrust bool `json:"folder_trust"`
+	// FullAuto: the person may run a thread in Full auto (ADR-0061
+	// amendment of 2026-11-26). Off: the desktop hides the mode, refuses a
+	// turn in it and decides as Bypass.
+	FullAuto bool `json:"full_auto"`
 }
 
 // DefaultLocalWorkPolicy is the group of a deployment that never saved it:
@@ -372,6 +383,9 @@ func DefaultLocalWorkPolicy() LocalWorkPolicy {
 		// Owner decision at acceptance (ADR-0061 question 1): on, because the
 		// workspace-write ceiling already keeps trust off by default.
 		FolderTrust: true,
+		// Owner decision of 2026-11-26 (issue 3079): an administrator or the
+		// device management can forbid it; the person still opts in per thread.
+		FullAuto: true,
 	}
 }
 
@@ -405,6 +419,7 @@ func localWorkPolicyFromValues(values Values) LocalWorkPolicy {
 	policy.BrowserHTTP = values.Bool(KeyNativeLocalWorkBrowserHTTP, policy.BrowserHTTP)
 	policy.BrowserPrivateNetwork = values.Bool(KeyNativeLocalWorkBrowserPrivateNetwork, policy.BrowserPrivateNetwork)
 	policy.FolderTrust = values.Bool(KeyNativeLocalWorkFolderTrust, policy.FolderTrust)
+	policy.FullAuto = values.Bool(KeyNativeLocalWorkFullAuto, policy.FullAuto)
 	if mirror, ok := values[KeyNativeLocalWorkIndexModelMirrorURL].(string); ok && ValidModelMirrorURL(mirror) {
 		policy.IndexModelMirrorURL = mirror
 	}

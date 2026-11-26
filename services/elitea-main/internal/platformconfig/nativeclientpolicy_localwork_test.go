@@ -48,10 +48,35 @@ func TestLocalWorkPolicyOverlay(t *testing.T) {
 		IndexModelMirrorURL:  "https://mirror.example.com/hf",
 		ComputerUseAppsAllow: []string{}, ComputerUseAppsDeny: []string{},
 		Browser: true, BrowserAgent: true, BrowserAllowDomains: []string{}, BrowserDenyDomains: []string{},
-		FolderTrust: true,
+		FolderTrust: true, FullAuto: true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("overlay = %+v\nwant %+v", got, want)
+	}
+}
+
+// TestLocalWorkFullAuto pins the ADR-0061 amendment of 2026-11-26 (issue
+// 3079): the key defaults to true, a stored false forbids the mode, junk keeps
+// the default, and it travels in the `local_work` group as `full_auto`.
+func TestLocalWorkFullAuto(t *testing.T) {
+	if !NativeClientPolicyFromValues(Values{}).LocalWork.FullAuto {
+		t.Fatal("local_work.full_auto must default to true")
+	}
+	if !NativeClientPolicyFromValues(Values{KeyNativeLocalWorkFullAuto: "off"}).LocalWork.FullAuto {
+		t.Fatal("a non-boolean value must keep the default")
+	}
+	body, err := json.Marshal(NativeClientPolicyFromValues(Values{KeyNativeLocalWorkFullAuto: false}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		LocalWork map[string]any `json:"local_work"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := decoded.LocalWork["full_auto"]; !ok || got != false {
+		t.Fatalf("local_work.full_auto = %v (present %v), want false", got, ok)
 	}
 }
 

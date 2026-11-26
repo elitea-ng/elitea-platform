@@ -48,7 +48,7 @@ import { NewChatInput } from '@/features/chat-input';
 import { composer, SuggestionMenu, type SuggestionItem, type WorkspaceCommandId } from '@/features/workspace';
 
 import { AttachImagesButton } from './AttachImagesButton';
-import { composerFooter } from './FooterControls';
+import { composerFooter, type FooterSource } from './FooterControls';
 import { RetryUnsent, useRestoredDraft } from './SteeringControls';
 import { SteeringQueue, type SteeringQueueBinding } from './SteeringQueue';
 import type { UnsentSteers } from './useSteering';
@@ -92,6 +92,8 @@ export interface WorkspaceComposerProps {
   bypass?: boolean;
   /** Offers Bypass in the mode switch (a local thread only): `true` when it is picked, `false` when Act or Plan is. */
   onBypassChange?: ((on: boolean) => void) | undefined;
+  /** Offers Full auto in the mode switch (a local thread the organisation allows it for, issue 3079). */
+  fullAuto?: FooterSource['fullAuto'];
   /** The footer's agent·version picker and run-location chip (`ComposerControls`). */
   agentPicker?: ReactNode;
   /** A thread in the cloud: the placeholder says who the message goes to. */

@@ -188,6 +188,9 @@ impl std::fmt::Display for TurnError {
     }
 }
 
+/// The host's refusal of a Full auto turn the policy forbids (issue 3079).
+pub const FULL_AUTO_FORBIDDEN: &str = "full_auto_forbidden";
+
 /// `agent_turn_start`'s arguments.
 #[derive(Clone, Debug)]
 pub struct TurnRequest {
@@ -202,6 +205,11 @@ pub struct TurnRequest {
     /// Bypass mode: every local tool call that would be asked runs without
     /// the question (`PermissionProfile::Bypass`); never with `plan_mode`.
     pub bypass: bool,
+    /// Full auto (ADR-0061 amendment of 2026-11-26, issue 3079): Bypass that
+    /// also answers the taint gate (`PermissionProfile::FullAuto`). Always
+    /// with `bypass`; never with `plan_mode`, on a hand-off or in a consult,
+    /// and only while the policy allows it (`full_auto_forbidden`).
+    pub full_auto: bool,
     /// Workspace-relative paths the person referenced with "@" (checked,
     /// then listed under the prompt; contents are never inlined).
     pub mentions: Vec<String>,
@@ -304,7 +312,22 @@ impl TurnRequest {
     /// for it (`bypass`). An unattended grant does not imply it.
     #[must_use]
     pub const fn bypasses(&self) -> bool {
-        self.bypass
+        self.bypass || self.full_auto
+    }
+
+    /// The turn's permission profile at its start: plan mode wins, then
+    /// Full auto, then Bypass.
+    #[must_use]
+    pub const fn profile(&self) -> PermissionProfile {
+        if self.plan_mode {
+            PermissionProfile::Plan
+        } else if self.full_auto {
+            PermissionProfile::FullAuto
+        } else if self.bypass {
+            PermissionProfile::Bypass
+        } else {
+            PermissionProfile::Build
+        }
     }
 }
 
@@ -615,7 +638,10 @@ struct EndBypass(Arc<LocalSession>);
 impl Drop for EndBypass {
     fn drop(&mut self) {
         self.0.rules().set_unattended(None);
-        if self.0.profile() == PermissionProfile::Bypass {
+        if matches!(
+            self.0.profile(),
+            PermissionProfile::Bypass | PermissionProfile::FullAuto
+        ) {
             self.0.set_profile(PermissionProfile::Build);
         }
     }
@@ -1647,7 +1673,13 @@ impl AgentHost {
         if let Some(store) = self.trust.get() {
             store.set_policy_known(received.is_some());
         }
-        received.unwrap_or_default()
+        let mut policy = received.unwrap_or_default();
+        // The device management can forbid Full auto, never allow it
+        // (issue 3079): a forced `local_work_full_auto = false` wins.
+        if crate::managed::full_auto_forbidden() {
+            policy.full_auto = false;
+        }
+        policy
     }
 
     /// The "always for this app" answers of every workspace (ADR-0047
@@ -1850,6 +1882,30 @@ impl AgentHost {
     #[cfg(test)]
     pub(super) fn open_approvals(&self) -> usize {
         self.broker.open()
+    }
+
+    /// A turn in Full auto (issue 3079) starts only outside plan mode and
+    /// while the policy allows it (`local_work_full_auto`, and the device's
+    /// managed value): otherwise `full_auto_forbidden`. A chain's
+    /// continuation is checked again, so a policy that forbids it ends the
+    /// chain rather than running on.
+    fn admit_full_auto(&self, request: &TurnRequest) -> Result<(), TurnError> {
+        if !request.full_auto {
+            return Ok(());
+        }
+        if request.plan_mode {
+            return Err(TurnError::new(
+                "invalid_request",
+                "A turn cannot run in plan mode and in Full auto.",
+            ));
+        }
+        if !self.local_work_policy().full_auto {
+            return Err(TurnError::new(
+                FULL_AUTO_FORBIDDEN,
+                "Your organisation does not allow Full auto. Choose Act or Bypass.",
+            ));
+        }
+        Ok(())
     }
 
     fn policy(&self) -> Result<LocalWorkPolicy, TurnError> {
@@ -2413,6 +2469,7 @@ impl AgentHost {
         self: &Arc<Self>,
         mut request: TurnRequest,
     ) -> Result<TurnStarted, TurnError> {
+        self.admit_full_auto(&request)?;
         // A command's turn is recorded everywhere (history, start, commit)
         // as the person typed it; only the model gets the expansion.
         if let Some(pick) = &request.command {
@@ -2737,6 +2794,7 @@ impl AgentHost {
             prompt: String::new(),
             plan_mode: false,
             bypass: false,
+            full_auto: false,
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
@@ -3252,6 +3310,7 @@ impl AgentHost {
         if let Some(hand) = &started.hand_off {
             request.prompt.clone_from(&hand.user_input);
             request.bypass = false;
+            request.full_auto = false;
             request.unattended = None;
         }
         // The grant id Main admitted is the chain's (a retried start used a
@@ -3295,14 +3354,10 @@ impl AgentHost {
         // The turn's permission profile (#1225): plan mode until the person
         // accepts the plan (`exit_plan_mode`), which switches it to Build
         // within this run; bypass mode for the whole run when the person
-        // chose it (an unattended grant does not imply it, ADR-0045).
-        session.set_profile(if request.plan_mode {
-            PermissionProfile::Plan
-        } else if request.bypasses() {
-            PermissionProfile::Bypass
-        } else {
-            PermissionProfile::Build
-        });
+        // chose it (an unattended grant does not imply it, ADR-0045), or
+        // Full auto (issue 3079), which the recorder reports on the commit.
+        session.set_profile(request.profile());
+        recorder.set_full_auto(request.profile() == PermissionProfile::FullAuto);
         session.rules().set_unattended(
             request
                 .unattended
@@ -4326,6 +4381,9 @@ impl AgentHost {
             plan_mode: next.plan_mode && !target.cloud,
             // Never on a hand-off: an agent asked for it, not the person.
             bypass: next.bypass && !target.cloud && !next.plan_mode && next.hand_id.is_none(),
+            // Full auto carries like Bypass: to the agents the person
+            // addressed, never to a hand-off (ADR-0061 amendment).
+            full_auto: next.full_auto && !target.cloud && !next.plan_mode && next.hand_id.is_none(),
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,

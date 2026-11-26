@@ -12,6 +12,9 @@
 //! - `support_contact`: the IT support line shown in the About panel, the
 //!   account menu and Settings › Troubleshoot. It beats the workspace's
 //!   `client_policy.support_contact`.
+//! - `local_work_full_auto` (boolean): `false` forbids Full auto on this
+//!   device whatever the server's policy says (ADR-0061 amendment of
+//!   2026-11-26). It cannot allow what the server forbids.
 
 use serde_json::Value;
 
@@ -52,6 +55,32 @@ pub fn support_contact() -> Option<String> {
     forced_string("support_contact")
         .as_deref()
         .and_then(normalize_support_contact)
+}
+
+/// The device management forbids Full auto (ADR-0061 amendment of
+/// 2026-11-26): a forced `local_work_full_auto` that is false. A managed
+/// value only forbids; it never allows what the server's policy forbids.
+#[must_use]
+pub fn full_auto_forbidden() -> bool {
+    forced_bool("local_work_full_auto") == Some(false)
+}
+
+#[cfg(target_os = "macos")]
+fn forced_bool(key: &str) -> Option<bool> {
+    use objc2_foundation::{NSString, NSUserDefaults};
+    let key = NSString::from_str(key);
+    let defaults = NSUserDefaults::standardUserDefaults();
+    if !defaults.objectIsForcedForKey(&key) {
+        return None;
+    }
+    // A forced value of another type is not a valid switch: it forbids
+    // (the organisation meant to manage it).
+    Some(defaults.objectForKey(&key).is_some() && defaults.boolForKey(&key))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn forced_bool(_key: &str) -> Option<bool> {
+    None
 }
 
 #[cfg(target_os = "macos")]

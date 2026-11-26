@@ -619,6 +619,24 @@ pub fn compaction_idle_hold(
         .idle_hold(&workspace_id, &conversation_id, hold)?)
 }
 
+/// `full_auto_status`'s answer: whether the composer offers Full auto.
+#[derive(Debug, serde::Serialize)]
+pub struct FullAutoStatus {
+    /// Local work and `local_work_full_auto` are on, and the device's
+    /// management does not forbid it (issue 3079).
+    allowed: bool,
+}
+
+/// Whether the composer offers Full auto (IPC.md "Full auto"): the policy
+/// as the host holds it, with the device's managed value applied.
+#[tauri::command(rename_all = "snake_case")]
+pub fn full_auto_status(state: State<'_, LocalState>) -> FullAutoStatus {
+    let policy = state.agents.local_work_policy();
+    FullAutoStatus {
+        allowed: policy.allowed && policy.full_auto,
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list
 #[tauri::command(rename_all = "snake_case")]
 pub async fn agent_turn_start(
@@ -641,8 +659,12 @@ pub async fn agent_turn_start(
     addressed_to: Option<Vec<i64>>,
     participant_id: Option<i64>,
     cloud_agent: Option<bool>,
+    full_auto: Option<bool>,
 ) -> Result<TurnStarted, IpcError> {
-    let bypass = bypass_approvals.unwrap_or(false);
+    // Full auto (issue 3079) is Bypass that also answers the taint gate:
+    // it implies bypass. The host refuses it when the policy forbids it.
+    let full_auto = full_auto.unwrap_or(false);
+    let bypass = bypass_approvals.unwrap_or(false) || full_auto;
     if bypass && plan_mode {
         return Err(IpcError::new(
             "invalid_request",
@@ -693,6 +715,7 @@ pub async fn agent_turn_start(
             prompt,
             plan_mode,
             bypass,
+            full_auto,
             mentions: mentions.unwrap_or_default(),
             skills,
             project_skills,

@@ -61,7 +61,7 @@
 //! resume_turns (workspace_id TEXT PRIMARY KEY, turn_id TEXT, origin TEXT,
 //!         user_id INTEGER, conversation_id TEXT /* JSON */,
 //!         conversation_uuid TEXT NULL, project_id, application_id,
-//!         version_id INTEGER, mode TEXT /* build | plan | bypass */,
+//!         version_id INTEGER, mode TEXT /* build | plan | bypass | full_auto */,
 //!         grant_json TEXT NULL, chain_root_execution_id TEXT NULL,
 //!         continuation_index INTEGER, kind TEXT NULL, execution_id TEXT,
 //!         last_committed_execution_id TEXT NULL, request TEXT NULL,
@@ -302,6 +302,9 @@ pub enum ResumeMode {
     Build,
     Plan,
     Bypass,
+    /// Full auto (issue 3079): a resumed chain keeps it, while the policy
+    /// allows it (the start checks again).
+    FullAuto,
 }
 
 impl ResumeMode {
@@ -311,6 +314,7 @@ impl ResumeMode {
             Self::Build => "build",
             Self::Plan => "plan",
             Self::Bypass => "bypass",
+            Self::FullAuto => "full_auto",
         }
     }
 
@@ -318,6 +322,7 @@ impl ResumeMode {
         match text {
             "plan" => Self::Plan,
             "bypass" => Self::Bypass,
+            "full_auto" => Self::FullAuto,
             _ => Self::Build,
         }
     }

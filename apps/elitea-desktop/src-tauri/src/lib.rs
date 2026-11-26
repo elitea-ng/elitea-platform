@@ -616,6 +616,7 @@ pub fn run() {
             local_commands::rules_explain,
             local_commands::rules_import_proposed,
             local_commands::agent_turn_start,
+            local_commands::full_auto_status,
             local_commands::compaction_settings_get,
             local_commands::compaction_settings_set,
             local_commands::compaction_idle_hold,

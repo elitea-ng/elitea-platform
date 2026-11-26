@@ -1,0 +1,51 @@
+---
+title: "Let a long run answer its own approvals: Full auto (desktop)"
+description: "How Full auto lets a Local work agent in the Elitea desktop app answer every approval for you, including the questions asked after it read outside content, what it still asks, and how to turn it on and off."
+---
+
+**Full auto** is a mode of a **Local work** thread in the Elitea desktop app for long runs you do not watch. It sits above **Bypass** in the composer's mode menu: it answers every approval Bypass answers, and also the questions a [trusted folder](/how-tos/chat-conversations/desktop-trusted-folders) asks after the agent read content from outside the folder. Bypass does not answer those: you do.
+
+## What it risks
+
+After the agent reads a web page, an issue, a tool's result or another agent's reply, instructions hidden in that content can steer what it runs next. In a trusted folder its commands run outside the sandbox, with your logins and the network. In Full auto nobody reviews those commands before they run. Use it only for work whose inputs you trust, and prefer Act or Bypass otherwise.
+
+## What it still asks
+
+Full auto does not answer these. They are asked as in Act mode, and declined at once when nobody is there to answer (a run to completion):
+
+- A recursive delete whose target is outside the folder, or cannot be told (a variable, `~`, another drive).
+- A command that names a credential store (`~/.ssh`, `~/.aws`, `~/.kube`, a keychain and others), a shell profile (`.zshrc`, `.bashrc`, `.profile` and others) or this app's own settings.
+- A command that turns an operating-system protection off.
+- Computer use, a purchase in the browser pane, a hook's question and an MCP server's sign-in, as in Bypass.
+
+Your organization's policy, your **Forbidden** rules and your hooks still apply.
+
+## Turn it on
+
+<Steps>
+1. Open a Local work thread and select the mode in the composer (it reads **Act** by default).
+2. Select **Full auto**.
+3. Read the dialog and select **Turn on Full auto**.
+</Steps>
+
+The mode chip reads **Full auto** and a red line above the composer says so while it is on. It applies to this thread only, until you turn it off or close the app: a new thread, another thread and the next launch start in Act. The dialog asks every time.
+
+It works with **Run to completion**: a run that continues by itself keeps Full auto, and a question on the list above ends that step declined.
+
+## Turn it off
+
+Select **Turn off** in the red line, or pick another mode.
+
+## Who gets it
+
+- An agent you address in the same message runs in Full auto too.
+- An agent that another agent hands work to, or consults, does not: it starts from another agent's text, so its questions come to you.
+- A sub-agent in a task worktree runs in Bypass.
+
+## What is recorded
+
+Every answer goes into the turn's record: the command, why it would have been asked, whether it was asked after reading outside content, and whether it was left to you. The answer shows **Ran in Full auto** on the web and in the mobile app.
+
+## When it is not offered
+
+Your organization can forbid Full auto (**Allow Full Auto Mode** in the native client policy), and a Mac's device management can too. A forbidden mode is not in the menu. See [Managed devices](/admin/managed-devices#full-auto).

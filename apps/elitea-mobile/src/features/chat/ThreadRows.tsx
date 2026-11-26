@@ -106,9 +106,10 @@ export function PersistedMessage({
       onActions={message.text.trim() !== '' || answer ? onActions : null}
       actions={answer && !message.isStreaming ? actions : undefined}
       footer={
-        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 || message.ranOutsideSandbox ? (
+        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 || message.ranOutsideSandbox || message.fullAuto ? (
           <>
             {message.ranOutsideSandbox ? <OutsideSandboxMarker /> : null}
+            {message.fullAuto ? <FullAutoMarker /> : null}
             <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
             {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
             <DelegationNoticeCards notices={message.delegationNotices ?? []} />
@@ -130,6 +131,21 @@ export function OutsideSandboxMarker() {
       <Icon name="warning" size={14} tone="warning" />
       <Text variant="footnote" tone="secondary">
         {TEAM_COPY.ranOutsideSandbox}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * The ADR-0061 amendment of 2026-11-26 (#3079): the answer ran in Full auto, the agent answering
+ * every approval for its owner. Shown on the flagged answer only.
+ */
+export function FullAutoMarker() {
+  return (
+    <View style={styles.sandbox} accessible accessibilityRole="text" accessibilityLabel={TEAM_COPY.fullAutoLabel} testID="ran-in-full-auto">
+      <Icon name="warning" size={14} tone="danger" />
+      <Text variant="footnote" tone="danger">
+        {TEAM_COPY.fullAuto}
       </Text>
     </View>
   );

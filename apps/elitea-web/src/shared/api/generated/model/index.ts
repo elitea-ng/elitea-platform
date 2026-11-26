@@ -742,6 +742,8 @@ export * from "./localTurnExecutor.zod";
 export * from "./localTurnFloorAgent.zod";
 export * from "./localTurnFloorStarted.zod";
 export * from "./localTurnFloorTurn.zod";
+export * from "./localTurnFullAutoAsk.zod";
+export * from "./localTurnFullAutoReport.zod";
 export * from "./localTurnHITLExchange.zod";
 export * from "./localTurnHandFloorConsult.zod";
 export * from "./localTurnHandFloorRequest.zod";

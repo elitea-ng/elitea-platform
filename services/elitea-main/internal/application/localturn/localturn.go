@@ -359,6 +359,27 @@ type LocalWorkReport struct {
 	// the commit digest of a report without them unchanged.
 	HostCommands int  `json:"host_commands,omitempty"`
 	Trusted      bool `json:"trusted,omitempty"`
+	// FullAuto is present when the turn ran in Full auto (ADR-0061 amendment
+	// of 2026-11-26, client contract 1.69): the questions it answered. A
+	// pointer with omitempty keeps the commit digest of a report without it
+	// unchanged.
+	FullAuto *FullAutoReport `json:"full_auto,omitempty"`
+}
+
+// FullAutoReport is what Full auto answered in a turn: how many questions,
+// and the first of them.
+type FullAutoReport struct {
+	Answered int           `json:"answered"`
+	Asks     []FullAutoAsk `json:"asks"`
+}
+
+// FullAutoAsk is one question Full auto answered, or one on its hard-deny
+// list that it left to the person (Held).
+type FullAutoAsk struct {
+	Command string `json:"command"`
+	Reason  string `json:"reason"`
+	Tainted bool   `json:"tainted"`
+	Held    bool   `json:"held"`
 }
 
 // Credential names the credential family a caller authenticated with: the
@@ -851,6 +872,40 @@ type boundedReport struct {
 	HostCommands      int  `json:"host_commands,omitempty"`
 	Trusted           bool `json:"trusted,omitempty"`
 	RanOutsideSandbox bool `json:"ran_outside_sandbox,omitempty"`
+	// FullAuto: the turn ran in Full auto, with at most MaxReportedCommands
+	// asks cut to MaxReportedCommandBytes; Answered is at least the kept asks
+	// that were not Held.
+	// Its presence is the "Full auto" marker web and mobile show.
+	FullAuto *FullAutoReport `json:"full_auto,omitempty"`
+}
+
+// boundFullAuto bounds a Full auto record: the first MaxReportedCommands asks
+// with a command, each cut, and a count no lower than the kept answered asks.
+func boundFullAuto(report *FullAutoReport) *FullAutoReport {
+	if report == nil {
+		return nil
+	}
+	out := &FullAutoReport{Asks: []FullAutoAsk{}}
+	answered := 0
+	for _, ask := range report.Asks {
+		if len(out.Asks) == MaxReportedCommands {
+			break
+		}
+		command := cleanReported(ask.Command, MaxReportedCommandBytes)
+		if command == "" {
+			continue
+		}
+		out.Asks = append(out.Asks, FullAutoAsk{
+			Command: command, Reason: cleanReported(ask.Reason, MaxReportedCommandBytes),
+			Tainted: ask.Tainted, Held: ask.Held,
+		})
+		if !ask.Held {
+			answered++
+		}
+	}
+	// A held ask was not answered: only the kept answered ones floor the count.
+	out.Answered = max(report.Answered, answered)
+	return out
 }
 
 func boundReport(report LocalWorkReport) boundedReport {
@@ -861,6 +916,7 @@ func boundReport(report LocalWorkReport) boundedReport {
 		MemoriesSaved: boundMemoryIDs(report.MemoriesSaved), MemoriesSavedTotal: len(report.MemoriesSaved),
 		MemoriesDeleted: boundMemoryIDs(report.MemoriesDeleted), MemoriesDeletedTotal: len(report.MemoriesDeleted),
 		HostCommands: max(report.HostCommands, 0), Trusted: report.Trusted,
+		FullAuto: boundFullAuto(report.FullAuto),
 	}
 	out.RanOutsideSandbox = out.HostCommands > 0
 	for _, command := range report.Commands {

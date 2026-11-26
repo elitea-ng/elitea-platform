@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.69
+
+| Area | What |
+|---|---|
+| Full auto (ADR-0061 amendment, issue 3079) | `local_work.full_auto` in the client policy and the commit's `local_work.full_auto` record are desktop-only: the app never runs or commits a local turn. A viewed Local work turn that ran in Full auto shows a read-only "Full auto" marker, read from the answer meta's `local_work.full_auto` object. A server before 1.69 stores no record, and the marker never shows. |
+
 ## Client contract 1.68
 
 | Area | What |

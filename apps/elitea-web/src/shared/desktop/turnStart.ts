@@ -9,9 +9,10 @@ import type { UnattendedGrant } from './unattendedIpc';
 
 /**
  * How a turn's tool calls are approved: as the rules say (Act), read-only until the plan is accepted (Plan), or
- * without questions (Bypass).
+ * without questions (Bypass), or without questions including those after reading outside content (Full auto, issue
+ * 3079; chosen per thread, never a default).
  */
-export type TurnMode = 'act' | 'plan' | 'bypass';
+export type TurnMode = 'act' | 'plan' | 'bypass' | 'full_auto';
 
 /**
  * What a send starts a turn in: a mode, or a mode with the "Run to completion" grant (ADR-0045; checked, without a
@@ -29,6 +30,8 @@ export interface TurnStartRequest {
   plan_mode: boolean;
   /** Bypass mode (IPC.md "Bypass mode"): every local tool call that would be asked runs without the question. Never with `plan_mode`. */
   bypass_approvals?: boolean;
+  /** Full auto (IPC.md "Full auto"): Bypass that also answers the trusted folder's taint gate, except a hard-deny list. Implies bypass; never with `plan_mode`; refused with `full_auto_forbidden` when the policy forbids it. */
+  full_auto?: boolean;
   /** Run to completion (ADR-0045): the grant, with a new `grant_id` per chain. It does not imply bypass; never with `plan_mode`. */
   unattended?: UnattendedGrant;
   /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */

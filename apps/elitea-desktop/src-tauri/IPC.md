@@ -387,7 +387,8 @@ the policy first; an allow rule the person wrote (never a repository's)
 allows; after the turn read outside content (a remote toolkit, MCP, web,
 browser or computer tool, or a later agent's turn of a routed message) every
 other host command is asked with `source: "taint"`, which neither bypass
-mode nor the unattended grant answers; otherwise only routine commands that
+mode nor the unattended grant answers (Full auto does, except its hard-deny
+list: **Full auto**); otherwise only routine commands that
 start no known network program run without a question (a best-effort list: a
 build or package script can still reach the network). With "Ask for every
 command" on, every host command is asked, rules and remembered choices
@@ -439,7 +440,7 @@ failed tool's `tool_result` event carries its `code` (without the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], participant_id?: number, cloud_agent?: boolean}` (**Unattended turns**, **Several agents in a thread**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, full_auto?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], participant_id?: number, cloud_agent?: boolean}` (**Unattended turns**, **Several agents in a thread**, below) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -656,6 +657,34 @@ apply). A sub-agent of the turn in a task worktree runs in bypass mode too. The
 session leaves bypass mode when the turn (or the sub-agent) ends.
 `rules_explain` explains the rules without the mode. The UI
 keeps the choice per folder and asks the person to confirm it once.
+
+**Full auto** (ADR-0061 amendment of 2026-11-26, issue 3079). `full_auto:
+true` (with `bypass_approvals` implied) starts the turn in the `full_auto`
+profile: everything Bypass answers, and also the trusted folder's taint
+gate (`source: "taint"`, the questions asked after the turn read outside
+content). It does not answer its hard-deny list
+(`libs/rust/local-tools/src/approvals/full_auto.rs`): a recursive delete
+whose target is outside the folder, unresolvable (`$`, `~`, a backtick) or
+on another drive; a command naming a credential store, a shell profile or
+the app's own settings; a keychain program; a command that turns an OS
+protection off. These are asked as in Act mode, and declined at once in an
+unattended turn. Everything Bypass leaves to the person (a hook's ask,
+computer use, a browser purchase, an MCP sign-in) stays so. The commit's
+`local_work.full_auto` records `{answered, asks: [{command, reason,
+tainted, held}]}` (at most 50 asks, 300 bytes each); the HITL exchanges of
+answered asks carry `source: "bypass"`. The start is refused with
+`full_auto_forbidden` when the policy's `local_work_full_auto` is false or
+the device's managed `local_work_full_auto` is forced false, and with
+`invalid_request` together with `plan_mode`. A hand-off or a consult never
+runs in Full auto (it starts from another agent's text), and a sub-agent in
+a task worktree runs in Bypass; an agent the person addressed in the same
+message keeps it. A resumed turn runs in Full auto only when unattended,
+otherwise in Bypass. The session leaves the profile when the turn ends. The
+UI never keeps the choice: it is the open thread's, confirmed every time.
+
+| Command | Args | Returns |
+|---------|------|---------|
+| `full_auto_status` | `{}` | `{allowed}`: Local work is allowed and neither the policy nor the device's managed value forbids Full auto. The UI hides the mode when `false` |
 
 **Waits** (ADR-0045 decision 3). No question waits forever. A rule's or a
 hook's ask that nobody answers in 30 minutes is declined; a remote toolkit
