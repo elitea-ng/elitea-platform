@@ -51,6 +51,9 @@ func (f *fakeReviews) Review(_ context.Context, review registry.ElevationReview)
 	if registry.InvolvedIn(f.elevation, review.ReviewerUserID) {
 		return registry.ReviewResult{}, registry.ErrReviewerInvolved
 	}
+	if f.elevation.ReviewState != registry.ElevationReviewPending {
+		return registry.ReviewResult{}, registry.ErrElevationNotReviewable
+	}
 	reviewed := f.elevation
 	reviewed.ReviewState = registry.ElevationReviewed
 	return registry.ReviewResult{Elevation: reviewed}, nil
@@ -152,6 +155,20 @@ func TestAReviewerTokenIsRefusedAndTheOutcomeIsChecked(t *testing.T) {
 	}
 	if len(store.reviews) != 0 {
 		t.Fatalf("a refused review reached the ledger: %+v", store.reviews)
+	}
+}
+
+// A review of an elevation in the terminal state unreviewed_no_reviewer
+// (R2.9b) is refused with 409 elevation_not_reviewable.
+func TestATerminalReviewIsRefused(t *testing.T) {
+	t.Parallel()
+	store := pendingReview()
+	store.elevation.ReviewState = registry.ElevationUnreviewedNoReviewer
+	h := reviewRouter(store, requestDirectory())
+	path := "/access/elevations/" + store.elevation.ID.String() + "/review"
+	rec := call(t, h, browser(auditor), http.MethodPost, path, `{"outcome":"justified"}`)
+	if rec.Code != http.StatusConflict || refusalCode(t, rec) != console.CodeElevationNotReviewable {
+		t.Fatalf("a review of an unreviewed_no_reviewer elevation: %d %s", rec.Code, rec.Body)
 	}
 }
 

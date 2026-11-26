@@ -127,7 +127,7 @@ Break-glass notices need outbound e-mail. Configure it (the **E-mail** section o
 
 A deployment can also send these notices to an out-of-band webhook, for when e-mail is down: see [The out-of-band notice webhook](/deployment/configuration#the-out-of-band-notice-webhook). Every event of the table but the request makes one webhook call, with ids, a type and a time only; it names nobody.
 
-The notice in the bell icon of the application comes in a later release. The request, a critical change and an `unauthorized` review write their notices today; the start ships in a later release.
+The notice in the bell icon of the application comes in a later release. The request, a critical change, an overdue review, the move to `unreviewed_no_reviewer` and an `unauthorized` review write their notices today; the start ships in a later release.
 
 ## The review after use
 
@@ -145,6 +145,17 @@ Every elevation is reviewed after it ends, by someone who was not involved. The 
 The review of an elevation after a sealed sign-in also says whether a replacement credential was issued (`replacement_issued`). The `admin.elevation.reviewed` security event is written in the same transaction; it carries the outcome, never the note. A second review of the same elevation answers `409 elevation_not_reviewable`.
 
 **A reviewer cannot be removed and waited out.** While the review is pending, taking `access.breakglass.review` from one of its reviewers, suspending or deleting them needs `admin.auth.users.super_admin` (`403 elevation_pending_reviewer` otherwise). The change is listed in the review (`reviewer_changes`), and the person stays a reviewer of it.
+
+### The review deadline
+
+A review is due within the review time of the **Break-glass** settings: 72 hours after the elevation ended on the online path, 24 hours after a sealed sign-in. The `main.elevation_reconciler` routine checks the pending reviews on every pass:
+
+- **A reviewer is left.** While at least one recorded reviewer still has an account that is not suspended, an overdue review stays `review_pending` and is raised **once a day**: the same people as an elevation start are told, and the webhook is called (see [Who is told](#who-is-told)). It is raised until someone reviews it.
+- **Nobody is left.** When no recorded reviewer is left, at the deadline or on a later day (the last one was suspended or deleted), the elevation moves to the terminal state `unreviewed_no_reviewer`. The move is announced once: the `admin.elevation.unreviewed` security event, the notices and the webhook call. The daily reminder stops, and a review of it is refused (`409 elevation_not_reviewable`).
+
+<Tip>
+Give the Security auditor role to at least one person who will not use break-glass, so that every elevation has a reviewer. With only administrators, an elevation one administrator approved for another has nobody independent to review it, and it ends as `unreviewed_no_reviewer`.
+</Tip>
 
 ### The revert list
 

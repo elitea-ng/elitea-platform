@@ -529,7 +529,8 @@ func (h *ReviewsHandler) writeReviewError(w http.ResponseWriter, r *http.Request
 			"only a reviewer recorded when the elevation ended reviews it")
 	case errors.Is(err, registry.ErrElevationNotReviewable):
 		writeElevationRefusal(w, http.StatusConflict, CodeElevationNotReviewable,
-			"the elevation is not awaiting review: it has not ended, or it was reviewed already")
+			"the elevation is not awaiting review: it has not ended, it was reviewed already, "+
+				"or nobody independent could review it by its deadline")
 	case errors.Is(err, registry.ErrElevationInvalid):
 		writeElevationRefusal(w, http.StatusBadRequest, CodeElevationRequestInvalid, err.Error())
 	case errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled):

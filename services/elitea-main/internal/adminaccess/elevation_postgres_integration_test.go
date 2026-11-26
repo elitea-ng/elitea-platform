@@ -54,7 +54,7 @@ func TestElevationLedgerIsAppendOnlyExceptTheEndAndTheReview(t *testing.T) {
 		}
 	}
 	for name, statement := range map[string]string{
-		"DELETE":   `DELETE FROM elitea_auth.admin_elevations WHERE id = $1`,
+		"DELETE": `DELETE FROM elitea_auth.admin_elevations WHERE id = $1`,
 		// The review items (shared 0283) reference the ledger, so a plain
 		// TRUNCATE needs CASCADE; the triggers of both tables refuse that.
 		"TRUNCATE": `TRUNCATE elitea_auth.admin_elevations CASCADE`,

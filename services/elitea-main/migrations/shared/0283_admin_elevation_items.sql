@@ -21,6 +21,8 @@
 --                    row of centry.audit_events), a queue for the platform
 --                    administrators; handled_at/handled_by mark it done.
 --   note             a later note on the review (R2.9c).
+--   overdue          the review was raised as overdue by the reconciler
+--                    (R2.9b): at most one a day while a reviewer is active.
 --
 -- The note texts are here and nowhere else: a chained security event carries
 -- the ids and codes of a review, never its text (decision 8).
@@ -48,7 +50,7 @@ CREATE TABLE IF NOT EXISTS elitea_auth.admin_elevation_items (
     handled_by          bigint,
 
     CONSTRAINT admin_elevation_items_kind_known
-        CHECK (kind IN ('reviewer', 'reviewer_change', 'review', 'revert', 'note')),
+        CHECK (kind IN ('reviewer', 'reviewer_change', 'review', 'revert', 'note', 'overdue')),
     CONSTRAINT admin_elevation_items_reviewer_names_a_person
         CHECK (kind NOT IN ('reviewer', 'reviewer_change', 'review', 'note') OR user_id IS NOT NULL),
     CONSTRAINT admin_elevation_items_reviewer_change_known

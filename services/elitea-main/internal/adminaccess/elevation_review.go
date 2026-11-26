@@ -57,6 +57,9 @@ const (
 	ReviewItemReview         = "review"
 	ReviewItemRevert         = "revert"
 	ReviewItemNote           = "note"
+	// ReviewItemOverdue: the review was raised as overdue (R2.9b), at most
+	// once a day.
+	ReviewItemOverdue = "overdue"
 )
 
 // The changes to a pending reviewer that GuardPendingReviewer lists.
