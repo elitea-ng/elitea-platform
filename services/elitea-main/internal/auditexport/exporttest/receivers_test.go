@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -296,24 +298,71 @@ func TestOTLPReceiverAllBodiesAndWaitForEvent(t *testing.T) {
 }
 
 func TestWebhookReceiverDeadLettersOnBadContent(t *testing.T) {
-	// A receiver that answers 400 for the event is a content refusal: the sink
-	// retries a bounded number of times, then the pipeline dead-letters the
-	// event. The existing plumbing test (TestWebhookSplitsARefusedBatchAndDeliversTheNeighbours)
-	// covers the split; this one asserts the default attempt bound.
+	// A receiver that answers 400 for the event is a content refusal: the
+	// pipeline retries a bounded number of times, then records the dead letter.
 	rcv := NewWebhookReceiver(t, testKey2)
 	defer func() { _ = rcv.Stop(t) }()
-	sink := newWebhookSink(t, rcv.URL(), testKey2)
+	store := &memoryDeadLetters{}
+	sink := auditexport.Wrap(newWebhookSink(t, rcv.URL(), testKey2), auditexport.PipelineConfig{
+		DeadLetters: store,
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
 	rcv.Refusals()["event-bad"] = http.StatusBadRequest
 	events := []auditexport.Event{testEvent("event-ok"), testEvent("event-bad")}
-	err := sink.Send(context.Background(), events)
-	if err == nil {
-		t.Fatal("a content refusal must return an error")
+	// Send repeatedly: the receiver refuses event-bad every pass, so the
+	// pipeline counts it, then dead-letters it once the default bound is met.
+	// The pass that dead-letters returns nil: the dead-lettered event is
+	// settled and the rest is delivered.
+	var err error
+	for i := 0; i < auditexport.DefaultMaxPermanentAttempts+2; i++ {
+		err = sink.Send(context.Background(), events)
+		if len(store.records) > 0 {
+			break
+		}
 	}
-	var permanent *auditexport.PermanentError
-	if !errors.As(err, &permanent) {
-		t.Fatalf("err = %v, want a permanent error", err)
+	if len(store.records) == 0 {
+		t.Fatal("the event must be dead-lettered after the default bound")
 	}
-	if len(permanent.Events) != 1 || permanent.Events[0].EventID != "event-bad" {
-		t.Fatalf("permanent events = %v, want only event-bad", permanent.Events)
+	// The first err of the loop must be a content refusal, proving the
+	// receiver refused the event on its own.
+	if err != nil {
+		var permanent *auditexport.PermanentError
+		if !errors.As(err, &permanent) {
+			t.Fatalf("err = %v, want a permanent error", err)
+		}
+		if len(permanent.Events) != 1 || permanent.Events[0].EventID != "event-bad" {
+			t.Fatalf("permanent events = %v, want only event-bad", permanent.Events)
+		}
 	}
+	// The default attempt bound is DefaultMaxPermanentAttempts: the event is
+	// refused repeatedly, and the dead letter is recorded once the pipeline
+	// has counted enough passes.
+	if len(store.records) != 1 {
+		t.Fatalf("dead letters = %v, want 1", store.records)
+	}
+	if store.records[0].Events[0].EventID != "event-bad" {
+		t.Fatalf("dead letter events = %v, want event-bad", store.records[0].Events)
+	}
+	if store.records[0].Attempts != auditexport.DefaultMaxPermanentAttempts {
+		t.Fatalf("dead-letter attempts = %d, want %d", store.records[0].Attempts, auditexport.DefaultMaxPermanentAttempts)
+	}
+}
+
+// memoryDeadLetters is an in-memory auditexport.DeadLetterStore.
+type memoryDeadLetters struct {
+	records []deadLetterRecord
+}
+
+type deadLetterRecord struct {
+	Events   []auditexport.Event
+	Attempts int
+}
+
+func (m *memoryDeadLetters) RecordDeadLetters(_ context.Context, _ string, events []auditexport.Event, _ string, attempts int) error {
+	if len(events) > 0 {
+		cp := make([]auditexport.Event, len(events))
+		copy(cp, events)
+		m.records = append(m.records, deadLetterRecord{Events: cp, Attempts: attempts})
+	}
+	return nil
 }
