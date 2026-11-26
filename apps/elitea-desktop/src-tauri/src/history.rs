@@ -308,8 +308,9 @@ pub enum ResumeMode {
 }
 
 impl ResumeMode {
+    /// The value the history record stores (a mode, not an error code).
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
+    pub const fn stored(self) -> &'static str {
         match self {
             Self::Build => "build",
             Self::Plan => "plan",
@@ -2256,7 +2257,7 @@ fn apply_resume(conn: &Connection, write: ResumeWrite) -> rusqlite::Result<()> {
                     record.project_id,
                     record.application_id,
                     record.version_id,
-                    record.mode.as_str(),
+                    record.mode.stored(),
                     text(record.grant.as_ref()),
                     record.chain_root_execution_id,
                     record.continuation_index,
