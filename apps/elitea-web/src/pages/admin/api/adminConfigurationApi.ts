@@ -24,17 +24,13 @@
  * `./adminSchedulesApi.ts`. Nothing else: a different endpoint, a different
  * payload shape, its own query-key namespace.
  */
-import {
-  useMutation,
-  useQuery,
-  useQueryClient,
-  type UseMutationResult,
-  type UseQueryResult,
-} from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
 import { getGetAdminConsoleDocumentQueryKey } from '@/shared/api/generated/admin/admin';
 import { EliteaApiError, eliteaFetch } from '@/shared/api/generated/mutator';
 import { unwrapBody } from '@/shared/api/unwrap';
+
+import { reasonFields, type AdminReason, type DangerousActionKey } from '../adminDangerousAction';
 
 /** Only `administration` may read or write configuration, server-side as in the legacy API. */
 const ADMIN_MODE = 'administration';
@@ -156,16 +152,9 @@ export interface AdminConfigSection {
    * `service_descriptors` out of the client's section list.
    */
   readonly page?: string;
-  /**
-   * Who may open the section (ADR-0059 R0.5): the console area it belongs
-   * to, under which Configuration groups it (R3.7, issue 2538).
-   */
+  /** The console area of the section (R0.5), which Configuration groups by (R3.7, issue 2538). */
   readonly access?: { readonly area?: string };
-  /**
-   * What the caller may do with it (R3.7): `read` when the server would
-   * refuse a save. The PUT refuses on its own account either way; this only
-   * disables the save before the refusal.
-   */
+  /** `read` when the server would refuse the caller's save (R3.7); the PUT refuses either way. */
   readonly level?: 'read' | 'write';
 }
 
@@ -298,7 +287,13 @@ export function useAdminConfigValues(
 export interface AdminConfigSave {
   readonly sectionId: string;
   readonly values: Readonly<Record<string, unknown>>;
+  /** The dialog's reason of a save that turns maintenance mode on (R3.8b, issue 2614). */
+  readonly reason?: AdminReason;
 }
+
+/** The action table key of the save that turns maintenance mode on. */
+export const MAINTENANCE_ON_ACTION: DangerousActionKey =
+  'PUT /api/v2/admin/plugin_config_values/administration/{plugin} maintenance:on';
 
 /**
  * `PUT /admin/plugin_config_values/administration/{section}`.
@@ -311,11 +306,14 @@ export interface AdminConfigSave {
 export function useSaveAdminConfigValues(): UseMutationResult<void, Error, AdminConfigSave> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ sectionId, values }: AdminConfigSave) => {
+    mutationFn: async ({ sectionId, values, reason }: AdminConfigSave) => {
       await eliteaFetch<unknown>(sectionValuesUrl(sectionId), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
+        body: JSON.stringify({
+          values,
+          ...(reason === undefined ? {} : reasonFields(MAINTENANCE_ON_ACTION, reason)),
+        }),
       });
     },
     onSuccess: async (_, { sectionId }) => {

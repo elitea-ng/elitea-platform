@@ -84,6 +84,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 
 import { BASE_URL, STORAGE_STATE } from '../../playwright.config';
 import { AUTOTEST_PREFIX } from '../fixtures/api';
+import { confirmDangerousAction } from '../fixtures/dangerousAction';
 
 test.use({ storageState: STORAGE_STATE.admin });
 
@@ -225,6 +226,8 @@ async function createProviderThroughPanel(page: Page, title: string): Promise<vo
       response.url().endsWith('/admin/gateway/providers') && response.request().method() === 'POST',
   );
   await page.getByTestId('llm-provider-save').click();
+  // A platform credential reaches every project: it is confirmed with a reason (ADR-0059 R3.8b).
+  await confirmDangerousAction(page, title);
   const response = await created;
   expect(response.status(), `POST /providers for ${title} was refused`).toBe(201);
 
@@ -384,7 +387,7 @@ test('a platform provider is published, breaks, and is repaired by Re-validate',
         response.url().includes(`/admin/gateway/providers/${String(created.id)}`) &&
         response.request().method() === 'DELETE',
     );
-    await page.getByTestId('llm-providers-confirm-delete-button').click();
+    await confirmDangerousAction(page, PROVIDER_NAME);
     expect((await deleted).status(), 'DELETE /providers/{id} must answer 204').toBe(204);
 
     await expect(providerRowLocator(page, PROVIDER_NAME)).toHaveCount(0, { timeout: 20_000 });

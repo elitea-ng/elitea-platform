@@ -78,6 +78,30 @@ While the console reads the capability document, the sidebar shows that it is lo
 
 The six areas are controlled by **Admin › Features › Administration console › Six labelled areas** (`admin_console_areas`). A new deployment has it on. On a deployment upgraded from a release that already had administrators, the upgrade turns it off for one release, so administrators keep the navigation they know: two unlabelled groups, with **Roles** among the first, and **Tasks** and **Schedules & Tasks** as two items. In that navigation an item is listed when you hold a permission its page accepts. Turn the setting on when you are ready; a later release removes the old navigation.
 
+## Dangerous actions ask for a reason
+
+Some actions change the whole deployment, or many projects or people at once, and cannot easily be undone. The console confirms each of them in one dialog of the same shape, so the same action never asks differently on two pages. The dialog shows:
+
+- **Dangerous action** or **Critical action**. A critical action changes who can do what across the deployment: a role's permissions, an identity provider's trust, a guardrail, or a platform LLM provider.
+- What changes, and how many projects or people it reaches. When the number cannot be counted cheaply, the dialog says **unknown** rather than a number it would have to invent.
+- A **reason code**: incident, request, maintenance, correction, offboarding or other. Choosing **other** needs a short text.
+- An optional reason text, with a counter. The text is cut at 500 bytes.
+- The name of the target, such as the project, the user's e-mail address, the role or the provider, which you type to arm the button. A platform-wide stop on the **Kill switch** asks you to type `STOP`.
+
+The actions that ask are listed by the server, and a test checks that the console asks for every one of them. They include:
+
+- deleting users, projects, roles, platform models, platform LLM providers, identity providers and SCIM clients;
+- changing administrators' roles and suspending an account;
+- saving or applying the permission matrix;
+- saving an identity provider, a SCIM client or a SCIM group binding, and rotating or revoking a SCIM client;
+- saving or deleting a governance entry;
+- changing a retention policy or a project's override, and releasing a legal hold;
+- resetting branding, revoking a credential, inviting in bulk and stopping the whole platform.
+
+Unsuspending an account and suspending a single agent, project or toolkit type do not ask. Where the server cannot tell from the request alone whether a save is dangerous, as on a retention policy or an identity provider, every save asks.
+
+The console sends the reason with the request: as the `reason_code` and `reason` fields of a JSON body, or as the `Elitea-Reason-Code` and `Elitea-Reason` headers, percent-encoded so that a reason in any language works. The server records the reason on the audit event. Until the warning period ends, the server still accepts a dangerous action without a reason and marks the response with `Elitea-Reason-Missing: 1`; scripts that call these routes should start sending a reason now.
+
 ## Account menu
 
 Select your name at the bottom of the sidebar, or your picture when the sidebar is collapsed, to open the same account menu as in the Elitea app. It has **Back to Elitea**, which returns you to the app, the version line (the console's version and the server's; select it to copy it) and **Sign out**.

@@ -32,6 +32,7 @@ import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/sh
 import { server } from '@/test/setup';
 
 import { AdminBranding } from './Branding';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 import { useBrandingDirtyStore } from './brandingDirty.store';
 import { BRANDING_KEYS, emptyBrandingValues } from './brandingValues';
@@ -64,6 +65,7 @@ const STORED: BrandingSettings = {
 
 let savedBodies: Array<Record<string, unknown>> = [];
 let resets = 0;
+let resetReasonCodes: Array<string | null> = [];
 let uploads: Array<{ kind: string; contentType: string }> = [];
 
 function useBrandingHandlers(): void {
@@ -78,8 +80,9 @@ function useBrandingHandlers(): void {
       savedBodies.push(body.values);
       return { ...STORED, values: body.values, saved: true };
     }),
-    getResetBrandingSettingsMockHandler(() => {
+    getResetBrandingSettingsMockHandler(({ request }) => {
       resets += 1;
+      resetReasonCodes.push(request.headers.get('Elitea-Reason-Code'));
       return { ...STORED, values: emptyBrandingValues(), layers: { file: false, database: false }, effective: null, saved: true };
     }),
     getUploadBrandingAssetMockHandler(({ params, request }) => {
@@ -129,6 +132,7 @@ beforeEach(() => {
   configureGeneratedClient({ baseUrl: '/api/v2' });
   savedBodies = [];
   resets = 0;
+  resetReasonCodes = [];
   uploads = [];
   useBrandingHandlers();
 });
@@ -253,8 +257,11 @@ describe('AdminBranding', () => {
     renderBranding();
     await productName();
     await userEvent.click(screen.getByTestId('branding-reset'));
-    await userEvent.click(await screen.findByTestId('branding-reset-confirm'));
+    await confirmDangerousAction(userEvent.setup(), 'branding', { code: 'maintenance' });
     await waitFor(() => expect(resets).toBe(1));
+    // The reason of the dangerous action (ADR-0059 R3.8b): a DELETE has no
+    // body, so the code travels in its header.
+    expect(resetReasonCodes).toEqual(['maintenance']);
     // The server deletes every row of the section (issue 1057): the client no
     // longer has to know each key — `scheme_tokens` included — to clear it.
     expect(savedBodies).toHaveLength(0);

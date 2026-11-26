@@ -34,6 +34,7 @@ import { randomBytes } from 'node:crypto';
 import { expect, request as playwrightRequest, test, type APIRequestContext, type Page } from '@playwright/test';
 
 import { API_BASE, AUTOTEST_PREFIX } from '../../fixtures/api';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 const PROVIDERS_URL = `${API_BASE}/admin/gateway/providers`;
@@ -153,6 +154,8 @@ test('the LLM manager adds a provider, adopts a model, sets a budget and saves t
         new URL(response.url()).pathname.endsWith('/admin/gateway/providers') && response.request().method() === 'POST',
     );
     await page.getByTestId('llm-provider-save').click();
+    // A provider create is a dangerous action: the one dialog asks for a reason (R3.8b, issue 2614).
+    await confirmDangerousAction(page, providerName);
     const createdResponse = await created;
     expect(createdResponse.status(), 'the server admits the create on llm.catalogue.manage').toBe(201);
     const providerId = ((await createdResponse.json()) as { id: number }).id;

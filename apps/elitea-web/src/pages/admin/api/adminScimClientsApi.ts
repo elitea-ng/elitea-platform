@@ -34,6 +34,8 @@ import {
 import { eliteaFetch } from "@/shared/api/generated/mutator";
 import { unwrapBody } from "@/shared/api/unwrap";
 
+import { reasonFields, reasonHeaders, type AdminReason } from "../adminDangerousAction";
+
 const CLIENTS_URL = "/admin/scim_clients/administration";
 
 /** Used until the listing has loaded; the server answers the same values. */
@@ -132,15 +134,21 @@ export interface AdminScimClientDraft {
   readonly expiresAt?: string | undefined;
 }
 
+/** A write on one client, with the reason of the dangerous action (ADR-0059 R3.8b). */
+interface AdminScimClientWrite {
+  readonly id: string;
+  readonly reason: AdminReason;
+}
+
 /** `POST /admin/scim_clients/administration` — answers the secret once. */
 export function useCreateAdminScimClient(): UseMutationResult<
   AdminScimClientSecret,
   Error,
-  AdminScimClientDraft
+  { readonly draft: AdminScimClientDraft; readonly reason: AdminReason }
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (draft: AdminScimClientDraft) =>
+    mutationFn: async ({ draft, reason }) =>
       readSecret(
         await eliteaFetch<unknown>(CLIENTS_URL, {
           method: "POST",
@@ -151,6 +159,7 @@ export function useCreateAdminScimClient(): UseMutationResult<
             ...(draft.expiresAt === undefined
               ? {}
               : { expires_at: draft.expiresAt }),
+            ...reasonFields("POST /api/v2/admin/scim_clients/administration", reason),
           }),
         }),
       ),
@@ -166,14 +175,15 @@ export function useCreateAdminScimClient(): UseMutationResult<
 export function useRotateAdminScimClient(): UseMutationResult<
   AdminScimClientSecret,
   Error,
-  string
+  AdminScimClientWrite
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) =>
+    mutationFn: async ({ id, reason }) =>
       readSecret(
         await eliteaFetch<unknown>(clientUrl(id, "rotate"), {
           method: "POST",
+          ...reasonHeaders("POST /api/v2/admin/scim_clients/administration/{id}/rotate", reason),
         }),
       ),
     gcTime: 0,
@@ -186,12 +196,15 @@ export function useRotateAdminScimClient(): UseMutationResult<
 export function useRevokeAdminScimClient(): UseMutationResult<
   void,
   Error,
-  string
+  AdminScimClientWrite
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      await eliteaFetch<unknown>(clientUrl(id, "revoke"), { method: "POST" });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(clientUrl(id, "revoke"), {
+        method: "POST",
+        ...reasonHeaders("POST /api/v2/admin/scim_clients/administration/{id}/revoke", reason),
+      });
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: adminScimClientKeys.all }),
@@ -202,12 +215,15 @@ export function useRevokeAdminScimClient(): UseMutationResult<
 export function useDeleteAdminScimClient(): UseMutationResult<
   void,
   Error,
-  string
+  AdminScimClientWrite
 > {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      await eliteaFetch<unknown>(clientUrl(id), { method: "DELETE" });
+    mutationFn: async ({ id, reason }) => {
+      await eliteaFetch<unknown>(clientUrl(id), {
+        method: "DELETE",
+        ...reasonHeaders("DELETE /api/v2/admin/scim_clients/administration/{id}", reason),
+      });
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: adminScimClientKeys.all }),

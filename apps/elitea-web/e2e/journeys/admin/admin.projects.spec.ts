@@ -24,6 +24,7 @@
 import { test as adminTest, expect, type Locator } from '@playwright/test';
 
 import { checkA11y } from '../../fixtures/axe';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
@@ -392,8 +393,6 @@ adminTest('J31g: creating a project puts it in the list, and deleting it takes i
   await expect(page.getByTestId('admin-projects-delete-list')).toContainText(name);
   const confirm = page.getByRole('button', { name: 'Delete permanently' });
   await expect(confirm).toBeDisabled();
-  await page.getByLabel('Type DELETE to confirm').fill('DELETE');
-  await expect(confirm).toBeEnabled();
 
   const [deleted] = await Promise.all([
     page.waitForResponse(
@@ -401,7 +400,9 @@ adminTest('J31g: creating a project puts it in the list, and deleting it takes i
         r.url().includes('/projects/project/administration/') && r.request().method() === 'DELETE',
       { timeout: 180_000 },
     ),
-    confirm.click(),
+    // The one dangerous-action dialog (ADR-0059 R3.8b): a reason and the
+    // project's name arm the button.
+    confirmDangerousAction(page, name),
   ]);
   expect(
     deleted.status(),

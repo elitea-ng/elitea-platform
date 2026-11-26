@@ -14,6 +14,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminRetention } from './Retention';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -76,7 +77,7 @@ beforeEach(() => {
       return HttpResponse.json(POLICIES[3]);
     }),
     http.delete('*/admin/retention/policies/:dataClass/projects/:projectId', ({ request }) => {
-      recorded.push({ method: 'DELETE', url: request.url, body: null });
+      recorded.push({ method: 'DELETE', url: request.url, body: { reasonCode: request.headers.get('Elitea-Reason-Code') } });
       return new HttpResponse(null, { status: 204 });
     }),
     http.get('*/admin/legal_holds', () => HttpResponse.json({ holds: [HOLD] })),
@@ -117,16 +118,32 @@ describe('AdminRetention - policies', () => {
     await user.type(max, '365');
     const row = screen.getByTestId('admin-retention-row-conversation');
     await user.click(within(row).getByRole('button', { name: 'Save' }));
+    // Shortening is critical and only the server can tell: every save asks (ADR-0059 R3.8b).
+    expect(recorded).toHaveLength(0);
+    await confirmDangerousAction(user, 'conversation', { code: 'request' });
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.url).toMatch(/\/admin\/retention\/policies\/conversation$/);
-    expect(recorded[0]!.body).toEqual({ min_age_days: 0, max_age_days: 365, allow_project_override: true });
+    expect(recorded[0]!.body).toEqual({
+      min_age_days: 0,
+      max_age_days: 365,
+      allow_project_override: true,
+      reason_code: 'request',
+      reason: 'ticket 42',
+    });
 
     const gatewayMax = screen.getByLabelText('Maximum (days): LLM gateway request log');
     await user.clear(gatewayMax);
     const gatewayRow = screen.getByTestId('admin-retention-row-gateway_request_log');
     await user.click(within(gatewayRow).getByRole('button', { name: 'Save' }));
+    await confirmDangerousAction(user, 'gateway_request_log', { text: '' });
     await waitFor(() => expect(recorded).toHaveLength(2));
-    expect(recorded[1]!.body).toEqual({ min_age_days: 1, max_age_days: null, allow_project_override: false });
+    expect(recorded[1]!.body).toEqual({
+      min_age_days: 1,
+      max_age_days: null,
+      allow_project_override: false,
+      reason_code: 'incident',
+      reason: '',
+    });
   });
 
   it('removes a project override', async () => {
@@ -134,8 +151,10 @@ describe('AdminRetention - policies', () => {
     renderAdminRoute(<AdminRetention />);
     const overrides = await screen.findByRole('table', { name: 'Project overrides' });
     await user.click(within(overrides).getByRole('button', { name: 'Remove' }));
+    await confirmDangerousAction(user, 'conversation');
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.method).toBe('DELETE');
+    expect(recorded[0]!.body).toEqual({ reasonCode: 'incident' });
     expect(recorded[0]!.url).toMatch(/\/admin\/retention\/policies\/conversation\/projects\/4$/);
   });
 });
@@ -167,11 +186,10 @@ describe('AdminRetention - legal holds', () => {
     await user.click(within(row).getByRole('button', { name: 'Release' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/resumes on the next retention sweep/)).toBeInTheDocument();
-    await user.type(within(dialog).getByLabelText('Release reason (optional)'), 'matter closed');
-    await user.click(within(dialog).getByRole('button', { name: 'Release' }));
+    await confirmDangerousAction(user, 'User 42', { code: 'request', text: 'matter closed' });
     await waitFor(() => expect(recorded).toHaveLength(1));
     expect(recorded[0]!.url).toMatch(/\/admin\/legal_holds\/11\/release$/);
-    expect(recorded[0]!.body).toEqual({ reason: 'matter closed' });
+    expect(recorded[0]!.body).toEqual({ reason_code: 'request', reason: 'matter closed' });
   });
 });
 

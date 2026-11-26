@@ -175,6 +175,7 @@ function GatewayGovernancePage() {
           onSave={state.onSave}
         />
       )}
+      {state.confirmDialog}
     </DrawerPage>
   );
 }

@@ -41,7 +41,8 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 import { AdminViewOnlyNotice, AdminWritable } from './AdminWritable';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
-import { AdminSuspendDialog, resumeRuleLabel, scopeLabel } from './AdminSuspendDialog';
+import { AdminSuspendDialog, PLATFORM_STOP_CONFIRMATION, resumeRuleLabel, scopeLabel } from './AdminSuspendDialog';
+import { useAdminDangerousConfirm } from './useAdminDangerousConfirm';
 import { useAdminSuspensions, useCreateAdminSuspension, useResumeAdminSuspension } from './api/adminKillSwitchApi';
 
 /** What the suspension covers, in one cell. */
@@ -83,6 +84,7 @@ function KillSwitchPage(props: AdminKillSwitchProps): ReactNode {
   const access = useAdminWritable(ADMIN_ITEM.killSwitch);
   const create = access.guard(useCreateAdminSuspension());
   const resume = access.guard(useResumeAdminSuspension());
+  const confirm = useAdminDangerousConfirm();
   const rows = list.data ?? [];
 
   const closeDialog = (): void => {
@@ -217,8 +219,26 @@ function KillSwitchPage(props: AdminKillSwitchProps): ReactNode {
         pending={create.isPending}
         error={create.isError ? describeSuspensionError(create.error) : undefined}
         onClose={closeDialog}
-        onSubmit={(body) => create.mutate(body, { onSuccess: closeDialog })}
+        onSubmit={(body) => {
+          if (body.scope !== 'platform') {
+            create.mutate({ body }, { onSuccess: closeDialog });
+            return;
+          }
+          confirm.ask({
+            action: 'POST /api/v2/admin/execution_suspensions platform',
+            title: t('pages.admin.killSwitch.platformTitle', 'Stop the whole platform'),
+            change: t(
+              'pages.admin.killSwitch.platformWarningBody',
+              'This stops every run on the platform and cancels every run in flight.',
+            ),
+            reach: { count: undefined, unit: 'projects' },
+            target: PLATFORM_STOP_CONFIRMATION,
+            confirmLabel: t('pages.admin.killSwitch.suspendConfirm', 'Suspend'),
+            run: (reason) => create.mutate({ body, reason }, { onSuccess: closeDialog }),
+          });
+        }}
       />
+      {confirm.dialog}
     </DrawerPage>
   );
 }

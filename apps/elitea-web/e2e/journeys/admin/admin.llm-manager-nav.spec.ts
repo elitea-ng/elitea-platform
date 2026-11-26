@@ -27,6 +27,7 @@ import { test as adminTest, expect, type APIRequestContext } from '@playwright/t
 
 import { API_BASE, AUTOTEST_PREFIX } from '../../fixtures/api';
 import { signInThroughOidc } from '../../fixtures/session';
+import { confirmDangerousAction } from '../../fixtures/dangerousAction';
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 
 adminTest.use({ storageState: STORAGE_STATE.admin });
@@ -124,6 +125,7 @@ adminTest('an LLM manager reaches Providers and models through the navigation an
       (response) => response.url().endsWith('/admin/gateway/providers') && response.request().method() === 'POST',
     );
     await page.getByTestId('llm-provider-save').click();
+    await confirmDangerousAction(page, PROVIDER_NAME);
     expect((await created).status(), 'the server must admit the create on llm.catalogue.manage').toBe(201);
     await expect(page.getByRole('row').filter({ hasText: PROVIDER_NAME })).toBeVisible({ timeout: 20_000 });
 

@@ -1,25 +1,17 @@
 /**
- * The revoke dialog of Admin › Credential inventory (ADR-0044 decision 5,
- * #1501). A dialog, not a `window.confirm`: the reason the administrator
- * types is recorded on the security audit event, and a refusal (the
- * credential was already gone, or is flagged only) stays in the dialog next
- * to the row it was about.
+ * The revoke confirmation of Admin › Credential inventory (ADR-0044 decision
+ * 5, #1501), in the one dangerous-action dialog (ADR-0059 R3.8b, issue 2614).
+ * The reason the administrator gives is recorded on the security audit event,
+ * and a refusal (the credential was already gone, or is flagged only) stays
+ * in the dialog next to the row it was about.
  */
-import { useState, type ReactNode } from 'react';
-
-import Alert from '@mui/material/Alert';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
+import type { ReactNode } from 'react';
 
 import { credentialReviewErrorMessage } from '@/features/agent-lifecycle';
 import type { CredentialInventoryCredential } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 
+import { AdminDangerousActionDialog } from './AdminDangerousActionDialog';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { useRevokeCredential } from './api/adminCredentialReviewApi';
@@ -30,64 +22,32 @@ export interface CredentialRevokeDialogProps {
 }
 
 export function CredentialRevokeDialog({ row, onClose }: CredentialRevokeDialogProps): ReactNode {
-  const [reason, setReason] = useState('');
   const access = useAdminWritable(ADMIN_ITEM.credentialInventory);
   const revoke = access.guard(useRevokeCredential());
+  if (row === undefined) return null;
   const close = (): void => {
-    setReason('');
     revoke.reset();
     onClose();
   };
-  const submit = (): void => {
-    if (row === undefined) return;
-    revoke.mutate(
-      {
-        kind: row.kind,
-        credential_id: row.credential_id,
-        reason: reason.trim(),
-      },
-      { onSuccess: close },
-    );
-  };
   return (
-    <Dialog open={row !== undefined} onClose={close} maxWidth="sm" fullWidth data-testid="credential-revoke-dialog">
-      <DialogTitle>{t('pages.admin.credentialInventory.revokeTitle', 'Revoke credential')}</DialogTitle>
-      <DialogContent>
-        <Typography variant="bodyMedium" sx={{ marginBottom: '1rem' }}>
-          {t(
-            'pages.admin.credentialInventory.revokeBody',
-            'Revoke {{name}}? Agents and tools that use it stop working with it. The revocation is audited.',
-            { name: row?.name ?? '' },
-          )}
-        </Typography>
-        <TextField
-          fullWidth
-          size="small"
-          label={t('pages.admin.credentialInventory.revokeReason', 'Reason (recorded on the audit event)')}
-          value={reason}
-          onChange={(event) => setReason(event.target.value.slice(0, 500))}
-          slotProps={{
-            htmlInput: { 'data-testid': 'credential-revoke-reason' },
-          }}
-        />
-        {revoke.error !== null && (
-          <Alert severity="error" sx={{ marginTop: '1rem' }}>
-            {credentialReviewErrorMessage(revoke.error)}
-          </Alert>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={close}>{t('pages.admin.credentialInventory.cancel', 'Cancel')}</Button>
-        <Button
-          color="error"
-          variant="contained"
-          disabled={!access.writable || revoke.isPending}
-          onClick={submit}
-          data-testid="credential-revoke-confirm"
-        >
-          {t('pages.admin.credentialInventory.revoke', 'Revoke')}
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <AdminDangerousActionDialog
+      open
+      action="POST /api/v2/admin/credential_inventory/revoke"
+      title={t('pages.admin.credentialInventory.revokeTitle', 'Revoke credential')}
+      change={t(
+        'pages.admin.credentialInventory.revokeBody',
+        'Revoke {{name}}? Agents and tools that use it stop working with it. The revocation is audited.',
+        { name: row.name },
+      )}
+      reach={{ count: undefined, unit: 'projects' }}
+      target={row.name}
+      confirmLabel={t('pages.admin.credentialInventory.revoke', 'Revoke')}
+      pending={!access.writable || revoke.isPending}
+      error={revoke.error === null ? undefined : credentialReviewErrorMessage(revoke.error)}
+      onClose={close}
+      onConfirm={(reason) =>
+        revoke.mutate({ kind: row.kind, credentialId: row.credential_id, reason }, { onSuccess: close })
+      }
+    />
   );
 }

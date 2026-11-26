@@ -22,6 +22,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 
+import type { AdminReason } from './adminDangerousAction';
 import { ADMIN_ITEM } from './adminItemIds';
 import { useAdminWritable } from './adminWriteAccess';
 import { withoutBlankLinks, type ConfigLink } from './ConfigurationLinksEditor';
@@ -62,13 +63,32 @@ export interface AdminConfigurationPageState {
   readonly readOnly: boolean;
   /** The open section alone is read for this caller, on a page it may write (R3.7). */
   readonly sectionReadOnly: boolean;
-  readonly onSave: () => void;
+  /** Saves the draft; `reason` is the dialog's, for a save that turns maintenance on. */
+  readonly onSave: (reason?: AdminReason) => void;
+  /** The save turns maintenance mode on: a dangerous action that asks for a reason (R3.8b). */
+  readonly turnsMaintenanceOn: boolean;
   readonly onDiscard: () => void;
   readonly saveError: string | undefined;
   readonly savedAt: number | undefined;
   readonly onDismissSaved: () => void;
   readonly onDismissError: () => void;
 }
+
+/**
+ * Whether saving the draft turns maintenance mode on: the server's
+ * `MaintenanceAction` outcome `on`, off (or unset) before and on after.
+ */
+function turnsMaintenanceOn(
+  section: AdminConfigSection | undefined,
+  stored: Readonly<Record<string, unknown>> | undefined,
+  draft: Readonly<Record<string, unknown>>,
+): boolean {
+  if (section?.id !== MAINTENANCE_SECTION || !(MAINTENANCE_ENABLED_KEY in draft)) return false;
+  return stored?.[MAINTENANCE_ENABLED_KEY] !== true && draft[MAINTENANCE_ENABLED_KEY] === true;
+}
+
+const MAINTENANCE_SECTION = 'maintenance';
+const MAINTENANCE_ENABLED_KEY = 'maintenance_enabled';
 
 /** View-only of the page (its item) or of the open section alone (its `level`). */
 function writeFlags(
@@ -200,11 +220,15 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     setSaveError(undefined);
   }, []);
 
-  const onSave = useCallback(() => {
+  const onSave = useCallback((reason?: AdminReason) => {
     if (activeSection === undefined) return;
     setSaveError(undefined);
     saveMutation.mutate(
-      { sectionId: activeSection.id, values: cleanForSave(draft, activeSection.fields ?? []) },
+      {
+        sectionId: activeSection.id,
+        values: cleanForSave(draft, activeSection.fields ?? []),
+        ...(reason === undefined ? {} : { reason }),
+      },
       {
         onSuccess: () => {
           setDraft({});
@@ -251,6 +275,7 @@ function useAdminConfigSectionsPage(page: string | undefined, itemId: string): A
     isSaving: saveMutation.isPending,
     ...writeFlags(access.writable, activeSection),
     onSave,
+    turnsMaintenanceOn: turnsMaintenanceOn(activeSection, serverValues, draft),
     onDiscard,
     saveError,
     savedAt,

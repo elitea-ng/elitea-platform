@@ -14,6 +14,7 @@ import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/gen
 import { server } from '@/test/setup';
 
 import { AdminCredentialInventory } from './CredentialInventory';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -119,10 +120,13 @@ describe('AdminCredentialInventory', () => {
     const user = userEvent.setup();
     renderAdminRoute(<AdminCredentialInventory />);
     await user.click(await screen.findByTestId('credential-inventory-revoke-pat-501'));
-    await user.type(screen.getByTestId('credential-revoke-reason'), 'left the team');
-    await user.click(screen.getByTestId('credential-revoke-confirm'));
-    await waitFor(() => expect(revokes).toEqual([{ kind: 'pat', credential_id: '501', reason: 'left the team' }]));
-    await waitFor(() => expect(screen.queryByTestId('credential-revoke-dialog')).not.toBeInTheDocument());
+    await confirmDangerousAction(user, 'ci token', { code: 'offboarding', text: 'left the team' });
+    await waitFor(() =>
+      expect(revokes).toEqual([
+        { kind: 'pat', credential_id: '501', reason_code: 'offboarding', reason: 'left the team' },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByTestId('admin-dangerous-dialog')).not.toBeInTheDocument());
   });
 });
 

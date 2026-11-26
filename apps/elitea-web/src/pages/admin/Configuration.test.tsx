@@ -21,6 +21,7 @@ import { server } from '@/test/setup';
 import { AdminConfiguration } from './Configuration';
 import { isFieldVisible, widgetFor } from './ConfigurationSectionForm';
 import { linkUrlError, toConfigLinks, withoutBlankLinks } from './ConfigurationLinksEditor';
+import { confirmDangerousAction } from './__tests__/dangerousDialog';
 import { renderAdminRoute } from './__tests__/testRouter';
 import { enabledWriteControls, findViewOnlyNotice, serveConsoleLevel } from './__tests__/viewOnly';
 
@@ -600,5 +601,62 @@ describe('AdminConfiguration — sections by area (R3.7)', () => {
     await userEvent.clear(search);
     await waitFor(() => expect(Object.keys(renderedGroups())).toHaveLength(4));
     expect(screen.queryByTestId('admin-configuration-search-empty')).not.toBeInTheDocument();
+  });
+});
+
+/*
+ * Turning maintenance mode on is a dangerous action (ADR-0059 R3.8b, issue
+ * 2614): the save asks for a reason in the one dialog and sends it; any
+ * other save of the section does not ask.
+ */
+describe('AdminConfiguration — turning maintenance on', () => {
+  const MAINTENANCE = {
+    id: 'maintenance',
+    title: 'Maintenance',
+    access: { area: 'platform' },
+    level: 'write',
+    fields: [
+      { key: 'maintenance_enabled', type: 'boolean', title: 'Maintenance Mode' },
+      { key: 'maintenance_title', type: 'string', title: 'Splash Title' },
+    ],
+  };
+
+  beforeEach(() => {
+    serveConsoleLevel('write', 'configuration');
+    serveSections([MAINTENANCE]);
+    server.use(
+      http.get('*/admin/plugin_config_values/administration/maintenance', () =>
+        HttpResponse.json({ values: { maintenance_enabled: false, maintenance_title: 'Back soon' } }),
+      ),
+    );
+  });
+
+  it('asks for a reason and sends it with the save', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminConfiguration />);
+    const toggle = await screen.findByLabelText('Maintenance Mode');
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(writes()).toEqual([]);
+    await confirmDangerousAction(user, 'maintenance', { code: 'maintenance', text: 'upgrade window' });
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(writes()[0]!.body).toEqual({
+      values: { maintenance_enabled: true },
+      reason_code: 'maintenance',
+      reason: 'upgrade window',
+    });
+  });
+
+  it('saves any other change at once, with no reason', async () => {
+    const user = userEvent.setup();
+    renderAdminRoute(<AdminConfiguration />);
+    const title = await screen.findByRole('textbox', { name: 'Splash Title' });
+    await waitFor(() => expect(title).toBeEnabled());
+    await user.type(title, '!');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes()).toHaveLength(1));
+    expect(screen.queryByTestId('admin-dangerous-dialog')).not.toBeInTheDocument();
+    expect(writes()[0]!.body).toEqual({ values: { maintenance_title: 'Back soon!' } });
   });
 });

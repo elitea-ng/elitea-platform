@@ -135,7 +135,7 @@ describe('useAdminConsoleRefresh', () => {
 
     act(() => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        result.current.save.mutate({ scope: 'platform', reason: 'refused' });
+        result.current.save.mutate({ body: { scope: 'platform', reason: 'refused' } });
       }
     });
 
@@ -150,7 +150,7 @@ describe('useAdminConsoleRefresh', () => {
     await waitFor(() => expect(result.current.console.status).toBe('success'));
 
     act(() => {
-      result.current.save.mutate({ scope: 'platform', reason: 'conflict' });
+      result.current.save.mutate({ body: { scope: 'platform', reason: 'conflict' } });
     });
     await waitFor(() => expect(result.current.save.isError).toBe(true));
     await settle(400);
