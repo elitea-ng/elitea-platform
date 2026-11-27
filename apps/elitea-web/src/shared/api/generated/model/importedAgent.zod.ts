@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { ApplicationVersionDetail } from "./applicationVersionDetail.zod";
+import { ImportedAgentModel } from "./importedAgentModel.zod";
 
 export const ImportedAgent = zod
   .object({
@@ -64,6 +65,7 @@ export const ImportedAgent = zod
       .describe(
         "Key ALWAYS present in the marshaled map — null only when every version insert failed (versionDetails stays nil, handler.go:2555).\n",
       ),
+    model: ImportedAgentModel.optional(),
   })
   .describe(
     "NOTE(W2): internal/api/v2/eliteacore/handler.go:2663-2670 — version_details unconditionally present (hence required+nullable).\n",

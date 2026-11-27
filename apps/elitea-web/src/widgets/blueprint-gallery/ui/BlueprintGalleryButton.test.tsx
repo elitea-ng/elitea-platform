@@ -118,7 +118,10 @@ describe('BlueprintGalleryButton', () => {
     const user = await openGallery();
     await user.click(await screen.findByTestId('blueprint-import-research-scout'));
     const dialog = await screen.findByTestId('blueprints-import-dialog');
-    expect(within(dialog).getByText(/Research Scout/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Research Scout' })).toBeInTheDocument();
+    // Issue 3142: a blueprint names no model; the preview says so before the write.
+    expect(within(dialog).getByTestId('blueprints-import-model')).toHaveTextContent("Model: this project's default");
+    expect(within(dialog).getByTestId('blueprints-import-stat-seeds')).toHaveTextContent('Memory seeds1');
     await user.click(within(dialog).getByRole('button', { name: 'Import' }));
     await waitFor(() => expect(imported).toHaveLength(1));
     const request = imported[0] as { applications: { name: string }[] };

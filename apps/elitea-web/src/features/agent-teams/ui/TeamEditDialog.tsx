@@ -6,22 +6,18 @@
  * agent's default version; a member saved from a conversation keeps the
  * version it ran there. A refusal stays in the dialog, in the server's words
  * (a name already taken, an agent that is gone).
+ *
+ * The layout (issue 3142) is the Import team preview's: the members as a
+ * roster with their avatars and the Lead badge, each row's actions named for
+ * a screen reader and explained by a tooltip, on the cards' surface tokens.
  */
 import type { ChangeEvent, ReactNode } from 'react';
 import { useState } from 'react';
 
 import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
 import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import CloseIcon from '@mui/icons-material/Close';
-import StarIcon from '@mui/icons-material/Star';
-import StarBorderIcon from '@mui/icons-material/StarBorder';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { AgentTeam, Application } from '@/shared/api/generated/model';
 import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
@@ -29,19 +25,12 @@ import { t } from '@/shared/i18n';
 import { BaseModal } from '@/shared/ui/BaseModal';
 
 import { fetchAgentVersions } from '../api/agentTeamsApi';
-import {
-  MAX_TEAM_MEMBERS,
-  defaultVersionOf,
-  draftOf,
-  draftProblem,
-  withMember,
-  withoutMember,
-  writeOf,
-  type TeamDraft,
-  type TeamDraftProblem,
-} from '../lib/teamDraft';
+import { MAX_TEAM_MEMBERS, defaultVersionOf, draftOf, draftProblem, withMember, writeOf, type TeamDraft, type TeamDraftProblem } from '../lib/teamDraft';
 import { useAgentTeamWrites } from '../model/useAgentTeams';
+import { useTeamMemberAvatars } from '../model/useTeamMemberAvatars';
+import type { RenderMemberAvatar } from './TeamAvatarStack';
 import { TeamAgentPicker } from './TeamAgentPicker';
+import { TeamMemberList } from './TeamMemberList';
 
 export interface TeamEditDialogProps {
   readonly projectId: string;
@@ -50,6 +39,8 @@ export interface TeamEditDialogProps {
   readonly team?: AgentTeam | undefined;
   readonly onClose: () => void;
   readonly onSaved?: ((team: AgentTeam) => void) | undefined;
+  /** Draws each agent's live avatar (the page's shared renderer); absent draws monograms. */
+  readonly renderAvatar?: RenderMemberAvatar | undefined;
 }
 
 export function TeamEditDialog({ open, team, ...rest }: TeamEditDialogProps): ReactNode {
@@ -72,8 +63,9 @@ function problemText(problem: TeamDraftProblem): string {
   }
 }
 
-function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialogProps, 'open'>): ReactNode {
+function TeamEditForm({ projectId, team, onClose, onSaved, renderAvatar }: Omit<TeamEditDialogProps, 'open'>): ReactNode {
   const { create, update } = useAgentTeamWrites(projectId);
+  const avatars = useTeamMemberAvatars(projectId, true);
   const [draft, setDraft] = useState<TeamDraft>(() => draftOf(team));
   const [error, setError] = useState<string | undefined>(undefined);
   const [adding, setAdding] = useState(false);
@@ -120,27 +112,43 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
       title={team === undefined ? t('features.agentTeams.edit.createTitle', 'New team') : t('features.agentTeams.edit.editTitle', 'Edit team')}
       onClose={onClose}
       onConfirm={save}
-      actions={{ confirmText: t('features.agentTeams.edit.save', 'Save'), confirming: saving || problem !== undefined }}
+      actions={{ confirmText: t('features.agentTeams.edit.save', 'Save'), confirming: saving, confirmDisabled: problem !== undefined }}
       content={
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: '1rem', minWidth: '30rem' }}>
+        <Box sx={formSx}>
           <TextField
             label={t('features.agentTeams.edit.name', 'Name')}
             value={draft.name}
+            fullWidth
             onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, name: event.target.value })}
             slotProps={{ htmlInput: { 'data-testid': 'agent-team-edit-name', maxLength: 128 } }}
           />
           <TextField
             label={t('features.agentTeams.edit.description', 'Description')}
             value={draft.description}
+            fullWidth
             onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, description: event.target.value })}
             multiline
             minRows={2}
+            maxRows={6}
             slotProps={{ htmlInput: { 'data-testid': 'agent-team-edit-description' } }}
           />
-          <MemberList draft={draft} onChange={setDraft} />
-          {draft.members.length < MAX_TEAM_MEMBERS && (
-            <TeamAgentPicker projectId={projectId} draft={draft} disabled={adding} onPick={addAgent} />
-          )}
+          <Box component="section" aria-labelledby="agent-team-edit-members-title" sx={sectionSx}>
+            <Box sx={sectionHeaderSx}>
+              <Typography id="agent-team-edit-members-title" component="h3" variant="labelMedium" sx={sectionTitleSx}>
+                {t('features.agentTeams.edit.membersTitle', 'Agents')}
+              </Typography>
+              <Typography variant="bodySmall" sx={countSx} data-testid="agent-team-edit-count">
+                {t('features.agentTeams.edit.memberCount', '{{count}} of {{max}}', { count: draft.members.length, max: MAX_TEAM_MEMBERS })}
+              </Typography>
+            </Box>
+            <Typography variant="bodySmall" sx={countSx}>
+              {t('features.agentTeams.edit.orderHint', 'Agents join a conversation in this order.')}
+            </Typography>
+            <TeamMemberList draft={draft} avatars={avatars} renderAvatar={renderAvatar} onChange={setDraft} />
+            {draft.members.length < MAX_TEAM_MEMBERS && (
+              <TeamAgentPicker projectId={projectId} draft={draft} disabled={adding} renderAvatar={renderAvatar} onPick={addAgent} />
+            )}
+          </Box>
           {problem !== undefined && draft.name !== '' && (
             <Typography variant="bodySmall" color="text.secondary" data-testid="agent-team-edit-problem">
               {problemText(problem)}
@@ -157,59 +165,8 @@ function TeamEditForm({ projectId, team, onClose, onSaved }: Omit<TeamEditDialog
   );
 }
 
-function MemberList({ draft, onChange }: { readonly draft: TeamDraft; readonly onChange: (draft: TeamDraft) => void }): ReactNode {
-  if (draft.members.length === 0) {
-    return (
-      <Typography variant="bodySmall" color="text.secondary" data-testid="agent-team-edit-empty">
-        {t('features.agentTeams.edit.noMembers', 'No agents yet. Add the agents this team starts with.')}
-      </Typography>
-    );
-  }
-  return (
-    <List dense disablePadding data-testid="agent-team-edit-members">
-      {draft.members.map((member, index) => {
-        const position = index + 1;
-        const isLead = draft.lead === position;
-        return (
-          <ListItem
-            key={`${member.project_id}:${member.application_id}`}
-            disableGutters
-            data-testid={`agent-team-edit-member-${position}`}
-            secondaryAction={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
-                <Tooltip title={isLead ? t('features.agentTeams.edit.clearLead', 'Clear lead') : t('features.agentTeams.edit.makeLead', 'Make lead')}>
-                  <IconButton
-                    size="small"
-                    aria-label={isLead ? t('features.agentTeams.edit.clearLead', 'Clear lead') : t('features.agentTeams.edit.makeLead', 'Make lead')}
-                    aria-pressed={isLead}
-                    data-testid={`agent-team-edit-lead-${position}`}
-                    onClick={() => onChange({ ...draft, lead: isLead ? 0 : position })}
-                  >
-                    {isLead ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
-                  </IconButton>
-                </Tooltip>
-                <IconButton
-                  size="small"
-                  aria-label={t('features.agentTeams.edit.remove', 'Remove from the team')}
-                  data-testid={`agent-team-edit-remove-${position}`}
-                  onClick={() => onChange(withoutMember(draft, index))}
-                >
-                  <CloseIcon fontSize="small" />
-                </IconButton>
-              </Box>
-            }
-          >
-            <ListItemText
-              primary={
-                <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75 }}>
-                  {member.name === '' ? t('features.agentTeams.unnamedAgent', 'Agent {{id}}', { id: member.application_id }) : member.name}
-                  {isLead && <Chip size="small" label={t('chat.lead.badge', 'Lead')} />}
-                </Box>
-              }
-            />
-          </ListItem>
-        );
-      })}
-    </List>
-  );
-}
+const formSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(2), minWidth: 0, paddingTop: theme.spacing(1) });
+const sectionSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', flexDirection: 'column', gap: theme.spacing(1), minWidth: 0 });
+const sectionHeaderSx: SxProps<Theme> = (theme: Theme) => ({ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: theme.spacing(1) });
+const sectionTitleSx: SxProps<Theme> = (theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.primary });
+const countSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.text.secondary });

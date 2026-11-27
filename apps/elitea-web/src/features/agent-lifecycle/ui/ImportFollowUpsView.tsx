@@ -1,6 +1,10 @@
 /**
  * After an import (issue 3137): what landed, and what is left to do — the
- * toolkits to connect, the memory seeds to review, the heartbeat to turn on.
+ * toolkits to connect, the memory seeds to review, the heartbeat to turn on —
+ * and the model each agent runs on, with its context window (issue 3143). An
+ * agent whose file named no model this install holds got the project's
+ * default model; that is said as a warning, never left for the person to find
+ * out from a smaller context than they expected.
  * Shown by Import and by the blueprint gallery's Import alike.
  */
 import type { ReactNode } from 'react';
@@ -12,7 +16,7 @@ import type { SxProps, Theme } from '@mui/material/styles';
 
 import { t } from '@/shared/i18n';
 
-import type { ImportFollowUps } from '../lib/importFollowUps';
+import type { ImportedAgentModelNotice, ImportFollowUps } from '../lib/importFollowUps';
 
 export interface ImportFollowUpsViewProps {
   readonly names: readonly string[];
@@ -38,12 +42,65 @@ function ToolkitsToConnect({ toolkits, testIdPrefix }: { readonly toolkits: Impo
   );
 }
 
+function modelText(notice: ImportedAgentModelNotice): string {
+  const model =
+    notice.contextWindow === undefined
+      ? notice.model
+      : t('features.agentLifecycle.import.modelWithWindow', '{{model}} ({{window}}-token context)', {
+          model: notice.model,
+          window: new Intl.NumberFormat().format(notice.contextWindow),
+        });
+  if (!notice.defaulted) return t('features.agentLifecycle.import.modelKept', '{{agent}} runs on {{model}}.', { agent: notice.agent, model });
+  if (notice.requested === '') {
+    return t('features.agentLifecycle.import.modelDefaulted', '{{agent}}: the file names no model, so it runs on this project\'s default, {{model}}. Change it in the agent\'s settings.', {
+      agent: notice.agent,
+      model,
+    });
+  }
+  return t(
+    'features.agentLifecycle.import.modelReplaced',
+    '{{agent}}: {{requested}} is not available here, so it runs on this project\'s default, {{model}}. Change it in the agent\'s settings.',
+    { agent: notice.agent, requested: notice.requested, model },
+  );
+}
+
+function ImportedModels({ models, testIdPrefix }: { readonly models: ImportFollowUps['models']; readonly testIdPrefix: string }): ReactNode {
+  if (models.length === 0) return null;
+  const defaulted = models.filter((notice) => notice.defaulted);
+  const kept = models.filter((notice) => !notice.defaulted);
+  return (
+    <>
+      {defaulted.length > 0 && (
+        <Alert severity="warning" data-testid={`${testIdPrefix}-import-model-defaulted`}>
+          <Box component="ul" sx={listSx}>
+            {defaulted.map((notice) => (
+              <Typography key={notice.agent} component="li" variant="bodySmall">
+                {modelText(notice)}
+              </Typography>
+            ))}
+          </Box>
+        </Alert>
+      )}
+      {kept.length > 0 && (
+        <Box component="ul" sx={listSx} data-testid={`${testIdPrefix}-import-models`}>
+          {kept.map((notice) => (
+            <Typography key={notice.agent} component="li" variant="bodySmall">
+              {modelText(notice)}
+            </Typography>
+          ))}
+        </Box>
+      )}
+    </>
+  );
+}
+
 export function ImportFollowUpsView({ names, followUps, testIdPrefix }: ImportFollowUpsViewProps): ReactNode {
   return (
     <Box sx={rootSx} data-testid={`${testIdPrefix}-import-done`}>
       <Alert severity="success">
         {t('features.agentLifecycle.import.done', 'Imported: {{names}}', { names: names.join(', ') })}
       </Alert>
+      <ImportedModels models={followUps.models} testIdPrefix={testIdPrefix} />
       <ToolkitsToConnect toolkits={followUps.toolkits} testIdPrefix={testIdPrefix} />
       {followUps.memorySeeds > 0 && (
         <Typography variant="bodySmall" data-testid={`${testIdPrefix}-import-seeds`}>

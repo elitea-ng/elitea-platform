@@ -38,9 +38,13 @@ export interface EntityImportButtonProps {
   readonly acceptsTeams?: boolean;
   /** The button's words: "Import team" on the Teams page (issue 3134); "Import" by default. */
   readonly label?: string;
+  /** Draws each agent's avatar in the preview (the page's shared renderer, issue 3142). */
+  readonly renderAvatar?: ImportDialogProps['renderAvatar'];
+  /** Why the import cannot run now (e.g. no project is selected); the preview says it beside Import. */
+  readonly blockedReason?: string | undefined;
 }
 
-export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true, label }: EntityImportButtonProps): ReactNode {
+export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true, label, renderAvatar, blockedReason }: EntityImportButtonProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<ReadImportResult>();
   const [error, setError] = useState<string>();
@@ -108,6 +112,8 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix, accept
         onImport={onImport}
         onClose={() => setPending(undefined)}
         testIdPrefix={testIdPrefix}
+        renderAvatar={renderAvatar}
+        blockedReason={blockedReason}
       />
     </>
   );

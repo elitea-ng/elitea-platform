@@ -16,6 +16,7 @@ import AutoAwesomeMosaicOutlinedIcon from '@mui/icons-material/AutoAwesomeMosaic
 
 import { ImportDialog, useEntityImport } from '@/features/agent-lifecycle';
 import { GenerateAgentModal } from '@/features/agents';
+import { AgentAvatar } from '@/features/chat-messages';
 import { hasBackendCapability } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
@@ -33,6 +34,17 @@ export interface BlueprintGalleryButtonProps {
   readonly testIdPrefix: string;
   /** Called with the id of the agent Craft from it created. */
   readonly onAgentCreated: (agentId: string) => void;
+}
+
+/** The import preview's faces: the shared live-avatar renderer, still (issue 3142). */
+function renderImportAvatar(avatar: { readonly iconUrl?: string | undefined; readonly pack?: object | undefined }, size: string): ReactNode {
+  return (
+    <AgentAvatar
+      iconUrl={avatar.iconUrl}
+      pack={avatar.pack}
+      size={size}
+    />
+  );
 }
 
 export function BlueprintGalleryButton({ projectId, initialTab, testIdPrefix, onAgentCreated }: BlueprintGalleryButtonProps): ReactNode {
@@ -82,6 +94,7 @@ export function BlueprintGalleryButton({ projectId, initialTab, testIdPrefix, on
         onImport={(request) => entityImport.run.mutateAsync(request)}
         onClose={blueprintImport.close}
         testIdPrefix="blueprints"
+        renderAvatar={renderImportAvatar}
       />
       {crafting !== undefined && (
         <GenerateAgentModal

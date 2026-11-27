@@ -7,8 +7,8 @@ import {
   parseImportDocument,
   parseMarkdownAgent,
   readImportFile,
-  summarizeImportDocument,
 } from './importDocument';
+import { summarizeImportDocument } from './importSummary';
 
 const exported = JSON.stringify({
   ok: true,
@@ -233,7 +233,7 @@ describe('team zips', () => {
     expect(names).toEqual(['Implementer', 'Coordinator']);
     const uuids = (document.applications ?? []).map((entry) => (entry as { import_uuid: string }).import_uuid);
     expect(team).toMatchObject({ name: 'Dev team', description: 'Builds it', members: uuids, lead: uuids[1], leadName: 'Coordinator' });
-    expect(summarizeImportDocument(document, [], team).team).toEqual({ name: 'Dev team', lead: 'Coordinator' });
+    expect(summarizeImportDocument(document, [], team).team).toEqual({ name: 'Dev team', description: 'Builds it', lead: 'Coordinator' });
   });
 
   it('resolves member paths relative to the team.yaml folder', async () => {

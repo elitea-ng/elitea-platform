@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentTeam, AgentTeamMember } from '@/shared/api/generated/model';
 
-import { MAX_TEAM_MEMBERS, defaultVersionOf, draftOf, draftProblem, withMember, withoutMember, writeOf, type TeamDraft } from './teamDraft';
+import { MAX_TEAM_MEMBERS, defaultVersionOf, draftOf, draftProblem, withMember, withMemberMoved, withoutMember, writeOf, type TeamDraft } from './teamDraft';
 
 const member = (id: number, project = 1): AgentTeamMember => ({ application_id: id, project_id: project, version_id: id * 10, name: `Agent ${id}` });
 
@@ -44,6 +44,20 @@ describe('teamDraft', () => {
     expect(withoutMember(draft, 0).lead).toBe(2);
     expect(withoutMember(draft, 2).lead).toBe(0);
     expect(withoutMember(draft, 1).lead).toBe(2);
+  });
+
+  it('reorders a member and keeps the lead on its agent (issue 3142)', () => {
+    const draft = { name: 'x', description: '', members: [member(1), member(2), member(3)], lead: 1 };
+    const down = withMemberMoved(draft, 0, 1);
+    expect(down.members.map((entry) => entry.application_id)).toEqual([2, 1, 3]);
+    expect(down.lead).toBe(2);
+    const otherDown = withMemberMoved({ ...draft, lead: 2 }, 0, 1);
+    expect(otherDown.lead).toBe(1);
+    const up = withMemberMoved({ ...draft, lead: 2 }, 2, -1);
+    expect(up.members.map((entry) => entry.application_id)).toEqual([1, 3, 2]);
+    expect(up.lead).toBe(3);
+    expect(withMemberMoved(draft, 0, -1)).toBe(draft);
+    expect(withMemberMoved(draft, 2, 1)).toBe(draft);
   });
 
   it('adds an agent once, keeps the same agent of another project, and stops at the limit', () => {

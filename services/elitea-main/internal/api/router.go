@@ -649,7 +649,13 @@ type RouterConfig struct {
 	// Unassigned, the admin routes answer 503 and nothing is seeded; every
 	// project still reads the platform default through the catalogue.
 	PlatformModelDefaults PlatformModelDefaults
-	AdminUI               *adminui.Config
+	// AgentImportModels is the model catalogue an agent or team import pins
+	// each imported agent's model against (issue 3143): the model the file
+	// names when this install holds it, else the project's default, and the
+	// answer says which. Unassigned, an import stores the file's model
+	// settings as they came. Built from the Configurations runtime in main.go.
+	AgentImportModels v2core.ImportModelCatalog
+	AdminUI           *adminui.Config
 	// ObjectStore is the new S3/Azure/GCS-compatible backend (see
 	// docs/plans/storage-migration-plan.md). S8 reads it for the bucket-plane
 	// DELETE cascade, but only inside newProductionRouter — it is
@@ -2437,6 +2443,7 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		v2core.WithConnectorGate(connectorGate),
 		v2core.WithWorkforceManagerCheck(apimw.HoldsPermissionIn(coreResolver, platformauth.PermissionModeDefault, v2agentworkforce.ManagePermission)),
 		v2core.WithDelegationGrants(delegationHook),
+		v2core.WithImportModelCatalog(cfg.AgentImportModels),
 	)
 	agentLifecycle.ComposePublisher(coreHandler)
 	// An approved upgrade or upstream merge is applied by the handler that owns

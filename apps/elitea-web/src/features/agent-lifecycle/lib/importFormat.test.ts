@@ -187,7 +187,7 @@ describe('import follow-ups', () => {
         { name: 'Calc', type: 'calc', needs_connection: false },
       ],
     });
-    expect(followUps).toEqual({ toolkits: [{ name: 'Jira', type: 'jira' }], memorySeeds: 2, heartbeatAgents: ['Incident Triage'] });
+    expect(followUps).toEqual({ toolkits: [{ name: 'Jira', type: 'jira' }], memorySeeds: 2, heartbeatAgents: ['Incident Triage'], models: [] });
   });
 
   it('names no toolkit when the server listed them and marked none', () => {

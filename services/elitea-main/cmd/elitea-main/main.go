@@ -44,6 +44,7 @@ import (
 	v2conversationskills "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/conversationskills"
 	v2deepwiki "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	desktopopsapi "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/eliteacore"
 	v2entityfolders "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/entityfolders"
 	v2evaluation "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/api/v2/events"
@@ -1396,6 +1397,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// takes and assigned only from a non-nil service, so no typed nil reaches
 	// the router's nil checks.
 	var platformModelDefaults api.PlatformModelDefaults
+	var agentImportModels eliteacore.ImportModelCatalog
 	// The save-time credential gate for the toolkit write path (#613). It is
 	// composed from the same Configurations graph agent-version freezing uses,
 	// so it exists only where that graph does.
@@ -1573,6 +1575,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		if modelDefaults != nil {
 			platformModelDefaults = modelDefaults
+		}
+		// An import pins each agent's model to this catalogue (issue 3143).
+		// Assigned through the concrete value, never a typed nil.
+		if catalog := currentConfigurationsRoot.ModelCatalog(); catalog != nil {
+			agentImportModels = catalog
 		}
 		// The status_ok decision for the compatibility write routes (#457).
 		//
@@ -3334,6 +3341,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ConfigStoredResolver:           configStoredResolver,
 		ObjectStore:                    objectStore,
 		PlatformModelDefaults:          platformModelDefaults,
+		AgentImportModels:              agentImportModels,
 		// Without AppsRepo, internal/api/router.go silently skips registering
 		// every /elitea_core/application(s)/* and /elitea_core/version(s)/*
 		// route, and creating an agent from the UI 404s (#115).

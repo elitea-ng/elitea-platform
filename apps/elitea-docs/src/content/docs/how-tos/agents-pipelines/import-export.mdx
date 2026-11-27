@@ -18,10 +18,10 @@ Open the agent or pipeline, then use **Export** in the toolbar's three-dot menu.
 On the **Agents** or **Pipelines** list, click **Import** and choose a `.json` export file, an `.agent.md` file (YAML front matter, then the instructions), an `.agent.zip`, or a `.zip` of `.md` agent files. To start from a ready-made file, see [Start from a blueprint](/how-tos/agents-pipelines/blueprints).
 </Step>
 <Step title="Review the summary">
-Elitea reads the file and shows the agent or pipeline names, and how many toolkits and skills it carries, before anything is created.
+Elitea reads the file and shows, before anything is created, the agent's name, description, avatar and model, or for several agents a list of them, and how many agents, toolkits and skills (and evaluation datasets and memory seeds, when there are any) the file carries. **Before you import** lists what to know: the toolkits that arrive without credentials, the heartbeat schedules to turn on later, and the agents whose file names no model. When **Import** cannot run, the text next to it says why; while an agent's avatar files upload, it says how many.
 </Step>
 <Step title="Confirm">
-Confirm the import. The entity is created in your current project using the file's exported configuration; model settings fall back to the project's own configured LLM and embedding defaults where the export didn't carry a credential.
+Confirm the import. The entity is created in your current project using the file's exported configuration. Each agent gets a model of this installation: the model the file names, if this installation has it in the file's project or in this project or as a shared model; else this project's default model. The dialog then says which model each agent runs on and its context window, and warns about each agent that got the project's default instead of the model in its file. Embedding settings fall back to the project's own configured defaults where the export didn't carry a credential.
 </Step>
 <Step title="Reconfigure credentials">
 Any toolkit that needs a credential (API key, token) must be reconfigured manually — exports never carry secrets.
@@ -43,7 +43,7 @@ The toolkits a file carries are created in the project and linked to the agents 
 A [team](/menus/agents) travels as a `.zip`: a `team.yaml` plus one `.agent.md` file per member.
 
 - **Export.** On the **Teams** switch of the Agents page, open the team card's **⋯** menu and select **Export**. Each member is exported at the version the team uses.
-- **Import.** On the **Teams** page select **Import team**, or on the **Agents** list (not the Pipelines list) select **Import**, and choose the zip. The summary shows the team's name and its lead above the agents. Confirm, and Elitea creates every agent, its toolkits and skills, and the team, in one step.
+- **Import.** On the **Teams** page select **Import team**, or on the **Agents** list (not the Pipelines list) select **Import**, and choose the zip. The summary shows the team's name and description above its agents, each with its avatar (the zip's own avatar files included) and its model, and the lead marked **Lead**. Confirm with **Import team**. Confirm, and Elitea creates every agent, its toolkits and skills, and the team, in one step.
 
 A team import is all or nothing. If anything cannot be created, nothing is kept and the dialog says why:
 

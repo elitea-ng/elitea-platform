@@ -10,7 +10,7 @@
  */
 import type { ReactElement } from 'react';
 
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import JSZip from 'jszip';
 import { HttpResponse, http } from 'msw';
@@ -625,7 +625,7 @@ describe('import', () => {
     await user.upload(screen.getByTestId('agents-import-input'), exportedFile(document));
 
     // The preview names what will be created before anything is written.
-    expect(await screen.findByText('Audit Agent')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Audit Agent' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Import' }));
 
     await waitFor(() => expect(recorded.some((call) => call.url.includes('/import_wizard/'))).toBe(true));
@@ -675,8 +675,22 @@ describe('import', () => {
     await user.upload(screen.getByTestId('agents-import-input'), await teamZipFile());
 
     expect(await screen.findByTestId('agents-import-team')).toHaveTextContent('Dev team');
-    expect(screen.getByTestId('agents-import-team')).toHaveTextContent('Coordinator');
-    await user.click(screen.getByRole('button', { name: 'Import' }));
+    // Issue 3142: the members are a list, the lead carries its badge, and the
+    // labelled summary and the no-model notice are their own blocks.
+    const members = within(screen.getByRole('list', { name: 'Members of Dev team' })).getAllByRole('listitem');
+    expect(members.map((row) => row.textContent)).toEqual([
+      expect.stringContaining('Coordinator'),
+      expect.stringContaining('Implementer'),
+    ]);
+    expect(within(members[0] as HTMLElement).getByTestId('agent-roster-lead-badge')).toHaveTextContent('Lead');
+    expect(within(members[1] as HTMLElement).queryByTestId('agent-roster-lead-badge')).toBeNull();
+    expect(members[0]).toHaveTextContent("Model: this project's default");
+    expect(screen.getByTestId('agents-import-stat-agents')).toHaveTextContent('Agents2');
+    expect(screen.getByTestId('agents-import-stat-toolkits')).toHaveTextContent('Toolkits0');
+    expect(screen.getByTestId('agents-import-notices')).toHaveTextContent('Coordinator, Implementer: the file names no model');
+    const confirm = screen.getByRole('button', { name: 'Import team' });
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
 
     await waitFor(() => expect(recorded.some((call) => call.url.includes('/team_import/'))).toBe(true));
     const sent = recorded.find((call) => call.url.includes('/team_import/'))?.body as {
@@ -704,7 +718,7 @@ describe('import', () => {
     renderWithProviders(teamImportButton(result.current.run));
     await user.upload(screen.getByTestId('agents-import-input'), await teamZipFile());
     await screen.findByTestId('agents-import-team');
-    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await user.click(screen.getByRole('button', { name: 'Import team' }));
 
     expect(await screen.findByTestId('agents-import-refusal')).toHaveTextContent('already exist in this project: Implementer');
     expect(screen.getByTestId('agents-import-dialog')).toBeInTheDocument();
@@ -766,7 +780,8 @@ describe('import', () => {
     );
     const markdown = '---\nname: Doc Bot\ndescription: answers\nmodel: gpt-5\n---\n\nBe helpful.';
     await user.upload(screen.getByTestId('agents-import-input'), exportedFile(markdown, 'doc.agent.md'));
-    expect(await screen.findByText('Doc Bot')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Doc Bot' })).toBeInTheDocument();
+    expect(screen.getByTestId('agents-import-model')).toHaveTextContent('Model: gpt-5');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

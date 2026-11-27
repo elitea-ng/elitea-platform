@@ -13,7 +13,8 @@ export interface MemberAvatar {
 /** The list route's largest page (`limit` max in the contract): a project's agents in one read. */
 const AGENT_PAGE = 1000;
 
-function avatarOf(application: Application): MemberAvatar | undefined {
+/** An agent row's avatar (`meta.icon_meta` and `meta.avatar_pack`), or `undefined` for the monogram. */
+export function memberAvatarOf(application: Application): MemberAvatar | undefined {
   const meta = application.meta ?? {};
   const iconMeta = meta['icon_meta'];
   const url = typeof iconMeta === 'object' && iconMeta !== null ? (iconMeta as Record<string, unknown>)['url'] : undefined;
@@ -42,7 +43,7 @@ export function useTeamMemberAvatars(projectId: string, enabled: boolean): Reado
     const { rows } = unwrapListPage<Application>(list.data, 'listApplications(team avatars)');
     const avatars = new Map<string, MemberAvatar>();
     for (const row of rows) {
-      const avatar = avatarOf(row);
+      const avatar = memberAvatarOf(row);
       if (avatar !== undefined) avatars.set(memberAvatarKey(projectId, row.id), avatar);
     }
     return avatars;

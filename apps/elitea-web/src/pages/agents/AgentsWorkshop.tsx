@@ -70,6 +70,7 @@ function AgentListActions({ projectId, canCreate }: { readonly projectId: string
         testIdPrefix="agents"
         isImporting={entityImport.run.isPending}
         onImport={(request) => entityImport.run.mutateAsync(request)}
+        renderAvatar={renderMemberAvatar}
       />
       {canCreate && <BlueprintGalleryButton projectId={projectId} initialTab="agents" testIdPrefix="agents" onAgentCreated={(agentId) => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId } })} />}
     </>
@@ -151,7 +152,7 @@ export function AgentsWorkshop(): ReactNode {
   );
 }
 
-/** A team member's face on its card: the shared live-avatar renderer, still (issue 3134). */
+/** An agent's face on a team card, in the Edit team dialog and in the Import preview: the shared live-avatar renderer, still (issues 3134 and 3142). */
 const renderMemberAvatar: RenderMemberAvatar = (avatar, size) => (
   <AgentAvatar
     iconUrl={avatar.iconUrl}
@@ -171,6 +172,7 @@ function TeamImportButton({ projectId, testIdPrefix }: { readonly projectId: str
         label={t('pages.agents.teams.import', 'Import team')}
         isImporting={entityImport.run.isPending}
         onImport={(request) => entityImport.run.mutateAsync(request)}
+        renderAvatar={renderMemberAvatar}
       />
       <BlueprintGalleryButton projectId={projectId} initialTab="teams" testIdPrefix={testIdPrefix} onAgentCreated={(agentId) => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId } })} />
     </>
