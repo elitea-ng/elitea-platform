@@ -74,6 +74,10 @@ import type {
   MarketplaceOrigin,
   MarketplaceReportRequest,
   MarketplaceReviewRequest,
+  MarketplaceTeamHireRequest,
+  MarketplaceTeamHireResult,
+  MarketplaceTeamPublishRequest,
+  MarketplaceTeamPublishResult,
   MarketplaceUpgradePlan,
   MarketplaceUpgradePolicy,
   MarketplaceUpgradeRequest,
@@ -1482,6 +1486,594 @@ export function useHireMarketplaceListing<
   const queryOptions = getHireMarketplaceListingQueryOptions(
     projectId,
     marketplaceHireRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type publishMarketplaceTeamResponse201 = {
+  data: MarketplaceTeamPublishResult;
+  status: 201;
+};
+
+export type publishMarketplaceTeamResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type publishMarketplaceTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type publishMarketplaceTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type publishMarketplaceTeamResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type publishMarketplaceTeamResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type publishMarketplaceTeamResponseSuccess =
+  publishMarketplaceTeamResponse201 & {
+    headers: Headers;
+  };
+export type publishMarketplaceTeamResponseError = (
+  | publishMarketplaceTeamResponse400
+  | publishMarketplaceTeamResponse401
+  | publishMarketplaceTeamResponse403
+  | publishMarketplaceTeamResponse404
+  | publishMarketplaceTeamResponse409
+) & {
+  headers: Headers;
+};
+
+export type publishMarketplaceTeamResponse =
+  publishMarketplaceTeamResponseSuccess | publishMarketplaceTeamResponseError;
+
+export const getPublishMarketplaceTeamUrl = (
+  projectId: string,
+  teamId: number,
+) => {
+  return `/elitea_core/marketplace_team_publish/prompt_lib/${projectId}/${teamId}`;
+};
+
+/**
+ * Lists a saved team as kind `team` (ADR-0051 amendment, issue 3137).
+ * Every member agent must itself be listed: the version pins each member
+ * to its listing's current version, and the requirements are the union
+ * of the members'. A member with no listed, hireable listing answers
+ * 409 `team_members_unlisted` with the `members` it names. A republish
+ * adds a version. Takes `models.applications.publish.post` and
+ * `models.teams.list` (internal/api/v2/eliteacore/marketplace_team.go).
+ * @summary Publish a saved team to the Marketplace
+ */
+export const publishMarketplaceTeam = async (
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<publishMarketplaceTeamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<publishMarketplaceTeamResponse>(
+    getPublishMarketplaceTeamUrl(projectId, teamId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceTeamPublishRequest),
+    },
+  );
+};
+
+export const getPublishMarketplaceTeamQueryKey = (
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_team_publish/prompt_lib/${projectId}/${teamId}`,
+    marketplaceTeamPublishRequest,
+  ] as const;
+};
+
+export const getPublishMarketplaceTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getPublishMarketplaceTeamQueryKey(
+      projectId,
+      teamId,
+      marketplaceTeamPublishRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof publishMarketplaceTeam>>
+  > = ({ signal }) =>
+    publishMarketplaceTeam(projectId, teamId, marketplaceTeamPublishRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      teamId !== null &&
+      teamId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type PublishMarketplaceTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof publishMarketplaceTeam>>
+>;
+export type PublishMarketplaceTeamQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function usePublishMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest: undefined | MarketplaceTeamPublishRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+          TError,
+          Awaited<ReturnType<typeof publishMarketplaceTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePublishMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+          TError,
+          Awaited<ReturnType<typeof publishMarketplaceTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function usePublishMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Publish a saved team to the Marketplace
+ */
+
+export function usePublishMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  teamId: number,
+  marketplaceTeamPublishRequest?: MarketplaceTeamPublishRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof publishMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getPublishMarketplaceTeamQueryOptions(
+    projectId,
+    teamId,
+    marketplaceTeamPublishRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type hireMarketplaceTeamResponse201 = {
+  data: MarketplaceTeamHireResult;
+  status: 201;
+};
+
+export type hireMarketplaceTeamResponse400 = {
+  data: N400Response;
+  status: 400;
+};
+
+export type hireMarketplaceTeamResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type hireMarketplaceTeamResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type hireMarketplaceTeamResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
+export type hireMarketplaceTeamResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type hireMarketplaceTeamResponse422 = {
+  data: ErrorResponse;
+  status: 422;
+};
+
+export type hireMarketplaceTeamResponseSuccess =
+  hireMarketplaceTeamResponse201 & {
+    headers: Headers;
+  };
+export type hireMarketplaceTeamResponseError = (
+  | hireMarketplaceTeamResponse400
+  | hireMarketplaceTeamResponse401
+  | hireMarketplaceTeamResponse403
+  | hireMarketplaceTeamResponse404
+  | hireMarketplaceTeamResponse409
+  | hireMarketplaceTeamResponse422
+) & {
+  headers: Headers;
+};
+
+export type hireMarketplaceTeamResponse =
+  hireMarketplaceTeamResponseSuccess | hireMarketplaceTeamResponseError;
+
+export const getHireMarketplaceTeamUrl = (projectId: string) => {
+  return `/elitea_core/marketplace_team_hire/prompt_lib/${projectId}`;
+};
+
+/**
+ * Hires every member through the agent hire, then saves the team in
+ * the project pinned to the hired agents' versions, in one transaction
+ * (ADR-0051 amendment, issue 3137). Install reuses an agent the project
+ * already installed from the same member listing version; Fork makes
+ * new editable agents. Each member's connections follow the agent hire:
+ * a required toolkit or MCP type needs a binding or `disabled`, and a
+ * member above low tier or with write tools waits for a `hire` change
+ * request. A member refusal refuses the whole team and names the member
+ * (`position`). Takes `models.applications.applications.create` and
+ * `models.teams.create` (internal/api/v2/eliteacore/marketplace_team.go).
+ * @summary Hire a team listing into the project (Install or Fork)
+ */
+export const hireMarketplaceTeam = async (
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<hireMarketplaceTeamResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<hireMarketplaceTeamResponse>(
+    getHireMarketplaceTeamUrl(projectId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(marketplaceTeamHireRequest),
+    },
+  );
+};
+
+export const getHireMarketplaceTeamQueryKey = (
+  projectId: string,
+  marketplaceTeamHireRequest?: MarketplaceTeamHireRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/marketplace_team_hire/prompt_lib/${projectId}`,
+    marketplaceTeamHireRequest,
+  ] as const;
+};
+
+export const getHireMarketplaceTeamQueryOptions = <
+  TData = Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getHireMarketplaceTeamQueryKey(projectId, marketplaceTeamHireRequest);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof hireMarketplaceTeam>>
+  > = ({ signal }) =>
+    hireMarketplaceTeam(projectId, marketplaceTeamHireRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: projectId !== null && projectId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type HireMarketplaceTeamQueryResult = NonNullable<
+  Awaited<ReturnType<typeof hireMarketplaceTeam>>
+>;
+export type HireMarketplaceTeamQueryError =
+  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+
+export function useHireMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+          TError,
+          Awaited<ReturnType<typeof hireMarketplaceTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHireMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+          TError,
+          Awaited<ReturnType<typeof hireMarketplaceTeam>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useHireMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Hire a team listing into the project (Install or Fork)
+ */
+
+export function useHireMarketplaceTeam<
+  TData = Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+  TError =
+    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+>(
+  projectId: string,
+  marketplaceTeamHireRequest: MarketplaceTeamHireRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof hireMarketplaceTeam>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getHireMarketplaceTeamQueryOptions(
+    projectId,
+    marketplaceTeamHireRequest,
     options,
   );
 

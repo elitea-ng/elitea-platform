@@ -17,6 +17,9 @@ export interface TeamRowProps {
   /** Saves the team as a zip that Workshop › Agents › Import reads back (issue 3010). */
   readonly onExport: () => void;
   readonly exporting: boolean;
+  /** Lists the team in the Marketplace (issue 3137); absent for a caller who may not publish. */
+  readonly onPublish?: (() => void) | undefined;
+  readonly publishing?: boolean;
   /** Absent for a caller who may not edit teams. */
   readonly onEdit?: (() => void) | undefined;
   /** Absent for a caller who may not delete teams. */
@@ -28,7 +31,7 @@ function memberLabel(member: AgentTeamMember, isLead: boolean): string {
   return isLead ? t('features.agentTeams.leadMember', '{{name}} (lead)', { name }) : name;
 }
 
-export function TeamRow({ team, starting, onStart, onExport, exporting, onEdit, onDelete }: TeamRowProps): ReactNode {
+export function TeamRow({ team, starting, onStart, onExport, exporting, onPublish, publishing = false, onEdit, onDelete }: TeamRowProps): ReactNode {
   return (
     <Paper variant="outlined" sx={{ p: '0.75rem 1rem', display: 'flex', alignItems: 'center', gap: '1rem' }} data-testid={`agent-team-${team.id}`}>
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
@@ -57,6 +60,11 @@ export function TeamRow({ team, starting, onStart, onExport, exporting, onEdit, 
         <Button size="small" disabled={exporting} onClick={onExport} data-testid={`agent-team-export-${team.id}`}>
           {t('features.agentTeams.exportAction', 'Export')}
         </Button>
+        {onPublish !== undefined && (
+          <Button size="small" disabled={publishing} onClick={onPublish} data-testid={`agent-team-publish-${team.id}`}>
+            {t('features.agentTeams.publishAction', 'Publish to Marketplace')}
+          </Button>
+        )}
         {onEdit !== undefined && (
           <Button size="small" onClick={onEdit} data-testid={`agent-team-edit-${team.id}`}>
             {t('features.agentTeams.editAction', 'Edit')}

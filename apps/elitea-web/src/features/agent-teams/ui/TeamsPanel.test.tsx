@@ -171,6 +171,36 @@ describe('TeamsPanel', () => {
     expect(await screen.findByTestId('agent-teams-forbidden')).toBeInTheDocument();
     expect(list).not.toHaveBeenCalled();
   });
+
+  // Issue 3137: Publish to Marketplace on a team row, offered with the agent publish permission.
+  it('publishes a team and names the members that must be listed first', async () => {
+    grant('models.teams.list', 'models.applications.publish.post');
+    let published: string | undefined;
+    server.use(
+      http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })),
+      http.post(`${BASE}/elitea_core/marketplace_team_publish/prompt_lib/:projectId/:teamId`, ({ params }) => {
+        published = String(params['teamId']);
+        return HttpResponse.json(
+          { error: 'team_members_unlisted', msg: 'Publish these agents first', members: [{ position: 2, name: 'CI Doctor' }] },
+          { status: 409 },
+        );
+      }),
+    );
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId('agent-team-publish-3'));
+    expect(await screen.findByTestId('agent-teams-publish-error')).toHaveTextContent(
+      'Publish these agents to the Marketplace first: CI Doctor.',
+    );
+    expect(published).toBe('3');
+  });
+
+  it('offers no Publish without the publish permission', async () => {
+    grant('models.teams.list');
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
+    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    expect(await screen.findByTestId('agent-team-name-3')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-team-publish-3')).not.toBeInTheDocument();
+  });
 });
 
 describe('SaveAsTeamDialog', () => {

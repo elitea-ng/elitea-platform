@@ -8351,7 +8351,7 @@ export interface operations {
                 featured?: boolean;
                 /** @description Keep only listings the project has hired or added. */
                 hired_here?: boolean;
-                /** @description `agent` or `skill`. Absent keeps both. */
+                /** @description `agent`, `skill` or `team`. Absent keeps all three. */
                 kind?: string;
                 /** @description Maximum number of items to return */
                 limit?: components["parameters"]["Limit"];

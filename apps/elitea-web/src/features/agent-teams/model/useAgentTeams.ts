@@ -28,6 +28,8 @@ export const TEAM_PERMISSIONS = {
   create: 'models.teams.create',
   update: 'models.teams.update',
   delete: 'models.teams.delete',
+  /** The agent publish permission: publishing a team to the Marketplace takes it too (issue 3137). */
+  publish: 'models.applications.publish.post',
 } as const;
 
 function teamsKey(projectId: string): readonly unknown[] {
@@ -107,6 +109,7 @@ export function useTeamAbilities(projectId: string | undefined) {
       canCreate: granted.has(TEAM_PERMISSIONS.create),
       canUpdate: granted.has(TEAM_PERMISSIONS.update),
       canDelete: granted.has(TEAM_PERMISSIONS.delete),
+      canPublish: granted.has(TEAM_PERMISSIONS.publish),
     };
   }, [query.data]);
 }

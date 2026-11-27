@@ -53,6 +53,13 @@ describe('marketplace filters', () => {
     });
   });
 
+  // Issue 3137: the Teams kind travels in the address and reaches the route as `team`.
+  it('keeps the Teams kind in the address and asks the route for teams', () => {
+    const filters = filtersFromSearch({ kind: 'teams' });
+    expect(searchFromFilters(filters)).toEqual({ kind: 'teams' });
+    expect(apiParamsFromFilters(filters)['kind']).toBe('team');
+  });
+
   it('counts a search or a facet as active, but not the kind or the sort', () => {
     expect(hasActiveFilter(filtersFromSearch({ kind: 'skills', sort_by: 'name' }))).toBe(false);
     expect(hasActiveFilter(filtersFromSearch({ max_tier: 'low' }))).toBe(true);

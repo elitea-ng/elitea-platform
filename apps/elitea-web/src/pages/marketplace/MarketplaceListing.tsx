@@ -10,6 +10,7 @@ import { useParams } from '@tanstack/react-router';
 import { kindFromSearch } from './listing';
 import { AgentListing } from './ui/AgentListing';
 import { SkillListing } from './ui/SkillListing';
+import { TeamListing } from './ui/TeamListing';
 
 interface ListingParams {
   kind?: string;
@@ -19,9 +20,8 @@ interface ListingParams {
 export function MarketplaceListing(): ReactNode {
   const params = useParams({ strict: false }) as ListingParams;
   const listingId = params.listingId ?? '';
-  return kindFromSearch(params.kind) === 'skills' ? (
-    <SkillListing listingId={listingId} />
-  ) : (
-    <AgentListing listingId={listingId} />
-  );
+  const kind = kindFromSearch(params.kind);
+  if (kind === 'skills') return <SkillListing listingId={listingId} />;
+  if (kind === 'teams') return <TeamListing listingId={listingId} />;
+  return <AgentListing listingId={listingId} />;
 }
