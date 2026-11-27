@@ -160,3 +160,14 @@ brand/sample/assets/*.icns
 # The client contract lock is generated text (go test ./internal/api/clientcontract -update)
 # and grows with every client operation; it passed 1 MiB with contract 1.55.
 services/elitea-main/api/openapi/client-contract/v1.lock.json
+
+# Blueprint avatar packs (issue 3137): the animated WebP states of the shipped
+# agent and team blueprints, read by scripts/blueprints/build.mjs into the
+# team zips the release attaches and the web gallery serves. Product art, not
+# a build artifact. Each file is under the platform's avatar limits (2 MiB,
+# 512 px, 4 s), which build.mjs checks from the bytes; the whole blueprints/
+# tree is capped at 40 MB by the same script (MAX_TREE_BYTES), the guard that
+# matters, since WebP does not delta-compress. Same `[[ == ]]` caveat as
+# above: `*` crosses `/`, and both folders hold only avatar slot files.
+blueprints/teams/*/avatars/*.webp
+blueprints/agents/avatars/*.webp

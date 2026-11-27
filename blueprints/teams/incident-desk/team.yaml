@@ -1,0 +1,31 @@
+schema: elitea.team/v1
+kind: team
+name: Incident Desk
+description: >-
+  A first-response desk for incidents. Incident Triage leads, watches on a heartbeat and sets
+  severity; Incident Summariser keeps a running timeline; Comms Drafter writes status updates
+  for people to approve and send.
+floor_policy: lead
+members:
+  - members/incident-triage.agent.md
+  - members/incident-summariser.agent.md
+  - members/comms-drafter.agent.md
+lead: members/incident-triage.agent.md
+blueprint:
+  brief: >-
+    An incident response team of three. The lead triages new incident reports (severity,
+    owning team, next action) and watches its home thread on a heartbeat outside quiet hours;
+    a summariser keeps a timestamped timeline and writes the post-incident summary; a comms
+    drafter writes internal and customer status updates that a person approves before
+    sending. Nothing is sent or changed without a person.
+  showcases:
+    - Team with a lead
+    - Heartbeat on the lead (configured, turned on after import)
+    - Output contract (JSON severity record)
+    - People approve every outbound message
+  requirements:
+    - type: heartbeat
+      label: Turn the heartbeat on for Incident Triage in its Heartbeat tab after publishing
+    - type: alerts
+      label: Optional - a toolkit that reads your alert or ticket source
+  surface: cloud
