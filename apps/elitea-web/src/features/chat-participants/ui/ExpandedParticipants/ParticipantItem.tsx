@@ -46,6 +46,8 @@ export interface ParticipantItemProps {
   contextSlot?: React.ReactNode;
   /** The agent's "Lead" badge and lead menu (issue 1612), shown on hover too. */
   leadSlot?: React.ReactNode;
+  /** The agent's logo or live avatar (#3131), in place of its icon or letter. */
+  avatarSlot?: React.ReactNode;
   resolveToolkitIcon?: Parameters<typeof useParticipantEntityIcon>[0]['resolveToolkitIcon'];
   // Status flags from ParticipantDetailsContext
   hasMisconfigurationErrors?: boolean;
@@ -135,6 +137,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
     resolveToolkitIcon,
     contextSlot,
     leadSlot,
+    avatarSlot,
   } = props;
 
   const nameRef = useRef<HTMLSpanElement>(null);
@@ -172,6 +175,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
   // Custom icon_meta image when present, else a distinct icon for pipeline
   // participants (fixes bug #4993), else the initials fallback.
   const iconNode = useMemo(() => {
+    if (avatarSlot !== undefined) return avatarSlot;
     if (entityIcon.url) {
       return <img src={entityIcon.url} alt={displayName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />;
     }
@@ -179,7 +183,7 @@ const ParticipantItem = memo((props: ParticipantItemProps): React.ReactElement |
       return <AccountTreeIcon fontSize="small" />;
     }
     return (displayName[0] ?? '?').toUpperCase();
-  }, [entityIcon.url, displayName, isPipelineParticipant]);
+  }, [avatarSlot, entityIcon.url, displayName, isPipelineParticipant]);
 
   // Version name
   const [versionName, setVersionName] = useState('');

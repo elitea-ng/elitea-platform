@@ -256,6 +256,63 @@ describe("sendQuestion — a turn no transport accepted", () => {
     expect(
       history.read().some((message) => message.exception !== undefined),
     ).toBe(true);
+    // The question stays on screen with the reason.
+    expect(history.read().filter((message) => message.role === ROLES.User).map((message) => message.content)).toEqual(["hi"]);
+  });
+
+  it("shows a new chat's question before its conversation is created, once (#3127)", async () => {
+    const history = makeHistory([]);
+    let answer: (created: { id: number; uuid: string }) => void = () => undefined;
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        conversationUuid: undefined,
+        createConversation: () => new Promise((resolve) => { answer = resolve; }),
+        startStreamedExecution: () => Promise.resolve({ started: true } as StreamStartOutcome),
+      }),
+    );
+
+    const sending = handlers.sendQuestion({ question: "fix the build" });
+    // The create has not answered: the question is already on screen.
+    const users = () => history.read().filter((message) => message.role === ROLES.User);
+    expect(users().map((message) => message.content)).toEqual(["fix the build"]);
+
+    answer({ id: 501, uuid: "created-uuid" });
+    expect((await sending).success).toBe(true);
+    expect(users()).toHaveLength(1);
+    expect(users()[0]?.content).toBe("fix the build");
+  });
+
+  it("drops the early question of a new chat whose files could not be uploaded, as for an existing chat", async () => {
+    const history = makeHistory([]);
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        conversationUuid: undefined,
+        createConversation: () => Promise.resolve({ id: 501, uuid: "created-uuid" }),
+        uploadAttachments: () => Promise.resolve({ success: false, uploaded: [] }),
+        startStreamedExecution: () => Promise.resolve({ started: true } as StreamStartOutcome),
+      }),
+    );
+
+    const result = await handlers.sendQuestion({ question: "hi", attachments: [new File(["x"], "a.txt")] });
+    expect(result.success).toBe(false);
+    expect(history.read().filter((message) => message.role === ROLES.User)).toEqual([]);
+  });
+
+  it("drops the early question of a new chat whose create throws", async () => {
+    const history = makeHistory([]);
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        conversationUuid: undefined,
+        createConversation: () => Promise.reject(new Error("network down")),
+        startStreamedExecution: () => Promise.resolve({ started: true } as StreamStartOutcome),
+      }),
+    );
+
+    await expect(handlers.sendQuestion({ question: "hi" })).rejects.toThrow("network down");
+    expect(history.read().filter((message) => message.role === ROLES.User)).toEqual([]);
   });
 });
 

@@ -21,6 +21,7 @@ import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 
 import {
+  avatarPackOf,
   HANDOFF_MS,
   MOTION_EASING,
   activeAnimatedParticipant,
@@ -31,12 +32,48 @@ import {
   type ActivityLabels,
   type AvatarStates,
 } from '@elitea/client-core/conversation';
-import { AgentAvatar, useAgentAvatarStates } from '@/features/chat-messages';
+import { AgentAvatar, participantIconUrl, useAgentAvatarStates } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
 import type { ParticipantRowView } from './ParticipantRowControls';
 
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)';
+
+/** The participant row id of a conversation participant, when it is a positive integer. */
+function participantRowId(participant: unknown): number | undefined {
+  const id = Number((participant as { id?: unknown } | null)?.id);
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
+/** An agent participant's logo (`icon_meta`) and avatar pack, as a chat message reads them. */
+function agentMediaOf(participant: unknown): { iconUrl: string | undefined; pack: unknown } {
+  const persona = (participant as { persona?: { avatar_pack_v1?: unknown; avatar_pack?: unknown } } | null)?.persona;
+  const pack = avatarPackOf(persona?.avatar_pack_v1 ?? persona?.avatar_pack);
+  return { iconUrl: participantIconUrl(participant as Parameters<typeof participantIconUrl>[0]), pack };
+}
+
+/** The row avatar's edge: the participant row's avatar place (`ParticipantItem`'s icon box). */
+const ROW_AVATAR_SIZE = '1.5rem';
+
+/**
+ * The participants panel's `renderAgentAvatar` slot (#3131): an agent row's logo or avatar pack takes the row's avatar
+ * place at full size, animating with the agent's state as in chat (only the active agent, never under reduced motion).
+ * An agent with neither keeps the row's letter (`null`). The state's label stays on the right, without a second avatar.
+ */
+export function agentAvatarRenderer(participants: readonly unknown[] | undefined, rows: readonly ParticipantRowView[]): (props: { participantId: number }) => ReactNode {
+  return ({ participantId }) => {
+    const participant = (participants ?? []).find((candidate) => participantRowId(candidate) === participantId);
+    if (participant === undefined) return null;
+    const { iconUrl, pack } = agentMediaOf(participant);
+    if (iconUrl === undefined && pack === undefined) return null;
+    const motion = rows.find((row) => row.participantId === participantId)?.motion ?? 'still';
+    return (
+      <Box data-testid="participant-avatar" data-participant-id={participantId} data-motion={motion} sx={{ display: 'flex' }}>
+        <AgentAvatar iconUrl={iconUrl} pack={pack} motion={motion} size={ROW_AVATAR_SIZE} />
+      </Box>
+    );
+  };
+}
 
 /** At most one announcement per agent per this long. */
 export const ANNOUNCE_INTERVAL_MS = 1_000;

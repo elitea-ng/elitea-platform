@@ -16,4 +16,4 @@ export type { WorktreeRowParts } from './ui/WorktreesPanel';
 export { StartInWorktreeError, useStartInWorktree } from './model/useStartInWorktree';
 export { WorktreeIpcProvider, useWorktreeIpc } from './model/ipcContext';
 export { RemoveWorktreeError, useRemoveWorktree, type WorktreeRef } from './model/useRemoveWorktree';
-export { holdFirstMessage, initialWorkIn, listenForWorktree, preferWorktree, rememberWorkIn, takeFirstMessage, type WorkIn } from './model/workIn';
+export { holdFirstMessage, initialWorkIn, listenForWorktree, peekFirstMessage, preferWorktree, rememberWorkIn, takeFirstMessage, type WorkIn } from './model/workIn';

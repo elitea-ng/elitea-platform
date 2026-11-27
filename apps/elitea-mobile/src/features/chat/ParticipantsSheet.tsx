@@ -27,6 +27,8 @@ import { agentExecutorOf } from '@/features/localWork/model';
 import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
+import { PackAvatar } from '@/features/chat/AssistantAvatar';
+import { participantAvatarPack } from '@/features/chat/avatarPackMedia';
 import { ProbationBadge } from '@/features/workforce/ProbationBadge';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
 import { Avatar, Button, hitTarget, Icon, ListRow, ListSection, maxScale, ramp, Text } from '@/ui';
@@ -258,7 +260,14 @@ function SheetBody({
                   key={p.id}
                   title={me ? `${name} (you)` : name}
                   subtitle={isLead ? `${kind} · ${TURN_TAKING_COPY.lead}` : kind}
-                  leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
+                  leading={
+                    p.entity_name === 'user' ? (
+                      <Avatar name={name} kind="person" size={36} decorative />
+                    ) : (
+                      // An agent's own avatar pack still in the row's avatar place (#3131), else its monogram.
+                      <PackAvatar projectId={projectId} pack={participantAvatarPack(p)} motion="still" name={name} imageUri={null} mark={false} size={36} />
+                    )
+                  }
                   trailing={
                     leadable || removable || executor !== null || remembers || delegations || (!offline && participantAgentId(p) !== null) ? (
                       <View style={styles.trailing}>

@@ -14,7 +14,7 @@ import Box from '@mui/material/Box';
 import { useAgentAvatarStates } from '@/features/chat-messages';
 import { floorOf, FLOOR_POLICY } from '@elitea/client-core/conversation';
 
-import { AgentStateAnnouncer, useAgentRowViews, type PresenceAgent } from './agentPresence';
+import { agentAvatarRenderer, AgentStateAnnouncer, useAgentRowViews, type PresenceAgent } from './agentPresence';
 import { ParticipantRowControls } from './ParticipantRowControls';
 
 type LeadRenderer = (props: { conversationId: string | number; participantId: number }) => ReactNode;
@@ -22,6 +22,8 @@ type LeadRenderer = (props: { conversationId: string | number; participantId: nu
 /** What the participants panel takes from presence: the row slot, and the Local work appearance. */
 export interface PresencePanelProps {
   readonly renderAgentLead?: LeadRenderer;
+  /** Each agent row's logo or live avatar in its avatar place (#3131). */
+  readonly renderAgentAvatar?: LeadRenderer;
   readonly context?: 'local_work';
   readonly readOnly?: boolean;
 }
@@ -86,8 +88,10 @@ export function usePresenceSlot(conversation: PresenceConversation | undefined, 
       );
     };
   }, [agents.length, rows, lead, readOnly]);
+  const renderAgentAvatar = useMemo(() => agentAvatarRenderer(conversation?.participants, rows), [conversation?.participants, rows]);
   const panelProps: PresencePanelProps = {
     ...(renderAgentLead === undefined ? {} : { renderAgentLead }),
+    renderAgentAvatar,
     // A Local work thread holds agents only (no toolkit, pipeline or MCP sections), and the web edits none of it.
     ...(readOnly ? { context: LOCAL_WORK_CONTEXT, readOnly: true } : {}),
   };

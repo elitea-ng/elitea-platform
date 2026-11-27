@@ -14,7 +14,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 
 import { server } from '../../test/setup';
 
-import { useAgentSelection, type AgentSelection } from './useAgentSelection';
+import { selectionSeed, useAgentSelection, type AgentSelection, type SelectionSeed } from './useAgentSelection';
 import { useEnsureConversation, type EnsureConversationInput, type EnsuredConversation } from './useEnsureConversation';
 
 const BASE = '/api/v2';
@@ -59,10 +59,10 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-function mountSelection(): { current: () => AgentSelection } {
+function mountSelection(workspaceId = 'w-teams', seed?: SelectionSeed): { current: () => AgentSelection } {
   let latest: AgentSelection | undefined;
   function Probe(): null {
-    latest = useAgentSelection('w-teams', 42);
+    latest = useAgentSelection(workspaceId, 42, seed);
     return null;
   }
   render(
@@ -155,6 +155,34 @@ describe('useAgentSelection teams (#3053)', () => {
     act(() => hook.current().selectConversation('33333333-3333-4333-8333-333333333333'));
     act(() => hook.current().makeLead?.('6'));
     expect(hook.current().agentId).toBe('5');
+  });
+
+  it('a worktree\'s new thread starts with the team chosen in its folder\'s new thread, not the default agent (#3128)', async () => {
+    serveProject(['models.teams.list']);
+    const folder = mountSelection('w-folder');
+    await waitFor(() => expect(folder.current().teams).toHaveLength(2));
+    act(() => folder.current().selectTeam?.(3));
+    await waitFor(() => expect(folder.current().versionId).toBe('10'));
+    const seed = selectionSeed(folder.current(), 42);
+    expect(seed).toBeDefined();
+
+    // The first message moved to the worktree's own thread: another workspace, a new session, seeded.
+    const worktree = mountSelection('w-worktree', seed);
+    expect(worktree.current().agentId).toBe('6');
+    await waitFor(() => expect(worktree.current().versions).toHaveLength(2));
+    // The team's version of its lead, not the lead's first version (nor the default agent, Coder).
+    expect(worktree.current().versionId).toBe('10');
+    expect(worktree.current().team).toMatchObject({ id: 3, lead: true });
+    expect(worktree.current().companions).toEqual([{ agentId: '5', name: 'Coder', versionId: 9, agentType: '', cloud: false }]);
+    expect(worktree.current().conversationId).toBe('');
+  });
+
+  it('ignores a seed of another project', async () => {
+    serveProject(['models.teams.list']);
+    const seed: SelectionSeed = { projectId: 7, agentId: '6', versionId: '10', companions: [{ agentId: '5', name: 'Coder', versionId: 9, agentType: '', cloud: false }] };
+    const hook = mountSelection('w-other', seed);
+    await waitFor(() => expect(hook.current().agentId).toBe('5'));
+    expect(hook.current().companions).toEqual([]);
   });
 
   it('a team that cannot run here is not picked', async () => {

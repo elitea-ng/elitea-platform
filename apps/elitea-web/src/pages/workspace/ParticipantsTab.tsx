@@ -22,7 +22,7 @@ import { ParticipantsWrapper } from '@/features/chat-participants';
 import type { WorkspaceTurn } from '@/features/workspace';
 import { InspectorTab } from '@/shared/desktop/inspectorSlot';
 import { t } from '@/shared/i18n';
-import { AgentStateAnnouncer, HandoffBaton, useAgentRowViews } from '@/pages/chat/agentPresence';
+import { agentAvatarRenderer, AgentStateAnnouncer, HandoffBaton, useAgentRowViews } from '@/pages/chat/agentPresence';
 import { ParticipantRowControls, type ParticipantRowActions } from '@/pages/chat/ParticipantRowControls';
 
 import { ExchangeStrip, exchangeOf, type ExchangeStripProps } from './ExchangeStrip';
@@ -91,6 +91,9 @@ export function ParticipantsTab({ projectId, conversationId, subject, executorLo
     const row = rows.find((candidate) => candidate.participantId === participantId);
     return row === undefined ? null : <ParticipantRowControls row={row} actions={actions} />;
   }, [rows, actions]);
+  // Each agent's logo or live avatar in its row's avatar place (#3131).
+  const participants = team.conversation?.participants;
+  const renderAgentAvatar = useMemo(() => agentAvatarRenderer(participants, rows), [participants, rows]);
   const joined = team.conversation === undefined ? [] : team.agents;
   const pending = selection === undefined ? [] : pendingAgents(selection, joined);
   if (joined.length === 0 && pending.length === 0) return null;
@@ -104,6 +107,7 @@ export function ParticipantsTab({ projectId, conversationId, subject, executorLo
             context="local_work"
             activeConversation={team.conversation as unknown as WrapperConversation}
             renderAgentLead={renderAgentLead}
+            renderAgentAvatar={renderAgentAvatar}
           />
         )}
         {selection !== undefined && <ThreadAgentsPanel selection={selection} joined={joined} locked={executorLocked} />}

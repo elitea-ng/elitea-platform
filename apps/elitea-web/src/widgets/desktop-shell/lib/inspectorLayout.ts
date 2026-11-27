@@ -129,6 +129,21 @@ export function reopenIfAllClosed(layout: InspectorLayout, available: readonly I
   return { ...layout, closed: layout.closed.filter((tab) => !offered.has(tab)) };
 }
 
+/**
+ * The thread's Participants tab has two ids, by its agent count (`team` with two or more, leading the tabs;
+ * `participants` with one, after them). It is one tab to the person: chosen as one, it stays chosen as the other when
+ * a team is added or agents removed (#3129), instead of the group falling back to its first tab (Changes).
+ */
+const SAME_TAB: Partial<Record<InspectorTabId, InspectorTabId>> = { team: 'participants', participants: 'team' };
+
+/** The group's active tab among `tabs`: the stored one, or the Participants tab under its other id, else the first. */
+function activeOf(active: InspectorTabId | null, tabs: readonly InspectorTabId[], first: InspectorTabId): InspectorTabId {
+  if (active === null) return first;
+  if (tabs.includes(active)) return active;
+  const same = SAME_TAB[active];
+  return same !== undefined && tabs.includes(same) ? same : first;
+}
+
 export interface InspectorGroupView {
   /** The group's index in the stored layout. */
   readonly index: number;
@@ -154,7 +169,7 @@ export function viewOf(layout: InspectorLayout, available: readonly InspectorTab
     const tabs = [...leading, ...group.tabs, ...trailing].filter((id) => offered.has(id) && !closed.has(id));
     const first = tabs[0];
     if (first === undefined) return;
-    views.push({ index, tabs, active: group.active !== null && tabs.includes(group.active) ? group.active : first });
+    views.push({ index, tabs, active: activeOf(group.active, tabs, first) });
   });
   return views;
 }

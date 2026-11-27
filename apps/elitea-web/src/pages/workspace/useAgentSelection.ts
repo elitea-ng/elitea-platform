@@ -17,6 +17,10 @@
  * A saved team (ADR-0050 decision 8, #3053): picking one of the project's teams starts a new thread run by the team
  * (`workTeams.ts`): the composer's agent is its lead (or its first member), on the team's version, and the other
  * members are the companions, each running on this computer. The first send writes the lead as the thread's floor.
+ *
+ * A worktree's new thread starts from the pick made in its folder's new thread (`seed`, #3128): the first message
+ * written there with "New worktree" moves here with the agent, version, companions and team chosen for it, so the
+ * thread's first turn runs them, not the folder's default agent.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -85,6 +89,15 @@ interface ThreadCompanion {
   versionName?: string;
 }
 
+/** The pick a new thread hands to the worktree's thread its first message moves to (#3128). */
+export interface SelectionSeed {
+  readonly projectId: number;
+  readonly agentId: string;
+  readonly versionId: string;
+  readonly companions: readonly ThreadCompanion[];
+  readonly team?: WorkTeam;
+}
+
 export interface AgentSelection {
   agents: readonly Application[];
   versions: readonly VersionChoice[];
@@ -123,6 +136,13 @@ export interface AgentSelection {
 
 const NO_COMPANIONS: readonly ThreadCompanion[] = [];
 const NO_TEAMS: readonly TeamChoice[] = [];
+
+/** The selection's pick as a seed, or `undefined` before an agent and version are picked. */
+export function selectionSeed(selection: Pick<AgentSelection, 'agentId' | 'versionId' | 'companions' | 'team'>, projectId: number): SelectionSeed | undefined {
+  if (selection.agentId === '' || selection.versionId === '') return undefined;
+  const { agentId, versionId, team } = selection;
+  return { projectId, agentId, versionId, companions: selection.companions ?? NO_COMPANIONS, ...(team === undefined ? {} : { team }) };
+}
 
 /** The companion came with the team (one of its other members). */
 function fromTeam(team: WorkTeam | undefined, companion: ThreadCompanion): boolean {
@@ -177,18 +197,27 @@ export function isCloudOnlyPick(selection: AgentSelection): boolean {
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
-export function useAgentSelection(workspaceId: string, projectId: number | null): AgentSelection {
+const NO_PICK: SelectionSeed = { projectId: -1, agentId: '', versionId: '', companions: NO_COMPANIONS };
+
+/** What the session starts with: the seed, when it is of this project; else nothing picked. */
+function initialPick(seed: SelectionSeed | undefined, projectId: number | null): { pick: SelectionSeed; seeded: boolean } {
+  return seed !== undefined && seed.projectId === projectId ? { pick: seed, seeded: true } : { pick: NO_PICK, seeded: false };
+}
+
+export function useAgentSelection(workspaceId: string, projectId: number | null, seed?: SelectionSeed): AgentSelection {
   const project = projectId === null ? '' : String(projectId);
   const enabled = projectId !== null;
-  const [agentId, setAgentId] = useState('');
-  const [versionId, setVersionId] = useState('');
+  // A seed of another project is not this folder's pick.
+  const [{ pick: start, seeded }] = useState(() => initialPick(seed, projectId));
+  const [agentId, setAgentId] = useState(start.agentId);
+  const [versionId, setVersionId] = useState(start.versionId);
   const [conversationId, setConversationId] = useState('');
-  const [companions, setCompanions] = useState<readonly ThreadCompanion[]>(NO_COMPANIONS);
-  const [team, setTeam] = useState<WorkTeam | undefined>(undefined);
+  const [companions, setCompanions] = useState<readonly ThreadCompanion[]>(start.companions);
+  const [team, setTeam] = useState<WorkTeam | undefined>(start.team);
   // The thread the new thread's first send created (`markCreated`).
   const created = useRef('');
-  // The version a member made lead was added with (`makeLead`): picked once the new lead's versions are read.
-  const wanted = useRef<{ agentId: string; versionId: string } | null>(null);
+  // The version a member made lead was added with (`makeLead`), or the seed's: picked once the agent's versions are read.
+  const wanted = useRef<{ agentId: string; versionId: string } | null>(seeded ? { agentId: start.agentId, versionId: start.versionId } : null);
 
   const agentsQuery = useListApplications(project, { agents_type: 'classic', limit: 100 }, { query: { enabled } });
   const pipelinesQuery = useListApplications(project, { agents_type: 'pipeline', limit: 100 }, { query: { enabled } });

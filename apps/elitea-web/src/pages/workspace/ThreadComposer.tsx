@@ -82,6 +82,8 @@ import { useSteering, type Steering } from './useSteering';
 import { useThreadSkillPins } from './useThreadSkillPins';
 import { useTurnModel, type TurnModelControl } from './useTurnModel';
 import { useWorkIn } from './useWorkIn';
+import { selectionSeed } from './useAgentSelection';
+import { useFirstSend } from './useFirstSend';
 import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
 import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
@@ -197,6 +199,13 @@ function contextPercentOf(cloudMode: boolean, turn: WorkspaceTurn, history: Thre
   return meter === undefined ? undefined : contextBreakdown(meter).percent;
 }
 
+/** Nothing was sent in this local thread yet: its first message shows at once (#3127). */
+const isFresh = (conversationId: string, local: boolean, session: ThreadSession, turn: WorkspaceTurn): boolean =>
+  local && conversationId === '' && session.prompts.length === 0 && turn.turnId === null;
+
+/** While a first message is shown and not yet sent, no other message goes and "Work in" stays as it was sent. */
+const firstGate = (bound: SendBinding, holding: boolean): { canSend: boolean; locked: boolean } => ({ canSend: bound.canSend && !holding, locked: bound.busy || holding });
+
 /** "Work in" is a new local thread's choice, in a folder that is its repository's top. */
 const offersWorkIn = (canBranch: boolean, local: boolean, conversationId: string): boolean => canBranch && local && conversationId === '';
 
@@ -291,11 +300,14 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const workIn = useWorkIn({
     workspaceId,
     offered: offersWorkIn(canBranch, local, conversationId),
-    canSend: bound.canSend,
     send: controls.remembering(bound.onSend),
+    handOver: () => selectionSeed(session.raw, projectId),
     onError: commands.showText,
     open: (id) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: id } }),
   });
+  // A new thread's first message shows at once, while the thread is prepared (#3127).
+  const first = useFirstSend({ workspaceId, slot: session.first, fresh: isFresh(conversationId, local, session, turn), canSend: bound.canSend, send: workIn.send });
+  const gate = firstGate(bound, first.holding);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
@@ -325,7 +337,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         {...modelBinding(model, !local, commands.modelRef)}
         runLocation={
           <>
-            {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={bound.busy} />}
+            {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={gate.locked} />}
             <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
             <LocalTrustBadge workspaceId={workspaceId} local={local} />
           </>
@@ -343,7 +355,8 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onDraftChange={onDraftChange}
         {...team}
         {...bound}
-        onSend={workIn.send}
+        canSend={gate.canSend}
+        onSend={first.send}
       />
     </>
   );

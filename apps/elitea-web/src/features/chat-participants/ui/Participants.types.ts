@@ -99,6 +99,11 @@ export interface ParticipantsProps {
   readonly renderAgentContext?: (props: { participantId: number }) => ReactNode;
   /** Slot for an agent row's "Lead" badge and lead menu (ADR-0050 decision 7d, issue 1612), shown on hover too. */
   readonly renderAgentLead?: (props: { participantId: number }) => ReactNode;
+  /**
+   * Slot for an agent row's avatar (#3131): the agent's logo or live avatar, animating with its state, in the row's
+   * avatar place. `null` from it keeps the row's own (the icon, else the letter); absent, every row keeps its own.
+   */
+  readonly renderAgentAvatar?: (props: { participantId: number }) => ReactNode;
   readonly renderContextBudget?: (props: {
     conversationId: string | number | undefined;
     /**
