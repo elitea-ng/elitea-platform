@@ -4,9 +4,14 @@
 //! about to change.
 //!
 //! Before-images cover `write_file`, `edit_file`, `multi_edit` and
-//! `apply_patch`. A file a
-//! shell command changes is in the turn's checkpoint (undo works) but not
-//! in [`Recorder::changes`]: D0 has no checkpoint diff yet.
+//! `apply_patch` (taken before the tool runs), and every file a command
+//! created, changed or deleted ([`Recorder::command_changed`], from a scan
+//! before and after the command, `super::command_changes`). A command's
+//! before-image is the file as the turn's checkpoint holds it, so a file
+//! is listed once, against what it was before the turn, whichever wrote
+//! it first. A file whose content is not kept (binary, over
+//! [`MAX_IMAGE_BYTES`], or known only by its size) is listed with its size
+//! before and after and no line diff.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -18,8 +23,8 @@ use serde_json::{Map, Value, json};
 use similar::{ChangeTag, TextDiff};
 
 /// Largest file a before-image keeps; larger files are reported changed
-/// without a diff.
-const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
+/// without a diff, with their sizes.
+pub const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
 /// Largest file whose state at the turn's end is hashed (for the per-file
 /// revert of an older turn); a larger one cannot be checked, so is refused.
 const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
@@ -29,6 +34,57 @@ const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
 enum PostState {
     Absent,
     Content([u8; 32]),
+}
+
+/// A file as the turn saw it: before its first change, or now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Image {
+    /// It did not exist.
+    Absent,
+    /// Its content (at most [`MAX_IMAGE_BYTES`]).
+    Bytes(Vec<u8>),
+    /// It existed, but its content is not kept: over [`MAX_IMAGE_BYTES`],
+    /// unreadable, or known only by its stat (a command changed it and no
+    /// checkpoint holds it). `digest` when it could be hashed.
+    Opaque {
+        len: u64,
+        mtime_ns: i128,
+        digest: Option<[u8; 32]>,
+    },
+}
+
+impl Image {
+    fn len(&self) -> Option<u64> {
+        match self {
+            Self::Absent => None,
+            Self::Bytes(bytes) => Some(bytes.len() as u64),
+            Self::Opaque { len, .. } => Some(*len),
+        }
+    }
+
+    /// Whether the two hold the same content, as far as can be told.
+    fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Absent, Self::Absent) => true,
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            (
+                Self::Opaque {
+                    len: a_len,
+                    mtime_ns: a_time,
+                    digest: a_digest,
+                },
+                Self::Opaque {
+                    len: b_len,
+                    mtime_ns: b_time,
+                    digest: b_digest,
+                },
+            ) => match (a_digest, b_digest) {
+                (Some(a), Some(b)) => a == b && a_len == b_len,
+                _ => a_len == b_len && a_time == b_time,
+            },
+            _ => false,
+        }
+    }
 }
 /// The commit's bounds (`LocalTurnWorkReport`).
 const MAX_COMMANDS: usize = 500;
@@ -105,13 +161,24 @@ impl Serialize for ToolCalls {
 }
 
 /// One changed file, as `turn_changes` answers it.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct FileChange {
     pub path: String,
     pub status: &'static str,
     pub added: u64,
     pub removed: u64,
     pub diff: String,
+    /// No line diff: the file is binary, or too large to keep.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub binary: bool,
+    /// Its size before the turn and now (absent: it did not exist).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_before: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_after: Option<u64>,
+    /// The command that changed it first; absent: a file tool did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 #[derive(Default)]
@@ -146,8 +213,14 @@ struct State {
     /// What the weakest enforcement left out (Landlock only: credentials
     /// and the app's data not hidden), from the command's result.
     enforcement_note: Option<String>,
-    /// Path → content before the turn first changed it (`None`: absent).
-    before: BTreeMap<String, Option<Vec<u8>>>,
+    /// Path → the file before the turn first changed it.
+    before: BTreeMap<String, Image>,
+    /// Path → the command that changed it first (a file tools changed
+    /// first is not here).
+    commands_by_path: BTreeMap<String, String>,
+    /// A command's changes could not be listed: the folder is too large
+    /// to scan.
+    commands_unlisted: bool,
     /// `(from, to)` of renames a patch made.
     renames: Vec<(String, String)>,
     /// The memories this turn saved and deleted (#1233), in call order.
@@ -167,6 +240,9 @@ struct State {
 
 pub struct Recorder {
     state: Mutex<State>,
+    /// The turn's background commands, whose changes are listed at its
+    /// end (`super::command_changes`).
+    background: super::command_changes::Background,
     /// The key of this turn's typed-text digests (ADR-0047 decision 9): 256
     /// random bits, drawn with the recorder and never stored or sent, so a
     /// digest compares two texts of one turn and cannot be brute-forced
@@ -178,6 +254,7 @@ impl Default for Recorder {
     fn default() -> Self {
         Self {
             state: Mutex::default(),
+            background: super::command_changes::Background::default(),
             text_key: rand::random(),
         }
     }
@@ -553,6 +630,52 @@ impl Recorder {
         });
     }
 
+    /// Whether the turn already recorded `path` (workspace-relative,
+    /// resolved) as changed.
+    #[must_use]
+    pub fn knows(&self, path: &str) -> bool {
+        self.with(|state| state.before.contains_key(path))
+            .unwrap_or(true)
+    }
+
+    /// A command created, changed or deleted `path` (workspace-relative,
+    /// resolved) and the turn had not recorded it: `before` is what it
+    /// held before the turn. A file the turn already recorded keeps its
+    /// first before-image and its first writer.
+    pub fn command_changed(&self, path: &str, before: Image, command: &str) {
+        self.with(|state| {
+            if state.before.contains_key(path) {
+                return;
+            }
+            state.before.insert(path.to_owned(), before);
+            state
+                .commands_by_path
+                .insert(path.to_owned(), truncate(command, 300));
+            if state.paths.len() < MAX_PATHS && !state.paths.iter().any(|known| known == path) {
+                state.paths.push(path.to_owned());
+            }
+        });
+    }
+
+    /// The turn's background commands.
+    #[must_use]
+    pub fn background(&self) -> &super::command_changes::Background {
+        &self.background
+    }
+
+    /// A command ran that may have changed files the turn cannot list (the
+    /// folder is too large to scan).
+    pub fn commands_unlisted(&self) {
+        self.with(|state| state.commands_unlisted = true);
+    }
+
+    /// Whether some command's changes could not be listed.
+    #[must_use]
+    pub fn has_unlisted_commands(&self) -> bool {
+        self.with(|state| state.commands_unlisted)
+            .unwrap_or(false)
+    }
+
     /// Before the first change of `paths` (workspace-relative, as the model
     /// named them) in this turn, keep what they hold now.
     pub fn before_change(&self, workspace: &Workspace, paths: &[String]) {
@@ -737,24 +860,31 @@ impl Recorder {
         post_state(workspace, &key).is_some_and(|now| now == then)
     }
 
-    /// The files the turn's file tools changed, against their before-images.
+    /// The files the turn changed (its file tools and its commands),
+    /// against their before-images.
     #[must_use]
     pub fn changes(&self, workspace: &Workspace) -> Vec<FileChange> {
-        let Some((before, renames)) =
-            self.with(|state| (state.before.clone(), state.renames.clone()))
-        else {
+        let Some((before, renames, commands)) = self.with(|state| {
+            (
+                state.before.clone(),
+                state.renames.clone(),
+                state.commands_by_path.clone(),
+            )
+        }) else {
             return Vec::new();
         };
         let mut changes = Vec::new();
         let mut consumed = Vec::new();
         for (from, to) in &renames {
-            let (Some(Some(old)), Some(None)) = (before.get(from), before.get(to)) else {
+            let (Some(old @ (Image::Bytes(_) | Image::Opaque { .. })), Some(Image::Absent)) =
+                (before.get(from), before.get(to))
+            else {
                 continue;
             };
             let now_from = current(workspace, from);
             let now_to = current(workspace, to);
-            if let (None, Some(new)) = (now_from, now_to) {
-                let mut change = diff(to, Some(old), Some(&new));
+            if now_from == Image::Absent && now_to != Image::Absent {
+                let mut change = diff(to, old, &now_to);
                 change.status = "renamed";
                 changes.push(change);
                 consumed.push(from.clone());
@@ -766,25 +896,34 @@ impl Recorder {
                 continue;
             }
             let new = current(workspace, path);
-            if old.as_deref() == new.as_deref() {
+            if old.same_as(&new) {
                 continue;
             }
-            changes.push(diff(path, old.as_deref(), new.as_deref()));
+            let mut change = diff(path, old, &new);
+            change.command = commands.get(path).cloned();
+            changes.push(change);
         }
         changes
     }
 }
 
-fn read_image(
-    workspace: &Workspace,
-    path: &elitea_local_tools::workspace::WsPath,
-) -> Option<Vec<u8>> {
-    match workspace.stat(path) {
-        Ok(Some(_)) => workspace
-            .read(path, MAX_IMAGE_BYTES)
+/// What `path` holds now, as a before-image keeps it.
+pub fn read_image(workspace: &Workspace, path: &elitea_local_tools::workspace::WsPath) -> Image {
+    use elitea_local_tools::workspace::EntryKind;
+    let stamp = match workspace.stamp(path) {
+        Ok(Some(stamp)) if stamp.kind == EntryKind::File => stamp,
+        _ => return Image::Absent,
+    };
+    if let Ok(file) = workspace.read(path, MAX_IMAGE_BYTES) {
+        return Image::Bytes(file.bytes);
+    }
+    Image::Opaque {
+        len: stamp.len,
+        mtime_ns: stamp.mtime_ns,
+        digest: workspace
+            .read(path, MAX_HASHED_BYTES)
             .ok()
-            .map(|file| file.bytes),
-        _ => None,
+            .map(|file| file.stamp.sha256),
     }
 }
 
@@ -802,30 +941,56 @@ fn post_state(workspace: &Workspace, path: &str) -> Option<PostState> {
     }
 }
 
-fn current(workspace: &Workspace, path: &str) -> Option<Vec<u8>> {
-    let resolved = workspace.resolve(path, Intent::Read).ok()?;
-    read_image(workspace, &resolved)
+fn current(workspace: &Workspace, path: &str) -> Image {
+    match workspace.resolve(path, Intent::Read) {
+        Ok(resolved) => read_image(workspace, &resolved),
+        Err(_) => Image::Absent,
+    }
 }
 
-pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileChange {
+/// The bytes of an image whose content is kept (`Some(empty)` for an
+/// absent file), `None` for one whose content is not.
+fn kept(image: &Image) -> Option<&[u8]> {
+    match image {
+        Image::Absent => Some(&[]),
+        Image::Bytes(bytes) => Some(bytes),
+        Image::Opaque { .. } => None,
+    }
+}
+
+/// [`diff`] of two contents (`None`: absent).
+pub(crate) fn diff_bytes(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileChange {
+    let image = |bytes: Option<&[u8]>| bytes.map_or(Image::Absent, |bytes| Image::Bytes(bytes.to_vec()));
+    diff(path, &image(old), &image(new))
+}
+
+pub(crate) fn diff(path: &str, old: &Image, new: &Image) -> FileChange {
     let status = match (old, new) {
-        (None, _) => "added",
-        (_, None) => "deleted",
+        (Image::Absent, _) => "added",
+        (_, Image::Absent) => "deleted",
         _ => "modified",
     };
-    let (Ok(old_text), Ok(new_text)) = (
-        std::str::from_utf8(old.unwrap_or_default()),
-        std::str::from_utf8(new.unwrap_or_default()),
-    ) else {
-        // Binary: changed, no line diff.
+    let sized = FileChange {
+        path: path.to_owned(),
+        status,
+        size_before: old.len(),
+        size_after: new.len(),
+        ..FileChange::default()
+    };
+    let texts = kept(old)
+        .zip(kept(new))
+        .and_then(|(old, new)| Some((std::str::from_utf8(old).ok()?, std::str::from_utf8(new).ok()?)));
+    let Some((old_text, new_text)) = texts else {
+        // Binary, or not kept: changed, with its sizes, no line diff.
         return FileChange {
-            path: path.to_owned(),
-            status,
-            added: 0,
-            removed: 0,
-            diff: String::new(),
+            binary: true,
+            ..sized
         };
     };
+    let (old, new) = (
+        (*old != Image::Absent).then_some(()),
+        (*new != Image::Absent).then_some(()),
+    );
     let text_diff = TextDiff::from_lines(old_text, new_text);
     let (mut added, mut removed) = (0, 0);
     for change in text_diff.iter_all_changes() {
@@ -852,11 +1017,10 @@ pub(crate) fn diff(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileCh
         )
         .to_string();
     FileChange {
-        path: path.to_owned(),
-        status,
         added,
         removed,
         diff: unified,
+        ..sized
     }
 }
 

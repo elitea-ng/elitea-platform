@@ -35,7 +35,8 @@ use crate::ingest::Expansion;
 use crate::search::{Answer, Dense, NameIndex, Request};
 use crate::source::{LocalFolderSource, SOURCE_NAME};
 use crate::sqlite_store::{ChunkUpdate, SqliteGraphStore, StoreError};
-use elitea_content_source::content_version;
+use elitea_content_source::{content_version, mime_of};
+use elitea_doc_extract::DocumentExtractor;
 use elitea_engine_core::stream::{Context, Line, StopSignal};
 use elitea_inventory_core::graph::Graph;
 use elitea_inventory_core::ingest::files::Selection;
@@ -110,6 +111,12 @@ pub struct IndexStatus {
     pub state: IndexState,
     /// Documents of the last build.
     pub files: u64,
+    /// Of those, the PDF, Office, e-mail and e-book files, read as text
+    /// through the sandboxed extractor.
+    pub documents: u64,
+    /// Why PDF and Office files are not indexed here (no extractor in this
+    /// build, or no sandbox that can confine it), when they are not.
+    pub documents_unavailable: Option<String>,
     pub entities: u64,
     pub relations: u64,
     /// Embedded entities (none until embeddings are turned on).
@@ -140,6 +147,8 @@ impl IndexStatus {
         Self {
             state: IndexState::Off,
             files: 0,
+            documents: 0,
+            documents_unavailable: None,
             entities: 0,
             relations: 0,
             vectors: 0,
@@ -251,6 +260,8 @@ struct Inner {
     error: Option<String>,
     changed_files: u64,
     files: u64,
+    /// The PDF and Office files among [`Self::files`].
+    documents: u64,
     chunks: u64,
     last_run: Option<String>,
     report: Option<RunReport>,
@@ -278,6 +289,24 @@ struct Inner {
     shortcut: bool,
 }
 
+/// How a service reads PDF and Office files.
+#[derive(Clone, Default)]
+struct DocumentReader {
+    /// The extractor (the desktop's sandboxed sidecar); `None`: those
+    /// files are left out.
+    extractor: Option<Arc<dyn DocumentExtractor>>,
+    /// Why there is none, for the status.
+    unavailable: Option<String>,
+}
+
+/// Count the PDF, Office, e-mail and e-book files among `keys`.
+fn document_count<'a>(keys: impl Iterator<Item = &'a String>) -> u64 {
+    count(
+        keys.filter(|key| elitea_doc_extract::is_document_type(mime_of(key)))
+            .count(),
+    )
+}
+
 /// One workspace's index.
 pub struct IndexService {
     workspace_id: String,
@@ -294,6 +323,8 @@ pub struct IndexService {
     matrix: Mutex<Option<CachedMatrix>>,
     /// The host watches the folder ([`IndexService::set_watching`]).
     watching: AtomicBool,
+    /// How PDF and Office files are read ([`IndexService::set_documents`]).
+    documents: Mutex<DocumentReader>,
 }
 
 /// A loaded vector matrix and what it was loaded at.
@@ -327,8 +358,9 @@ fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, IndexError> 
     Ok(runtime.block_on(future))
 }
 
-/// What a completed build hands back: the view, its files, the report.
-type Built = (Arc<GraphView>, u64, RunReport);
+/// What a completed build hands back: the view, its files, the PDF and
+/// Office files among them, the report.
+type Built = (Arc<GraphView>, u64, u64, RunReport);
 
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
@@ -396,15 +428,17 @@ impl IndexService {
         } else {
             store.chunk_count()?
         };
-        let (state, view, files) = if policy_mismatch {
-            (IndexState::StalePolicy, None, 0)
+        let (state, view, files, documents) = if policy_mismatch {
+            (IndexState::StalePolicy, None, 0, 0)
         } else {
-            let files = count(store.document_stats(KEY, SOURCE_NAME)?.len());
+            let stats = store.document_stats(KEY, SOURCE_NAME)?;
+            let files = count(stats.len());
+            let documents = document_count(stats.keys());
             let view = store
                 .load_view_now(KEY)?
                 .map(|read| Arc::new(GraphView::from_read(read)));
             // Turned on, never built yet, or built: not checked yet.
-            (IndexState::Stale, view, files)
+            (IndexState::Stale, view, files, documents)
         };
         Ok(Arc::new(Self {
             workspace_id: workspace_id.to_owned(),
@@ -418,6 +452,7 @@ impl IndexService {
                 error: None,
                 changed_files: 0,
                 files,
+                documents,
                 chunks,
                 last_run,
                 report: None,
@@ -432,6 +467,7 @@ impl IndexService {
                 shortcut: false,
             }),
             watching: AtomicBool::new(false),
+            documents: Mutex::new(DocumentReader::default()),
             query_embedder: Mutex::new(None),
             matrix: Mutex::new(None),
         }))
@@ -465,7 +501,51 @@ impl IndexService {
         &self.policy
     }
 
-    fn status_of(inner: &Inner, watching: bool) -> IndexStatus {
+    /// Read PDF, Office, e-mail and e-book files through `extractor` from
+    /// the next refresh on (the desktop's sandboxed sidecar; never this
+    /// process). `None` leaves them out, and `unavailable` says why in the
+    /// status.
+    pub fn set_documents(
+        &self,
+        extractor: Option<Arc<dyn DocumentExtractor>>,
+        unavailable: Option<String>,
+    ) {
+        let unavailable = if extractor.is_some() {
+            None
+        } else {
+            unavailable
+        };
+        *self
+            .documents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = DocumentReader {
+            extractor,
+            unavailable,
+        };
+    }
+
+    fn document_reader(&self) -> DocumentReader {
+        self.documents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// A listing source of the folder, reading documents when the host
+    /// gave an extractor.
+    fn folder_source(&self) -> LocalFolderSource {
+        let source = LocalFolderSource::new(Arc::clone(&self.workspace));
+        match self.document_reader().extractor {
+            Some(extractor) => source.with_documents(extractor),
+            None => source,
+        }
+    }
+
+    fn status_of(
+        inner: &Inner,
+        watching: bool,
+        documents_unavailable: Option<String>,
+    ) -> IndexStatus {
         let (entities, relations) = inner.view.as_ref().map_or((0, 0), |view| {
             (
                 count(view.graph.node_count()),
@@ -475,6 +555,8 @@ impl IndexService {
         IndexStatus {
             state: inner.state,
             files: inner.files,
+            documents: inner.documents,
+            documents_unavailable,
             entities,
             relations,
             vectors: 0,
@@ -497,7 +579,12 @@ impl IndexService {
     /// Where the index is now.
     #[must_use]
     pub fn status(&self) -> IndexStatus {
-        Self::status_of(&self.inner(), self.watching.load(Ordering::SeqCst))
+        let unavailable = self.document_reader().unavailable;
+        Self::status_of(
+            &self.inner(),
+            self.watching.load(Ordering::SeqCst),
+            unavailable,
+        )
     }
 
     /// Record whether the host watches the folder (what
@@ -513,12 +600,13 @@ impl IndexService {
     }
 
     fn emit(&self, phase: &'static str, message: Option<String>) {
+        let unavailable = self.document_reader().unavailable;
         let status = {
             let inner = self.inner();
             if inner.closed {
                 return;
             }
-            Self::status_of(&inner, self.watching.load(Ordering::SeqCst))
+            Self::status_of(&inner, self.watching.load(Ordering::SeqCst), unavailable)
         };
         self.events.emit(IndexEvent {
             workspace_id: self.workspace_id.clone(),
@@ -835,9 +923,10 @@ impl IndexService {
                 return Err(closed_error());
             }
             match &outcome {
-                Ok((view, files, report)) => {
+                Ok((view, files, documents, report)) => {
                     inner.view = Some(Arc::clone(view));
                     inner.files = *files;
+                    inner.documents = *documents;
                     inner.report = Some(*report);
                     if let Some(chunks) = chunks {
                         inner.chunks = chunks;
@@ -965,7 +1054,8 @@ impl IndexService {
         if Some(view.revision) != self.store.revision_now(KEY)? {
             return Ok(None);
         }
-        let source = LocalFolderSource::new(Arc::clone(&self.workspace))
+        let source = self
+            .folder_source()
             .with_previous(stats.clone())
             .selecting(Selection::default());
         let listed = source
@@ -999,7 +1089,7 @@ impl IndexService {
             hashed: 0,
             dependents: 0,
         };
-        Ok(Some((view, files, report)))
+        Ok(Some((view, files, document_count(previous.keys()), report)))
     }
 
     /// Add a committed refresh to the drift since the last full build: the
@@ -1071,7 +1161,8 @@ impl IndexService {
             self.store.start(KEY, &source_status()).await?;
             started = true;
             self.store.clear_staged_chunks()?;
-            let source = LocalFolderSource::new(Arc::clone(&self.workspace))
+            let source = self
+                .folder_source()
                 .with_previous(stat_cache)
                 .selecting(Selection::default())
                 .chunking();
@@ -1137,6 +1228,7 @@ impl IndexService {
             Ok::<_, IndexError>((
                 Arc::new(GraphView::without_vectors(graph, revision)),
                 count(outcome.documents.len()),
+                document_count(outcome.documents.keys()),
                 report,
             ))
         });

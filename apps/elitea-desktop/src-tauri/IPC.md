@@ -2040,7 +2040,9 @@ sent anywhere: there are no embeddings yet.
 ```ts
 type IndexStatus = {
   state: "off" | "building" | "ready" | "stale" | "stale_policy" | "error";
-  files: number;          // documents of the last build
+  files: number;          // files of the last build
+  documents: number;      // of those, PDF/Office/e-mail/e-book files, read as text by the sandboxed extractor
+  documents_unavailable: string | null; // why PDF and Office files are left out (no extractor, or no sandbox that hides the deny list)
   entities: number;
   relations: number;
   vectors: number;        // 0 until embeddings exist

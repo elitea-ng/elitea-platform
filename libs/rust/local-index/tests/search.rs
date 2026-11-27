@@ -370,3 +370,83 @@ async fn a_graph_neighbour_whose_chunk_no_word_matches_is_still_a_hit() {
     filtered.path_glob = Some("pkg/target.py".to_owned());
     assert_eq!(paths(&service, &filtered), ["pkg/target.py"]);
 }
+
+/// An extractor that stands for the sandboxed sidecar: every document reads
+/// as one page of known text, and each call is counted.
+#[derive(Default)]
+struct CountingExtractor(std::sync::atomic::AtomicUsize);
+
+impl elitea_doc_extract::DocumentExtractor for CountingExtractor {
+    fn extract(
+        &self,
+        _mime: &str,
+        _bytes: Vec<u8>,
+        _range: &elitea_doc_extract::PageRange,
+    ) -> Result<elitea_doc_extract::PagedText, elitea_doc_extract::ExtractFailure> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(elitea_doc_extract::PagedText {
+            extractor: "fake".to_owned(),
+            page_count: 1,
+            pages: vec![elitea_doc_extract::Page {
+                number: 1,
+                text: "The quarterly invoice reconciliation is due on Fridays.".to_owned(),
+            }],
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn documents_are_indexed_and_searchable_only_through_the_hosts_extractor() {
+    let folder = tempfile::tempdir().unwrap();
+    fixture(folder.path());
+    fs::write(folder.path().join("finance.pdf"), b"%PDF-1.4 not real").unwrap();
+    fs::write(folder.path().join("plan.docx"), b"PK not real").unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = IndexService::open(
+        "ws",
+        folder.path(),
+        &[],
+        &data.path().join("index"),
+        Arc::new(NoEvents),
+    )
+    .unwrap();
+
+    // No extractor: the documents are left out, and the status says why.
+    service.set_documents(None, Some("no document extractor in this build".to_owned()));
+    service.refresh(false).await.unwrap();
+    let status = service.status();
+    assert_eq!(
+        status.documents_unavailable.as_deref(),
+        Some("no document extractor in this build")
+    );
+    if !elitea_doc_extract::can_extract("application/pdf") {
+        assert_eq!(status.documents, 0, "{status:?}");
+        assert!(
+            paths(&service, &request("invoice reconciliation"))
+                .iter()
+                .all(|p| p != "finance.pdf"),
+            "nothing extracted a PDF in this process"
+        );
+    }
+
+    // The host's extractor: both documents are read through it, counted,
+    // and their text is searchable as docs.
+    let extractor = Arc::new(CountingExtractor::default());
+    service.set_documents(Some(extractor.clone()), Some("ignored".to_owned()));
+    service.refresh(true).await.unwrap();
+    let status = service.status();
+    assert_eq!(status.documents, 2, "{status:?}");
+    assert_eq!(status.documents_unavailable, None);
+    assert_eq!(extractor.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let mut found = Request {
+        kind: Some(elitea_local_index::chunks::ChunkKind::Docs),
+        ..request("invoice reconciliation")
+    };
+    assert!(
+        paths(&service, &found).iter().any(|p| p == "finance.pdf"),
+        "{:?}",
+        paths(&service, &found)
+    );
+    found.path_glob = Some("*.docx".to_owned());
+    assert_eq!(paths(&service, &found), ["plan.docx"]);
+}

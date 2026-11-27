@@ -1,7 +1,8 @@
 /**
- * A workspace's local index at a glance: Off / Building n/m / Ready · N
- * entities (· Watching, while the host watches the folder) / Stale / Policy
- * changed / Error. Clicking it opens the index settings.
+ * A workspace's local folder index at a glance: Off / Building n/m / Ready ·
+ * N entities (· M documents, once PDF or Office files are indexed; ·
+ * Watching, while the host watches the folder) / Stale / Policy changed /
+ * Error. Clicking it opens the index settings.
  */
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import Chip from '@mui/material/Chip';
@@ -30,9 +31,9 @@ type ChipLook = { label: string; color: ChipColor; hint: string };
 /** Before there is a status: reading it, it could not be read, or the policy turns the index off. */
 function describeNoStatus(view: IndexView | undefined, loadError: unknown): ChipLook {
   if (view?.kind === 'disabled') {
-    return { label: t('workspace.index.chip.off', 'Off'), color: 'default', hint: t('workspace.index.policyOff', 'The local code index is turned off by your organisation’s policy.') };
+    return { label: t('workspace.index.chip.off', 'Off'), color: 'default', hint: t('workspace.index.policyOff', 'The local folder index is turned off by your organisation’s policy.') };
   }
-  if (loadError === null || loadError === undefined) return { label: t('workspace.index.chip.reading', 'Index…'), color: 'default', hint: t('workspace.index.chip.loading', 'Reading the code index') };
+  if (loadError === null || loadError === undefined) return { label: t('workspace.index.chip.reading', 'Index…'), color: 'default', hint: t('workspace.index.chip.loading', 'Reading the folder index') };
   return { label: t('workspace.index.chip.error', 'Error'), color: 'error', hint: describeIndexError(loadError) };
 }
 
@@ -46,19 +47,34 @@ function staleHint(status: IndexStatus): string {
     : t('workspace.index.chip.staleHint', 'Not checked since the app started. It is checked when you open this folder, or when you refresh it.');
 }
 
+/** A ready chip's label: its entities, the PDF and Office files indexed (when any), and whether the folder is watched. */
+function readyLabel(status: IndexStatus): string {
+  const entities = compact(status.entities);
+  const count = status.documents ?? 0;
+  if (count > 0) {
+    const documents = compact(count);
+    return status.watching
+      ? t('workspace.index.chip.readyDocumentsWatching', 'Ready · {{entities}} entities · {{documents}} documents · Watching', { entities, documents })
+      : t('workspace.index.chip.readyDocuments', 'Ready · {{entities}} entities · {{documents}} documents', { entities, documents });
+  }
+  return status.watching
+    ? t('workspace.index.chip.readyWatching', 'Ready · {{entities}} entities · Watching', { entities })
+    : t('workspace.index.chip.ready', 'Ready · {{entities}} entities', { entities });
+}
+
 /** A ready index, and whether the host watches its folder. */
 function readyChip(status: IndexStatus): ChipLook {
-  const entities = compact(status.entities);
+  const label = readyLabel(status);
   return status.watching
     ? {
-        label: t('workspace.index.chip.readyWatching', 'Ready · {{entities}} entities · Watching', { entities }),
+        label,
         color: 'success',
-        hint: t('workspace.index.chip.readyWatchingHint', 'Agents can search this folder’s code structure. The folder is watched: changes made outside the app refresh it a few seconds after they stop.'),
+        hint: t('workspace.index.chip.readyWatchingHint', 'Agents can search this folder’s code and documents. The folder is watched: changes made outside the app refresh it a few seconds after they stop.'),
       }
     : {
-        label: t('workspace.index.chip.ready', 'Ready · {{entities}} entities', { entities }),
+        label,
         color: 'success',
-        hint: t('workspace.index.chip.readyHint', 'Agents can search this folder’s code structure.'),
+        hint: t('workspace.index.chip.readyHint', 'Agents can search this folder’s code and documents.'),
       };
 }
 
@@ -68,7 +84,7 @@ function describeChip(view: IndexView | undefined, loadError: unknown, progress:
   const { status } = view;
   switch (status.state) {
     case 'off':
-      return { label: t('workspace.index.chip.off', 'Off'), color: 'default', hint: t('workspace.index.chip.offHint', 'The code index is off for this folder.') };
+      return { label: t('workspace.index.chip.off', 'Off'), color: 'default', hint: t('workspace.index.chip.offHint', 'The folder index is off for this folder.') };
     case 'building':
       return {
         label:
@@ -76,7 +92,7 @@ function describeChip(view: IndexView | undefined, loadError: unknown, progress:
             ? t('workspace.index.chip.building', 'Building…')
             : t('workspace.index.chip.buildingCount', 'Building {{done}}/{{total}}', { done: String(progress.done), total: String(progress.total) }),
         color: 'info',
-        hint: t('workspace.index.chip.buildingHint', 'Indexing the code structure of this folder.'),
+        hint: t('workspace.index.chip.buildingHint', 'Indexing this folder’s code and documents.'),
       };
     case 'ready':
       return readyChip(status);
@@ -105,7 +121,7 @@ export function IndexStatusChip({ view, loadError, progress, onClick }: IndexSta
         label={label}
         onClick={onClick}
         data-testid="index-status-chip"
-        aria-label={t('workspace.index.chip.label', 'Code index: {{status}}', { status: label })}
+        aria-label={t('workspace.index.chip.label', 'Folder index: {{status}}', { status: label })}
       />
     </Tooltip>
   );

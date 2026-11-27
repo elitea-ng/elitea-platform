@@ -59,8 +59,10 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::clone_file;
 use crate::deny::DenyList;
 use crate::error::{ErrorCode, ToolError, ToolResult};
+use crate::folder_scan::{self, FileStat, PlaceholderTest, ScanRules};
 use crate::git::Repo;
 use crate::sandbox::SandboxConfig;
 use crate::workspace::{EntryKind, Workspace, WsPath, is_protected_name};
@@ -86,6 +88,11 @@ pub struct CheckpointLimits {
     pub max_untracked_bytes: u64,
     /// The same, in files.
     pub max_untracked_files: usize,
+    /// A copy checkpoint takes at most this many files ([`MAX_COPY_FILES`]):
+    /// more and the folder cannot be checkpointed.
+    pub max_copy_files: usize,
+    /// The same, in bytes ([`MAX_COPY_BYTES`]).
+    pub max_copy_bytes: u64,
     /// Checkpoints kept per session (the oldest are pruned).
     pub keep: usize,
     /// Checkpoints older than this are pruned (the newest is always kept).
@@ -98,6 +105,8 @@ impl Default for CheckpointLimits {
             max_file_bytes: MAX_COPY_FILE_BYTES,
             max_untracked_bytes: 512 * 1024 * 1024,
             max_untracked_files: MAX_COPY_FILES,
+            max_copy_files: MAX_COPY_FILES,
+            max_copy_bytes: MAX_COPY_BYTES,
             keep: 50,
             max_age: Duration::from_hours(30 * 24),
         }
@@ -115,13 +124,100 @@ const SKIPPED_TRAILER: &str = "Elitea-Skipped: ";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// One checkpoint.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct CheckpointInfo {
     pub seq: u64,
     pub label: String,
     pub created_unix: u64,
     /// The commit id (git) or the manifest name (copy).
     pub id: String,
+    /// Files left out because they are over the size limit
+    /// ([`CheckpointLimits::max_file_bytes`]). A restore leaves them alone,
+    /// so a turn's change to one cannot be undone. At most
+    /// [`MAX_REPORTED`] are named; [`Self::too_large_count`] counts all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub too_large: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub too_large_count: usize,
+    /// Cloud placeholders left out without being opened (opening one
+    /// downloads it, see [`folder_scan::is_placeholder`]). A restore leaves
+    /// them alone. At most [`MAX_REPORTED`] named.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub placeholders: Vec<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub placeholder_count: usize,
+}
+
+/// The most paths a [`CheckpointInfo`] names per list.
+pub const MAX_REPORTED: usize = 50;
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if takes a reference
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
+impl CheckpointInfo {
+    /// Name what was left out: the first [`MAX_REPORTED`] of each list.
+    fn with_left_out<'a>(
+        mut self,
+        too_large: impl IntoIterator<Item = &'a String>,
+        placeholders: impl IntoIterator<Item = &'a String>,
+    ) -> Self {
+        for path in too_large {
+            self.too_large_count += 1;
+            if self.too_large.len() < MAX_REPORTED {
+                self.too_large.push(path.clone());
+            }
+        }
+        for path in placeholders {
+            self.placeholder_count += 1;
+            if self.placeholders.len() < MAX_REPORTED {
+                self.placeholders.push(path.clone());
+            }
+        }
+        self
+    }
+}
+
+/// The file in a folder's copy store that remembers each stored file's
+/// stat and digest, so an unchanged file is not read or hashed again.
+const STAT_CACHE: &str = "stat-cache.json";
+
+/// A file modified this recently is hashed again even when its stat is
+/// unchanged: a write in the same tick as the stat leaves the stat equal.
+const RACY_WINDOW_NS: i128 = 2_000_000_000;
+
+/// `bytes` for a person: `1.2 GiB`, `340 MiB`, `12 KiB`.
+#[must_use]
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes} bytes");
+    }
+    #[allow(clippy::cast_precision_loss)] // a rounded size for a message
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if value >= 10.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The files copy checkpoints on this thread read into the store
+    /// (tests only: an unchanged file must not be among them).
+    static STORED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `dir` is inside a git work tree (a `.git` in it or above).
+fn in_git_tree(dir: &Path) -> bool {
+    dir.ancestors().any(|dir| dir.join(".git").exists())
 }
 
 /// What a restore changed.
@@ -335,13 +431,24 @@ impl Checkpoints {
         key.update(workspace.root().as_os_str().as_encoded_bytes());
         let key = hex(&key.finalize()[..8]);
         let base = data_dir.join("checkpoints").join(key);
+        // A repository refused as unsafe is still a git work tree: its
+        // `.gitignore` decides, as before. A plain folder's does not.
+        let rules = if refused.is_some() || in_git_tree(workspace.root()) {
+            ScanRules::Git
+        } else {
+            ScanRules::Folder
+        };
         Ok(Self::Copy(CopyCheckpoints {
             lock: base.join("lock"),
             objects: base.join("objects"),
+            cache: base.join(STAT_CACHE),
             manifests: base.join("sessions").join(session),
             restorer,
             refused,
             limits: CheckpointLimits::default(),
+            rules,
+            placeholder: folder_scan::is_placeholder,
+            clone: true,
         }))
     }
 
@@ -355,14 +462,78 @@ impl Checkpoints {
         self
     }
 
+    /// Tell cloud placeholders with `test` (tests simulate one).
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_placeholder_test(mut self, test: PlaceholderTest) -> Self {
+        if let Self::Copy(copy) = &mut self {
+            copy.placeholder = test;
+        }
+        self
+    }
+
+    /// Never clone into the store (tests of the plain copy).
+    #[cfg(test)]
+    #[must_use]
+    pub fn without_clones(mut self) -> Self {
+        if let Self::Copy(copy) = &mut self {
+            copy.clone = false;
+        }
+        self
+    }
+
     /// Use `limits` instead of the defaults.
     #[must_use]
     pub fn with_limits(mut self, limits: CheckpointLimits) -> Self {
-        match &mut self {
+        self.set_limits(limits);
+        self
+    }
+
+    /// Use `limits` from now on.
+    pub fn set_limits(&mut self, limits: CheckpointLimits) {
+        match self {
             Self::Git(git) => git.limits = limits,
             Self::Copy(copy) => copy.limits = limits,
         }
-        self
+    }
+
+    /// Whether a checkpoint of the folder as it is now fits the limits.
+    /// The answer comes from a walk that reads no file (stat only), so the
+    /// host can ask before a turn changes anything: `Err` with
+    /// [`ErrorCode::TooLarge`] and the reason when it does not fit.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::TooLarge`], or git failures.
+    pub fn check_fits(&self) -> ToolResult<()> {
+        match self {
+            Self::Git(git) => git.plan().map(|_| ()),
+            Self::Copy(copy) => copy.plan().map(|_| ()),
+        }
+    }
+
+    /// What file `path` held at checkpoint `seq`: `Ok(None)` when it did
+    /// not exist then, or was left out (too large, a placeholder).
+    ///
+    /// # Errors
+    ///
+    /// An unknown checkpoint, [`ErrorCode::TooLarge`] past `max_bytes`, or
+    /// git failures.
+    pub fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
+        match self {
+            Self::Git(git) => git.file_at(seq, path, max_bytes),
+            Self::Copy(copy) => copy.file_at(seq, path, max_bytes),
+        }
+    }
+
+    /// The scan rules that match what this folder's checkpoints cover:
+    /// the host scans with them to list what a command changed.
+    #[must_use]
+    pub fn scan_rules(&self) -> ScanRules {
+        match self {
+            Self::Git(_) => ScanRules::Git,
+            Self::Copy(copy) => copy.rules,
+        }
     }
 
     /// Why the folder's git repository is not used, when it was refused.
@@ -565,6 +736,10 @@ struct Plan {
     excluded: Vec<String>,
     /// Top-relative paths a restore must leave alone.
     skipped: Vec<String>,
+    /// Workspace-relative paths over the size limit (reported).
+    too_large: Vec<String>,
+    /// Workspace-relative cloud placeholders (reported, never read).
+    placeholders: Vec<String>,
 }
 
 impl GitCheckpoints {
@@ -639,6 +814,14 @@ impl GitCheckpoints {
             if meta.len() > self.limits.max_file_bytes {
                 plan.excluded.push(relative.to_owned());
                 plan.skipped.push(self.top_relative(&ws_path));
+                plan.too_large.push(relative.to_owned());
+                continue;
+            }
+            // `git add` would read a cloud placeholder and download it.
+            if folder_scan::is_placeholder(entry.path(), &meta) {
+                plan.excluded.push(relative.to_owned());
+                plan.skipped.push(self.top_relative(&ws_path));
+                plan.placeholders.push(relative.to_owned());
                 continue;
             }
             if !tracked.contains(relative) {
@@ -659,9 +842,42 @@ impl GitCheckpoints {
         Ok(plan)
     }
 
+    /// What file `path` held at checkpoint `seq` (see
+    /// [`Checkpoints::file_at`]).
+    fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
+        let commit = self
+            .list()?
+            .into_iter()
+            .find(|info| info.seq == seq)
+            .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("no checkpoint {seq}")))?
+            .id;
+        let object = format!("{commit}:{}", self.top_relative(path));
+        // Absent from the checkpoint's tree: not an error.
+        let Ok(size) = self.repo.git(self.top()).text(&["cat-file", "-s", &object]) else {
+            return Ok(None);
+        };
+        let size: u64 = size.trim().parse().unwrap_or(u64::MAX);
+        if size > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!("`{path}` was {size} bytes; the limit is {max_bytes}"),
+            ));
+        }
+        self.repo
+            .git(self.top())
+            .run(&["cat-file", "blob", &object])
+            .map(Some)
+    }
+
     /// The tree of the workspace as it is now (outside the workspace: as
     /// in HEAD), and the paths it skipped.
     fn snapshot_tree(&self) -> ToolResult<(String, Vec<String>)> {
+        let (tree, plan) = self.snapshot_tree_planned()?;
+        Ok((tree, plan.skipped))
+    }
+
+    /// [`Self::snapshot_tree`] with the whole plan.
+    fn snapshot_tree_planned(&self) -> ToolResult<(String, Plan)> {
         let plan = self.plan()?;
         let index = TempIndex::new()?;
         let index_dir = [index.dir.clone()];
@@ -697,7 +913,7 @@ impl GitCheckpoints {
             .env("GIT_INDEX_FILE", index.os())
             .writes(&with_objects)
             .text(&["write-tree"])?;
-        Ok((tree, plan.skipped))
+        Ok((tree, plan))
     }
 
     /// The paths checkpoint `commit` skipped.
@@ -947,12 +1163,13 @@ impl GitCheckpoints {
     }
 
     fn create(&self, label: &str) -> ToolResult<CheckpointInfo> {
-        let (tree, skipped) = self.snapshot_tree()?;
+        let (tree, plan) = self.snapshot_tree_planned()?;
+        let skipped = &plan.skipped;
         let seq = self.list()?.last().map_or(1, |last| last.seq + 1);
         let label = single_line(label);
         let mut message = format!("elitea checkpoint {seq}: {label}");
         if !skipped.is_empty() {
-            let list = serde_json::to_string(&skipped)
+            let list = serde_json::to_string(skipped)
                 .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
             message = format!("{message}\n\n{SKIPPED_TRAILER}{list}");
         }
@@ -970,7 +1187,9 @@ impl GitCheckpoints {
             label,
             created_unix: now_unix(),
             id: commit,
-        })
+            ..CheckpointInfo::default()
+        }
+        .with_left_out(&plan.too_large, &plan.placeholders))
     }
 
     fn list(&self) -> ToolResult<Vec<CheckpointInfo>> {
@@ -997,6 +1216,7 @@ impl GitCheckpoints {
                     label,
                     created_unix,
                     id,
+                    ..CheckpointInfo::default()
                 })
             })
             .collect();
@@ -1164,7 +1384,41 @@ struct Manifest {
     label: String,
     created_unix: u64,
     files: BTreeMap<String, ManifestFile>,
+    /// Left alone by a restore: too large, unreadable, a placeholder.
     skipped: BTreeSet<String>,
+    /// The rules the checkpoint walked by. `None`: a checkpoint from before
+    /// they were recorded, which always honoured `.gitignore`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rules: Option<ScanRules>,
+    /// The part of `skipped` over the size limit.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    too_large: BTreeSet<String>,
+    /// The part of `skipped` that are cloud placeholders.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    placeholders: BTreeSet<String>,
+}
+
+impl Manifest {
+    /// What this checkpoint walked by (legacy ones: `.gitignore`).
+    fn rules(&self) -> ScanRules {
+        self.rules.unwrap_or(ScanRules::Git)
+    }
+}
+
+/// A stored file's stat and digest, as [`STAT_CACHE`] keeps them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct CachedFile {
+    stat: FileStat,
+    sha256: String,
+}
+
+/// What a copy checkpoint takes, from a stat-only walk.
+#[derive(Debug, Default)]
+struct CopyPlan {
+    /// The files to store and their stat.
+    store: BTreeMap<String, FileStat>,
+    too_large: BTreeSet<String>,
+    placeholders: BTreeSet<String>,
 }
 
 /// Checkpoints as copies in the host's data directory.
@@ -1173,38 +1427,133 @@ pub struct CopyCheckpoints {
     /// The folder's store lock (shared by its sessions).
     lock: PathBuf,
     objects: PathBuf,
+    /// The folder's [`STAT_CACHE`].
+    cache: PathBuf,
     manifests: PathBuf,
     restorer: Workspace,
     /// Why the folder's git repository was not used.
     refused: Option<ToolError>,
     limits: CheckpointLimits,
+    /// What the walk honours: a plain folder's `.gitignore` is not.
+    rules: ScanRules,
+    placeholder: PlaceholderTest,
+    /// Store copy-on-write clones where the file system can.
+    clone: bool,
 }
 
-/// The regular files of the workspace a copy checkpoint covers: not
-/// ignored, not under `.git`, symlinks not followed.
-fn walk_files(root: &Path) -> Vec<WsPath> {
-    let mut out = Vec::new();
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .require_git(false)
-        .follow_links(false)
-        .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name))
-        .build();
-    for entry in walker.flatten() {
-        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-            continue;
-        }
-        if let Ok(relative) = entry.path().strip_prefix(root)
-            && let Ok(path) = WsPath::from_relative(relative)
-        {
-            out.push(path);
-        }
-    }
-    out.sort();
-    out
+/// The regular files of the workspace a copy checkpoint walked under
+/// `rules`: not under `.git`, symlinks not followed (placeholders
+/// included, see [`folder_scan`]).
+fn walk_files(root: &Path, rules: ScanRules) -> Vec<WsPath> {
+    let found = folder_scan::scan(root, rules, usize::MAX);
+    found
+        .files
+        .into_keys()
+        .chain(found.placeholders)
+        .filter_map(|name| WsPath::from_relative(Path::new(&name)).ok())
+        .collect()
 }
 
 impl CopyCheckpoints {
+    /// The walk, the limits, and what to leave out: nothing is read.
+    fn plan(&self) -> ToolResult<CopyPlan> {
+        let max_files = self.limits.max_copy_files;
+        let found =
+            folder_scan::scan_with(self.restorer.root(), self.rules, max_files, self.placeholder);
+        if found.truncated {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!("the folder has more than {max_files} files to checkpoint"),
+            ));
+        }
+        let max_file = self.limits.max_file_bytes.min(MAX_COPY_FILE_BYTES);
+        let mut plan = CopyPlan {
+            placeholders: found.placeholders,
+            ..CopyPlan::default()
+        };
+        let mut total = 0u64;
+        for (name, stat) in found.files {
+            if stat.len > max_file {
+                plan.too_large.insert(name);
+                continue;
+            }
+            total += stat.len;
+            plan.store.insert(name, stat);
+        }
+        if total > self.limits.max_copy_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!(
+                    "the folder holds {} to checkpoint; the limit is {}",
+                    human_bytes(total),
+                    human_bytes(self.limits.max_copy_bytes)
+                ),
+            ));
+        }
+        Ok(plan)
+    }
+
+    fn read_cache(&self) -> BTreeMap<String, CachedFile> {
+        std::fs::read(&self.cache)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    /// Store one file (opened confined, never through a link): a clone
+    /// where the file system can, a copy otherwise, named by the digest of
+    /// what was stored. `None`: unreadable, or grown past the limit.
+    fn store(&self, path: &WsPath, max_bytes: u64) -> Option<(String, u32, Option<FileStat>)> {
+        #[cfg(test)]
+        STORED.with(|stored| stored.borrow_mut().push(path.display_string()));
+        let (mut file, _) = self.restorer.open_file(path).ok()?;
+        let before = FileStat::of(&file.metadata().ok()?);
+        let temp = self.objects.join(format!(
+            "{}-{}.tmp",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let copied = clone_file::copy_into(&mut file, &temp, max_bytes, self.clone)
+            .ok()
+            .flatten()?;
+        let sha = hex(&copied.sha256);
+        let object = self.objects.join(&sha);
+        let placed = if object.exists() {
+            std::fs::remove_file(&temp)
+        } else {
+            std::fs::rename(&temp, &object)
+        };
+        if placed.is_err() {
+            let _ = std::fs::remove_file(&temp);
+            return None;
+        }
+        // Changed while it was stored: the digest names what was stored,
+        // but this stat does not, so it is not cached.
+        let after = file.metadata().ok().map(|meta| FileStat::of(&meta));
+        let cacheable = (after == Some(before) && copied.len == before.len).then_some(before);
+        Some((sha, before.mode, cacheable))
+    }
+
+    /// What file `path` held at checkpoint `seq`.
+    fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
+        let manifest = self.read_manifest(seq)?;
+        let Some(file) = manifest.files.get(&path.display_string()) else {
+            return Ok(None);
+        };
+        let object = self.objects.join(&file.sha256);
+        let len = std::fs::metadata(&object)
+            .map_err(|error| ToolError::io("cannot read the checkpoint", &error))?
+            .len();
+        if len > max_bytes {
+            return Err(ToolError::new(
+                ErrorCode::TooLarge,
+                format!("`{path}` was {len} bytes; the limit is {max_bytes}"),
+            ));
+        }
+        std::fs::read(object)
+            .map(Some)
+            .map_err(|error| ToolError::io("cannot read the checkpoint", &error))
+    }
     fn manifest_path(&self, seq: u64) -> PathBuf {
         self.manifests.join(format!("{seq:08}.json"))
     }
@@ -1233,67 +1582,85 @@ impl CopyCheckpoints {
         Ok(file)
     }
 
+    /// Take a checkpoint: a stat-only walk first (the limits are checked
+    /// before anything is read), then each file whose stat is unchanged
+    /// since the folder's last checkpoint reuses its stored digest
+    /// ([`STAT_CACHE`]: size, modification time, inode and mode), and the
+    /// rest are cloned or copied into the store and hashed.
     fn create(&self, label: &str) -> ToolResult<CheckpointInfo> {
         let io = |error: std::io::Error| ToolError::io("cannot store the checkpoint", &error);
+        let plan = self.plan()?;
         let _lock = self.lock()?;
         std::fs::create_dir_all(&self.objects).map_err(io)?;
         std::fs::create_dir_all(&self.manifests).map_err(io)?;
-        let files = walk_files(self.restorer.root());
-        if files.len() > MAX_COPY_FILES {
-            return Err(ToolError::new(
-                ErrorCode::TooLarge,
-                format!("the folder has more than {MAX_COPY_FILES} files to checkpoint"),
-            ));
-        }
         let mut manifest = Manifest {
             seq: self.list()?.last().map_or(1, |last| last.seq + 1),
             label: single_line(label),
             created_unix: now_unix(),
             files: BTreeMap::new(),
-            skipped: BTreeSet::new(),
+            skipped: plan
+                .too_large
+                .iter()
+                .chain(&plan.placeholders)
+                .cloned()
+                .collect(),
+            rules: Some(self.rules),
+            too_large: plan.too_large,
+            placeholders: plan.placeholders,
         };
-        let mut total = 0u64;
-        for path in files {
-            // Too large, unreadable, or gone since the walk: not stored,
-            // and left alone by a restore (never deleted as if the turn had
-            // created it).
-            let Ok(read) = self
-                .restorer
-                .read(&path, self.limits.max_file_bytes.min(MAX_COPY_FILE_BYTES))
-            else {
-                manifest.skipped.insert(path.display_string());
-                continue;
+        let cache = self.read_cache();
+        let mut next_cache = BTreeMap::new();
+        let max_file = self.limits.max_file_bytes.min(MAX_COPY_FILE_BYTES);
+        let racy_after = i128::from(now_unix()) * 1_000_000_000 - RACY_WINDOW_NS;
+        for (name, stat) in plan.store {
+            let cached = cache.get(&name).filter(|cached| {
+                cached.stat == stat
+                    && stat.mtime_ns < racy_after
+                    && self.objects.join(&cached.sha256).exists()
+            });
+            let (sha, mode, cacheable) = if let Some(cached) = cached {
+                (cached.sha256.clone(), stat.mode, Some(stat))
+            } else {
+                let Ok(path) = WsPath::from_relative(Path::new(&name)) else {
+                    manifest.skipped.insert(name);
+                    continue;
+                };
+                // Unreadable, grown past the limit, or gone since the
+                // walk: not stored, and left alone by a restore (never
+                // deleted as if the turn had created it).
+                let Some(stored) = self.store(&path, max_file) else {
+                    manifest.skipped.insert(name);
+                    continue;
+                };
+                stored
             };
-            total += read.stamp.len;
-            if total > MAX_COPY_BYTES {
-                return Err(ToolError::new(
-                    ErrorCode::TooLarge,
-                    format!("the folder holds more than {MAX_COPY_BYTES} bytes to checkpoint"),
-                ));
+            if let Some(stat) = cacheable.filter(|stat| stat.mtime_ns < racy_after) {
+                next_cache.insert(
+                    name.clone(),
+                    CachedFile {
+                        stat,
+                        sha256: sha.clone(),
+                    },
+                );
             }
-            let sha = hex(&read.stamp.sha256);
-            let object = self.objects.join(&sha);
-            if !object.exists() {
-                write_atomically(&object, &read.bytes, false).map_err(io)?;
-            }
-            manifest.files.insert(
-                path.display_string(),
-                ManifestFile {
-                    sha256: sha,
-                    mode: read.mode,
-                },
-            );
+            manifest.files.insert(name, ManifestFile { sha256: sha, mode });
         }
         let bytes = serde_json::to_vec(&manifest)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
         write_atomically(&self.manifest_path(manifest.seq), &bytes, true).map_err(io)?;
+        if let Ok(cache) = serde_json::to_vec(&next_cache) {
+            // Only a cache: a failure costs the next checkpoint some hashing.
+            let _ = write_atomically(&self.cache, &cache, false);
+        }
         self.prune();
         Ok(CheckpointInfo {
             seq: manifest.seq,
-            label: manifest.label,
+            label: manifest.label.clone(),
             created_unix: manifest.created_unix,
             id: format!("{:08}", manifest.seq),
-        })
+            ..CheckpointInfo::default()
+        }
+        .with_left_out(&manifest.too_large, &manifest.placeholders))
     }
 
     /// As [`GitCheckpoints::prune`], then remove stored contents no
@@ -1364,12 +1731,16 @@ impl CopyCheckpoints {
                 continue;
             };
             let manifest = self.read_manifest(seq)?;
-            out.push(CheckpointInfo {
-                seq,
-                label: manifest.label,
-                created_unix: manifest.created_unix,
-                id: format!("{seq:08}"),
-            });
+            out.push(
+                CheckpointInfo {
+                    seq,
+                    label: manifest.label.clone(),
+                    created_unix: manifest.created_unix,
+                    id: format!("{seq:08}"),
+                    ..CheckpointInfo::default()
+                }
+                .with_left_out(&manifest.too_large, &manifest.placeholders),
+            );
         }
         out.sort_by_key(|info| info.seq);
         Ok(out)
@@ -1401,18 +1772,21 @@ impl CopyCheckpoints {
         let manifest = self.read_manifest(seq)?;
         let in_scope = |path: &str| only.is_none_or(|only| only.display_string() == path);
         // Not in the checkpoint, but ignored by its rules: it was not
-        // copied, so it may be older than the checkpoint. Kept.
+        // copied, so it may be older than the checkpoint. Kept. A plain
+        // folder's checkpoint honoured no ignore file: everything it walks
+        // was copied (or skipped and named).
+        let rules = manifest.rules();
         let mut ignores = CheckpointIgnores::new(&[".gitignore", ".ignore"], |file| {
             let stored = manifest.files.get(file)?;
             std::fs::read(self.objects.join(&stored.sha256)).ok()
         });
         let mut report = RestoreReport::default();
-        for path in walk_files(self.restorer.root()) {
+        for path in walk_files(self.restorer.root(), rules) {
             let name = path.display_string();
             if in_scope(&name)
                 && !manifest.files.contains_key(&name)
                 && !manifest.skipped.contains(&name)
-                && !ignores.ignores(&name)
+                && (rules == ScanRules::Folder || !ignores.ignores(&name))
                 && (dry_run || self.restorer.remove_file(&path)?)
             {
                 report.deleted.push(name);
@@ -1743,10 +2117,9 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o755);
         assert_eq!(read(&root, "new.txt"), None);
-        assert_eq!(
-            read(&root, "cache/blob").as_deref(),
-            Some("ignored changed")
-        );
+        // A plain folder's `.gitignore` does not decide what undo covers:
+        // the ignored file was saved and is put back too.
+        assert_eq!(read(&root, "cache/blob").as_deref(), Some("ignored"));
         assert_eq!(report.deleted, ["new.txt"]);
 
         let reopened = Checkpoints::open(&workspace, "s1", data.path()).expect("reopen");
@@ -2351,5 +2724,242 @@ mod tests {
         crate::worktree::remove(&main, &created.entry, false).expect("remove");
         assert!(!tree.exists());
         assert!(!root.join(".git/worktrees/0123abcd").exists());
+    }
+
+    /// Back-date `path` past the racy window, as a file the person saved
+    /// a while ago.
+    fn age(path: &Path) {
+        let then = std::time::SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open")
+            .set_modified(then)
+            .expect("set mtime");
+    }
+
+    fn stored() -> Vec<String> {
+        super::STORED.with(|stored| std::mem::take(&mut *stored.borrow_mut()))
+    }
+
+    fn plain_folder() -> (tempfile::TempDir, Workspace, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("dir");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        (dir, workspace, data)
+    }
+
+    #[test]
+    fn copy_checkpoints_do_not_read_files_unchanged_since_the_last_one() {
+        let (dir, workspace, data) = plain_folder();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            std::fs::write(dir.path().join(name), name).expect("write");
+            age(&dir.path().join(name));
+        }
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        stored();
+        checkpoints.create("one").expect("one");
+        assert_eq!(stored(), ["a.txt", "b.txt", "c.txt"]);
+        // Nothing changed: nothing is read again, and the checkpoint still
+        // restores every file.
+        checkpoints.create("two").expect("two");
+        assert_eq!(stored(), Vec::<String>::new());
+        std::fs::write(dir.path().join("b.txt"), "changed").expect("change");
+        age(&dir.path().join("b.txt"));
+        checkpoints.create("three").expect("three");
+        assert_eq!(stored(), ["b.txt"]);
+        std::fs::write(dir.path().join("a.txt"), "lost").expect("lose");
+        std::fs::write(dir.path().join("b.txt"), "lost").expect("lose");
+        checkpoints.restore(2).expect("restore");
+        assert_eq!(read(dir.path(), "a.txt").as_deref(), Some("a.txt"));
+        assert_eq!(read(dir.path(), "b.txt").as_deref(), Some("b.txt"));
+        stored();
+        // Another session of the folder shares the cache: only the two
+        // files the restore rewrote (new stats) are read.
+        let other = Checkpoints::open(&workspace, "t", data.path()).expect("open");
+        other.create("other").expect("other");
+        assert_eq!(stored(), ["a.txt", "b.txt"]);
+    }
+
+    #[test]
+    fn a_file_saved_just_now_is_read_again_even_with_its_stat_unchanged() {
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join("fresh.txt"), "x").expect("write");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        stored();
+        checkpoints.create("one").expect("one");
+        checkpoints.create("two").expect("two");
+        // Within the racy window the stat proves nothing: read both times.
+        assert_eq!(stored(), ["fresh.txt", "fresh.txt"]);
+    }
+
+    #[test]
+    fn copy_checkpoints_store_plain_copies_when_cloning_is_off() {
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join("doc.md"), "# notes\n").expect("write");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .without_clones();
+        checkpoints.create("one").expect("one");
+        std::fs::write(dir.path().join("doc.md"), "gone").expect("edit");
+        checkpoints.restore(1).expect("restore");
+        assert_eq!(read(dir.path(), "doc.md").as_deref(), Some("# notes\n"));
+    }
+
+    #[test]
+    fn cloud_placeholders_are_never_read_and_are_named_in_the_checkpoint() {
+        fn simulated(path: &Path, metadata: &std::fs::Metadata) -> bool {
+            path.ends_with("cloud.pdf") || crate::folder_scan::is_placeholder(path, metadata)
+        }
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join("here.docx"), "local").expect("write");
+        std::fs::write(dir.path().join("cloud.pdf"), "").expect("write");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_placeholder_test(simulated);
+        stored();
+        let info = checkpoints.create("one").expect("one");
+        assert_eq!(stored(), ["here.docx"], "a placeholder is never opened");
+        assert_eq!(info.placeholders, ["cloud.pdf"]);
+        assert_eq!(info.placeholder_count, 1);
+        assert_eq!(
+            checkpoints.list().expect("list")[0].placeholders,
+            ["cloud.pdf"]
+        );
+        // A restore leaves it alone (never deleted as if the turn made it).
+        let report = checkpoints.restore(1).expect("restore");
+        assert!(report.deleted.is_empty());
+        assert!(dir.path().join("cloud.pdf").exists());
+    }
+
+    #[test]
+    fn files_over_the_size_limit_are_reported_not_dropped_silently() {
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join("small.txt"), "s").expect("write");
+        std::fs::write(dir.path().join("video.mov"), vec![0u8; 2048]).expect("write");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(small_limits());
+        let info = checkpoints.create("one").expect("one");
+        assert_eq!(info.too_large, ["video.mov"]);
+        assert_eq!(info.too_large_count, 1);
+    }
+
+    #[test]
+    fn a_folder_over_the_copy_limits_is_refused_before_anything_is_read() {
+        let (dir, workspace, data) = plain_folder();
+        for index in 0..4 {
+            std::fs::write(dir.path().join(format!("{index}.txt")), "0123456789").expect("write");
+        }
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(CheckpointLimits {
+                max_copy_files: 3,
+                ..CheckpointLimits::default()
+            });
+        stored();
+        let error = checkpoints.check_fits().expect_err("too many files");
+        assert_eq!(error.code(), ErrorCode::TooLarge);
+        assert_eq!(
+            checkpoints.create("one").expect_err("too many").code(),
+            ErrorCode::TooLarge
+        );
+        let by_bytes = Checkpoints::open(&workspace, "s", data.path())
+            .expect("open")
+            .with_limits(CheckpointLimits {
+                max_copy_bytes: 30,
+                ..CheckpointLimits::default()
+            });
+        let error = by_bytes.check_fits().expect_err("too many bytes");
+        assert!(error.message().contains("40 bytes"), "{}", error.message());
+        assert_eq!(
+            by_bytes.create("one").expect_err("too large").code(),
+            ErrorCode::TooLarge
+        );
+        assert_eq!(stored(), Vec::<String>::new(), "nothing was read");
+        assert!(
+            Checkpoints::open(&workspace, "s", data.path())
+                .expect("open")
+                .check_fits()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_checkpoint_from_before_the_rules_were_recorded_still_keeps_ignored_files() {
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join(".gitignore"), "cache/\n").expect("ignore");
+        std::fs::write(dir.path().join("a.txt"), "a").expect("a");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        checkpoints.create("one").expect("one");
+        // The manifest as an older host wrote it: no rules recorded.
+        let manifest = walk_paths(data.path())
+            .into_iter()
+            .find(|path| {
+                path.extension().is_some_and(|ext| ext == "json")
+                    && path.to_string_lossy().contains("sessions")
+            })
+            .expect("manifest");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest).expect("read")).expect("json");
+        json.as_object_mut().expect("object").remove("rules");
+        std::fs::write(&manifest, serde_json::to_vec(&json).expect("encode")).expect("write");
+        std::fs::create_dir(dir.path().join("cache")).expect("cache");
+        std::fs::write(dir.path().join("cache/old"), "kept").expect("old");
+        std::fs::write(dir.path().join("made.txt"), "new").expect("new");
+        let report = checkpoints.restore(1).expect("restore");
+        assert_eq!(report.deleted, ["made.txt"]);
+        assert!(dir.path().join("cache/old").exists());
+    }
+
+    #[test]
+    fn file_at_reads_a_file_as_the_checkpoint_holds_it() {
+        let (dir, workspace, data) = plain_folder();
+        std::fs::write(dir.path().join("a.txt"), "then").expect("a");
+        let copy = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        copy.create("one").expect("one");
+        std::fs::write(dir.path().join("a.txt"), "now").expect("a");
+        let a = workspace.resolve("a.txt", Intent::Read).expect("a");
+        let b = workspace.resolve("b.txt", Intent::Read).expect("b");
+        assert_eq!(
+            copy.file_at(1, &a, 100).expect("a").as_deref(),
+            Some(&b"then"[..])
+        );
+        assert_eq!(copy.file_at(1, &b, 100).expect("b"), None);
+        assert_eq!(
+            copy.file_at(1, &a, 2).expect_err("large").code(),
+            ErrorCode::TooLarge
+        );
+
+        let repo = repo();
+        std::fs::write(repo.path().join("g.txt"), "then").expect("g");
+        let workspace = Workspace::open(repo.path(), &[]).expect("workspace");
+        let tracked = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        assert_eq!(tracked.kind(), "git");
+        tracked.create("one").expect("one");
+        std::fs::write(repo.path().join("g.txt"), "now").expect("g");
+        let g = workspace.resolve("g.txt", Intent::Read).expect("g");
+        let none = workspace.resolve("none.txt", Intent::Read).expect("none");
+        assert_eq!(
+            tracked.file_at(1, &g, 100).expect("g").as_deref(),
+            Some(&b"then"[..])
+        );
+        assert_eq!(tracked.file_at(1, &none, 100).expect("none"), None);
+    }
+
+    fn walk_paths(root: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        out
     }
 }

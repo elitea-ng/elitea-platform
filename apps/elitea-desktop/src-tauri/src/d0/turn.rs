@@ -874,6 +874,9 @@ struct TurnEntry {
     recorder: Arc<Recorder>,
     stop: LocalStop,
     checkpoint: Mutex<TurnCheckpoint>,
+    /// What the turn's checkpoint left out (too large, cloud placeholders):
+    /// a change to one of those files cannot be undone (`turn_changes`).
+    not_saved: Mutex<Option<CheckpointInfo>>,
     state: Mutex<RunState>,
     /// The `done` event's payload, once sent (`agent_turn_status`).
     done: Mutex<Option<Value>>,
@@ -1035,6 +1038,16 @@ pub struct RestorePreview {
     pub restored: Vec<String>,
     /// Files that would be deleted (they did not exist before the turn).
     pub deleted: Vec<String>,
+}
+
+/// What `turn_changes` says the list and undo leave out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChangesCoverage {
+    /// The turn's checkpoint, when it left files out.
+    pub not_saved: Option<CheckpointInfo>,
+    /// A command's changes could not be listed (the folder is too large to
+    /// scan).
+    pub commands_unlisted: bool,
 }
 
 /// How `turn_changes` offers to undo a turn.
@@ -2577,6 +2590,7 @@ impl AgentHost {
                     recorder: Arc::new(Recorder::default()),
                     stop,
                     checkpoint: Mutex::new(TurnCheckpoint::None),
+                    not_saved: Mutex::new(None),
                     state: Mutex::new(RunState::Running),
                     done: Mutex::new(None),
                     done_changed: tokio::sync::watch::Sender::new(0),
@@ -3560,12 +3574,26 @@ impl AgentHost {
             .checkpoint
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = TurnCheckpoint::of(&session);
-        // What the turn left in each file it changed: the per-file revert
-        // of this turn, once it is not the newest, checks against it.
-        recorder.seal(session.workspace());
+        *entry
+            .not_saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = session
+            .turn_checkpoint_info()
+            .filter(|info| info.too_large_count + info.placeholder_count > 0);
         // The turn's background processes end with it, unless pinned or
         // kept for the session; their exits reach the tool cards first.
         session.end_turn_processes().await;
+        // What its background commands changed since they started, then
+        // what the turn left in each file it changed: the per-file revert
+        // of this turn, once it is not the newest, checks against it.
+        {
+            let (session, recorder) = (session.clone(), recorder.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                recorder.background().settle(&session, &recorder);
+                recorder.seal(session.workspace());
+            })
+            .await;
+        }
         workspace.processes.bind_turn(None);
         for info in session.processes() {
             recorder.process_ended(&info);
@@ -7206,6 +7234,26 @@ impl AgentHost {
             .cloned()
             .unwrap_or_else(|| entry.workspace.clone());
         Ok(entry.recorder.changes(current.session.workspace()))
+    }
+
+    /// What `turn_changes` says undo does not cover: the files the turn's
+    /// checkpoint left out, and whether some command's changes could not
+    /// be listed.
+    ///
+    /// # Errors
+    ///
+    /// An unknown turn.
+    pub fn changes_coverage(&self, turn_id: &str) -> Result<ChangesCoverage, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let not_saved = entry
+            .not_saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Ok(ChangesCoverage {
+            not_saved,
+            commands_unlisted: entry.recorder.has_unlisted_commands(),
+        })
     }
 
     /// How `turn_changes` offers to undo the turn: whole-turn "Undo" for

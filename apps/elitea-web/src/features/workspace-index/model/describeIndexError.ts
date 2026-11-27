@@ -10,7 +10,7 @@ export function describeIndexError(error: unknown): string {
   const { code, message } = toWorkspaceIpcError(error);
   switch (code) {
     case 'local_index_disabled':
-      return t('workspace.index.policyOff', 'The local code index is turned off by your organisation’s policy.');
+      return t('workspace.index.policyOff', 'The local folder index is turned off by your organisation’s policy.');
     case 'index_busy':
       return t('workspace.index.error.busy', 'The index is already being built. Wait for it to finish, or cancel it, and try again.');
     case 'index_refused':

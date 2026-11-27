@@ -16,6 +16,7 @@ pub mod approvals;
 pub mod budget;
 pub mod checkpoint;
 pub mod classify;
+pub mod clone_file;
 pub mod command;
 pub mod conditions;
 pub mod credentials;
@@ -27,6 +28,7 @@ pub mod error;
 pub mod execpolicy;
 pub mod files;
 pub mod find;
+pub mod folder_scan;
 pub mod git;
 #[cfg(feature = "handoff")]
 pub mod handoff;

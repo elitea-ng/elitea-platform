@@ -131,7 +131,8 @@ impl LocalFolderSource {
     /// `extractor` (the same one `read_document` uses, with the same limits):
     /// they are listed, and fetched as `text/plain` holding the pages in
     /// order. A file the extractor cannot read fails its own fetch and no
-    /// other. Not chunked by [`Self::chunking`]: that stays for text and code.
+    /// other. With [`Self::chunking`] the text is cut into `docs` chunks, so
+    /// `search_workspace` finds what a PDF or a Word file says.
     #[must_use]
     pub fn with_documents(mut self, extractor: Arc<dyn DocumentExtractor>) -> Self {
         self.documents = Some(Documents(extractor));
@@ -291,7 +292,7 @@ impl LocalFolderSource {
                 continue;
             }
             let key = path.display_string();
-            let mime = mime_of(&key).to_owned();
+            let mut mime = mime_of(&key).to_owned();
             if !self.admitted(&key, &mime) {
                 listed.push(DocumentRef {
                     key,
@@ -315,6 +316,11 @@ impl LocalFolderSource {
                 stat_version(size, modified)
             };
             seen.insert(key.clone(), (size, modified));
+            if self.documents.is_some() && elitea_doc_extract::is_document_type(&mime) {
+                // Its fetch hands over the extractor's text: ingestion
+                // decodes that, and never parses the file itself.
+                "text/plain".clone_into(&mut mime);
+            }
             listed.push(DocumentRef {
                 key,
                 version,
@@ -355,8 +361,15 @@ impl LocalFolderSource {
         let mut bytes = read.bytes;
         if let Some(text) = self.document_text(&mime, &bytes) {
             // The version stays the file's own hash; what ingestion parses
-            // is its text.
-            bytes = text?.into_bytes();
+            // is its text, and the search chunks are cut from that text.
+            let text = text?;
+            if let Some(staged) = &self.staged {
+                staged
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(key.to_owned(), (version.clone(), text.clone()));
+            }
+            bytes = text.into_bytes();
             "text/plain".clone_into(&mut mime);
         }
         Ok(Document {

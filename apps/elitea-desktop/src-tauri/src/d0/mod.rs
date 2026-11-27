@@ -64,6 +64,7 @@ pub mod brief;
 pub mod cache;
 pub mod catalogue;
 pub mod child_agent;
+pub mod command_changes;
 pub mod commits;
 pub mod consult;
 pub mod context;

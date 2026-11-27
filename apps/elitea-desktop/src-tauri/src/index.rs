@@ -50,6 +50,15 @@
 //! from nothing after [`IDLE_REBUILD`] with no refresh, no change and no
 //! turn running.
 //!
+//! **Documents.** PDF, Office (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.rtf`
+//! and the like), e-book and e-mail files are indexed as their text, read out by the
+//! bundled extractor sidecar (`src/documents.rs`) under the OS sandbox:
+//! read-only, no network, the deny list hidden, the `read_document`
+//! wall-clock limit. Nothing is ever parsed in this process. Without the
+//! sidecar, or on a machine whose sandbox cannot hide the denied paths,
+//! those files are left out and `IndexStatus::documents_unavailable` says
+//! why; `IndexStatus::documents` counts the ones indexed.
+//!
 //! Indexes are kept across sign-out and `host_wipe`: they hold code
 //! structure parsed from the person's own folders, no account data (only
 //! their folder watches stop at sign-out: nothing refreshes for nobody). The
@@ -57,7 +66,7 @@
 //! the Doctor can too.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
@@ -73,7 +82,9 @@ use elitea_local_index::service::{
 use elitea_local_index::sqlite_store::{FILE_NAME, Peek, SqliteGraphStore, StoreError};
 use elitea_local_index::watch::{FolderWatcher, WatchConfig};
 use elitea_local_tools::deny::DenyList;
+use elitea_local_tools::document::{Documents, SandboxedSidecar};
 use elitea_local_tools::policy::LocalWorkPolicy;
+use elitea_local_tools::sandbox::SandboxConfig;
 use tauri::State;
 
 use crate::d0::turn::{PolicySource, TurnError};
@@ -303,6 +314,37 @@ pub struct IndexRegistry {
     /// The registry itself, for the watchers' callbacks (set by
     /// [`Self::shared`]; a registry made otherwise watches nothing).
     me: Weak<Self>,
+    /// The bundled document extractor (`src/documents.rs`): PDF and Office
+    /// files are read as text through it, under the OS sandbox, and never in
+    /// this process. `None` (a build without the bundle step): they are
+    /// left out, and the status says so.
+    document_sidecar: Option<PathBuf>,
+}
+
+/// Why PDF and Office files are not indexed when the app has no extractor.
+const NO_EXTRACTOR: &str =
+    "This build has no document extractor, so PDF and Office files are not indexed.";
+
+/// Give `service` the sandboxed sidecar at `program` to read PDF and Office
+/// files with, when this machine can confine it; otherwise say why they are
+/// left out.
+fn attach_documents(service: &IndexService, program: Option<&Path>) {
+    let Some(program) = program else {
+        service.set_documents(None, Some(NO_EXTRACTOR.to_owned()));
+        return;
+    };
+    let sidecar = SandboxedSidecar::for_workspace(
+        program.to_path_buf(),
+        service.workspace(),
+        SandboxConfig::default(),
+    );
+    match sidecar.check() {
+        Ok(()) => service.set_documents(Some(Arc::new(sidecar)), None),
+        Err(reason) => service.set_documents(
+            None,
+            Some(format!("PDF and Office files are not indexed: {reason}.")),
+        ),
+    }
 }
 
 impl IndexRegistry {
@@ -325,7 +367,20 @@ impl IndexRegistry {
             turns: Arc::new(AtomicUsize::new(0)),
             idle_rebuild: Some(IDLE_REBUILD),
             me: Weak::new(),
+            document_sidecar: match crate::documents::bundled() {
+                Documents::Sidecar(program) => Some(program),
+                Documents::InProcess | Documents::Custom(_) => None,
+            },
         }
+    }
+
+    /// Read PDF and Office files with the extractor at `program` (`None`:
+    /// leave them out).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_document_sidecar(mut self, program: Option<PathBuf>) -> Self {
+        self.document_sidecar = program;
+        self
     }
 
     /// Embed the chunks of every open, turned-on index whose `embeddings`
@@ -681,6 +736,7 @@ impl IndexRegistry {
             IndexService::open_with_deny(&id, &root, &deny, host_deny, &dir, events)
         })
         .await??;
+        attach_documents(&service, self.document_sidecar.as_deref());
         slot.peeked = None;
         if enabled && let Some(embedding) = &self.embedding {
             embedding.add(&service);
@@ -1658,6 +1714,91 @@ mod tests {
             assert_eq!(registry.disable(id).await.unwrap().state, IndexState::Off);
             assert!(registry.remove(id, true).await.is_ok());
         }
+    }
+
+    /// A fixture whose folder also holds `report.pdf`, with the registry
+    /// reading documents through `sidecar` (`None`: no extractor).
+    fn with_pdf(sidecar: Option<PathBuf>) -> Fixture {
+        let mut f = registry(on());
+        let folder = PathBuf::from(f.workspaces.get(&f.id).unwrap().unwrap().path);
+        std::fs::write(folder.join("report.pdf"), b"%PDF-1.4 opaque bytes").unwrap();
+        let registry =
+            IndexRegistry::new(f.workspaces.clone(), f.policy.clone(), Arc::new(NoEvents))
+                .with_refresh_delay(None)
+                .with_document_sidecar(sidecar);
+        f.registry = Arc::new(registry);
+        f
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_the_sidecar_documents_are_left_out_and_the_status_says_why() {
+        let f = with_pdf(None);
+        let (registry, id) = (&f.registry, &f.id);
+        registry.enable(id).await.unwrap();
+        let built = until_built(registry, id).await;
+        assert_eq!(built.documents, 0, "{built:?}");
+        assert_eq!(built.documents_unavailable.as_deref(), Some(NO_EXTRACTOR));
+        let service = registry.for_turn(id).await.unwrap();
+        let request = elitea_local_index::search::Request {
+            query: "opaque bytes".to_owned(),
+            top_k: 10,
+            path_glob: None,
+            kind: None,
+            mode: elitea_local_index::search::Mode::Auto,
+            execution_id: None,
+        };
+        let (answer, _) = service.search(&request, None).unwrap();
+        assert!(
+            answer.hits.iter().all(|hit| hit.path != "report.pdf"),
+            "nothing read the PDF in this process: {:?}",
+            answer.hits
+        );
+    }
+
+    /// The index reads a PDF through the bundled sidecar's seam: a stand-in
+    /// program, run under the OS sandbox, whose answer is the only place the
+    /// indexed words come from (the file itself holds none of them).
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pdf_is_indexed_through_the_sandboxed_sidecar() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if !Path::new("/usr/bin/sandbox-exec").is_file() {
+            return;
+        }
+        let bin = tempfile::tempdir().unwrap();
+        let script = bin.path().join(crate::documents::SIDECAR_NAME);
+        let canary = bin.path().join("written");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncat > /dev/null\ntouch '{}' 2>/dev/null\nprintf '{{\"ok\":true,\"extractor\":\"fake\",\"page_count\":1,\"pages\":[{{\"n\":1,\"text\":\"Quarterly reconciliation of supplier invoices.\"}}]}}'\n",
+                canary.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let f = with_pdf(Some(script));
+        let (registry, id) = (&f.registry, &f.id);
+        registry.enable(id).await.unwrap();
+        let built = until_built(registry, id).await;
+        assert_eq!(built.documents, 1, "{built:?}");
+        assert_eq!(built.documents_unavailable, None, "{built:?}");
+        let service = registry.for_turn(id).await.unwrap();
+        let request = elitea_local_index::search::Request {
+            query: "supplier invoices reconciliation".to_owned(),
+            top_k: 10,
+            path_glob: None,
+            kind: None,
+            mode: elitea_local_index::search::Mode::Auto,
+            execution_id: None,
+        };
+        let (answer, _) = service.search(&request, None).unwrap();
+        assert!(
+            answer.hits.iter().any(|hit| hit.path == "report.pdf"),
+            "{:?}",
+            answer.hits
+        );
+        assert!(!canary.exists(), "the sidecar ran unconfined");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3120,6 +3120,7 @@ mod tests {
             added: 1,
             removed: 0,
             diff: "+hi".into(),
+            ..FileChange::default()
         }]);
         tap.emit(event(&id, 7, "status", json!({"phase": "done"})));
         tap.emit(event(
@@ -4177,6 +4178,7 @@ mod tests {
             added: 1,
             removed: 1,
             diff: "z".repeat(MAX_DIFF_BYTES * 2),
+            ..FileChange::default()
         };
         let stored = stored_changes(&std::iter::repeat_n(big, 40).collect::<Vec<_>>());
         let total: usize = stored
