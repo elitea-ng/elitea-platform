@@ -268,14 +268,15 @@ func preRolesDefault(t *testing.T) *v2branding.Pack {
 	pack := v2branding.ProductDefault()
 	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
 		for id := range record {
-			if addedDefaultID(id) {
+			if AddedDefaultID(id) {
 				delete(record, id)
 			}
 		}
 	}
 	if len(pack.Schemes.Light) != earlierDefaultIDs || len(pack.Schemes.Dark) != earlierDefaultIDs {
 		t.Fatalf("the product default states %d/%d ids that are not on addedDefaultIDs, want %d/%d: "+
-			"add each new default id to addedDefaultIDs (package.go), do not change earlierDefaultIDs",
+			"an added default id goes on addedDefaultIDs (package.go), do not change earlierDefaultIDs; "+
+			"a removed default id needs its own rule",
 			len(pack.Schemes.Light), len(pack.Schemes.Dark), earlierDefaultIDs, earlierDefaultIDs)
 	}
 	return pack

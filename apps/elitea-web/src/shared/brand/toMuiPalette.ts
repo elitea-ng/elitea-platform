@@ -63,10 +63,11 @@ function deriveContextFor(scheme: SchemeName, brand: BrandInput): DeriveContext 
  * the roles, and an id pinned at its default under another hue keeps that
  * pin. If neither counts, the role resolves as every other id above: its
  * stated value, or its default re-hued (decision 1.6). An id stated with the
- * value it gets anyway is not a tuning: the file layer can state every id of
- * the product default, and none of them then overrides a role. `onBrand`
- * gives its value to each label role of `onBrandRoles` that the pack does not
- * tune. `toMuiPalette` always gives it to `primary.contrastText`.
+ * value it gets anyway is not a tuning: at the default hue the file layer can
+ * state every id of the product default, and none of them then overrides a
+ * role. `onBrand` gives its value to each label role of `onBrandRoles` whose
+ * fill resolves to the brand anchor's colour, unless the pack tunes the label
+ * or its legacy id. `toMuiPalette` always gives it to `primary.contrastText`.
  */
 export function resolveScheme(
   record: SchemeRecord,
@@ -90,11 +91,7 @@ export function resolveScheme(
     const source = [roleId, ...legacyIds].find(tunes);
     if (source !== undefined) resolved[roleId] = record[source] as string;
   }
-  if (brand.onBrand !== undefined) {
-    for (const onRole of onBrandRoles(scheme)) {
-      if (!tunes(onRole)) resolved[onRole] = brand.onBrand;
-    }
-  }
+  if (brand.onBrand !== undefined) giveOnBrand(resolved, brand.onBrand, scheme, tunes);
   for (const [id, value] of Object.entries(record)) {
     resolved[id] ??= value;
   }
@@ -102,22 +99,41 @@ export function resolveScheme(
 }
 
 /**
- * The label roles that `brand.onBrand` reaches in `scheme`: each
- * `role.on<Name>` whose `role.<name>` has the brand anchor's default colour in
- * that scheme. Such a fill takes the brand hue, so its label must follow
- * `onBrand`, as `primary.contrastText` does. In the default pack this is
- * `role.onPrimary` in both schemes and `role.onSignal` in light, where Signal
- * is the anchor colour.
+ * Give `onBrand` to each label of `onBrandRoles` whose fill resolves to the
+ * brand anchor's colour, unless the pack tunes the label or its legacy id.
  */
-function onBrandRoles(scheme: SchemeName): string[] {
-  const reference = DEFAULT_BRAND_PACK.schemes[scheme];
-  const anchor = reference[BRAND_ANCHOR_TOKEN] as string;
+function giveOnBrand(
+  resolved: Record<string, string>,
+  onBrand: string,
+  scheme: SchemeName,
+  tunes: (id: string) => boolean,
+): void {
+  const anchor = resolved[BRAND_ANCHOR_TOKEN] as string;
+  for (const { label, fill } of onBrandRoles(scheme)) {
+    const labelIds = [`${ROLE_GROUP}.${label}`, ...(LEGACY_ROLES[label] ?? [])];
+    const fillValue = resolved[`${ROLE_GROUP}.${fill}`];
+    if (fillValue !== undefined && sameColour(fillValue, anchor) && !labelIds.some(tunes)) {
+      resolved[`${ROLE_GROUP}.${label}`] = onBrand;
+    }
+  }
+}
+
+/**
+ * The label roles of `scheme`, each `role.on<Name>` with its fill
+ * `role.<name>`, both without the group. `resolveScheme` gives `brand.onBrand`
+ * to a label whose fill resolves to the brand anchor's colour: such a fill is
+ * the brand colour, so its label must follow `onBrand`, as
+ * `primary.contrastText` does. With the default pack's colours this is
+ * `role.onPrimary` in both schemes and `role.onSignal` in light; a tuned
+ * Signal of another colour keeps its own label.
+ */
+function onBrandRoles(scheme: SchemeName): { label: string; fill: string }[] {
   const prefix = `${ROLE_GROUP}.on`;
-  return catalogueFor(scheme).filter((id) => {
+  return catalogueFor(scheme).flatMap((id) => {
     const name = id.slice(prefix.length);
-    if (!id.startsWith(prefix) || name === '' || name[0] !== name[0]?.toUpperCase()) return false;
-    const fill = reference[`${ROLE_GROUP}.${name[0]?.toLowerCase()}${name.slice(1)}`];
-    return fill !== undefined && sameColour(fill, anchor);
+    if (!id.startsWith(prefix) || name === '' || name[0] !== name[0]?.toUpperCase()) return [];
+    const fill = `${name[0]?.toLowerCase()}${name.slice(1)}`;
+    return catalogueFor(scheme).includes(`${ROLE_GROUP}.${fill}`) ? [{ label: `on${name}`, fill }] : [];
   });
 }
 
