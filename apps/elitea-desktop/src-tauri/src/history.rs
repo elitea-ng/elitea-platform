@@ -612,13 +612,29 @@ pub fn stored_changes(changes: &[FileChange]) -> Value {
                 diff = String::new();
             }
             budget -= diff.len();
-            serde_json::json!({
+            let mut file = serde_json::json!({
                 "path": change.path,
                 "status": change.status,
                 "added": change.added,
                 "removed": change.removed,
                 "diff": diff,
-            })
+            });
+            // What a binary or command-made row shows, as `turn_changes` has it.
+            if change.binary {
+                file["binary"] = Value::Bool(true);
+            }
+            if let Some(size) = change.size_before {
+                file["size_before"] = Value::from(size);
+            }
+            if let Some(size) = change.size_after {
+                file["size_after"] = Value::from(size);
+            }
+            if let Some(command) = &change.command {
+                file["command"] = Value::String(
+                    cut(command, MAX_EVENT_STRING).unwrap_or_else(|| command.clone()),
+                );
+            }
+            file
         })
         .collect();
     Value::Array(files)
@@ -4190,6 +4206,34 @@ mod tests {
         assert!(total <= MAX_CHANGES_BYTES);
         assert_eq!(stored[0]["added"], 1);
         assert_eq!(stored[39]["diff"], "", "past the budget: counts only");
+    }
+
+    /// A reopened turn shows a binary, command-made row as it was live:
+    /// sizes and the command survive storage; a text row carries neither.
+    #[test]
+    fn stored_changes_keep_sizes_and_the_command() {
+        let binary = FileChange {
+            path: "report.docx".into(),
+            status: "modified",
+            binary: true,
+            size_before: Some(1_200_000),
+            size_after: Some(1_400_000),
+            command: Some("make report".into()),
+            ..FileChange::default()
+        };
+        let text = FileChange {
+            path: "a.txt".into(),
+            status: "modified",
+            added: 1,
+            diff: "+x\n".into(),
+            ..FileChange::default()
+        };
+        let stored = stored_changes(&[binary, text]);
+        assert_eq!(stored[0]["binary"], true);
+        assert_eq!(stored[0]["size_before"], 1_200_000);
+        assert_eq!(stored[0]["size_after"], 1_400_000);
+        assert_eq!(stored[0]["command"], "make report");
+        assert!(stored[1].get("binary").is_none() && stored[1].get("command").is_none());
     }
 
     #[test]

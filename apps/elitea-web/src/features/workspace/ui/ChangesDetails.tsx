@@ -32,9 +32,12 @@ export function formatSize(bytes: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value).toString()} ${units[unit] ?? 'TB'}`;
 }
 
-/** A file with sizes and no line diff: show the sizes in place of the line counts. */
+/**
+ * A file the host could not diff (binary, or too large to keep), with sizes: show them in place of the line counts.
+ * A text file whose diff was dropped (a stored turn's size budget) keeps its counts.
+ */
 export function showsSizes(file: ChangedFile): boolean {
-  return file.diff === '' && (file.size_before !== undefined || file.size_after !== undefined);
+  return file.binary === true && (file.size_before !== undefined || file.size_after !== undefined);
 }
 
 /** `1.2 MB → 1.4 MB`; an added or deleted file shows its one side. */

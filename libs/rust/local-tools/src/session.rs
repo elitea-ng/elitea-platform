@@ -1799,6 +1799,13 @@ impl LocalSession {
     /// Full auto) makes no change. A "no" refuses every change of the
     /// turn. Any other failure refuses the change.
     async fn ensure_checkpoint(self: &Arc<Self>, call_id: &str) -> ToolResult<()> {
+        // Taken (or agreed to go without) already: later changes of the
+        // turn neither queue behind the gate nor leave the async runtime.
+        if self.turn.lock().is_ok_and(|turn| {
+            turn.refused.is_none() && (turn.checkpoint.is_some() || turn.skipped.is_some())
+        }) {
+            return Ok(());
+        }
         let _gate = self.checkpoint_gate.lock().await;
         let reason = match self.blocking(Self::take_checkpoint).await? {
             CheckpointStep::Ready => return Ok(()),
@@ -1865,7 +1872,8 @@ impl LocalSession {
     }
 
     /// The checkpoint step of [`Self::ensure_checkpoint`], off the async
-    /// runtime: a fit check that reads no file, then the checkpoint.
+    /// runtime: the checkpoint, whose stat-only plan refuses a folder too
+    /// large ([`ErrorCode::TooLarge`]) before any file is read, in one walk.
     fn take_checkpoint(&self) -> ToolResult<CheckpointStep> {
         let mut turn = self
             .turn
@@ -1882,10 +1890,7 @@ impl LocalSession {
         } else {
             turn.label.clone()
         };
-        let created = self
-            .checkpoints
-            .check_fits()
-            .and_then(|()| self.checkpoints.create(&label));
+        let created = self.checkpoints.create(&label);
         match created {
             Ok(info) => {
                 turn.checkpoint = Some(info.seq);

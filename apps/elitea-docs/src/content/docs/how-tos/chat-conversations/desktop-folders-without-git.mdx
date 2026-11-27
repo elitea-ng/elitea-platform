@@ -25,7 +25,7 @@ Without git, the app keeps its own copy of the folder before the agent's first c
 - Files that did not change since the last copy are not read again, and on macOS and Linux the copy uses the file system's clone where it can, so it is fast even in a large folder.
 - Cloud files that are not downloaded (iCloud Drive, OneDrive, Dropbox) are never opened. They are left out of the copy and named in the **Changes** tab.
 - Files over 64 MiB are left out of the copy and named too: a change to one of them cannot be undone.
-- Files your `.gitignore` names are still saved; only dependency and build folders are left out.
+- Files your `.gitignore` names are still saved. Only dependency and build folders are left out, and a folder with an ordinary name such as `target`, `venv` or `Pods` only when it sits next to the project file of the tool that makes it (`Cargo.toml`, `requirements.txt`, `Podfile`), so your own `target` folder of spreadsheets keeps its undo.
 
 **When the folder is too large to save.** Before the agent's first change in such a folder, the app asks you whether to go on without undo. Say no and the agent makes no change in that turn; it tells you what it would change instead. A turn nobody can be asked about, an unattended run or a thread in **Full auto**, never goes on without undo: it makes no change and says why.
 
@@ -50,7 +50,7 @@ In a **Documents** folder, or one with no chip, the documents agent is offered f
 
 ## Project instructions without AGENTS.md
 
-The agent follows the folder's `AGENTS.md`. A folder without one at its top uses its `README.md`, else `README.txt`, else `NOTES.md`, as its project instructions. A README in a subfolder is never used. The **Participants** tab lists the file that applies, and **Respect project instructions** turns it off for a thread. See [Project instructions](/how-tos/chat-conversations/desktop-multi-agent#project-instructions).
+The agent follows the folder's `AGENTS.md`. A folder without git and without an `AGENTS.md` at its top uses its `README.md`, else `README.txt`, else `NOTES.md`, as its project instructions. A README in a subfolder is never used, and neither is a git repository's README. The **Participants** tab lists the file that applies, and **Respect project instructions** turns it off for a thread. See [Project instructions](/how-tos/chat-conversations/desktop-multi-agent#project-instructions).
 
 ## Search the folder's documents
 

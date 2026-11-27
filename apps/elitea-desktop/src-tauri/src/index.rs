@@ -736,7 +736,11 @@ impl IndexRegistry {
             IndexService::open_with_deny(&id, &root, &deny, host_deny, &dir, events)
         })
         .await??;
-        attach_documents(&service, self.document_sidecar.as_deref());
+        // The sandbox probe walks the deny paths (bwrap masks on Linux): on
+        // the blocking pool, again at every open, so a changed policy or
+        // sandbox is seen when the index reopens.
+        let (attached, sidecar) = (service.clone(), self.document_sidecar.clone());
+        blocking(move || attach_documents(&attached, sidecar.as_deref())).await?;
         slot.peeked = None;
         if enabled && let Some(embedding) = &self.embedding {
             embedding.add(&service);

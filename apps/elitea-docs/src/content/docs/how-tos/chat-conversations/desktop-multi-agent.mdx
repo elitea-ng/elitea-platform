@@ -66,7 +66,7 @@ A Local work thread holds agents only: the tab shows no toolkit, pipeline or MCP
 
 ## Project instructions
 
-The desktop app reads the thread folder's project instructions at the start of every turn: the `AGENTS.md` at the folder's root, the `AGENTS.md` of the folders of the files you reference with **@**, and the root `SOUL.md`. A folder without an `AGENTS.md` at its root (a folder of documents or notes, or a project that never added one) uses its root `README.md` instead, else `README.txt`, else `NOTES.md`; a README in a subfolder is never used. See [Working with documents and folders without git](/how-tos/chat-conversations/desktop-folders-without-git). In a worktree, they are the worktree's files. They go into the agent's prompt after its own instructions, which outrank them.
+The desktop app reads the thread folder's project instructions at the start of every turn: the `AGENTS.md` at the folder's root, the `AGENTS.md` of the folders of the files you reference with **@**, and the root `SOUL.md`. A folder that is not a git repository and has no `AGENTS.md` at its root (a folder of documents or notes) uses its root `README.md` instead, else `README.txt`, else `NOTES.md`; a README in a subfolder, or in a git repository, is never used. See [Working with documents and folders without git](/how-tos/chat-conversations/desktop-folders-without-git). In a worktree, they are the worktree's files. They go into the agent's prompt after its own instructions, which outrank them.
 
 The **Participants** tab lists them once, under **Project instructions**, below the agents: the file names, for example `AGENTS.md` and `apps/web/AGENTS.md`, or `README.md` when the folder falls back to it. The conversation no longer shows a notice under each message.
 

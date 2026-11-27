@@ -377,9 +377,13 @@ impl Tool for ObservedTool {
             .flatten();
         // A command's changes: the folder before it runs (stat only), and
         // after (below), in the session its file tools' before-images use.
-        let scanned_session = (!self.remote && super::command_changes::may_write(&tool, &args))
-            .then(|| observer.session.clone())
-            .flatten();
+        // Once a scan found the folder too large this turn, no command of
+        // the turn walks it again (the tab already says so).
+        let scanned_session = (!self.remote
+            && super::command_changes::may_write(&tool, &args)
+            && !observer.recorder.has_unlisted_commands())
+        .then(|| observer.session.clone())
+        .flatten();
         let scan_before = match &scanned_session {
             Some(session) => {
                 let session = session.clone();

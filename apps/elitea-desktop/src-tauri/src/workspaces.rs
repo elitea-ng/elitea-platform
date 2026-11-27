@@ -30,8 +30,9 @@ pub struct Workspace {
     /// folder is inside a git work tree. `get` leaves it `false`.
     #[serde(default)]
     pub is_git: bool,
-    /// Computed with `is_git` ([`folder_kind`]): what the folder mostly
-    /// holds. `get` leaves it `mixed`.
+    /// What the folder mostly holds ([`folder_kind`]): computed for the UI
+    /// (`list_with_kinds`, `add`, `bind_project`); `list` and `get` leave it
+    /// `mixed`.
     #[serde(default)]
     pub kind: FolderKind,
     /// A task worktree's workspace (#1235, src/worktrees.rs): the workspace
@@ -388,6 +389,24 @@ impl WorkspaceStore {
             .into_iter()
             .map(|mut workspace| {
                 workspace.is_git = in_git_tree(Path::new(&workspace.path));
+                workspace
+            })
+            .collect())
+    }
+
+    /// [`Self::list`] with each folder's `kind` sampled too
+    /// ([`folder_kind`]): only for what the UI shows (`workspace_list`, off
+    /// the main thread), never for the host's own lookups, since sampling a
+    /// folder on a slow or network drive can block.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn list_with_kinds(&self) -> Result<Vec<Workspace>, HostError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .map(|mut workspace| {
                 workspace.kind = folder_kind(Path::new(&workspace.path), workspace.is_git);
                 workspace
             })
@@ -913,12 +932,17 @@ mod tests {
             folder.path(),
             &["go.mod", "main.go", "x.go", "y.go", "z.go"],
         );
-        assert_eq!(store.list().unwrap()[0].kind, FolderKind::Code);
+        assert_eq!(store.list_with_kinds().unwrap()[0].kind, FolderKind::Code);
+        // The host's own lookups never sample the folder.
+        let looked = || KIND_ENTRIES.with(std::cell::Cell::get);
+        let before = looked();
         assert_eq!(
             store.get(&added.id).unwrap().unwrap().kind,
             FolderKind::Mixed
         );
-        let json = serde_json::to_value(&store.list().unwrap()[0]).unwrap();
+        assert_eq!(store.list().unwrap()[0].kind, FolderKind::Mixed);
+        assert_eq!(looked(), before, "list() and get() read no folder names");
+        let json = serde_json::to_value(&store.list_with_kinds().unwrap()[0]).unwrap();
         assert_eq!(json["kind"], "code");
     }
 

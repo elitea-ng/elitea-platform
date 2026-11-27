@@ -503,9 +503,16 @@ pub async fn open_path(
         .map_err(|e| IpcError::new("os_refused", format!("could not open it: {e}")))
 }
 
+/// Each folder's `kind` is sampled here, off the main thread: a folder on
+/// a slow drive never freezes the window.
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, IpcError> {
-    Ok(state.workspaces.list()?)
+pub async fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, IpcError> {
+    let workspaces = state.workspaces.clone();
+    Ok(
+        tokio::task::spawn_blocking(move || workspaces.list_with_kinds())
+            .await
+            .map_err(|e| IpcError::new("internal", e.to_string()))??,
+    )
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace; also

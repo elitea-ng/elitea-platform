@@ -1359,9 +1359,10 @@ mention, the `AGENTS.md` of every folder between it and the root, nearest
 first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
-files past the cap are skipped. When the root has no `AGENTS.md`, the
-root's `README.md`, else `README.txt`, else `NOTES.md` is read in its place
-(same matching, confinement and cap); a nested folder's README never is.
+files past the cap are skipped. In a folder that is not a git work tree,
+when the root has no `AGENTS.md`, the root's `README.md`, else `README.txt`,
+else `NOTES.md` is read in its place (same matching, confinement and cap); a
+nested folder's README never is, and neither is a git repository's.
 They end the system instructions, after
 the agent's own instructions and the environment section (which outrank
 them, as does any picked skill, as the section's preamble says), as one

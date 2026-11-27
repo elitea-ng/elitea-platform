@@ -10,7 +10,10 @@
 //!   `.gitignore` and `.ignore` files are NOT honoured. A plain folder's
 //!   ignore file says nothing about which of the person's documents need
 //!   undo. The usual heavy, regenerable directories ([`HEAVY_DIRS`]) are
-//!   left out.
+//!   left out; one with an ordinary name (`target`, `venv`, `Pods`) only
+//!   beside the project file of the tool that makes it
+//!   ([`HEAVY_DIR_MARKERS`]), so a person's own `target` folder of
+//!   spreadsheets keeps its undo.
 //! - [`ScanRules::Git`], for a git work tree: `.gitignore` is honoured, as
 //!   in what git itself shows.
 //!
@@ -28,7 +31,8 @@ use crate::workspace::{WsPath, is_protected_name};
 
 /// Directories a [`ScanRules::Folder`] scan leaves out, at any depth:
 /// dependency and build caches a tool regenerates, never the person's own
-/// work.
+/// work. Those named in [`HEAVY_DIR_MARKERS`] only beside one of their
+/// markers.
 pub const HEAVY_DIRS: &[&str] = &[
     "node_modules",
     "target",
@@ -234,8 +238,34 @@ pub fn is_placeholder(path: &Path, metadata: &std::fs::Metadata) -> bool {
 /// pass their own).
 pub type PlaceholderTest = fn(&Path, &std::fs::Metadata) -> bool;
 
-fn heavy(name: &str) -> bool {
-    HEAVY_DIRS.contains(&name)
+/// Heavy directories with an ordinary name, and the files beside them that
+/// say a tool made them: without one, the folder is the person's and is
+/// scanned like any other.
+pub const HEAVY_DIR_MARKERS: &[(&str, &[&str])] = &[
+    ("target", &["Cargo.toml", "pom.xml"]),
+    (
+        "venv",
+        &[
+            "pyproject.toml",
+            "requirements.txt",
+            "setup.py",
+            "setup.cfg",
+        ],
+    ),
+    ("Pods", &["Podfile"]),
+];
+
+/// Whether the directory `name` at `path` is a heavy one to leave out.
+fn heavy(name: &str, path: &Path) -> bool {
+    if !HEAVY_DIRS.contains(&name) {
+        return false;
+    }
+    match HEAVY_DIR_MARKERS.iter().find(|(dir, _)| *dir == name) {
+        None => true,
+        Some((_, markers)) => path
+            .parent()
+            .is_some_and(|parent| markers.iter().any(|marker| parent.join(marker).is_file())),
+    }
 }
 
 /// Scan `root` under `rules`, stopping after `max_files` files
@@ -279,7 +309,7 @@ pub fn scan_with(
         !(rules == ScanRules::Folder
             && entry.depth() > 0
             && entry.file_type().is_some_and(|kind| kind.is_dir())
-            && heavy(name))
+            && heavy(name, entry.path()))
     });
     let mut out = FolderScan::default();
     for entry in builder.build().flatten() {
@@ -325,13 +355,35 @@ mod tests {
         std::fs::write(root.join("node_modules/x/i.js"), "x").unwrap();
         std::fs::create_dir_all(root.join("sub/target")).unwrap();
         std::fs::write(root.join("sub/target/o.bin"), "o").unwrap();
+        std::fs::write(root.join("sub/Cargo.toml"), "[package]").unwrap();
         let folder = scan(root, ScanRules::Folder, 100);
         let names: Vec<&str> = folder.files.keys().map(String::as_str).collect();
-        assert_eq!(names, [".gitignore", "notes/a.md", "report.docx"]);
+        assert_eq!(
+            names,
+            [".gitignore", "notes/a.md", "report.docx", "sub/Cargo.toml"]
+        );
         // The git rules follow the ignore file.
         let git = scan(root, ScanRules::Git, 100);
         assert!(!git.files.contains_key("report.docx"));
         assert!(!git.files.contains_key("notes/a.md"));
+    }
+
+    #[test]
+    fn an_ordinary_named_folder_is_left_out_only_beside_its_tools_project_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // A person's own `target` folder of spreadsheets: kept.
+        std::fs::create_dir_all(root.join("sales/target")).unwrap();
+        std::fs::write(root.join("sales/target/q4.xlsx"), "q4").unwrap();
+        // Cargo's `target`: left out.
+        std::fs::create_dir_all(root.join("tool/target/debug")).unwrap();
+        std::fs::write(root.join("tool/Cargo.toml"), "[package]").unwrap();
+        std::fs::write(root.join("tool/target/debug/app"), "bin").unwrap();
+        let names: Vec<String> = scan(root, ScanRules::Folder, 100)
+            .files
+            .into_keys()
+            .collect();
+        assert_eq!(names, ["sales/target/q4.xlsx", "tool/Cargo.toml"]);
     }
 
     #[test]

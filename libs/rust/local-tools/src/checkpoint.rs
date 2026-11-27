@@ -521,9 +521,40 @@ impl Checkpoints {
     /// git failures.
     pub fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
         match self {
-            Self::Git(git) => git.file_at(seq, path, max_bytes),
-            Self::Copy(copy) => copy.file_at(seq, path, max_bytes),
+            Self::Git(git) => git.file_at(&git.commit_of(seq)?, path, max_bytes),
+            Self::Copy(copy) => copy.file_at(&copy.read_manifest(seq)?, path, max_bytes),
         }
+    }
+
+    /// [`Self::file_at`] for several paths of one checkpoint: the
+    /// checkpoint is looked up once (one manifest read, one listing of the
+    /// commits), not once per path. Each path's answer is its own.
+    ///
+    /// # Errors
+    ///
+    /// An unknown checkpoint, or git failures listing them.
+    pub fn files_at(
+        &self,
+        seq: u64,
+        paths: &[WsPath],
+        max_bytes: u64,
+    ) -> ToolResult<Vec<ToolResult<Option<Vec<u8>>>>> {
+        Ok(match self {
+            Self::Git(git) => {
+                let commit = git.commit_of(seq)?;
+                paths
+                    .iter()
+                    .map(|path| git.file_at(&commit, path, max_bytes))
+                    .collect()
+            }
+            Self::Copy(copy) => {
+                let manifest = copy.read_manifest(seq)?;
+                paths
+                    .iter()
+                    .map(|path| copy.file_at(&manifest, path, max_bytes))
+                    .collect()
+            }
+        })
     }
 
     /// The scan rules that match what this folder's checkpoints cover:
@@ -842,15 +873,19 @@ impl GitCheckpoints {
         Ok(plan)
     }
 
-    /// What file `path` held at checkpoint `seq` (see
-    /// [`Checkpoints::file_at`]).
-    fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
-        let commit = self
+    /// The commit of checkpoint `seq`.
+    fn commit_of(&self, seq: u64) -> ToolResult<String> {
+        Ok(self
             .list()?
             .into_iter()
             .find(|info| info.seq == seq)
             .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("no checkpoint {seq}")))?
-            .id;
+            .id)
+    }
+
+    /// What file `path` held in checkpoint `commit` (see
+    /// [`Checkpoints::file_at`]).
+    fn file_at(&self, commit: &str, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
         let object = format!("{commit}:{}", self.top_relative(path));
         // Absent from the checkpoint's tree: not an error.
         let Ok(size) = self.repo.git(self.top()).text(&["cat-file", "-s", &object]) else {
@@ -1538,9 +1573,13 @@ impl CopyCheckpoints {
         Some((sha, before.mode, cacheable))
     }
 
-    /// What file `path` held at checkpoint `seq`.
-    fn file_at(&self, seq: u64, path: &WsPath, max_bytes: u64) -> ToolResult<Option<Vec<u8>>> {
-        let manifest = self.read_manifest(seq)?;
+    /// What file `path` held in the checkpoint whose manifest is `manifest`.
+    fn file_at(
+        &self,
+        manifest: &Manifest,
+        path: &WsPath,
+        max_bytes: u64,
+    ) -> ToolResult<Option<Vec<u8>>> {
         let Some(file) = manifest.files.get(&path.display_string()) else {
             return Ok(None);
         };
@@ -2951,6 +2990,22 @@ mod tests {
             Some(&b"then"[..])
         );
         assert_eq!(tracked.file_at(1, &none, 100).expect("none"), None);
+
+        // Several paths of one checkpoint, looked up once; each answer its own.
+        let both = tracked
+            .files_at(1, &[g.clone(), none.clone()], 100)
+            .expect("both");
+        assert_eq!(both[0].as_ref().expect("g").as_deref(), Some(&b"then"[..]));
+        assert_eq!(*both[1].as_ref().expect("none"), None);
+        let plain = copy
+            .files_at(1, &[a.clone(), b.clone()], 100)
+            .expect("plain");
+        assert_eq!(plain[0].as_ref().expect("a").as_deref(), Some(&b"then"[..]));
+        assert_eq!(*plain[1].as_ref().expect("b"), None);
+        assert_eq!(
+            copy.files_at(9, &[a], 100).expect_err("unknown").code(),
+            ErrorCode::NotFound
+        );
     }
 
     fn walk_paths(root: &Path) -> Vec<std::path::PathBuf> {

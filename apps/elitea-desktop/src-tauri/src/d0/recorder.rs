@@ -25,6 +25,10 @@ use similar::{ChangeTag, TextDiff};
 /// Largest file a before-image keeps; larger files are reported changed
 /// without a diff, with their sizes.
 pub const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The most before-image bytes the turn keeps for files commands changed,
+/// all together; past it a command's file is kept by its size only.
+pub const MAX_COMMAND_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 /// Largest file whose state at the turn's end is hashed (for the per-file
 /// revert of an older turn); a larger one cannot be checked, so is refused.
 const MAX_HASHED_BYTES: u64 = 64 * 1024 * 1024;
@@ -221,6 +225,8 @@ struct State {
     /// A command's changes could not be listed: the folder is too large
     /// to scan.
     commands_unlisted: bool,
+    /// The bytes of command before-images kept ([`MAX_COMMAND_IMAGE_BYTES`]).
+    command_image_bytes: usize,
     /// `(from, to)` of renames a patch made.
     renames: Vec<(String, String)>,
     /// The memories this turn saved and deleted (#1233), in call order.
@@ -647,6 +653,23 @@ impl Recorder {
             if state.before.contains_key(path) {
                 return;
             }
+            // Within the turn's budget the bytes are kept; past it, the size.
+            let before = match before {
+                Image::Bytes(bytes)
+                    if state.command_image_bytes + bytes.len() > MAX_COMMAND_IMAGE_BYTES =>
+                {
+                    Image::Opaque {
+                        len: bytes.len() as u64,
+                        mtime_ns: 0,
+                        digest: None,
+                    }
+                }
+                Image::Bytes(bytes) => {
+                    state.command_image_bytes += bytes.len();
+                    Image::Bytes(bytes)
+                }
+                other => other,
+            };
             state.before.insert(path.to_owned(), before);
             state
                 .commands_by_path
@@ -667,6 +690,14 @@ impl Recorder {
     /// folder is too large to scan).
     pub fn commands_unlisted(&self) {
         self.with(|state| state.commands_unlisted = true);
+    }
+
+    /// The turn kept as many command before-images as it may
+    /// ([`MAX_COMMAND_IMAGE_BYTES`]): no more are read.
+    #[must_use]
+    pub fn command_images_full(&self) -> bool {
+        self.with(|state| state.command_image_bytes >= MAX_COMMAND_IMAGE_BYTES)
+            .unwrap_or(true)
     }
 
     /// Whether some command's changes could not be listed.

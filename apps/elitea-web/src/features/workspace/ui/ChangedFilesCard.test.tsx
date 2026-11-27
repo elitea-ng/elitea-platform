@@ -183,4 +183,11 @@ describe('ChangedFilesCard', () => {
     expect(within(row).queryByText('+0 -0')).toBeNull();
     expect(within(row).getByTestId('change-command')).toHaveTextContent('rm deck.pptx');
   });
+
+  it('keeps the line counts of a text file whose diff was dropped, though it has sizes', async () => {
+    setup([{ path: 'notes.md', status: 'modified' as const, added: 12, removed: 3, diff: '', size_before: 4000, size_after: 4200 }]);
+    const row = await screen.findByTestId('changed-file');
+    expect(within(row).queryByTestId('change-sizes')).toBeNull();
+    expect(row).toHaveTextContent('+12');
+  });
 });

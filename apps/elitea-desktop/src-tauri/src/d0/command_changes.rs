@@ -12,28 +12,42 @@
 //! plain folder's is not. A file the turn already recorded (a file tool
 //! changed it first) keeps its entry: nothing is listed twice. Its
 //! before-image is the file as the turn's checkpoint holds it. Without one
-//! (or a file the checkpoint left out) the row has the sizes only.
+//! (or a file the checkpoint left out, or past [`MAX_BEFORE_IMAGES`] or
+//! the recorder's budget) the row has the sizes only. A path the policy
+//! denies reading is not listed at all.
 
 use std::sync::Mutex;
 
 use elitea_local_tools::checkpoint::MAX_COPY_FILES;
 use elitea_local_tools::error::ErrorCode;
-use elitea_local_tools::folder_scan::{self, FolderScan};
+use elitea_local_tools::folder_scan::{self, FolderScan, ScanRules};
 use elitea_local_tools::session::LocalSession;
-use elitea_local_tools::workspace::WsPath;
+use elitea_local_tools::workspace::{Intent, WsPath};
 use serde_json::Value;
 
 use super::recorder::{Image, MAX_IMAGE_BYTES, Recorder};
 
+/// The most files a git work tree's scan lists. A repository checkpoints
+/// through git whatever its size, so its scan is not held to a copy
+/// checkpoint's [`MAX_COPY_FILES`]; `.gitignore` keeps build output out.
+pub const MAX_GIT_SCAN_FILES: usize = 250_000;
+
+/// The most files a scan under `rules` lists.
+#[must_use]
+pub fn scan_limit(rules: ScanRules) -> usize {
+    match rules {
+        ScanRules::Git => MAX_GIT_SCAN_FILES,
+        ScanRules::Folder => MAX_COPY_FILES,
+    }
+}
+
 /// The scan of the folder as it is now; `None` when it has more files
-/// than a checkpoint takes (its changes cannot be told apart).
+/// than [`scan_limit`] (its changes cannot be told apart). A turn that met
+/// one such folder scans no more ([`Recorder::has_unlisted_commands`]).
 #[must_use]
 pub fn scan(session: &LocalSession) -> Option<FolderScan> {
-    let found = folder_scan::scan(
-        session.workspace().root(),
-        session.checkpoints().scan_rules(),
-        MAX_COPY_FILES,
-    );
+    let rules = session.checkpoints().scan_rules();
+    let found = folder_scan::scan(session.workspace().root(), rules, scan_limit(rules));
     (!found.truncated).then_some(found)
 }
 
@@ -48,41 +62,75 @@ pub fn may_write(tool: &str, args: &Value) -> bool {
     }
 }
 
-/// The file `path` as it was before the turn, given its stat in the scan
-/// before the command (`None`: it did not exist then).
-fn before_image(session: &LocalSession, path: &str, stat: Option<folder_scan::FileStat>) -> Image {
-    let Some(stat) = stat else {
-        return Image::Absent;
-    };
-    let opaque = Image::Opaque {
+/// The most before-images one command's changes read from the checkpoint;
+/// past it (a formatter or a code generator rewriting thousands of files)
+/// the rows have the sizes only, so the call is not held back.
+pub const MAX_BEFORE_IMAGES: usize = 64;
+
+/// A file known by its stat only (`None`: it did not exist).
+fn opaque(stat: Option<folder_scan::FileStat>) -> Image {
+    stat.map_or(Image::Absent, |stat| Image::Opaque {
         len: stat.len,
         mtime_ns: stat.mtime_ns,
         digest: None,
+    })
+}
+
+/// The files of `paths` (with their stats in the scan before the command)
+/// as they were before the turn: the first [`MAX_BEFORE_IMAGES`] that
+/// existed then are read from the turn's checkpoint, looked up once
+/// ([`elitea_local_tools::checkpoint::Checkpoints::files_at`]) while the recorder's budget lasts; every
+/// other one, a file the checkpoint left out (too large, a placeholder) or
+/// one it cannot read is known by its size only.
+fn before_images(
+    session: &LocalSession,
+    recorder: &Recorder,
+    paths: &[(String, Option<folder_scan::FileStat>)],
+) -> Vec<Image> {
+    let mut images: Vec<Image> = paths.iter().map(|(_, stat)| opaque(*stat)).collect();
+    let Some(seq) = session.turn_checkpoint() else {
+        return images;
     };
-    let (Some(seq), Ok(ws_path)) = (
-        session.turn_checkpoint(),
-        WsPath::from_relative(std::path::Path::new(path)),
-    ) else {
-        return opaque;
-    };
-    match session
+    if recorder.command_images_full() {
+        return images;
+    }
+    let wanted: Vec<(usize, WsPath)> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, stat))| stat.is_some())
+        .filter_map(|(at, (path, _))| {
+            WsPath::from_relative(std::path::Path::new(path))
+                .ok()
+                .map(|ws| (at, ws))
+        })
+        .take(MAX_BEFORE_IMAGES)
+        .collect();
+    let targets: Vec<WsPath> = wanted.iter().map(|(_, ws)| ws.clone()).collect();
+    let read = match session
         .checkpoints()
-        .file_at(seq, &ws_path, MAX_IMAGE_BYTES)
+        .files_at(seq, &targets, MAX_IMAGE_BYTES)
     {
-        Ok(Some(bytes)) => Image::Bytes(bytes),
-        // Left out of the checkpoint (too large, a placeholder), too large
-        // to keep, or unreadable: its size only.
-        Ok(None) => opaque,
-        Err(error) if error.code() == ErrorCode::TooLarge => opaque,
+        Ok(read) => read,
         Err(error) => {
-            log::debug!("no before-image of `{path}`: {}", error.message());
-            opaque
+            log::debug!("no before-images: {}", error.message());
+            return images;
+        }
+    };
+    for ((at, _), answer) in wanted.into_iter().zip(read) {
+        match answer {
+            Ok(Some(bytes)) => images[at] = Image::Bytes(bytes),
+            Ok(None) => {}
+            Err(error) if error.code() == ErrorCode::TooLarge => {}
+            Err(error) => log::debug!("no before-image of `{}`: {}", paths[at].0, error.message()),
         }
     }
+    images
 }
 
 /// Record what changed between `before` and `after` (both scans of the
-/// folder) as `command`'s.
+/// folder) as `command`'s. A path the policy denies reading is never
+/// listed: neither its name nor what it held reaches the changes or the
+/// history.
 pub fn record(
     session: &LocalSession,
     recorder: &Recorder,
@@ -90,14 +138,24 @@ pub fn record(
     after: &FolderScan,
     command: &str,
 ) {
-    let changed = folder_scan::diff(before, after);
-    for path in changed.paths() {
-        if recorder.knows(&path) {
-            continue;
-        }
-        let image = before_image(session, &path, before.files.get(&path).copied());
+    let workspace = session.workspace();
+    let changed: Vec<(String, Option<folder_scan::FileStat>)> = folder_scan::diff(before, after)
+        .paths()
+        .into_iter()
+        .filter(|path| !recorder.knows(path))
+        .filter(|path| {
+            WsPath::from_relative(std::path::Path::new(path))
+                .is_ok_and(|ws| workspace.denied_by(&ws, Intent::Read).is_none())
+        })
+        .map(|path| {
+            let stat = before.files.get(&path).copied();
+            (path, stat)
+        })
+        .collect();
+    let images = before_images(session, recorder, &changed);
+    for ((path, _), image) in changed.iter().zip(images) {
         // A placeholder that was there: its size is its stat's too.
-        let image = if image == Image::Absent && before.placeholders.contains(&path) {
+        let image = if image == Image::Absent && before.placeholders.contains(path) {
             Image::Opaque {
                 len: 0,
                 mtime_ns: 0,
@@ -106,7 +164,7 @@ pub fn record(
         } else {
             image
         };
-        recorder.command_changed(&path, image, command);
+        recorder.command_changed(path, image, command);
     }
 }
 
@@ -191,6 +249,50 @@ mod tests {
             label(&["a".to_owned(), "b".to_owned()]),
             "2 background commands"
         );
+    }
+
+    #[test]
+    fn a_path_the_policy_denies_reading_is_never_listed() {
+        use elitea_local_tools::approvals::{DeferringPrompt, MemoryChoices, WorkspaceSettings};
+        use elitea_local_tools::policy::LocalWorkPolicy;
+        use elitea_local_tools::session::SessionConfig;
+
+        let base = tempfile::tempdir().expect("tempdir");
+        let root = base.path().join("work");
+        std::fs::create_dir_all(&root).expect("root");
+        let session = LocalSession::open(SessionConfig {
+            spill_dir: None,
+            root: root.clone(),
+            session_id: "s".to_owned(),
+            policy: LocalWorkPolicy {
+                allowed: true,
+                path_deny: vec![".env".to_owned()],
+                ..LocalWorkPolicy::default()
+            },
+            settings: WorkspaceSettings::default(),
+            choices: Arc::new(MemoryChoices::default()),
+            prompt: Arc::new(DeferringPrompt),
+            data_dir: base.path().join("data"),
+            shell: None,
+            deny_read: Vec::new(),
+            app_id: None,
+            budgets: elitea_local_tools::budget::Budgets::default(),
+            documents: elitea_local_tools::document::Documents::default(),
+        })
+        .expect("session");
+        let stat = folder_scan::FileStat {
+            len: 3,
+            mtime_ns: 1,
+            ino: 0,
+            mode: 0o644,
+        };
+        let mut after = FolderScan::default();
+        after.files.insert(".env".to_owned(), stat);
+        after.files.insert("notes.txt".to_owned(), stat);
+        let recorder = Recorder::default();
+        record(&session, &recorder, &FolderScan::default(), &after, "make");
+        assert!(recorder.knows("notes.txt"));
+        assert!(!recorder.knows(".env"));
     }
 
     #[test]
