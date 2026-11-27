@@ -17,7 +17,7 @@ export function checkFileSchema(front: Readonly<Record<string, unknown>>, expect
   const schema = front['schema'];
   if (schema === undefined || schema === null || schema === expected) return;
   throw new ImportDocumentError(
-    t('features.agentLifecycle.import.unknownSchema', 'This file uses format {{schema}}, which this version of Elitea cannot read.', {
+    t('features.agentLifecycle.import.unknownSchema', 'This file uses format {{schema}}, which this version of {{product}} cannot read.', {
       schema: typeof schema === 'string' ? schema : JSON.stringify(schema),
     }),
   );

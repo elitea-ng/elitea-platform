@@ -1008,7 +1008,9 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 611 -> 613 (issue 3137, ADR-0051 amendment, 2026-11-26): publishMarketplaceTeam and
 // hireMarketplaceTeam, saved teams in the Marketplace. The Teams row and the team hire dialog
 // call them, so MANIFEST_ENTRY_COUNT moves too.
-const GENERATED_OPERATION_COUNT = 613;
+// 613 -> 614 (issue 3137, 2026-11-26): getAgentRunCaps, the platform's run caps for an agent's
+// risk tier. The agent editor's Run caps section calls it, so MANIFEST_ENTRY_COUNT moves too.
+const GENERATED_OPERATION_COUNT = 614;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1358,8 +1360,11 @@ const GENERATED_OPERATION_COUNT = 613;
  *
  * 401 -> 403 (issue 3137): marketplace.publishTeam and marketplace.hireTeam, saved teams in the
  * Marketplace. Both generated.
+ *
+ * 403 -> 404 (issue 3137): applications.getAgentRunCaps, the tier's run caps for the agent
+ * editor's Run caps section. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 403;
+const MANIFEST_ENTRY_COUNT = 404;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

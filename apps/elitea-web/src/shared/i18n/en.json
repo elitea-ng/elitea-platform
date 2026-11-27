@@ -7634,7 +7634,7 @@
   "features.agentLifecycle.import.memorySeeds": "{{count}} memory seeds wait for your review in the Memory tab.",
   "features.agentLifecycle.import.refusedField": "Field: {{field}}",
   "features.agentLifecycle.import.tooManyAvatars": "This zip holds more than {{limit}} avatar files.",
-  "features.agentLifecycle.import.unknownSchema": "This file uses format {{schema}}, which this version of Elitea cannot read.",
+  "features.agentLifecycle.import.unknownSchema": "This file uses format {{schema}}, which this version of {{product}} cannot read.",
   "pages.agents.editApplication.meta.aboveTierCap": "At most {{cap}}, the platform cap for this agent's risk tier.",
   "pages.agents.editApplication.meta.default": "Default",
   "pages.agents.editApplication.meta.heartbeat.actTarget": "Act in",

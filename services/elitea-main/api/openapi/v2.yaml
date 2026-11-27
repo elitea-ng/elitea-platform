@@ -21611,7 +21611,7 @@ components:
           additionalProperties: true
           x-elitea-passthrough: >-
             NOTE(W2): the case's template variables, stored as the case
-            routes store them (internal/api/v2/eliteacore/import_carried.go).
+            routes store them (internal/api/v2/eliteacore/import_carried.go:78).
         expected_output:
           type: string
           nullable: true
