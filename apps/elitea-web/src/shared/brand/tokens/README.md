@@ -65,7 +65,9 @@ ids on the map.
 To change the map:
 
 - Add an id by hand. Its meaning must be the role.
-- Give it the role's colour in both schemes.
+- Check that its default colour is already the role's colour in both schemes.
+  Do not change the id's value to make it match: that is a visible change
+  (ADR-0062 decision 5).
 - Add an upgrade note for each change of the map.
 
 `__tests__/roles.test.ts` holds the ids, the one list per id, the colours and

@@ -41,9 +41,10 @@ gives its colour to `primary.contrastText`.
 14 roles have no generic legacy id. Every id that is not on the map does not
 reach a role: for example `text.default`, `focus.ring`, `text.button.primary`,
 `secondary.main` and component ids such as `background.tab.hover`. A tuned
-one keeps its colour on each screen that reads it. A screen that a later
-release moves onto a shared component reads roles, and the tuned id then
-stops reaching that screen. That release says so in its own upgrade note.
+one keeps its colour on each screen that reads it. A later release can move
+a screen's reads off such an id, onto a role or onto a shared component's
+own id. The tuned id then stops reaching that screen, and that release says
+so in its own upgrade note.
 `focus.ring` loses nothing: shared code reads it for focus rings (ADR-0062
 R-T15), so a tuned ring reaches moved screens too.
 
