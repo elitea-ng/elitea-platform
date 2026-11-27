@@ -33,9 +33,9 @@ submodule. Since brand guide v3 the values come from client-core's
 
 The 27 roles of `tokens.json` (`schemes.dark` / `schemes.light`) are ids
 `role.<name>` in both scheme records, with the `tokens.json` values verbatim
-(ADR-0062 decision 1). New shared code reads a role
-(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`), and
-`focus.ring` for focus rings; the legacy ids below stay for the call sites that read them. Change a role here
+(ADR-0062 decision 1). A shared component reads roles
+(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`) or its own
+ids, and code reads `focus.ring` for focus rings; the legacy ids below stay for the call sites that read them. Change a role here
 only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
 differ.
 
@@ -54,8 +54,8 @@ another hue is tuned too. `brand.onBrand` gives its colour to each label role
 default colours this is `role.onPrimary`, and in light `role.onSignal`. It
 always gives its colour to `primary.contrastText`.
 
-New code reads `role.textMuted` for muted text, not `text.default`. Shared code
-reads `focus.ring` for the focus ring, as every ring reads it today, so a tuned
+New code reads `role.textMuted` for muted text, not `text.default`. Code
+reads `focus.ring` for focus rings, as every ring reads it today, so a tuned
 ring loses nothing; review holds this rule. `text.default`
 and `focus.ring` are not on the map. From PR 4 (#3092), theme-gate check 10
 counts reads of the ids on the map. It does not count reads of `text.default`:
@@ -69,6 +69,8 @@ To change the map:
   Do not change the id's value to make it match: that is a visible change
   (ADR-0062 decision 5).
 - Add an upgrade note for each change of the map.
+- Update the role pairs in
+  `services/elitea-main/internal/application/brandpackage/templates/README.md`.
 
 `__tests__/roles.test.ts` holds the ids, the one list per id, the colours and
 the one id per role. Review holds the meaning and the upgrade note. When you
@@ -92,7 +94,7 @@ does not always say what the value now is. The mapping decisions:
 | --- | --- | --- |
 | Accent / primary action (`primary.*`, `background.button.{primary,neutral,positive,maxi}.*`, switch on, checkbox and radio checked, tag / chip selected) | `primary` / `primaryHover` / `primaryPressed`, label `onPrimary` | One action colour in both schemes. `text.button.primary` is white in both schemes |
 | Soft accent (`background.button.special.*`, `split.*`, selected rows, drawer / conversation selection, drag target) | `selected` (and an alpha of `primary` for hover / pressed) | No per-scheme magenta / cyan washes |
-| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset. It is not on the map: shared code reads `focus.ring` itself (Roles) |
+| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset. It is not on the map: code reads `focus.ring` itself (Roles) |
 | AI presence (`aiAssistant.*`, `capability.*`, magic assistant, agent hub icon, `nodeColors.llm|agent`) | `ai` (icons, fills, alpha washes) and `aiText` (text) | Violet marks AI only |
 | Canvas / surfaces (`background.default`, `card.*`, `secondary`, `modal.simple`, `sideBar`, …) | `bg` → `surface` → `elevated` | Dark: page `bg`, cards `surface`, raised `elevated`. Light: page `bg`, cards `elevated` with a `border`, insets `surface` |
 | Text (`text.secondary` = strong, `text.primary` / `text.default` = muted) | `text` / `textMuted` / `textDisabled` | The old names are inverted (`text.primary` is the MUTED role); kept for the call sites |

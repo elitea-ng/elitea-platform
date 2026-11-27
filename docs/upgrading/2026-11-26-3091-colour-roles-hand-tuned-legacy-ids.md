@@ -45,7 +45,8 @@ one keeps its colour on each screen that reads it. A later release can move
 a screen's reads off such an id, onto a role or onto a shared component's
 own id. The tuned id then stops reaching that screen, and that release says
 so in its own upgrade note.
-`focus.ring` loses nothing: shared code reads it for focus rings (ADR-0062
+
+`focus.ring` loses nothing: code reads it for focus rings (ADR-0062
 R-T15), so a tuned ring reaches moved screens too.
 
 A file layer (`BRAND_PACK_PATH`) can state every legacy id with another
