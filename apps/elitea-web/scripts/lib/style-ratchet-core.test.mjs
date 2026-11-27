@@ -202,10 +202,10 @@ describe('totals and formatting', () => {
   it('prints each grown folder with its grown files and their findings', () => {
     const growth = compareCounts(countFindings([]), counts);
     expect(formatGrowth(growth)).toEqual([
-      'src/app mui-dialog: 0 → 1 (the base branch is the ceiling; remove as many as you add)',
+      'src/app mui-dialog: 0 → 1 (the base branch is the ceiling)',
       '  src/app/App.tsx (0 → 1 in this file)',
       `    src/app/App.tsx:0 ${dialog('').message} ${dialog('').help}`,
-      'src/features/foo spacing-rem: 0 → 1 (the base branch is the ceiling; remove as many as you add)',
+      'src/features/foo spacing-rem: 0 → 1 (the base branch is the ceiling)',
       '  src/features/foo/ui/A.tsx (0 → 1 in this file)',
       "    src/features/foo/ui/A.tsx:4 R-T9 [spacing-rem] p: '1rem' → 2",
     ]);
@@ -308,6 +308,30 @@ describe('unpairedFiles', () => {
       removed: ['src/features/foo/ui/Out.tsx'],
     });
   });
+
+  it('counts a pair out of, or into, a path the ratchet does not count as new or removed', () => {
+    const nameStatus = [
+      'R100\tapps/elitea-web/src/widgets/support-assistant/vendor/Pane.tsx\tapps/elitea-web/src/features/foo/ui/Pane.tsx',
+      'R100\tapps/elitea-web/src/features/foo/ui/Card.tsx\tapps/elitea-web/src/features/foo/ui/Card.stories.tsx',
+    ].join('\n');
+    expect(unpairedFiles(nameStatus, prefix)).toEqual({
+      added: ['src/features/foo/ui/Pane.tsx'],
+      removed: ['src/features/foo/ui/Card.tsx'],
+    });
+    // On the base tree the vendor file stays at its old path, where it is not
+    // counted, so its values count as new at the head.
+    const baseFiles = [
+      'apps/elitea-web/src/widgets/support-assistant/vendor/Pane.tsx',
+      'apps/elitea-web/src/features/foo/ui/Card.tsx',
+    ];
+    expect(planBaseTree(baseFiles, nameStatus, prefix)).toEqual([
+      {
+        from: 'apps/elitea-web/src/widgets/support-assistant/vendor/Pane.tsx',
+        to: 'src/widgets/support-assistant/vendor/Pane.tsx',
+      },
+      { from: 'apps/elitea-web/src/features/foo/ui/Card.tsx', to: 'src/features/foo/ui/Card.stories.tsx' },
+    ]);
+  });
 });
 
 describe('parseUnpairedManifest', () => {
@@ -340,7 +364,7 @@ describe('a grown folder with a file git did not pair', () => {
 
   it('names the new file in the message and gives the two fixes once for the folder', () => {
     expect(formatGrowth(growth, unpaired)).toEqual([
-      'src/features/bar spacing-rem: 1 → 4 (the base branch is the ceiling; remove as many as you add)',
+      'src/features/bar spacing-rem: 1 → 4 (the base branch is the ceiling)',
       `  src/features/bar/ui/Moved.tsx (0 → 2 in this file; ${UNPAIRED_NOTE})`,
       "    src/features/bar/ui/Moved.tsx:3 R-T9 [spacing-rem] p: '1rem' → 2",
       "    src/features/bar/ui/Moved.tsx:4 R-T9 [spacing-rem] p: '1rem' → 2",
@@ -349,7 +373,7 @@ describe('a grown folder with a file git did not pair', () => {
       ...UNPAIRED_FIXES.map((line) => `  ${line}`),
     ]);
     expect(UNPAIRED_FIXES.join(' ')).toMatch(
-      /land the move unchanged in its own PR first .* onto the system in this PR/,
+      /land each move unchanged in its own PR .* onto the system; a change of pixels goes first in its own PR/,
     );
   });
 
@@ -361,7 +385,7 @@ describe('a grown folder with a file git did not pair', () => {
 
   it('has no fixes when no grown file is new', () => {
     expect(
-      formatGrowth(growth, { added: ['src/features/zed/ui/X.tsx'] }).some((l) => l.includes('land the move')),
+      formatGrowth(growth, { added: ['src/features/zed/ui/X.tsx'] }).some((l) => l.includes('land each move')),
     ).toBe(false);
   });
 });

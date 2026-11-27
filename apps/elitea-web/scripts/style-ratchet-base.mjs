@@ -13,9 +13,9 @@
  * On a branch HEAD^1 is only the previous commit. To run check 10 locally as
  * CI does, give the merge base, and an --out outside the work tree:
  *
- *   node scripts/style-ratchet-base.mjs --out "$TMPDIR/ratchet-base" \
+ *   node scripts/style-ratchet-base.mjs --out "${TMPDIR:-/tmp}/ratchet-base" \
  *     --base "$(git merge-base origin/main HEAD)"
- *   npm run theme-gate -- --base "$TMPDIR/ratchet-base"
+ *   npm run theme-gate -- --base "${TMPDIR:-/tmp}/ratchet-base"
  *
  * The script deletes and rewrites <out>/src, so it refuses an --out inside
  * the work tree.

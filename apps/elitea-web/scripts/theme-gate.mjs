@@ -168,7 +168,7 @@ function styleRatchet(oxlint, root, base) {
     return true;
   }
   if (!baseCounts) {
-    console.log(`theme-gate ${name}: REPORT — no --base tree (nightly or dispatch run), counts per folder:`);
+    console.log(`theme-gate ${name}: REPORT — no --base tree (nightly, dispatch or a local run; see style-ratchet-base.mjs), counts per folder:`);
     for (const line of formatCounts(head)) console.log(`  ${line}`);
     return false;
   }
