@@ -27,29 +27,44 @@ in `scheme_tokens`. The map is
 
 The rule: a stated `role.*` id wins when it is tuned. Else the legacy id of
 its row wins when it is tuned. A value is tuned when it differs from the
-value the id gets when the pack does not state it. That value is the
-default, re-hued from `brand.hue`. So a legacy id pinned at its default
-under another hue keeps its colour in the role. A role with no tuned id is
-derived from `brand.hue`, like every other id. `brand.onBrand` gives its
-colour to `role.onPrimary`, as it does to `primary.contrastText`.
+value that the id gets when the pack does not state it: its default, re-hued
+from `brand.hue`. So a legacy id pinned at its default under another hue
+keeps its colour in the role. A role with no tuned id is derived from
+`brand.hue`, like every other id.
+
+`brand.onBrand` gives its colour to `role.onPrimary`, and in the light scheme
+to `role.onSignal`, when the pack does not tune that id. It always gives its
+colour to `primary.contrastText`.
 
 **Who is affected.** No deployment loses a colour in this release. The other
-14 roles have no legacy id. The ids that are not on the map (for example
-`text.default`, `focus.ring`, `text.button.primary` and component ids such as
-`background.tab.hover`) do not reach a role. A tuned one keeps its colour on
-each screen that reads it. A screen that a later release moves onto a shared
-component reads roles, and the tuned id then stops reaching that screen.
+14 roles have no generic legacy id. Every id that is not on the map does not
+reach a role: for example `text.default`, `focus.ring`, `text.button.primary`,
+`secondary.main` and component ids such as `background.tab.hover`. A tuned
+one keeps its colour on each screen that reads it. A screen that a later
+release moves onto a shared component reads roles, and the tuned id then
+stops reaching that screen.
 
-**What to do.** Nothing.
+**Tuning a role.** A package can state a `role.*` id in `scheme_tokens`. Give
+the legacy id of its row the same colour: a later release moves the reads of
+that legacy id to the role, and those screens then take the role's colour.
+`role.hover`, `role.selected` and `role.scrim` take a six-digit hex colour
+only, so a tuned one is opaque.
+
+**What to do.** Nothing on upgrade. Before you downgrade elitea-main, keep a
+branding package downloaded from the earlier release (see below).
 
 **Branding packages.** A package downloaded before this release states the
 408 earlier ids. If every id has the product default's value, import and
-restore pin no scheme tokens, as before. A package that states fewer ids,
-or a tuned id, is carried into `scheme_tokens`, as before.
+restore pin no scheme tokens, as before. A record that states every id at the
+product default is untouched also under another hue, as before: its colours
+then re-hue. A record with an id changed from the product default goes into
+`scheme_tokens` whole, for both schemes, as before. Every value there must be
+six-digit hex, so a full package with one colour changed is refused: state
+only the ids that you change.
 
 **Downgrading elitea-main.** The earlier release has no `role.*` ids and
-ignores a stated one. Its import compares the number of ids. So it refuses a
-package with the default colours downloaded from this release: the 435 ids
-then reach `scheme_tokens`, which takes six-digit hex only. A tuned package
-that states only the tuned ids still imports. After a downgrade, import
-packages downloaded from the earlier release.
+ignores a stated one. Its import compares the number of ids. So it refuses
+import and restore of a package with the default colours downloaded from this
+release: the 435 ids then reach `scheme_tokens`, which takes six-digit hex
+only. A package that states only its changed ids still imports. After a
+downgrade, import or restore packages downloaded from the earlier release.

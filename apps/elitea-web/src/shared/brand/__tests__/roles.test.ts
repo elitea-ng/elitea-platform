@@ -142,7 +142,7 @@ describe('a hand-tuned pack keeps its colours in the roles (decision 1.4)', () =
     }
   });
 
-  it('gives each role the colour of its id when a file layer of the 408-id default sets another hue', () => {
+  it('gives each mapped role the colour of its id when a file layer of the 408-id default sets another hue', () => {
     // A file layer written before the role ids states every legacy id at its
     // default: each is a pin under another hue, and the role follows it.
     for (const scheme of SCHEMES) {
@@ -220,7 +220,7 @@ describe('a role follows the brand hue (decision 1.6)', () => {
   });
 });
 
-describe('brand.onBrand reaches role.onPrimary', () => {
+describe('brand.onBrand reaches the labels of brand-coloured roles', () => {
   /** A light brand hue, where the default white label fails the contrast of tokens.json. */
   const LIGHT_HUE: BrandInput = { hue: '#FFD400', onBrand: '#0B0B18' };
 
@@ -236,6 +236,18 @@ describe('brand.onBrand reaches role.onPrimary', () => {
   it('keeps a tuned role.onPrimary over onBrand', () => {
     for (const scheme of SCHEMES) {
       expect(resolveScheme({ 'role.onPrimary': TUNED }, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe(TUNED);
+    }
+  });
+
+  it('gives role.onSignal the onBrand value only where Signal has the anchor colour (light)', () => {
+    expect(resolveScheme({}, LIGHT_HUE, 'light')['role.onSignal']).toBe('#0B0B18');
+    expect(resolveScheme({ 'role.onSignal': TUNED }, LIGHT_HUE, 'light')['role.onSignal']).toBe(TUNED);
+    const darkHueOnly = resolveScheme({}, { hue: LIGHT_HUE.hue }, 'dark')['role.onSignal'];
+    expect(resolveScheme({}, LIGHT_HUE, 'dark')['role.onSignal']).toBe(darkHueOnly);
+    for (const scheme of SCHEMES) {
+      expect(resolveScheme({}, LIGHT_HUE, scheme)['role.onDangerFill'], scheme).toBe(
+        resolveScheme({}, { hue: LIGHT_HUE.hue }, scheme)['role.onDangerFill'],
+      );
     }
   });
 

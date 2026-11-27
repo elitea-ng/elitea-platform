@@ -255,23 +255,56 @@ func TestValuesFromPack_HandTunedTokensAreKept(t *testing.T) {
 	}
 }
 
+// earlierDefaultIDs is the number of ids per scheme that the product default
+// stated before the ids of addedDefaultIDs. It does not change.
+const earlierDefaultIDs = 408
+
 // preRolesDefault is the product default as it was before ADR-0062 PR 3: the
-// same pack without its 27 role.* ids, 408 ids per scheme, which is what every
-// package exported with the default colours before that release states.
+// same pack without the ids of addedDefaultIDs, 408 ids per scheme, which is
+// what every package downloaded with the default colours before that release
+// states.
 func preRolesDefault(t *testing.T) *v2branding.Pack {
 	t.Helper()
 	pack := v2branding.ProductDefault()
 	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
 		for id := range record {
-			if strings.HasPrefix(id, "role.") {
+			if addedDefaultID(id) {
 				delete(record, id)
 			}
 		}
 	}
-	if len(pack.Schemes.Light) != 408 || len(pack.Schemes.Dark) != 408 {
-		t.Fatalf("pre-roles default states %d/%d ids, want 408/408", len(pack.Schemes.Light), len(pack.Schemes.Dark))
+	if len(pack.Schemes.Light) != earlierDefaultIDs || len(pack.Schemes.Dark) != earlierDefaultIDs {
+		t.Fatalf("the product default states %d/%d ids that are not on addedDefaultIDs, want %d/%d: "+
+			"add each new default id to addedDefaultIDs (package.go), do not change earlierDefaultIDs",
+			len(pack.Schemes.Light), len(pack.Schemes.Dark), earlierDefaultIDs, earlierDefaultIDs)
 	}
 	return pack
+}
+
+func TestAddedDefaultIDs_CoverTheProductDefault(t *testing.T) {
+	// A package downloaded from any earlier release lacks only ids that were
+	// added later. When the product default gains an id that is not on
+	// addedDefaultIDs, every package of the release before it would import as
+	// hand-tuned and be refused (see untouchedRecord).
+	preRolesDefault(t)
+	// A package downloaded from this release, imported after a later id is
+	// added, lacks only that id.
+	current := v2branding.ProductDefault()
+	next := v2branding.ProductDefault()
+	for _, record := range []map[string]string{next.Schemes.Light, next.Schemes.Dark} {
+		record["role.later"] = "#123456"
+	}
+	if !untouchedRecord(current.Schemes.Light, next.Schemes.Light) || !untouchedRecord(current.Schemes.Dark, next.Schemes.Dark) {
+		t.Fatal("a package of the current default is not untouched against a default with one more role.* id")
+	}
+	// An id off the list that the package lacks is a tuning shape, not an
+	// untouched export.
+	for _, record := range []map[string]string{next.Schemes.Light, next.Schemes.Dark} {
+		record["text.later"] = "#123456"
+	}
+	if untouchedRecord(current.Schemes.Light, next.Schemes.Light) {
+		t.Fatal("a missing id off addedDefaultIDs was called untouched")
+	}
 }
 
 func TestExportImport_PackageFromBeforeTheRoleIds(t *testing.T) {

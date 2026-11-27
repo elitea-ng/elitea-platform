@@ -45,9 +45,9 @@ export const ROLE_GROUP = 'role';
  * the stage 4 script rewrites only ids on this file (ADR-0062 Rollout).
  *
  * An id is listed only by hand and only when its meaning is the role and its
- * default colour is the role's in both schemes. A role has one id at most: a
- * role cannot hold two tuned colours, so a second id would lose one of them.
- * A role with no generic id has no entry. `__tests__/roles.test.ts` holds the
- * rule.
+ * default colour is the role's in both schemes. A role has exactly one id, or
+ * no entry: a role cannot hold two tuned colours, so a second id would lose
+ * one of them. `__tests__/roles.test.ts` holds the ids, the colours and the
+ * one id per role; review holds the meaning.
  */
 export const LEGACY_ROLES: Readonly<Record<string, readonly string[]>> = legacyRolesJson;

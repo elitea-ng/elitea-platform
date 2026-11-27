@@ -233,7 +233,9 @@ func TestBrandingPackageImport_PackageFromBeforeTheRoleIds(t *testing.T) {
 		}
 	}
 	if len(pack.Schemes.Light) != 408 || len(pack.Schemes.Dark) != 408 {
-		t.Fatalf("pre-roles default states %d/%d ids, want 408/408", len(pack.Schemes.Light), len(pack.Schemes.Dark))
+		t.Fatalf("pre-roles default states %d/%d ids, want 408/408: the ids before ADR-0062 PR 3; "+
+			"a new default id goes into addedDefaultIDs (brandpackage/package.go), not into this number",
+			len(pack.Schemes.Light), len(pack.Schemes.Dark))
 	}
 	fake := &fakePackages{exported: []byte("PK\x03\x04zip-bytes"), pack: pack}
 	router := packageRouter(admin.NewHandler(nil, admin.WithBrandingPackages(fake)))

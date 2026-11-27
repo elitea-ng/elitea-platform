@@ -65,8 +65,8 @@ function deriveContextFor(scheme: SchemeName, brand: BrandInput): DeriveContext 
  * stated value, or its default re-hued (decision 1.6). An id stated with the
  * value it gets anyway is not a tuning: the file layer can state every id of
  * the product default, and none of them then overrides a role. `onBrand`
- * gives `role.onPrimary` its value when the pack does not tune that role,
- * as it gives `primary.contrastText` its value in `toMuiPalette`.
+ * gives its value to each label role of `onBrandRoles` that the pack does not
+ * tune. `toMuiPalette` always gives it to `primary.contrastText`.
  */
 export function resolveScheme(
   record: SchemeRecord,
@@ -90,12 +90,35 @@ export function resolveScheme(
     const source = [roleId, ...legacyIds].find(tunes);
     if (source !== undefined) resolved[roleId] = record[source] as string;
   }
-  const onPrimary = `${ROLE_GROUP}.onPrimary`;
-  if (brand.onBrand !== undefined && !tunes(onPrimary)) resolved[onPrimary] = brand.onBrand;
+  if (brand.onBrand !== undefined) {
+    for (const onRole of onBrandRoles(scheme)) {
+      if (!tunes(onRole)) resolved[onRole] = brand.onBrand;
+    }
+  }
   for (const [id, value] of Object.entries(record)) {
     resolved[id] ??= value;
   }
   return resolved;
+}
+
+/**
+ * The label roles that `brand.onBrand` reaches in `scheme`: each
+ * `role.on<Name>` whose `role.<name>` has the brand anchor's default colour in
+ * that scheme. Such a fill takes the brand hue, so its label must follow
+ * `onBrand`, as `primary.contrastText` does. In the default pack this is
+ * `role.onPrimary` in both schemes and `role.onSignal` in light, where Signal
+ * is the anchor colour.
+ */
+function onBrandRoles(scheme: SchemeName): string[] {
+  const reference = DEFAULT_BRAND_PACK.schemes[scheme];
+  const anchor = reference[BRAND_ANCHOR_TOKEN] as string;
+  const prefix = `${ROLE_GROUP}.on`;
+  return catalogueFor(scheme).filter((id) => {
+    const name = id.slice(prefix.length);
+    if (!id.startsWith(prefix) || name === '' || name[0] !== name[0]?.toUpperCase()) return false;
+    const fill = reference[`${ROLE_GROUP}.${name[0]?.toLowerCase()}${name.slice(1)}`];
+    return fill !== undefined && sameColour(fill, anchor);
+  });
 }
 
 /**
