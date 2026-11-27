@@ -51,7 +51,8 @@ function checkDeclaredSizes(zip: JSZip, names: readonly string[], zipName: strin
   let total = 0;
   for (const entry of names) {
     const declared = declaredSize(zip, entry);
-    if (typeof declared !== 'number') continue;
+    // Fail closed: without the declared size the entry cannot be refused unread (JSZip keeps it in `_data`).
+    if (typeof declared !== 'number') throw new ImportDocumentError(t('features.agentLifecycle.import.badZip', 'This zip file could not be read.'));
     if (declared > limits.each) throw tooLarge(entry, limits.each);
     total += declared;
     if (total > limits.total) throw tooLarge(zipName, limits.total);

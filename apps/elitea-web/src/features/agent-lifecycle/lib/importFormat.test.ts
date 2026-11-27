@@ -190,6 +190,11 @@ describe('import follow-ups', () => {
     expect(followUps).toEqual({ toolkits: [{ name: 'Jira', type: 'jira' }], memorySeeds: 2, heartbeatAgents: ['Incident Triage'] });
   });
 
+  it('names no toolkit when the server listed them and marked none', () => {
+    const followUps = importFollowUps({ applications: [{ name: 'A' }], toolkits: [{ name: 'Calc', type: 'calc' }] }, { toolkits: [{ name: 'Calc', type: 'calc' }] });
+    expect(followUps.toolkits).toEqual([]);
+  });
+
   it('names every toolkit of the file when the server answered no list', () => {
     const followUps = importFollowUps({ applications: [{ name: 'A' }], toolkits: [{ name: 'GitHub', type: 'github' }] });
     expect(followUps.toolkits).toEqual([{ name: 'GitHub', type: 'github' }]);

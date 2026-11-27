@@ -77,6 +77,7 @@ func importEvaluationDataset(ctx context.Context, q relationQuerier, s string, a
 		caseInput.Normalize()
 		variables, err := json.Marshal(caseInput.Variables)
 		if err != nil {
+			dropPartialDataset(ctx, q, s, datasetID)
 			return err
 		}
 		excluded := caseInput.Excluded != nil && *caseInput.Excluded
@@ -86,10 +87,20 @@ func importEvaluationDataset(ctx context.Context, q relationQuerier, s string, a
 			VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)`, s),
 			datasetID, caseInput.Input, string(variables), caseInput.ExpectedOutput,
 			evaluation.CaseSourceImport, order, excluded); err != nil {
+			dropPartialDataset(ctx, q, s, datasetID)
 			return err
 		}
 	}
 	return nil
+}
+
+// dropPartialDataset deletes a dataset whose case could not be written, so the
+// import route (which writes through the pool) never leaves a dataset with
+// fewer cases than the file; its cases go with it (ON DELETE CASCADE). In the
+// team import's transaction the failed insert already aborted the transaction,
+// which rolls back everything, so the delete's own error is not a fault.
+func dropPartialDataset(ctx context.Context, q relationQuerier, s string, datasetID int) {
+	_, _ = q.Exec(ctx, fmt.Sprintf(`DELETE FROM %s.eval_datasets WHERE id = $1`, s), datasetID)
 }
 
 // unboundToolkitSettings is a toolkit's settings with everything that names a

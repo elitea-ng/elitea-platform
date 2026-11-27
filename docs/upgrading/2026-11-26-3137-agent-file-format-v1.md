@@ -13,7 +13,7 @@ files (2 MiB, 512 px, 4 s, type read from the bytes), variables, tags, evaluatio
 problem answers **422** with `code: import_invalid` and the `field` it found, for example
 `applications[0].versions[0].meta.run_caps.max_tool_calls`. Before, some of these values were stored as they were,
 and an agent with such a value failed at its first chat turn; others refused only that agent and answered 207.
-Import still never takes credentials: toolkits arrive without them, to be connected after the import.
+Import still never takes credentials: toolkits arrive without them, to be connected after the import. The import route now refuses a body above 64 MiB with 400, and an agent with more than 50 evaluation datasets with 422.
 
 A new read-only route, `GET /elitea_core/run_caps/prompt_lib/{project_id}/{application_id}`, gives the agent editor
 the platform's run caps for the agent's risk tier. It needs the agent read permission.

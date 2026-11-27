@@ -208,11 +208,21 @@ func validateImportedLLMSettings(path string, raw any) *fieldError {
 	if !ok {
 		return refuseField(path, ruleLLMSettings, "must be an object")
 	}
-	for _, key := range []string{"model_name", "model_project_id"} {
-		if value, present := llm[key]; present && value != nil {
-			if _, isString := value.(string); !isString && key == "model_name" {
-				return refuseField(path+"."+key, ruleLLMSettings, "must be a string")
+	if value, present := llm["model_name"]; present && value != nil {
+		if _, isString := value.(string); !isString {
+			return refuseField(path+".model_name", ruleLLMSettings, "must be a string")
+		}
+	}
+	// model_project_id is a string or an integer (LLMSettings in v2.yaml).
+	if value, present := llm["model_project_id"]; present && value != nil {
+		switch typed := value.(type) {
+		case string:
+		case float64:
+			if typed != float64(int64(typed)) {
+				return refuseField(path+".model_project_id", ruleLLMSettings, "must be a string or an integer")
 			}
+		default:
+			return refuseField(path+".model_project_id", ruleLLMSettings, "must be a string or an integer")
 		}
 	}
 	for _, key := range []string{"temperature", "top_p", "max_tokens"} {
@@ -441,6 +451,10 @@ func validateImportedArray(path string, raw any) *fieldError {
 	return nil
 }
 
+// maxImportedDatasets bounds the evaluation datasets one agent entry carries,
+// as MaxCasesPerDataset bounds the cases of each.
+const maxImportedDatasets = 50
+
 // validateImportedEvaluation checks `evaluation.datasets` against the rules
 // of the dataset and case routes (evaluation.DatasetWriteInput and
 // CaseWriteInput, MaxCasesPerDataset).
@@ -448,6 +462,9 @@ func validateImportedEvaluation(path string, raw any) *fieldError {
 	datasets, failure := importedEvaluationDatasets(path, raw)
 	if failure != nil {
 		return failure
+	}
+	if len(datasets) > maxImportedDatasets {
+		return refuseField(path+".datasets", ruleEvaluation, fmt.Sprintf("an agent file carries at most %d evaluation datasets", maxImportedDatasets))
 	}
 	for position, dataset := range datasets {
 		field := fmt.Sprintf("%s.datasets[%d]", path, position)

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   areMetaBlocksEqual,
+  durationMinutes,
   metaBlockProblems,
   metaBlocksWriteField,
   numberInput,
@@ -92,6 +93,22 @@ describe('meta block state', () => {
     const block = withMetaValue(null, ['recall', 'max_entries'], 5);
     expect(block).toEqual({ recall: { max_entries: 5 } });
     expect(withMetaValue(block, ['recall', 'max_entries'], undefined)).toBeNull();
+  });
+
+  it('reads every Go duration the server accepts, in whole minutes', () => {
+    expect(durationMinutes('1h30m')).toBe(90);
+    expect(durationMinutes('1800s')).toBe(30);
+    expect(durationMinutes('1.5h')).toBe(90);
+    expect(durationMinutes('90s')).toBeUndefined();
+    expect(durationMinutes('1x')).toBeUndefined();
+    expect(problemsOf({ proactivity: { mode: 'heartbeat', interval: '3600s' } })).toEqual([]);
+    expect(problemsOf({ proactivity: { mode: 'heartbeat', interval: '10m' } })).toEqual(['proactivity.interval']);
+  });
+
+  it('accepts a spend with up to four decimals despite floating-point error', () => {
+    expect(problemsOf({ run_caps: { max_spend: 1.11 } })).toEqual([]);
+    expect(problemsOf({ run_caps: { max_spend: 0.07 } })).toEqual([]);
+    expect(problemsOf({ run_caps: { max_spend: 0.00001 } })).toEqual(['run_caps.max_spend']);
   });
 
   it('keeps unreadable number text so validation can name it', () => {

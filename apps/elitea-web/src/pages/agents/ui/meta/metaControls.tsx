@@ -5,7 +5,7 @@
  * carries its label, its helper text and, when Main would refuse the value,
  * the reason in place of the helper.
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
@@ -58,14 +58,23 @@ function textOf(value: unknown): string {
   return typeof value === 'number' || typeof value === 'string' ? String(value) : '';
 }
 
-/** A number; empty removes the key (the default applies). Raw text that is not a number is kept, and refused. */
+/**
+ * A number; empty removes the key (the default applies). Raw text that is not a number is kept, and refused.
+ * While the field is focused it shows what was typed, so "0." stays "0." on the way to "0.5" (the stored value
+ * is the parsed number, which has no trailing dot).
+ */
 export function MetaNumberField({ handle, path, label, helper, disabled, testId, placeholder }: FieldProps & { readonly placeholder?: string | undefined }): ReactNode {
   const problem = handle.problem(path);
+  const [typed, setTyped] = useState<string | null>(null);
   return (
     <TextField
       label={label}
-      value={textOf(handle.get(path))}
-      onChange={(event) => handle.set(path, numberInput(event.target.value))}
+      value={typed ?? textOf(handle.get(path))}
+      onChange={(event) => {
+        setTyped(event.target.value);
+        handle.set(path, numberInput(event.target.value));
+      }}
+      onBlur={() => setTyped(null)}
       error={problem !== undefined}
       helperText={problem ?? helper}
       disabled={disabled}

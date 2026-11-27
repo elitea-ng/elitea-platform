@@ -69,4 +69,14 @@ describe('RunCapsSection', () => {
     await user.clear(field);
     expect(screen.getByTestId('blocks')).toHaveTextContent('null');
   });
+
+  it('keeps the decimal point while a spend is typed', async () => {
+    const user = userEvent.setup();
+    renderWithQueryAndTheme(<Harness />);
+    await screen.findByText(/risk tier, medium/);
+    const field = screen.getByTestId('agent-meta-run-caps-max-spend');
+    await user.type(field, '0.5');
+    expect(field).toHaveValue('0.5');
+    expect(screen.getByTestId('blocks')).toHaveTextContent('{"max_spend":0.5}');
+  });
 });

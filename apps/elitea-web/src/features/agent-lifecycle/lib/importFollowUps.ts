@@ -33,14 +33,14 @@ function records(value: unknown): Rec[] {
 
 /**
  * The server marks each toolkit whose credentials or configuration references
- * it dropped (`needs_connection: true`, ImportedToolkit); when it marks none,
- * or answered no list, every imported toolkit is named, because the import
- * never carries credentials.
+ * it dropped (`needs_connection: true`, ImportedToolkit), so a toolkit list in
+ * the answer is trusted: only the marked toolkits are named. Only when the
+ * server answered no list is every toolkit of the file named, because the
+ * import never carries credentials.
  */
 function toolkitsOf(document: EntityExportDocument, result: unknown): ImportFollowUps['toolkits'] {
-  const answered = records((result as Rec | null | undefined)?.['toolkits']);
-  let source = answered.length > 0 ? answered : records(document.toolkits);
-  if (answered.some((toolkit) => 'needs_connection' in toolkit)) source = answered.filter((toolkit) => toolkit['needs_connection'] === true);
+  const listed = (result as Rec | null | undefined)?.['toolkits'];
+  const source = Array.isArray(listed) ? records(listed).filter((toolkit) => toolkit['needs_connection'] === true) : records(document.toolkits);
   return source.map((toolkit) => ({ name: text(toolkit['name']), type: text(toolkit['type']) }));
 }
 

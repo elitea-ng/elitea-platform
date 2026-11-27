@@ -94,6 +94,12 @@ interface Bound {
   readonly decimals?: number;
 }
 
+/** At most `decimals` decimals, with the server's tolerance: 1.11 * 1e4 is 11100.000000000002 in floating point. */
+function hasAtMostDecimals(value: number, decimals: number): boolean {
+  const scaled = value * 10 ** decimals;
+  return Math.abs(scaled - Math.round(scaled)) < 1e-6;
+}
+
 function boundProblem(value: unknown, bound: Bound): string | undefined {
   if (value === undefined || value === null) return undefined;
   const ok =
@@ -101,7 +107,7 @@ function boundProblem(value: unknown, bound: Bound): string | undefined {
     value >= bound.min &&
     value <= bound.max &&
     (!bound.integer || Number.isInteger(value)) &&
-    (bound.decimals === undefined || Math.round(value * 10 ** bound.decimals) === value * 10 ** bound.decimals);
+    (bound.decimals === undefined || hasAtMostDecimals(value, bound.decimals));
   if (ok) return undefined;
   return bound.integer
     ? t('pages.agents.editApplication.meta.wholeNumberBetween', 'A whole number from {{min}} to {{max}}.', { min: bound.min, max: bound.max })
@@ -120,13 +126,27 @@ function memoryProblems(block: MetaBlock | null, problems: Map<string, string>):
   check(problems, 'memory.recall.max_tokens', recall['max_tokens'], { min: 100, max: 8000, integer: true });
 }
 
-const DURATION = /^(?:(\d+)h)?(?:(\d+)m)?$/;
+const DURATION_PART = /(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/gy;
+const UNIT_MS: Readonly<Record<string, number>> = { ns: 1e-6, us: 1e-3, 'µs': 1e-3, 'μs': 1e-3, ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
 
-/** A Go duration of whole minutes ("1h", "90m", "1h30m"), in minutes; `undefined` when it is not one. */
-function durationMinutes(text: string): number | undefined {
-  const match = DURATION.exec(text.trim());
-  if (match === null || text.trim() === '') return undefined;
-  return Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0);
+/**
+ * A Go duration (the server reads it with time.ParseDuration: "1h", "90m",
+ * "1h30m", "1800s", "1.5h") in minutes; `undefined` when it is not one or is
+ * not a whole number of minutes.
+ */
+export function durationMinutes(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (trimmed === '' || trimmed === '0') return trimmed === '0' ? 0 : undefined;
+  DURATION_PART.lastIndex = 0;
+  let ms = 0;
+  let consumed = 0;
+  for (let match = DURATION_PART.exec(trimmed); match !== null; match = DURATION_PART.exec(trimmed)) {
+    ms += Number(match[1]) * (UNIT_MS[match[2] ?? ''] ?? Number.NaN);
+    consumed = DURATION_PART.lastIndex;
+  }
+  if (consumed !== trimmed.length || !Number.isFinite(ms)) return undefined;
+  const minutes = ms / 60_000;
+  return Math.abs(minutes - Math.round(minutes)) < 1e-9 ? Math.round(minutes) : undefined;
 }
 
 function isTimeZone(zone: string): boolean {

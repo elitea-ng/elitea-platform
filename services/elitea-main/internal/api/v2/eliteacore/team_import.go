@@ -48,6 +48,11 @@ const (
 // reader stops a zip at 10 MiB of markdown; the JSON of that is well inside.
 const maxTeamImportBody = 32 << 20
 
+// maxImportBody bounds the body of the agent import route (import_wizard).
+// An export with embedded avatar files is the largest honest body; the web
+// client uploads avatar files first, so its bodies are far smaller.
+const maxImportBody = 64 << 20
+
 // importedAgentRef is what an import wrote for one agent entry: the team
 // import pins the first version as the member's version.
 type importedAgentRef struct {

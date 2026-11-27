@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"io"
 	"log/slog"
 	"mime"
@@ -34,6 +33,7 @@ import (
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
@@ -3148,10 +3148,14 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	//     branch, failed to decode as a map, and took the same silent exit.
 	//
 	// bytes.TrimSpace removes the third. The other two are reported.
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxImportBody+1))
 	if err != nil {
 		slog.ErrorContext(ctx, "import: unable to read the request body", "schema", s, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unable to read the request body"})
+		return
+	}
+	if len(bodyBytes) > maxImportBody {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("the import file is larger than %d MiB", maxImportBody>>20)})
 		return
 	}
 	entities, _, parseRefusal := importEntitiesFrom(bodyBytes)
