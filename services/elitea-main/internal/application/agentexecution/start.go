@@ -29,6 +29,12 @@ var (
 	ErrInvalidCurrentAgentStart                = errors.New("invalid current agent start")
 	ErrUnsupportedCurrentAgentStart            = errors.New("current agent start is not supported by the admitted parity slice")
 	ErrCurrentAgentRegenerationStillFinalizing = errors.New("current agent response is still being finalized")
+	// ErrConversationTurnInFlight refuses a regeneration while ANOTHER turn of
+	// the conversation is still being written, for example the automatic
+	// continuation of Run to completion (ADR-0045). It is a wait, not a
+	// refusal: the route answers the retryable 409 `agent_regeneration_pending`
+	// (#3137), not a 422.
+	ErrConversationTurnInFlight = errors.New("another turn of the conversation is still being written")
 	// ErrLocalWorkThread refuses a server-side send, regenerate or continue in
 	// a conversation the desktop's Local work owns (source `local_work`): its
 	// turns run against a folder on the person's computer, which a cloud run
