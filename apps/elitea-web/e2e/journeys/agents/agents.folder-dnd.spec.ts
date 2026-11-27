@@ -71,10 +71,12 @@ async function dragCardToFolder(page: Page, agentName: string, folderName: strin
   // Both ends must be on screen and laid out before the pointer is measured: a list still re-rendering from the previous drop moves them.
   await expect(handle).toBeVisible();
   await expect(target).toBeVisible();
+  // The handle first: centring the row last means no later scroll can move it back into a band.
+  await handle.scrollIntoViewIfNeeded();
   await target.evaluate((element) => {
     element.scrollIntoView({ block: 'center' });
   });
-  await handle.scrollIntoViewIfNeeded();
+  await expect(handle).toBeInViewport();
   const from = await centre(handle);
   const start = await centre(target);
   // Armed before the drag, resolved only by the PUT the drop makes.
@@ -84,17 +86,18 @@ async function dragCardToFolder(page: Page, agentName: string, folderName: strin
   await page.mouse.move(from.x + 12, from.y + 12, { steps: 4 });
   await expect(page.getByTestId('entity-folder-drag-overlay')).toBeVisible();
   // Up or down the list first, then across at the row's height: the pointer never crosses the panel's edge bands.
+  // The card list may auto-scroll on the way; that moves only where the card is drawn, the overlay follows the pointer.
   await page.mouse.move(from.x, start.y, { steps: 6 });
   await page.mouse.move(start.x, start.y, { steps: 14 });
+  // The row is marked and dnd-kit has announced the drag over it, read together so the release follows straight on.
+  const announced = page.locator('[aria-live]').filter({ hasText: `${agentName} is over ${folderName}` });
   await expect
     .poll(async () => {
       const at = await centre(target);
       await page.mouse.move(at.x, at.y, { steps: 2 });
-      return target.getAttribute('data-drop-over');
+      return (await target.getAttribute('data-drop-over')) === 'true' && (await announced.count()) > 0;
     })
-    .toBe('true');
-  // The drop target has registered the drag when dnd-kit announces it; releasing earlier drops on nothing.
-  await expect(page.locator('[aria-live]').filter({ hasText: `${agentName} is over ${folderName}` }).first()).toBeAttached();
+    .toBe(true);
   await page.mouse.up();
   expect((await moved).status()).toBe(204);
   await expect(page.getByTestId('entity-folder-dnd-status')).toContainText(`Moved ${agentName} to ${folderName}`);
@@ -170,6 +173,15 @@ async function arrowToward(page: Page, state: DragState): Promise<'ArrowUp' | 'A
  * does not move the drag, or a walk longer than the panel, fails naming where the drag is.
  */
 async function keyboardDragOnto(page: Page, live: Locator, folderName: string): Promise<void> {
+  // dnd-kit's keyboard sensor listens for the arrow keys only from a zero-delay timer it sets at pick-up, and the
+  // announcement is in the page before that timer runs: an arrow pressed in between is never seen (issue 3154).
+  // Timers of the same delay run in the order they were set, so once this one has run, the sensor is listening.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      }),
+  );
   // Right moves the drag onto the nearest folder row in the side panel.
   await page.keyboard.press('ArrowRight');
   await expect(live.first()).toContainText(' is over ');
@@ -213,15 +225,6 @@ test('T6: four agents into a new folder, three by pointer and one by keyboard wi
   await page.keyboard.press('Space');
   const live = page.locator('[aria-live]').filter({ hasText: /Picked up|is over|dropped/ });
   await expect(live.first()).toContainText('Picked up');
-  // dnd-kit's keyboard sensor listens for the arrow keys only from a zero-delay timer it sets at pick-up, and the
-  // announcement is in the page before that timer runs: an arrow pressed in between is never seen (issue 3154).
-  // Timers of the same delay run in the order they were set, so once this one has run, the sensor is listening.
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      }),
-  );
   await keyboardDragOnto(page, live, folderName);
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');
   await page.keyboard.press('Space');
