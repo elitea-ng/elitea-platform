@@ -55,24 +55,49 @@ async function centre(locator: Locator): Promise<{ x: number; y: number }> {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
-/** A pointer drag of a card's handle onto a folder row, in steps so dnd-kit's activation distance is crossed. */
+/**
+ * A pointer drag of a card's handle onto a folder row, in steps so dnd-kit's activation distance is crossed.
+ *
+ * While a drag is over a zone, dnd-kit auto-scrolls that zone's scroll container whenever the pointer is in the
+ * band along its edge (a fifth of its height). A folder row low in the side panel therefore scrolls out from under
+ * a pointer that holds still, and the release lands on nothing ("cancelled", issue 3154). Centred in the panel, the
+ * row is outside both bands, or the panel is already at the end it would scroll toward. The pointer then reaches
+ * the row at the row's own height, and is aimed again at where the row is now until dnd-kit marks it as the one the
+ * drag is over: another journey adding a folder while this one runs pushes the rows down.
+ */
 async function dragCardToFolder(page: Page, agentName: string, folderName: string): Promise<void> {
   const handle = page.getByTestId('entity-card').filter({ hasText: agentName }).getByTestId('entity-drag-handle');
   const target = page.getByTestId('entity-folder-drop').filter({ hasText: folderName });
   // Both ends must be on screen and laid out before the pointer is measured: a list still re-rendering from the previous drop moves them.
   await expect(handle).toBeVisible();
   await expect(target).toBeVisible();
+  // The handle first: centring the row last means no later scroll can move it back into a band.
   await handle.scrollIntoViewIfNeeded();
+  await target.evaluate((element) => {
+    element.scrollIntoView({ block: 'center' });
+  });
+  await expect(handle).toBeInViewport();
   const from = await centre(handle);
-  const to = await centre(target);
+  const start = await centre(target);
   // Armed before the drag, resolved only by the PUT the drop makes.
   const moved = page.waitForResponse((r) => r.url().includes('/items/') && r.request().method() === 'PUT');
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(from.x + 12, from.y + 12, { steps: 4 });
-  await page.mouse.move(to.x, to.y, { steps: 14 });
-  // The drop target has registered the drag when dnd-kit announces it; releasing earlier drops on nothing.
-  await expect(page.locator('[aria-live]').filter({ hasText: `is over ${folderName}` }).first()).toBeAttached();
+  await expect(page.getByTestId('entity-folder-drag-overlay')).toBeVisible();
+  // Up or down the list first, then across at the row's height: the pointer never crosses the panel's edge bands.
+  // The card list may auto-scroll on the way; that moves only where the card is drawn, the overlay follows the pointer.
+  await page.mouse.move(from.x, start.y, { steps: 6 });
+  await page.mouse.move(start.x, start.y, { steps: 14 });
+  // The row is marked and dnd-kit has announced the drag over it, read together so the release follows straight on.
+  const announced = page.locator('[aria-live]').filter({ hasText: `${agentName} is over ${folderName}` });
+  await expect
+    .poll(async () => {
+      const at = await centre(target);
+      await page.mouse.move(at.x, at.y, { steps: 2 });
+      return (await target.getAttribute('data-drop-over')) === 'true' && (await announced.count()) > 0;
+    })
+    .toBe(true);
   await page.mouse.up();
   expect((await moved).status()).toBe(204);
   await expect(page.getByTestId('entity-folder-dnd-status')).toContainText(`Moved ${agentName} to ${folderName}`);
@@ -148,6 +173,15 @@ async function arrowToward(page: Page, state: DragState): Promise<'ArrowUp' | 'A
  * does not move the drag, or a walk longer than the panel, fails naming where the drag is.
  */
 async function keyboardDragOnto(page: Page, live: Locator, folderName: string): Promise<void> {
+  // dnd-kit's keyboard sensor listens for the arrow keys only from a zero-delay timer it sets at pick-up, and the
+  // announcement is in the page before that timer runs: an arrow pressed in between is never seen (issue 3154).
+  // Timers of the same delay run in the order they were set, so once this one has run, the sensor is listening.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      }),
+  );
   // Right moves the drag onto the nearest folder row in the side panel.
   await page.keyboard.press('ArrowRight');
   await expect(live.first()).toContainText(' is over ');
