@@ -65,9 +65,9 @@ The `avatar` key has one of two forms:
 
 ```yaml
 avatar:
-  still: avatars/dev-coordinator/still.webp
-  idle: avatars/dev-coordinator/idle.webp
-  thinking: avatars/dev-coordinator/thinking.webp
+  still: avatars/coordinator/still.webp
+  idle: avatars/coordinator/idle.webp
+  thinking: avatars/coordinator/thinking.webp
 ```
 
 The states are `still` (required), `idle`, `thinking`, `speaking`, `working`, `waiting`, `success`, `error` and `waking`. A path is relative to the zip root. A Markdown file cannot hold an image, so an agent with uploaded avatar files exports as `<name>.agent.zip`: the agent file and its `avatars/` folder. Import reads the zip. A single `.agent.md` file with file paths imports without the avatar, and the import summary says so.

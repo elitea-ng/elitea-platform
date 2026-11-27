@@ -59,12 +59,12 @@ test('every gallery entry names a built file and carries a brief', () => {
 test('a team zip is the importable layout: team.yaml, its members and their avatars', () => {
   const team = built.index.teams.find((entry) => entry.slug === 'elitea-dev-team');
   assert.equal(team.members.length, 8);
-  assert.equal(team.lead, 'dev-coordinator');
+  assert.equal(team.lead, 'coordinator');
   const entries = unzip(built.files.get(team.file));
   const manifest = yaml.parse(entries.get('team.yaml').toString('utf8'));
   assert.equal(manifest.schema, 'elitea.team/v1');
   assert.equal(manifest.floor_policy, 'lead');
-  assert.equal(manifest.lead, 'members/dev-coordinator.agent.md');
+  assert.equal(manifest.lead, 'members/coordinator.agent.md');
   for (const member of manifest.members) assert.ok(entries.has(member), member);
   for (const member of team.members) {
     for (const slot of AVATAR_SLOTS) {

@@ -8,8 +8,8 @@
  *     description: ...            # optional
  *     floor_policy: lead          # optional: addressed | lead
  *     members:                    # 1-16, roster order, paths beside team.yaml
- *       - agents/dev-coordinator.agent.md
- *     lead: agents/dev-coordinator.agent.md   # optional, one of the members
+ *       - agents/coordinator.agent.md
+ *     lead: agents/coordinator.agent.md   # optional, one of the members
  */
 import { load as loadYaml } from 'js-yaml';
 import type JSZip from 'jszip';

@@ -6,15 +6,15 @@ description: >-
   hands work to the others.
 floor_policy: lead
 members:
-  - members/dev-coordinator.agent.md
-  - members/dev-implementer.agent.md
-  - members/dev-issue-groomer.agent.md
-  - members/dev-pr-reviewer.agent.md
-  - members/dev-ci-triager.agent.md
-  - members/dev-docs-writer.agent.md
-  - members/dev-security-triage.agent.md
-  - members/dev-release-brief.agent.md
-lead: members/dev-coordinator.agent.md
+  - members/coordinator.agent.md
+  - members/implementer.agent.md
+  - members/issue-groomer.agent.md
+  - members/pr-reviewer.agent.md
+  - members/ci-triager.agent.md
+  - members/docs-writer.agent.md
+  - members/security-triage.agent.md
+  - members/release-brief.agent.md
+lead: members/coordinator.agent.md
 blueprint:
   brief: >-
     An eight-agent software team that runs in the desktop app's Local work on a repository

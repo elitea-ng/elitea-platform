@@ -12,8 +12,8 @@
  *     description: …            # optional
  *     floor_policy: lead        # addressed | lead
  *     members:                  # roster order, paths inside the zip
- *       - members/dev-coordinator.agent.md
- *     lead: members/dev-coordinator.agent.md   # with floor_policy lead
+ *       - members/coordinator.agent.md
+ *     lead: members/coordinator.agent.md   # with floor_policy lead
  *
  * A member with uploaded avatar media exports as an `.agent.zip` (its `.md`
  * plus `avatars/<slug>/<slot>.<ext>`); its files are merged into the team zip
