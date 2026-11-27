@@ -82,7 +82,7 @@ func TestResolver_Layering(t *testing.T) {
 		if snap.Pack.Product.Name != "Acme AI" || snap.Pack.Brand.Hue != "#FF6600" {
 			t.Errorf("overlay not applied: %+v", snap.Pack.Product)
 		}
-		// The base is the UI's compiled default: Manrope, 408 tokens per
+		// The base is the UI's compiled default: Manrope, 435 tokens per
 		// scheme. DefaultPack() has empty schemes.
 		if !strings.Contains(snap.Pack.Typography.FontFamily, "Manrope") {
 			t.Errorf("base should be the product default, got font %q", snap.Pack.Typography.FontFamily)

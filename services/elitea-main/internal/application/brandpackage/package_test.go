@@ -325,6 +325,31 @@ func TestValuesFromPack_TunedRecordOfTheEarlierDefault(t *testing.T) {
 	}
 }
 
+func TestValuesFromPack_PinsAtTheDefaultAreKept(t *testing.T) {
+	// A deployment that states some ids at their default values pins them:
+	// under another brand hue they must not re-hue. Such a record lacks ids
+	// other than role.*, so it is not an untouched export and is carried.
+	pinned := v2branding.ProductDefault()
+	pinned.Brand.Hue = "#FF6600"
+	pinned.Schemes.Light = map[string]string{}
+	pinned.Schemes.Dark = map[string]string{"error.main": v2branding.ProductDefault().Schemes.Dark["error.main"]}
+	tokens := ValuesFromPack(pinned, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	dark, _ := tokens["dark"].(map[string]any)
+	if len(dark) != 1 || dark["error.main"] != pinned.Schemes.Dark["error.main"] {
+		t.Fatalf("pin at the default lost: %v", tokens)
+	}
+	// An export of the earlier default in another hex case is still untouched.
+	old := preRolesDefault(t)
+	for _, record := range []map[string]string{old.Schemes.Light, old.Schemes.Dark} {
+		for id, v := range record {
+			record[id] = strings.ToLower(v)
+		}
+	}
+	if tokens, _ := ValuesFromPack(old, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any); len(tokens) != 0 {
+		t.Fatalf("a lower-case export of the earlier default pinned %d schemes of tokens", len(tokens))
+	}
+}
+
 func TestParse_Refusals(t *testing.T) {
 	svc, _ := newService(t)
 	good, _, _ := svc.Export(context.Background(), nil)
