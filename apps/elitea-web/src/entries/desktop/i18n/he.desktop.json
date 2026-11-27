@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "הסוכנים של השרשור הזה",
   "workspace.participants.search": "חיפוש",
   "workspace.participants.team": "צוות: {{name}}",
-  "workspace.team.add": "הוספת צוות"
+  "workspace.team.add": "הוספת צוות",
+  "workspace.team.noticeClose": "הסתרה בשרשור הזה",
+  "workspace.team.noticeLess": "הצגת פחות",
+  "workspace.team.noticeMore": "מידע נוסף",
+  "workspace.to.header": "שליחה אל",
+  "workspace.to.manage": "ניהול משתתפים…",
+  "workspace.settings.title": "הגדרות השרשור",
+  "workspace.settings.workspace": "סביבת עבודה",
+  "workspace.settings.sandbox": "ארגז חול",
+  "workspace.settings.sandboxed": "בארגז חול",
+  "workspace.settings.subAgents": "סוכני משנה",
+  "workspace.settings.subAgentsValue": "לקריאה בלבד, מוצעים",
+  "workspace.settings.models": "מודלים",
+  "workspace.settings.modelCloud": "מודל משלו (ענן)",
+  "workspace.settings.modelPinned": "{{model}} (מקובע)",
+  "workspace.settings.context": "הקשר",
+  "workspace.model.own": "המודל של הסוכן עצמו ({{model}})"
 }

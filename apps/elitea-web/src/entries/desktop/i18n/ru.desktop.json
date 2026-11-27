@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "Агенты этой ветки",
   "workspace.participants.search": "Поиск",
   "workspace.participants.team": "Команда: {{name}}",
-  "workspace.team.add": "Добавить команду"
+  "workspace.team.add": "Добавить команду",
+  "workspace.team.noticeClose": "Скрыть в этой цепочке",
+  "workspace.team.noticeLess": "Свернуть",
+  "workspace.team.noticeMore": "Подробнее",
+  "workspace.to.header": "Кому отправить",
+  "workspace.to.manage": "Управление участниками…",
+  "workspace.settings.title": "Настройки цепочки",
+  "workspace.settings.workspace": "Рабочая область",
+  "workspace.settings.sandbox": "Песочница",
+  "workspace.settings.sandboxed": "В песочнице",
+  "workspace.settings.subAgents": "Субагенты",
+  "workspace.settings.subAgentsValue": "Только для чтения, доступны",
+  "workspace.settings.models": "Модели",
+  "workspace.settings.modelCloud": "Собственная модель (облако)",
+  "workspace.settings.modelPinned": "{{model}} (закреплена)",
+  "workspace.settings.context": "Контекст",
+  "workspace.model.own": "Собственная модель агента ({{model}})"
 }

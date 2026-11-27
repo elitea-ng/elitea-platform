@@ -109,12 +109,14 @@ export function ChatParticipantsPanel({ activeConversation, activeParticipant, p
     <SidePanelTab id="conversation" title={t('desktop.inspector.chat', 'Conversation')} subject={activeConversation?.name ?? ''}>
       {panel}
       {presence.announcer}
+      {leadSlot.dialog}
       {skills}
     </SidePanelTab>
   ) : (
     <>
       {panel}
       {presence.announcer}
+      {leadSlot.dialog}
       {skills}
     </>
   );

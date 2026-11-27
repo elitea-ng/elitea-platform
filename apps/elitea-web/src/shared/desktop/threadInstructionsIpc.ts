@@ -9,7 +9,7 @@
 export interface ProjectInstructionsFields {
   /** The files the folder held for the turn (the root's first, then the nested ones of the referenced paths). */
   project_instructions?: string[];
-  /** Whether the turn applied them: false when the thread does not respect AGENTS.md. Present with the files. */
+  /** Whether the turn applied them: false when the thread does not respect project instructions. Present with the files. */
   project_instructions_applied?: boolean;
 }
 

@@ -5068,5 +5068,7 @@
   "chat.presence.waitingForYou": "Wartet auf Sie",
   "chat.presence.waking": "Wird fortgesetzt",
   "chat.presence.working": "Arbeitet",
-  "features.chatMessages.ranOutsideSandbox": "Außerhalb der Sandbox ausgeführt"
+  "features.chatMessages.ranOutsideSandbox": "Außerhalb der Sandbox ausgeführt",
+  "chat.participants.model": "Modell in diesem Thread…",
+  "chat.participants.modelBadge": "Modell in diesem Thread: {{model}}"
 }

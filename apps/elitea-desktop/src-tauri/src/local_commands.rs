@@ -589,6 +589,41 @@ pub struct TurnModel {
     pub reasoning_effort: Option<String>,
 }
 
+/// `agent_turn_start`'s `agent_models` entry (#3145): the model the person
+/// chose for one agent of the thread, by its application id.
+#[derive(Debug, serde::Deserialize)]
+pub struct AgentModel {
+    pub application_id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+}
+
+/// At most this many agents' choices go with one message (a thread holds a
+/// handful; the cap keeps a malformed request small).
+const MAX_AGENT_MODELS: usize = 64;
+
+/// The per-agent model choices of a start, checked like `model` is.
+fn agent_models_of(
+    entries: Vec<AgentModel>,
+) -> Result<std::collections::BTreeMap<i64, ModelChoice>, IpcError> {
+    if entries.len() > MAX_AGENT_MODELS {
+        return Err(IpcError::new(
+            "invalid_request",
+            "Too many agents' model choices in one message.",
+        ));
+    }
+    entries
+        .into_iter()
+        .filter(|entry| entry.application_id > 0)
+        .map(|entry| {
+            ModelChoice::parse(&entry.name, entry.reasoning_effort.as_deref())
+                .map(|choice| (entry.application_id, choice))
+                .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+        })
+        .collect()
+}
+
 /// The app-wide context compaction settings (`src/compaction_settings.rs`).
 #[tauri::command(rename_all = "snake_case")]
 pub fn compaction_settings_get(state: State<'_, LocalState>) -> CompactionSettings {
@@ -673,6 +708,7 @@ pub async fn agent_turn_start(
     cloud_agent: Option<bool>,
     full_auto: Option<bool>,
     submit_id: Option<String>,
+    agent_models: Option<Vec<AgentModel>>,
 ) -> Result<TurnStarted, IpcError> {
     // Full auto (issue 3079) is Bypass that also answers the taint gate:
     // it implies bypass. The host refuses it when the policy forbids it.
@@ -717,6 +753,23 @@ pub async fn agent_turn_start(
         ));
     }
     let (skills, project_skills) = crate::d0::skills::split(skills.unwrap_or_default());
+    let cloud = cloud_agent.unwrap_or(false);
+    let agent_models = agent_models_of(agent_models.unwrap_or_default())?;
+    let model = model
+        .map(|model| {
+            ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
+                .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
+        })
+        .transpose()?
+        // A message that names no model runs its agent on the person's
+        // choice for that agent in this thread (#3145); never a cloud agent.
+        .or_else(|| {
+            if cloud {
+                None
+            } else {
+                agent_models.get(&application_id).cloned()
+            }
+        });
     let scope = workspace_id.clone();
     let request = TurnRequest {
         workspace_id,
@@ -732,12 +785,7 @@ pub async fn agent_turn_start(
         skills,
         project_skills,
         compact: compact.unwrap_or(false),
-        model: model
-            .map(|model| {
-                ModelChoice::parse(&model.name, model.reasoning_effort.as_deref())
-                    .map_err(|refusal| IpcError::new(refusal.code, refusal.message))
-            })
-            .transpose()?,
+        model,
         command,
         images: images.unwrap_or_default(),
         unattended,
@@ -750,7 +798,8 @@ pub async fn agent_turn_start(
         floor_turn: None,
         // The agent's participant runs in the cloud: only the
         // conversation's text goes to it.
-        cloud: cloud_agent.unwrap_or(false),
+        cloud,
+        agent_models,
     };
     // One start per message (#3077): a second call with the message's
     // `submit_id` (Enter pressed again, a double IPC call) gets the first
@@ -1392,6 +1441,31 @@ pub async fn checkpoint_preview(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// #3145: each agent's model choice is checked like `model`, keyed by its
+    /// application id; a choice without an agent is dropped.
+    #[test]
+    fn the_agents_model_choices_are_checked_and_keyed_by_agent() {
+        let entry = |application_id, name: &str, effort: Option<&str>| AgentModel {
+            application_id,
+            name: name.to_owned(),
+            reasoning_effort: effort.map(str::to_owned),
+        };
+        let models = agent_models_of(vec![
+            entry(6, "gpt-5", Some("high")),
+            entry(0, "gpt-4o", None),
+        ])
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            models.get(&6),
+            Some(&ModelChoice::parse("gpt-5", Some("high")).unwrap())
+        );
+        let bad = agent_models_of(vec![entry(6, "gpt-5", Some("max"))]).unwrap_err();
+        assert_eq!(bad.code, "invalid_request");
+        let many = (1..=65).map(|id| entry(id, "gpt-5", None)).collect();
+        assert_eq!(agent_models_of(many).unwrap_err().code, "invalid_request");
+    }
 
     #[test]
     fn turn_changes_name_what_the_checkpoint_left_out() {

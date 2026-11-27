@@ -36,6 +36,12 @@ export function useFolderTrusted(workspaceId: string | undefined): boolean {
   return useFolderTrust(workspaceId).status?.state === 'trusted';
 }
 
+/** The folder carries the trust badge ("No sandbox", "Trust paused"): its trust is granted, running or paused (#3145). */
+export function useFolderTrustBadged(workspaceId: string | undefined): boolean {
+  const state = useFolderTrust(workspaceId).status?.state;
+  return state !== undefined && state !== 'untrusted';
+}
+
 /** Under a command refused for want of a sandbox: "Trust this folder…", when the policy allows it. */
 export function SandboxUnavailableOffer({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }): React.JSX.Element | null {
   const { status } = useFolderTrust(workspaceId);

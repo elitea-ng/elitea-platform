@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "وكلاء هذه السلسلة",
   "workspace.participants.search": "بحث",
   "workspace.participants.team": "الفريق: {{name}}",
-  "workspace.team.add": "إضافة فريق"
+  "workspace.team.add": "إضافة فريق",
+  "workspace.team.noticeClose": "إخفاء لهذا الخيط",
+  "workspace.team.noticeLess": "عرض أقل",
+  "workspace.team.noticeMore": "معرفة المزيد",
+  "workspace.to.header": "إرسال إلى",
+  "workspace.to.manage": "إدارة المشاركين…",
+  "workspace.settings.title": "إعدادات الخيط",
+  "workspace.settings.workspace": "مساحة العمل",
+  "workspace.settings.sandbox": "البيئة المعزولة",
+  "workspace.settings.sandboxed": "في بيئة معزولة",
+  "workspace.settings.subAgents": "الوكلاء الفرعيون",
+  "workspace.settings.subAgentsValue": "للقراءة فقط، متاحون",
+  "workspace.settings.models": "النماذج",
+  "workspace.settings.modelCloud": "نموذجه الخاص (السحابة)",
+  "workspace.settings.modelPinned": "{{model}} (مثبّت)",
+  "workspace.settings.context": "السياق",
+  "workspace.model.own": "نموذج الوكيل الخاص ({{model}})"
 }

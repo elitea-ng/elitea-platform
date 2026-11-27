@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "このスレッドのエージェント",
   "workspace.participants.search": "検索",
   "workspace.participants.team": "チーム: {{name}}",
-  "workspace.team.add": "チームを追加"
+  "workspace.team.add": "チームを追加",
+  "workspace.team.noticeClose": "このスレッドでは非表示",
+  "workspace.team.noticeLess": "表示を減らす",
+  "workspace.team.noticeMore": "詳細",
+  "workspace.to.header": "送信先",
+  "workspace.to.manage": "参加者を管理…",
+  "workspace.settings.title": "スレッドの設定",
+  "workspace.settings.workspace": "ワークスペース",
+  "workspace.settings.sandbox": "サンドボックス",
+  "workspace.settings.sandboxed": "サンドボックス内",
+  "workspace.settings.subAgents": "サブエージェント",
+  "workspace.settings.subAgentsValue": "読み取り専用、提供中",
+  "workspace.settings.models": "モデル",
+  "workspace.settings.modelCloud": "独自のモデル (クラウド)",
+  "workspace.settings.modelPinned": "{{model}} (固定)",
+  "workspace.settings.context": "コンテキスト",
+  "workspace.model.own": "エージェント独自のモデル ({{model}})"
 }

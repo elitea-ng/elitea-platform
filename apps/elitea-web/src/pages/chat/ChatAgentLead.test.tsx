@@ -85,6 +85,24 @@ describe('AgentLeadControl', () => {
     expect(onSetLead).toHaveBeenCalledWith(0);
   });
 
+  it('opens the agent\'s model in this thread from its menu, only once the conversation exists (#3145)', () => {
+    const onModel = vi.fn();
+    render(
+      <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+        <AgentLeadControl participantId={12} leadParticipantId={13} onSetLead={vi.fn()} onModel={onModel} />
+      </ThemeProvider>,
+    );
+    fireEvent.click(screen.getByTestId('participant-lead-menu'));
+    fireEvent.click(screen.getByTestId('participant-model'));
+    expect(onModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no model item without a conversation', () => {
+    renderControl(12, 13);
+    fireEvent.click(screen.getByTestId('participant-lead-menu'));
+    expect(screen.queryByTestId('participant-model')).toBeNull();
+  });
+
   it('is offered only with two or more agents', () => {
     expect(hasSeveralAgents([{ entity_name: 'application' }, { entity_name: 'user' }])).toBe(false);
     expect(hasSeveralAgents([{ entity_name: 'application' }, { entity_name: 'application' }])).toBe(true);

@@ -10,7 +10,10 @@
  *   shown disabled and there is no plan mode;
  * - `returning`: read-only, with its notice.
  *
- * A local thread's footer also shows the context ring (`UsageChip`, lazy: the
+ * The footer holds only attach, the mode, "To:" and "To completion" (#3145); the thread's settings are in its
+ * Participants tab under "Thread settings" (`ThreadSettings`, rendered there from here so they keep this state):
+ * where it works and runs, the sandbox, the sub-agents, the step limit, each agent's model and the meters.
+ * The context ring (`UsageChip`, lazy: the
  * share of the window in use; its tooltip the latest turn's tokens, the
  * thread's, a cost only from the catalogue's price, #1227); a click opens what
  * fills the context, the inspector's Context tab (`ContextPanel`); `/compact`
@@ -19,17 +22,16 @@
  * says when it did (`useIdleCompacted`).
  * Beside it the language-server icon (`LspChip`, lazy, #1236): the servers
  * behind the edits' diagnostics; and the index icon (`IndexStatusIcon`): the folder's index state, a click opens the
- * Index tab. The ⋯ menu holds the step limit
- * (`StepLimitMenu`, lazy): the model steps each run here may take (`/steps`
+ * Index tab. The step limit
+ * (`StepLimitMenu`): the model steps each run here may take (`/steps`
  * sets the same).
  * `/retry` sends the last message again and `/steps` shows or sets the
  * folder's step limit (`useRetryAndSteps`).
  * A new thread of a git folder chooses where it works (`WorkInChip`, `useWorkIn`): the folder, or a new task worktree
  * that its first send makes and moves to.
- * And the model chip (`ModelChip`, `useTurnModel`): the model the next turn
- * runs on, unless the agent pins it or the folder's settings keep it
- * (`/model` opens it, `/model <name>` sets a listed one; an unknown name or
- * a catalogue still loading is said above the composer and sets nothing).
+ * And each agent's model (`agentModels`, #3145): every send carries the agents' choices (`agent_models`); `/model`
+ * opens the lead's (else the composer's agent's) chip in Thread settings and `/model <name>` sets a listed one for it
+ * (an unknown name or a catalogue still loading is said above the composer and sets nothing).
  *
  * A pipeline (#1239 A3) never runs here: when it is the pick, a send runs it
  * in the cloud and opens its chat (`useRunInCloud`; no plan mode, images or
@@ -42,13 +44,13 @@
  * (`unsent`). Esc Esc stops a running turn, as the composer's Stop does (`useDoubleEscape`).
  */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { useNavigate } from '@tanstack/react-router';
 
-import { TrustBadge } from '@/features/folder-trust';
 import { RunToCompletionControl } from '@/features/unattended';
 import { composer, replayView, type WorkspaceTurn } from '@/features/workspace';
-import { IndexStatusIcon } from '@/features/workspace-index';
+import { FolderIndexOpener, IndexStatusIcon } from '@/features/workspace-index';
 import type { CustomCommand, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { useDoubleEscape } from '@/shared/lib/useDoubleEscape';
@@ -74,17 +76,18 @@ import { pipelineComposerBinding, useComposerPipeline, type ComposerPipeline } f
 import type { ThreadHandoff } from './useThreadHandoff';
 import type { ThreadSession } from './useThreadSession';
 import { useRetryAndSteps, type SentMessage } from './useRetryAndSteps';
-import type { SessionCommands } from './useSessionCommands';
 import { useComposerModes, type RunToCompletionBinding } from './useComposerModes';
 import { useIdleCompacted } from './useIdleCompacted';
 import { useIdleHold } from './useIdleHold';
 import { useSteering, type Steering } from './useSteering';
 import { useThreadSkillPins } from './useThreadSkillPins';
-import { useTurnModel, type TurnModelControl } from './useTurnModel';
+import type { AgentModels } from './agentModels';
+import { ThreadSettings } from './ThreadSettings';
+import { defaultModelAgent, modelAgents, useModelCommands } from './useThreadModels';
 import { useWorkIn } from './useWorkIn';
 import { selectionSeed } from './useAgentSelection';
 import { useFirstSend } from './useFirstSend';
-import StepLimitMenu, { prefetchStepLimit } from './StepLimitMenu';
+import { prefetchStepLimit } from './StepLimitMenu';
 import { skillPicks, WorkspaceComposer, type WorkspaceComposerProps } from './WorkspaceComposer';
 
 const UsageChip = lazy(() => import('./UsageChip'));
@@ -103,6 +106,10 @@ export interface ThreadComposerProps {
   skills: readonly ComposerSkill[];
   /** The folder is its repository's top (not a task worktree): a new thread may work in a new worktree. */
   canBranch: boolean;
+  /** The model chosen for each agent of the thread (`agentModels`, shared with the Participants tab). */
+  models: AgentModels;
+  /** Where the Participants tab shows "Thread settings"; `null` while the tab is not on screen. */
+  settingsHost: HTMLElement | null;
 }
 
 /** What differs when the thread's messages go to the cloud copy. */
@@ -126,15 +133,6 @@ type SendBinding = Partial<Pick<WorkspaceComposerProps, 'placeholder' | 'showMod
 function sendBinding(cloudMode: boolean, cloud: CloudChat, pipeline: ComposerPipeline, here: SendBinding): SendBinding {
   if (cloudMode) return cloudBinding(cloud);
   return pipeline.pipeline ? pipelineComposerBinding(pipeline.run) : here;
-}
-
-/** The model chip and `/model <name>`: neither for a cloud thread (its own agent answers) nor when no choice is offered. */
-function modelBinding(model: TurnModelControl, cloudMode: boolean, chipRef: SessionCommands['modelRef']): Pick<WorkspaceComposerProps, 'modelPicker' | 'onModelCommand'> {
-  if (cloudMode || !model.offered) return {};
-  return {
-    modelPicker: <composer.ModelChip current={model.current} effort={model.effort} models={model.models} onChoose={model.choose} chipRef={chipRef} />,
-    onModelCommand: model.command,
-  };
 }
 
 type Usage = WorkspaceTurn['view']['usage'];
@@ -178,11 +176,6 @@ function steeringProps(steering: Steering, agent: { readonly name: string } | un
 /** The local session can start a turn, or the running turn takes a steering message; never while the thread is away. */
 const canSendHere = (session: ThreadSession, steering: Steering, offLaptop: boolean): boolean => (session.canSend || steering.active) && !offLaptop;
 
-/** Beside the run-location chip of a thread that runs here: the folder's "No sandbox" / "Trust paused" badge (ADR-0061 decision 5i). */
-function LocalTrustBadge({ workspaceId, local }: { workspaceId: string; local: boolean }): React.JSX.Element | null {
-  return local ? <TrustBadge workspaceId={workspaceId} /> : null;
-}
-
 interface ComposerMetersProps {
   usages: NonNullable<Usage>[];
   projectId: number;
@@ -224,12 +217,6 @@ function ComposerMeters({ usages, projectId, workspaceId, local, contextPercent 
   );
 }
 
-/** The ⋯ menu's rows for a local thread: the step limit (read ahead, so the menu opens whole); a choice it cannot store is said above the composer. */
-function moreRows(workspaceId: string, local: boolean, onStepsError: (message: string) => void): WorkspaceComposerProps['more'] {
-  if (!local) return undefined;
-  return (close) => <StepLimitMenu workspaceId={workspaceId} onError={onStepsError} close={close} />;
-}
-
 /**
  * What the "/" menu offers besides the host commands: the custom commands and the project's own skills (after the
  * agent's), both the local host's only (`local`: none for the cloud copy). The project's skills are read once the
@@ -256,12 +243,27 @@ function useIdleNotice(workspaceId: string, conversationId: string): { shown: bo
   return { shown: at !== null && at !== dismissed, dismiss: () => setDismissed(at) };
 }
 
+/** Thread settings › Workspace: "Work in" (a new thread of a repository's top folder) and where the thread runs. */
+function WorkspaceSetting({ workIn, locked, handoff, onOpenInChat }: { workIn: ReturnType<typeof useWorkIn>; locked: boolean; handoff: ThreadHandoff; onOpenInChat: (() => void) | undefined }): React.JSX.Element {
+  return (
+    <>
+      {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={locked} />}
+      <RunLocationControl handoff={handoff} onOpenInChat={onOpenInChat} />
+    </>
+  );
+}
+
+/** "Thread settings" in the Participants tab (`host`), while the tab is on screen. */
+function SettingsPortal({ host, children }: { host: HTMLElement | null; children: React.ReactNode }): React.ReactPortal | null {
+  return host === null ? null : createPortal(children, host);
+}
+
 /** "Run to completion" (ADR-0045) in the footer, or nothing when it does not show (a cloud thread, grants off). */
 function runControl(binding: RunToCompletionBinding | undefined, busy: boolean): React.JSX.Element | null {
   return binding === undefined ? null : <RunToCompletionControl {...binding} scope="desktop" disabled={busy} testId="workspace-run-to-completion" />;
 }
 
-export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch }: ThreadComposerProps): React.JSX.Element {
+export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, session, turn, handoff, cloud, skills, canBranch, models, settingsHost }: ThreadComposerProps): React.JSX.Element {
   const navigate = useNavigate();
   const { commands } = session;
   const cloudMode = handoff.status?.executor === 'cloud';
@@ -270,9 +272,14 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   }, [cloudMode, workspaceId]);
   const composerPipeline = useComposerPipeline(projectId, session.raw, turn, cloudMode);
   const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
-  const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   const local = !cloudMode && !pipeline;
-  const modes = useComposerModes(workspaceId, local, commands);
+  const team = useComposerTeam(projectId, conversationId, local);
+  const agents = useMemo(() => modelAgents(session.raw, team.floor), [session.raw, team.floor]);
+  const model = useModelCommands({ workspaceId, projectId, models, agents, target: defaultModelAgent(agents, team.floor, session.raw), local, refusalCode: turn.startErrorCode });
+  useEffect(() => {
+    commands.modelOpen.current = model.openChip;
+  });
+  const modes = useComposerModes(workspaceId, local, commands, session.handedChoices);
   const idle = useIdleNotice(workspaceId, conversationId);
   const onDraftChange = useIdleHold(workspaceId, conversationId, local);
   const skillPins = useThreadSkillPins(ipc, workspaceId, projectId, conversationId, local);
@@ -281,7 +288,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     model.dismissNotice();
     idle.dismiss();
     remember(prompt);
-    const sent = await session.send(prompt, modes.choice, mentions, picked, commands.compactNext, model.choice, command, images);
+    const sent = await session.send(prompt, modes.choice, mentions, picked, commands.compactNext, model.entries(), command, images);
     if (sent && commands.compactNext) commands.compactSent();
     return sent;
   };
@@ -302,17 +309,17 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     offered: offersWorkIn(canBranch, local, conversationId),
     send: controls.remembering(bound.onSend),
     handOver: () => selectionSeed(session.raw, projectId),
+    handOverChoices: () => ({ ...modes.choices(), agentModels: models.handed() }),
     onError: commands.showText,
     open: (id) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: id } }),
   });
   // A new thread's first message shows at once, while the thread is prepared (#3127).
-  const first = useFirstSend({ workspaceId, slot: session.first, fresh: isFresh(conversationId, local, session, turn), canSend: bound.canSend, send: workIn.send });
+  const first = useFirstSend({ workspaceId, slot: session.first, fresh: isFresh(conversationId, local, session, turn), canSend: bound.canSend && !modes.settling, send: workIn.send });
   const gate = firstGate(bound, first.holding);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);
   const usages = cloudMode ? NO_USAGE : turnUsages(turn, recorded);
   const modelNotice = cloudMode ? null : model.notice;
-  const team = useComposerTeam(projectId, conversationId, local, session.selection.agentId);
   const agentHint = cloudMode ? t('workspace.cloud.agentHint', 'The cloud copy answers with this thread’s own agent.') : undefined;
   return (
     <>
@@ -322,7 +329,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
       <FullAutoControls fullAuto={modes.fullAuto} active={modes.mode === 'full_auto'} />
       {local && <IdleCompactedNotice shown={idle.shown} onClose={idle.dismiss} />}
       <CloudLeadNotice projectId={projectId} conversationId={conversationId} local={local} />
-      <TeamThreadNotice team={session.selection.team} local={local} />
+      <TeamThreadNotice team={session.selection.team} local={local} conversationId={conversationId} />
       <ExchangeStrip exchange={exchangeOf(turn, team.agents)} ipc={ipc} />
       <RunInCloudNotice cloudOnly={pipeline} refusedPrompt={refusedPrompt} running={runInCloud.running} error={runInCloud.error} onRun={(prompt) => void runInCloud.run(prompt)} />
       <WorkspaceComposer
@@ -333,18 +340,9 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         acceptImages={!cloudMode}
         planMode={commands.planMode}
         {...modes.switchProps}
-        agentPicker={(draft) => <AgentChip selection={session.selection} draft={draft} floor={team.floor} agentRef={commands.agentRef} disabledHint={agentHint} />}
-        {...modelBinding(model, !local, commands.modelRef)}
-        runLocation={
-          <>
-            {workIn.offered && <WorkInChip value={workIn.value} onChange={workIn.choose} disabled={gate.locked} />}
-            <RunLocationControl handoff={handoff} onOpenInChat={openInChat} />
-            <LocalTrustBadge workspaceId={workspaceId} local={local} />
-          </>
-        }
+        agentPicker={(draft) => <AgentChip selection={session.selection} draft={draft} floor={team.floor} agentRef={commands.agentRef} disabledHint={agentHint} onAddress={team.onAddress} />}
+        onModelCommand={model.onModelCommand}
         runToCompletion={runControl(modes.runToCompletion, bound.busy)}
-        contextMeter={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
-        more={moreRows(workspaceId, !cloudMode, commands.showText)}
         onPlanModeChange={commands.setPlanMode}
         skills={offered}
         skillPins={skillPins}
@@ -353,11 +351,25 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
         onStepsCommand={controls.onStepsCommand}
         onFocus={onFocus}
         onDraftChange={onDraftChange}
-        {...team}
+        agents={team.agents}
         {...bound}
         canSend={gate.canSend}
         onSend={first.send}
       />
+      <FolderIndexOpener workspaceId={workspaceId} enabled={!cloudMode} />
+      <SettingsPortal host={settingsHost}>
+          <ThreadSettings
+            workspaceId={workspaceId}
+            projectId={projectId}
+            local={!cloudMode}
+            workspace={<WorkspaceSetting workIn={workIn} locked={gate.locked} handoff={handoff} onOpenInChat={openInChat} />}
+            agents={agents}
+            models={models}
+            modelsOffered={local}
+            meters={<ComposerMeters usages={usages} projectId={projectId} workspaceId={workspaceId} local={!cloudMode} contextPercent={contextPercentOf(cloudMode, turn, session.history)} />}
+            onStepsError={commands.showText}
+          />
+      </SettingsPortal>
     </>
   );
 }

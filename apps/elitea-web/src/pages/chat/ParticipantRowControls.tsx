@@ -5,8 +5,10 @@
  * - the agent's live state as a small badge with its label ("Running cargo"): its avatar animates only when it is
  *   the thread's active agent, and never under reduced motion;
  * - where it runs, **Local** (here, with the folder) or **Cloud** (the conversation text only), and the Lead chip;
- * - a menu: Make lead / Clear lead, Address (`@Name` into the composer), Run here / Run in the cloud, Edit agent and
- *   Remove from thread. A viewer (`readOnly`, the web and mobile, #3069) gets the badges without the menu.
+ * - a menu: Make lead / Clear lead, Address (`@Name` into the composer), Model in this thread… (a local agent, #3145),
+ *   Run here / Run in the cloud, Edit agent and Remove from thread. A viewer (`readOnly`, the web and mobile, #3069)
+ *   gets the badges without the menu;
+ * - the model chosen for the agent in this thread, as a small badge, only when it is not the agent's own (#3145).
  */
 import type { MouseEvent, ReactNode } from 'react';
 import { useState } from 'react';
@@ -47,6 +49,10 @@ export interface ParticipantRowActions {
   readonly onSetCloud: (participantId: number, cloud: boolean) => void;
   readonly onEdit: (participantId: number) => void;
   readonly onRemove: (participantId: number) => void;
+  /** "Model in this thread…" (#3145): opens the agent's model choice; absent: not offered (the web's chat has its own). */
+  readonly onModel?: ((participantId: number) => void) | undefined;
+  /** The model chosen for the agent in this thread; `undefined`: its own (no badge). */
+  readonly modelOf?: ((participantId: number) => string | undefined) | undefined;
 }
 
 function RowMenu({ row, actions }: { readonly row: ParticipantRowView; readonly actions: ParticipantRowActions }): ReactNode {
@@ -76,6 +82,9 @@ function RowMenu({ row, actions }: { readonly row: ParticipantRowView; readonly 
           <MenuItem onClick={choose(() => actions.onSetLead(id))} data-testid="participant-lead-make">{t('chat.lead.make', 'Make lead')}</MenuItem>
         ))}
         <MenuItem onClick={choose(() => actions.onAddress(row.name))} data-testid="participant-address">{t('chat.participants.address', 'Address')}</MenuItem>
+        {actions.onModel !== undefined && !row.cloud && (
+          <MenuItem onClick={choose(() => actions.onModel?.(id))} data-testid="participant-model">{t('chat.participants.model', 'Model in this thread…')}</MenuItem>
+        )}
         <MenuItem
           disabled={actions.executorLocked}
           onClick={choose(() => actions.onSetCloud(id, !row.cloud))}
@@ -98,6 +107,23 @@ function StateBadge({ row }: { readonly row: ParticipantRowView }): ReactNode {
       {/* 5rem: beside the chips and the menu the name keeps room in the chat panel (issue 3067's visual baseline). */}
       <Typography variant="labelSmall" color="text.secondary" noWrap sx={{ fontKerning: 'none', maxWidth: '5rem' }}>{row.label}</Typography>
     </Box>
+  );
+}
+
+/** The model chosen for the agent in this thread (#3145): shown only when it is not the agent's own. */
+function ModelBadge({ model }: { readonly model: string | undefined }): ReactNode {
+  if (model === undefined) return null;
+  const label = t('chat.participants.modelBadge', 'Model in this thread: {{model}}', { model });
+  return (
+    <Chip
+      size="small"
+      variant="outlined"
+      label={model}
+      title={label}
+      aria-label={label}
+      data-testid="participant-model-badge"
+      sx={{ maxWidth: '6rem' }}
+    />
   );
 }
 
@@ -126,6 +152,7 @@ export function ParticipantRowControls({ row, actions, presenceOnly = false }: P
         data-executor={row.cloud ? 'cloud' : 'local'}
       />
       {row.isLead && <Chip size="small" label={t('chat.lead.badge', 'Lead')} data-testid="participant-lead-badge" />}
+      <ModelBadge model={row.cloud ? undefined : actions?.modelOf?.(row.participantId)} />
       {actions !== undefined && <RowMenu row={row} actions={actions} />}
     </Box>
   );

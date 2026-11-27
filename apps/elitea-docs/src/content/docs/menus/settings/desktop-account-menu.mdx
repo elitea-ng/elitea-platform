@@ -43,13 +43,29 @@ Chats and Local work threads share one message box. Drag its top edge to make it
 In a Local work thread the row under the text holds, from the left:
 
 - **+** to attach images (you can also paste or drop them).
-- The mode: **Act** (edits with approvals), **Plan** (plans, changes nothing) or **Bypass** (no approvals; the app warns you the first time).
-- The agent and its version (point at **Version** to see the versions), and the model.
-- **⋯** with **Step limit**: how many steps a turn may take. Point at it to pick the default, a preset, **Unlimited** or a number of your own.
-- In a new thread of a git folder, **Work in**: **This folder**, or **New worktree** (see [Work in a worktree](#work-in-a-worktree)).
-- **Send to cloud**, or **Take back** for a thread running in the cloud (see [Send a thread to the cloud](#send-a-thread-to-the-cloud)), the language-server status, the index icon, and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab.
+- The mode, by its name: **Act** (edits with approvals), **Plan** (plans, changes nothing), **Bypass** (no approvals; the app warns you the first time) or **Full auto** (see [Full auto](/how-tos/chat-conversations/desktop-full-auto)).
+- **To:**, who the message goes to: the agent and its version with one agent; with several, **To: Reviewer (lead)** or the agent the message names first. With several agents it is a menu: pick an agent to address the message to it, or **Manage participants…** to open the **Participants** tab. With one agent it opens the tab.
 - **∞ To completion**, on by default: the turn continues by itself until the goal is met (see [Run a task to completion](#run-a-task-to-completion)).
 - **Send**, which becomes **Stop** while a turn runs.
+
+The thread's other settings are in the **Participants** tab of the right sidebar, under **Thread settings** (see [Thread settings](#thread-settings)). The thread's title bar holds only its name, the one run status while something runs, and **⋯**.
+
+### Thread settings
+
+**Thread settings** is at the bottom of the **Participants** tab. Each row shows its value:
+
+| Row | What it holds |
+| --- | --- |
+| **Workspace** | In a new thread of a git folder, **Work in**: **This folder** or **New worktree** (see [Work in a worktree](#work-in-a-worktree)). **Send to cloud**, or **Take back** for a thread running in the cloud, with the other moves in the **⌄** beside it (see [Send a thread to the cloud](#send-a-thread-to-the-cloud)). |
+| **Sandbox** | **Sandboxed**, or the folder's **No sandbox** / **Trust paused** badge with **Revoke trust** (see [Trusted folders](/how-tos/chat-conversations/desktop-trusted-folders)). |
+| **Sub-agents** | The read-only sub-agents an agent may start to look things up. They are always offered here. |
+| **Step limit** | How many steps a turn may take. Open it and point at **Step limit** to pick the default, a preset, **Unlimited** or a number of your own. `/steps` sets the same. |
+| **Models** | Each agent's model in this thread (see [Choose a model for an agent](/how-tos/chat-conversations/desktop-multi-agent#choose-a-model-for-an-agent)). |
+| **Context** | The language-server status, the index icon and a ring showing how much of the model's context the thread uses. Select the ring to open the **Context** tab. |
+
+**Respect project instructions** follows, under **Project instructions** (see [Project instructions](/how-tos/chat-conversations/desktop-multi-agent#project-instructions)).
+
+Everything you choose before the first message goes with the thread that the message creates, also with **Work in** set to **New worktree**: the mode, **To completion** and its settings, **Respect project instructions**, the agents and each agent's model. **Full auto** goes with it too: you confirmed it for this new thread. It is never kept as a default and never carried to another thread.
 
 The index icon shows the state of the folder index by its colour: grey when it is ready or off, the accent colour while it builds, orange when it is out of date and red after an error. Point at it to read the state, for example *Index ready · 257.3K entities*; select it to open the **Index** tab on the right, where the index settings are.
 

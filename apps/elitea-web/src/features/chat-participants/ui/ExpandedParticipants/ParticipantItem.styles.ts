@@ -72,6 +72,8 @@ export const participantItemStyles = (theme: { vars: { shape: { radiusMd: string
     borderRadius: 'var(--el-shape-radiusMd, 8px)', backgroundColor: isActive ? 'action.selected' : 'background.paper',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: (t: Theme) => t.typography.bodySmall.fontSize, fontWeight: 600, overflow: 'hidden',
+    // A live agent avatar (`renderAgentAvatar`, #3145) draws its motion ring just outside its edge: never clipped.
+    '&:has(> [data-motion])': { overflow: 'visible', backgroundColor: 'transparent' },
   }),
   iconBoxAttention: {
     width: '1.5rem', height: '1.5rem', minWidth: '1.5rem',

@@ -1306,5 +1306,21 @@
   "workspace.noAgents.documents": "Create a Local documents agent? It reads, summarises and edits the documents in this folder, saves edited Office files as new files, and every change can be undone. It is an ordinary agent of this project: you can edit it on the web.",
   "workspace.handoff.noUpstream": "This folder has no remote repository, so the cloud cannot push or open pull requests; take the thread back to get its changes.",
   "workspace.kind.code": "Code",
-  "workspace.kind.documents": "Documents"
+  "workspace.kind.documents": "Documents",
+  "workspace.team.noticeClose": "Hide for this thread",
+  "workspace.team.noticeLess": "Show less",
+  "workspace.team.noticeMore": "Learn more",
+  "workspace.to.header": "Send to",
+  "workspace.to.manage": "Manage participants…",
+  "workspace.settings.title": "Thread settings",
+  "workspace.settings.workspace": "Workspace",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "Sandboxed",
+  "workspace.settings.subAgents": "Sub-agents",
+  "workspace.settings.subAgentsValue": "Read-only, offered",
+  "workspace.settings.models": "Models",
+  "workspace.settings.modelCloud": "Its own model (cloud)",
+  "workspace.settings.modelPinned": "{{model}} (pinned)",
+  "workspace.settings.context": "Context",
+  "workspace.model.own": "Agent’s own model ({{model}})"
 }

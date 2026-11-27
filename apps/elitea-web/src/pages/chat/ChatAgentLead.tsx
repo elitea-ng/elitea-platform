@@ -1,7 +1,9 @@
 /**
  * The conversation's lead agent (ADR-0050 decision 7d, issue 1612): a "Lead"
  * badge on the lead's row in the participants panel and a row menu to make an
- * agent the lead or clear it.
+ * agent the lead or clear it, and "Model in this thread…" (#3145, as the desktop's Participants tab has it): the
+ * agent participant's own model settings in this conversation (`llm_settings`, the dialog the composer's agent panel
+ * opens for the active agent).
  *
  * The floor lives in the conversation meta (`floor`), and updating a
  * conversation replaces its whole meta, so the write goes through
@@ -21,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { floorOf, metaWithLead } from '@elitea/client-core/conversation';
 import { conversationApi } from '@/entities/conversation';
 import { t } from '@/shared/i18n';
+import { toParticipant, useChatBoxLlmSettingsDialog } from '@/widgets/chat-box';
 
 export interface UseConversationLeadParams {
   readonly projectId: string | undefined;
@@ -53,25 +56,46 @@ export function useConversationLead({ projectId, conversationId, meta }: UseConv
   return { leadParticipantId, setLead, isSaving: isPending };
 }
 
-/** The participants panel's `renderAgentLead` slot for a conversation, present with two or more agents. */
+/** "Model in this thread…" for one agent row (#3145): the participant's model settings dialog. */
+function useParticipantModelDialog(projectId: string | undefined, conversationId: string | number | undefined, participants: readonly unknown[] | undefined) {
+  const [participantId, setParticipantId] = useState<number | null>(null);
+  const raw = participantId === null ? undefined : (participants ?? []).find((row) => Number((row as { readonly id?: unknown } | null)?.id) === participantId);
+  const llm = useChatBoxLlmSettingsDialog({ projectId, conversationId, participant: toParticipant(raw) });
+  const { onEdit } = llm;
+  const open = useCallback((id: number) => {
+    setParticipantId(id);
+    onEdit();
+  }, [onEdit]);
+  return { open, dialog: llm.dialog };
+}
+
+/**
+ * The participants panel's `renderAgentLead` slot for a conversation, present with two or more agents, and the model
+ * dialog its rows open (`dialog`, rendered beside the panel).
+ */
 export function useAgentLeadSlot(
   projectId: string | undefined,
   conversation: { readonly id?: string | number; readonly isNew?: boolean; readonly meta?: unknown; readonly participants?: readonly unknown[] } | undefined,
-): { renderAgentLead?: (props: { conversationId: string | number; participantId: number }) => ReactNode } {
-  const { leadParticipantId, setLead, isSaving } = useConversationLead({ projectId, conversationId: conversation?.isNew === true ? undefined : conversation?.id, meta: conversation?.meta });
+): { renderAgentLead?: (props: { conversationId: string | number; participantId: number }) => ReactNode; dialog: ReactNode } {
+  const conversationId = conversation?.isNew === true ? undefined : conversation?.id;
+  const { leadParticipantId, setLead, isSaving } = useConversationLead({ projectId, conversationId, meta: conversation?.meta });
+  const model = useParticipantModelDialog(projectId, conversationId, conversation?.participants);
   const severalAgents = hasSeveralAgents(conversation?.participants);
+  const { open, dialog } = model;
   return useMemo(() => (severalAgents
     ? {
+        dialog,
         renderAgentLead: ({ participantId }: { participantId: number }) => (
           <AgentLeadControl
             participantId={participantId}
             leadParticipantId={leadParticipantId}
             disabled={isSaving}
             onSetLead={(next) => { setLead(next).catch((error: unknown) => { console.error('[chat] failed to save the lead', error); }); }}
+            onModel={conversationId === undefined ? undefined : () => open(participantId)}
           />
         ),
       }
-    : {}), [severalAgents, leadParticipantId, setLead, isSaving]);
+    : { dialog }), [severalAgents, leadParticipantId, setLead, isSaving, conversationId, open, dialog]);
 }
 
 /** The lead matters only with two or more agents (with one, it answers anyway). */
@@ -84,10 +108,12 @@ export interface AgentLeadControlProps {
   readonly leadParticipantId: number;
   readonly onSetLead: (participantId: number) => void;
   readonly disabled?: boolean;
+  /** "Model in this thread…": the agent's model settings in this conversation (#3145); absent before it exists. */
+  readonly onModel?: (() => void) | undefined;
 }
 
 /** The badge and the menu of one agent row. */
-export function AgentLeadControl({ participantId, leadParticipantId, onSetLead, disabled = false }: AgentLeadControlProps): ReactNode {
+export function AgentLeadControl({ participantId, leadParticipantId, onSetLead, disabled = false, onModel }: AgentLeadControlProps): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const isLead = participantId === leadParticipantId;
   const stop = (event: MouseEvent) => { event.stopPropagation(); };
@@ -115,6 +141,14 @@ export function AgentLeadControl({ participantId, leadParticipantId, onSetLead, 
           <MenuItem onClick={choose(0)} data-testid="participant-lead-clear">{t('chat.lead.clear', 'Clear lead')}</MenuItem>
         ) : (
           <MenuItem onClick={choose(participantId)} data-testid="participant-lead-make">{t('chat.lead.make', 'Make lead')}</MenuItem>
+        )}
+        {onModel !== undefined && (
+          <MenuItem
+            onClick={(event) => { event.stopPropagation(); setAnchor(null); onModel(); }}
+            data-testid="participant-model"
+          >
+            {t('chat.participants.model', 'Model in this thread…')}
+          </MenuItem>
         )}
       </Menu>
     </Box>

@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "اس تھریڈ کے ایجنٹ",
   "workspace.participants.search": "تلاش",
   "workspace.participants.team": "ٹیم: {{name}}",
-  "workspace.team.add": "ٹیم شامل کریں"
+  "workspace.team.add": "ٹیم شامل کریں",
+  "workspace.team.noticeClose": "اس تھریڈ کے لیے چھپائیں",
+  "workspace.team.noticeLess": "کم دکھائیں",
+  "workspace.team.noticeMore": "مزید جانیں",
+  "workspace.to.header": "بھیجیں بنام",
+  "workspace.to.manage": "شرکاء کا نظم کریں…",
+  "workspace.settings.title": "تھریڈ کی ترتیبات",
+  "workspace.settings.workspace": "ورک اسپیس",
+  "workspace.settings.sandbox": "سینڈ باکس",
+  "workspace.settings.sandboxed": "سینڈ باکس میں",
+  "workspace.settings.subAgents": "ذیلی ایجنٹس",
+  "workspace.settings.subAgentsValue": "صرف پڑھنے والے، پیش کردہ",
+  "workspace.settings.models": "ماڈلز",
+  "workspace.settings.modelCloud": "اپنا ماڈل (کلاؤڈ)",
+  "workspace.settings.modelPinned": "{{model}} (پن شدہ)",
+  "workspace.settings.context": "سیاق",
+  "workspace.model.own": "ایجنٹ کا اپنا ماڈل ({{model}})"
 }

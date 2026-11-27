@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "此討論串的代理",
   "workspace.participants.search": "搜尋",
   "workspace.participants.team": "團隊：{{name}}",
-  "workspace.team.add": "新增團隊"
+  "workspace.team.add": "新增團隊",
+  "workspace.team.noticeClose": "在此對話串中隱藏",
+  "workspace.team.noticeLess": "收合",
+  "workspace.team.noticeMore": "深入了解",
+  "workspace.to.header": "傳送給",
+  "workspace.to.manage": "管理參與者…",
+  "workspace.settings.title": "對話串設定",
+  "workspace.settings.workspace": "工作區",
+  "workspace.settings.sandbox": "沙箱",
+  "workspace.settings.sandboxed": "在沙箱中",
+  "workspace.settings.subAgents": "子代理",
+  "workspace.settings.subAgentsValue": "唯讀，可用",
+  "workspace.settings.models": "模型",
+  "workspace.settings.modelCloud": "自有模型（雲端）",
+  "workspace.settings.modelPinned": "{{model}}（已固定）",
+  "workspace.settings.context": "上下文",
+  "workspace.model.own": "代理自有模型（{{model}}）"
 }

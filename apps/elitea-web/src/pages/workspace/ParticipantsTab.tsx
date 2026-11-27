@@ -12,12 +12,18 @@
  * `ThreadAgentsPanel` lists the agents that join with the next message (before the first send, the composer's agent and
  * the ones added to it, so a new thread has the tab too) and the Add agent, Add cloud agent and Add team pickers.
  *
- * Below them, the thread's project instructions (issue 3130): the folder's AGENTS.md (or its README/NOTES fallback), once, with the thread's
- * "Respect project instructions" switch (`ProjectInstructionsSection`).
+ * Below them, "Thread settings" (#3145): the composer's `ThreadSettings` (where the thread works and runs, the sandbox,
+ * the sub-agents, the step limit, each agent's model, the meters) rendered into `settingsRef`, then the thread's project
+ * instructions (issue 3130): the folder's AGENTS.md (or a non-git folder's README/NOTES fallback), once, with the thread's
+ * "Respect project instructions" switch
+ * (`ProjectInstructionsSection`). Each row's "Model in this thread…" opens that agent's model there, and a row whose
+ * agent runs on another model than its own says which.
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import Box from '@mui/material/Box';
+import type { Theme } from '@mui/material/styles';
+import Typography from '@mui/material/Typography';
 import { useNavigate } from '@tanstack/react-router';
 
 import { applyLocalAgentState, useAgentAvatarStates } from '@/features/chat-messages';
@@ -28,6 +34,7 @@ import { t } from '@/shared/i18n';
 import { agentAvatarRenderer, AgentStateAnnouncer, HandoffBaton, useAgentRowViews } from '@/pages/chat/agentPresence';
 import { ParticipantRowControls, type ParticipantRowActions } from '@/pages/chat/ParticipantRowControls';
 
+import type { AgentModels } from './agentModels';
 import { ExchangeStrip, exchangeOf, type ExchangeStripProps } from './ExchangeStrip';
 import { ProjectInstructionsSection, type ProjectInstructionsSectionProps } from './ProjectInstructionsSection';
 import { participantsTabId, pendingAgents, ThreadAgentsPanel } from './ThreadAgentsPanel';
@@ -49,6 +56,10 @@ export interface ParticipantsTabProps {
   readonly ipc: ExchangeStripProps['ipc'] & ProjectInstructionsSectionProps['ipc'];
   /** The composer's agents (#3081): the ones that join with the next message, and the add pickers. */
   readonly selection?: AgentSelection | undefined;
+  /** Each agent's model in this thread (#3145): the rows' "Model in this thread…" and badge. */
+  readonly models?: AgentModels | undefined;
+  /** Where the composer renders "Thread settings" (#3145). */
+  readonly settingsRef?: ((node: HTMLElement | null) => void) | undefined;
 }
 
 type WrapperConversation = NonNullable<Parameters<typeof ParticipantsWrapper>[0]['activeConversation']>;
@@ -63,11 +74,27 @@ function useLocalAgentStates(conversationId: string, agentState: WorkspaceTurn['
   }, [conversationId, agentState]);
 }
 
+/** The rows' model actions (#3145): open the agent's choice in Thread settings, and the badge's model. */
+function modelActions(agents: readonly { participantId: number; applicationId: number }[], models: AgentModels | undefined): Pick<ParticipantRowActions, 'onModel' | 'modelOf'> {
+  if (models === undefined) return {};
+  const applicationOf = (id: number): number | undefined => agents.find((row) => row.participantId === id)?.applicationId;
+  return {
+    onModel: (id) => {
+      const applicationId = applicationOf(id);
+      if (applicationId !== undefined) models.edit(applicationId);
+    },
+    modelOf: (id) => {
+      const applicationId = applicationOf(id);
+      return applicationId === undefined ? undefined : models.overrideOf(applicationId)?.name;
+    },
+  };
+}
+
 function report(action: string) {
   return (error: unknown) => { console.error(`[workspace] failed to ${action}`, error); };
 }
 
-export function ParticipantsTab({ workspaceId, projectId, conversationId, subject, executorLocked, onAddress, turn, ipc, selection }: ParticipantsTabProps): ReactNode {
+export function ParticipantsTab({ workspaceId, projectId, conversationId, subject, executorLocked, onAddress, turn, ipc, selection, models, settingsRef }: ParticipantsTabProps): ReactNode {
   const navigate = useNavigate();
   const team = useThreadTeam({ projectId, conversationId });
   useLocalAgentStates(conversationId, turn.view.agentState);
@@ -91,7 +118,8 @@ export function ParticipantsTab({ workspaceId, projectId, conversationId, subjec
       if (agent !== undefined) selection?.removeCompanion?.(String(agent.applicationId));
       team.remove(id).catch(report('remove the agent'));
     },
-  }), [team, executorLocked, onAddress, navigate, selection]);
+    ...modelActions(team.agents, models),
+  }), [team, executorLocked, onAddress, navigate, selection, models]);
   const renderAgentLead = useMemo(() => ({ participantId }: { participantId: number }) => {
     const row = rows.find((candidate) => candidate.participantId === participantId);
     return row === undefined ? null : <ParticipantRowControls row={row} actions={actions} />;
@@ -116,7 +144,13 @@ export function ParticipantsTab({ workspaceId, projectId, conversationId, subjec
           />
         )}
         {selection !== undefined && <ThreadAgentsPanel selection={selection} joined={joined} locked={executorLocked} />}
-        <ProjectInstructionsSection workspaceId={workspaceId} conversationId={conversationId} turn={turn} ipc={ipc} />
+        <Box component="section" aria-labelledby="thread-settings-title" data-testid="thread-settings-section" sx={(theme: Theme) => ({ borderTop: `0.0625rem solid ${theme.vars.palette.divider}`, paddingTop: 1 })}>
+          <Typography id="thread-settings-title" component="h2" variant="labelMedium" sx={{ paddingX: 2, margin: 0 }}>
+            {t('workspace.settings.title', 'Thread settings')}
+          </Typography>
+          <Box ref={settingsRef} sx={{ paddingX: 2, paddingY: 1 }} />
+          <ProjectInstructionsSection workspaceId={workspaceId} conversationId={conversationId} turn={turn} ipc={ipc} />
+        </Box>
         <HandoffBaton container={container} states={states} />
         <AgentStateAnnouncer rows={rows} />
       </Box>

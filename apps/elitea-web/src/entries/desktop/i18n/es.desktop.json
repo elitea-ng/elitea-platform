@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "Agentes de este hilo",
   "workspace.participants.search": "Buscar",
   "workspace.participants.team": "Equipo: {{name}}",
-  "workspace.team.add": "Añadir equipo"
+  "workspace.team.add": "Añadir equipo",
+  "workspace.team.noticeClose": "Ocultar en este hilo",
+  "workspace.team.noticeLess": "Mostrar menos",
+  "workspace.team.noticeMore": "Más información",
+  "workspace.to.header": "Enviar a",
+  "workspace.to.manage": "Administrar participantes…",
+  "workspace.settings.title": "Configuración del hilo",
+  "workspace.settings.workspace": "Espacio de trabajo",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "En sandbox",
+  "workspace.settings.subAgents": "Subagentes",
+  "workspace.settings.subAgentsValue": "Solo lectura, ofrecidos",
+  "workspace.settings.models": "Modelos",
+  "workspace.settings.modelCloud": "Su propio modelo (nube)",
+  "workspace.settings.modelPinned": "{{model}} (fijado)",
+  "workspace.settings.context": "Contexto",
+  "workspace.model.own": "Modelo propio del agente ({{model}})"
 }

@@ -1,6 +1,7 @@
 export { default as ChatBox } from './ui/ChatBox';
 export type { ChatBoxProps, ChatBoxHandle } from './ui/ChatBox';
 export { toParticipant } from './ui/ChatBox.helpers';
+export { useChatBoxLlmSettingsDialog } from './ui/ChatBoxLlmSettingsDialog';
 export { useChatBoxData } from './ui';
 export type {
   UseChatBoxDataParams,
@@ -21,5 +22,4 @@ export type {
   ChatBoxHandlerDeps,
   SendQuestionParams,
   SendResult,
-  HitlInterruptAction,
 } from './ui';

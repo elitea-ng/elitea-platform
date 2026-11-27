@@ -33,8 +33,11 @@ export interface SessionCommands {
   continueTurn: () => void;
   /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
-  /** The box holding the model chip; `/model` opens it (no chip: the agent's model is fixed here). */
-  modelRef: RefObject<HTMLDivElement | null>;
+  /**
+   * `/model`: the composer opens the lead's (else its agent's) model chip in Thread settings and says `true`; `false`
+   * or none: the agent's model is fixed here (#3145).
+   */
+  modelOpen: RefObject<(() => boolean) | null>;
   /** `/compact` was asked for: the next message's turn compacts the context first. */
   compactNext: boolean;
   /** The turn that compacts started. */
@@ -42,8 +45,9 @@ export interface SessionCommands {
   run: (command: WorkspaceCommandId) => void;
 }
 
-export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTurn, canUndo: boolean): SessionCommands {
-  const [planMode, setPlanMode] = useState(false);
+export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTurn, canUndo: boolean, initialPlanMode = false): SessionCommands {
+  // A worktree's new thread starts in the plan mode its folder's new thread was in (#3144).
+  const [planMode, setPlanMode] = useState(initialPlanMode);
   // An accepted plan left plan mode on the host (`plan_accepted`): the switch follows, once per accept.
   const accepted = turn.view.planAccepted;
   const [followed, setFollowed] = useState<string | undefined>(undefined);
@@ -58,7 +62,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
   const [continueRequest, setContinueRequest] = useState(0);
   const [compactNext, setCompactNext] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
-  const modelRef = useRef<HTMLDivElement>(null);
+  const modelOpen = useRef<(() => boolean) | null>(null);
 
   const actions: Record<WorkspaceCommandId, () => void> = {
     new: () => {
@@ -75,9 +79,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     steps: () => undefined,
     agent: () => agentRef.current?.querySelector<HTMLElement>('button')?.click(),
     model: () => {
-      const chip = modelRef.current?.querySelector<HTMLElement>('button');
-      if (chip === undefined || chip === null) setNotice('modelFixed');
-      else chip.click();
+      if (modelOpen.current?.() !== true) setNotice('modelFixed');
     },
     clear: () => turn.clear(),
     compact: () => {
@@ -102,7 +104,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     continueRequest,
     continueTurn: () => setContinueRequest((value) => value + 1),
     agentRef,
-    modelRef,
+    modelOpen,
     compactNext,
     compactSent: () => {
       setCompactNext(false);

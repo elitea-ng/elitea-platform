@@ -1122,5 +1122,21 @@
   "workspace.participants.open": "이 스레드의 에이전트",
   "workspace.participants.search": "검색",
   "workspace.participants.team": "팀: {{name}}",
-  "workspace.team.add": "팀 추가"
+  "workspace.team.add": "팀 추가",
+  "workspace.team.noticeClose": "이 스레드에서 숨기기",
+  "workspace.team.noticeLess": "간단히 보기",
+  "workspace.team.noticeMore": "자세히 알아보기",
+  "workspace.to.header": "보낼 대상",
+  "workspace.to.manage": "참여자 관리…",
+  "workspace.settings.title": "스레드 설정",
+  "workspace.settings.workspace": "워크스페이스",
+  "workspace.settings.sandbox": "샌드박스",
+  "workspace.settings.sandboxed": "샌드박스 적용",
+  "workspace.settings.subAgents": "하위 에이전트",
+  "workspace.settings.subAgentsValue": "읽기 전용, 제공됨",
+  "workspace.settings.models": "모델",
+  "workspace.settings.modelCloud": "자체 모델 (클라우드)",
+  "workspace.settings.modelPinned": "{{model}} (고정)",
+  "workspace.settings.context": "컨텍스트",
+  "workspace.model.own": "에이전트 자체 모델 ({{model}})"
 }

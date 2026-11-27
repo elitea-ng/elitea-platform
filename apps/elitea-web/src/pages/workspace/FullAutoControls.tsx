@@ -2,7 +2,8 @@
  * Full auto's confirmation and banner (`useFullAutoMode`, issue 3079): the
  * dialog every time a thread turns it on, which names the risk, and the red
  * line above the composer while it is on. The line cannot be dismissed; its
- * button turns the mode off.
+ * button turns the mode off, drawn in the banner's contrast colour with an outline so it reads in the light and dark
+ * themes alike (#3145).
  */
 import Alert from '@mui/material/Alert';
 import Button from '@mui/material/Button';
@@ -25,7 +26,19 @@ export function FullAutoControls({ fullAuto, active }: { fullAuto: FullAutoMode;
           variant="filled"
           data-testid="workspace-full-auto-banner"
           action={
-            <Button color="inherit" size="small" onClick={() => fullAuto.request(false)}>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => fullAuto.request(false)}
+              data-testid="workspace-full-auto-off"
+              sx={{
+                color: 'error.contrastText',
+                borderColor: 'error.contrastText',
+                fontWeight: 600,
+                whiteSpace: 'nowrap',
+                '&:hover': { borderColor: 'error.contrastText', backgroundColor: 'rgba(255, 255, 255, 0.16)' },
+              }}
+            >
               {t('workspace.fullAuto.turnOff', 'Turn off')}
             </Button>
           }
