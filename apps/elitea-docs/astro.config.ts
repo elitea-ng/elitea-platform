@@ -15,6 +15,7 @@ import { defineConfig, passthroughImageService } from 'astro/config';
 import starlightSidebarTopics from 'starlight-sidebar-topics';
 
 import { nav, type NavGroup, type NavTab } from './src/nav';
+import { blueprintDownloads } from './src/plugins/blueprints';
 import { rehypeBaseLinks } from './src/plugins/rehype-base-links';
 import { remarkDocsComponents } from './src/plugins/remark-docs-components';
 import { remarkMermaid } from './src/plugins/remark-mermaid';
@@ -94,5 +95,7 @@ export default defineConfig({
       },
       plugins: [starlightSidebarTopics(nav.map(topic))],
     }),
+    // The importable blueprint files under blueprints/ (issue 3137).
+    blueprintDownloads(),
   ],
 });

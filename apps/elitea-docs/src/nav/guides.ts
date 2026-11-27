@@ -49,6 +49,7 @@ export const guidesTab: NavTab = {
       kind: 'group',
       title: 'Agents, pipelines and skills',
       pages: [
+        { kind: 'page', slug: 'how-tos/agents-pipelines/blueprints', title: 'Start from a blueprint' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/build-agent-with-ai', title: 'Build an agent with AI' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/entity-versioning', title: 'Version agents and pipelines' },
         { kind: 'page', slug: 'how-tos/agents-pipelines/import-export', title: 'Import and export entities' },
