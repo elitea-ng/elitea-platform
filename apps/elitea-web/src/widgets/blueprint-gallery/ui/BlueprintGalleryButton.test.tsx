@@ -90,6 +90,24 @@ describe('BlueprintGalleryButton', () => {
     expect(within(card).getByText(/A web search toolkit/)).toBeInTheDocument();
   });
 
+  // The photo avatars of a team (the Elitea dev team's WebP stills) render through the shared AgentAvatar from the
+  // app's own built files: an app path, so the desktop serves it from its bundle and the web from its origin.
+  it('shows the photo avatar of a member from the built blueprint files', async () => {
+    const team = INDEX.teams[0];
+    server.use(
+      http.get('*/blueprints/index.json', () =>
+        HttpResponse.json({
+          ...INDEX,
+          teams: [{ ...team, members: [{ slug: 'coordinator', name: 'Coordinator', avatar: { still: 'avatars/elitea-dev-team/coordinator/still.webp' } }] }],
+        }),
+      ),
+    );
+    await openGallery('teams');
+    const card = await screen.findByTestId('blueprint-card-incident-desk');
+    const image = card.querySelector('img');
+    expect(image?.getAttribute('src')).toMatch(/\/blueprints\/avatars\/elitea-dev-team\/coordinator\/still\.webp$/);
+  });
+
   it('opens on the Teams tab from the Teams page', async () => {
     await openGallery('teams');
     expect(await screen.findByTestId('blueprint-card-incident-desk')).toBeInTheDocument();
