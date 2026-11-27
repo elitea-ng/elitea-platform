@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "У {{file}} немає назви команди.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} вказує учасника двічі.",
   "features.agentLifecycle.import.team.tooManyMembers": "У команді щонайбільше {{limit}} агентів.",
-  "features.agentLifecycle.import.teamLead": "Провідний: {{name}}",
-  "features.agentLifecycle.import.teamName": "Команда: {{name}}",
   "features.agentTeams.exportAction": "Експорт",
   "features.agentTeams.exportMemberFailed": "Не вдалося експортувати команду: не вдалося прочитати агента {{name}}.",
   "features.agentLifecycle.import.teamOnAgents": "Цей zip — команда. Імпортуйте його зі списку агентів.",

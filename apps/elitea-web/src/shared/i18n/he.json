@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "ל-{{file}} אין שם צוות.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} מפרט חבר פעמיים.",
   "features.agentLifecycle.import.team.tooManyMembers": "בצוות יש לכל היותר {{limit}} סוכנים.",
-  "features.agentLifecycle.import.teamLead": "מוביל: {{name}}",
-  "features.agentLifecycle.import.teamName": "צוות: {{name}}",
   "features.agentTeams.exportAction": "ייצוא",
   "features.agentTeams.exportMemberFailed": "לא ניתן היה לייצא את הצוות: לא ניתן היה לקרוא את הסוכן {{name}}.",
   "features.agentLifecycle.import.teamOnAgents": "קובץ ה-zip הזה הוא צוות. ייבאו אותו מרשימת הסוכנים.",

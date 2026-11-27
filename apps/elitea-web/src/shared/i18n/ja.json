@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} にチーム名がありません。",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} に同じメンバーが 2 回記載されています。",
   "features.agentLifecycle.import.team.tooManyMembers": "チームのエージェントは最大 {{limit}} 件です。",
-  "features.agentLifecycle.import.teamLead": "リーダー: {{name}}",
-  "features.agentLifecycle.import.teamName": "チーム: {{name}}",
   "features.agentTeams.exportAction": "エクスポート",
   "features.agentTeams.exportMemberFailed": "チームをエクスポートできませんでした: エージェント {{name}} を読み取れませんでした。",
   "features.agentLifecycle.import.teamOnAgents": "この zip はチームです。エージェント一覧からインポートしてください。",

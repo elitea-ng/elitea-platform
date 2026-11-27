@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}}에 팀 이름이 없습니다.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}}에 같은 멤버가 두 번 있습니다.",
   "features.agentLifecycle.import.team.tooManyMembers": "팀에는 에이전트가 최대 {{limit}}개까지 있습니다.",
-  "features.agentLifecycle.import.teamLead": "리더: {{name}}",
-  "features.agentLifecycle.import.teamName": "팀: {{name}}",
   "features.agentTeams.exportAction": "내보내기",
   "features.agentTeams.exportMemberFailed": "팀을 내보낼 수 없습니다: 에이전트 {{name}}을(를) 읽을 수 없습니다.",
   "features.agentLifecycle.import.teamOnAgents": "이 zip은 팀입니다. 에이전트 목록에서 가져오세요.",

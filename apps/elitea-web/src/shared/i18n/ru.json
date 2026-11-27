@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "В {{file}} нет названия команды.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} указывает участника дважды.",
   "features.agentLifecycle.import.team.tooManyMembers": "В команде не более {{limit}} агентов.",
-  "features.agentLifecycle.import.teamLead": "Ведущий: {{name}}",
-  "features.agentLifecycle.import.teamName": "Команда: {{name}}",
   "features.agentTeams.exportAction": "Экспорт",
   "features.agentTeams.exportMemberFailed": "Не удалось экспортировать команду: не удалось прочитать агента {{name}}.",
   "features.agentLifecycle.import.teamOnAgents": "Этот zip — команда. Импортируйте его из списка агентов.",

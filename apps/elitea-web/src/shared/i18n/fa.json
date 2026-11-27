@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} نام تیم ندارد.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} یک عضو را دو بار فهرست کرده است.",
   "features.agentLifecycle.import.team.tooManyMembers": "یک تیم حداکثر {{limit}} عامل دارد.",
-  "features.agentLifecycle.import.teamLead": "سرپرست: {{name}}",
-  "features.agentLifecycle.import.teamName": "تیم: {{name}}",
   "features.agentTeams.exportAction": "خروجی گرفتن",
   "features.agentTeams.exportMemberFailed": "خروجی گرفتن از تیم ممکن نشد: عامل {{name}} خوانده نشد.",
   "features.agentLifecycle.import.teamOnAgents": "این zip یک تیم است. آن را از فهرست عامل‌ها وارد کنید.",

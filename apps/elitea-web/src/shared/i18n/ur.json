@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} میں ٹیم کا نام نہیں ہے۔",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} ایک رکن کو دو بار درج کرتی ہے۔",
   "features.agentLifecycle.import.team.tooManyMembers": "ایک ٹیم میں زیادہ سے زیادہ {{limit}} ایجنٹ ہوتے ہیں۔",
-  "features.agentLifecycle.import.teamLead": "لیڈ: {{name}}",
-  "features.agentLifecycle.import.teamName": "ٹیم: {{name}}",
   "features.agentTeams.exportAction": "برآمد کریں",
   "features.agentTeams.exportMemberFailed": "ٹیم برآمد نہیں کی جا سکی: ایجنٹ {{name}} پڑھا نہیں جا سکا۔",
   "features.agentLifecycle.import.teamOnAgents": "یہ zip ایک ٹیم ہے۔ اسے ایجنٹس کی فہرست سے درآمد کریں۔",
