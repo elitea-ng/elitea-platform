@@ -192,7 +192,7 @@ function TeamsMode({ base, projectId }: { readonly base: SidebarBase; readonly p
       <EntityListSidebar
         {...base}
         subject={title}
-        newAction={teams.canCreate ? { label: t('features.agentTeams.create', 'New team'), testId: 'teams-create', onClick: () => setCreating(true) } : undefined}
+        newAction={teams.canList && teams.canCreate ? { label: t('features.agentTeams.create', 'New team'), testId: 'teams-create', onClick: () => setCreating(true) } : undefined}
         secondaryActions={
           <TeamImportButton
             projectId={projectId}

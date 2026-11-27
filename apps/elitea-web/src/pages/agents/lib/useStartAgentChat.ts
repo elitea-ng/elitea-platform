@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { useNavigate } from '@tanstack/react-router';
 
@@ -79,9 +79,11 @@ function runVersionOf(detail: ApplicationDetail): { readonly versionId: string; 
 
 /**
  * The Agents card's Chat (issue 3133): reads the agent's default version,
- * starts a private conversation with it and opens it. `startingId` is the
- * agent being started, so its card can disable the button; `error` says why
- * the last start failed, in the server's words when it gave some.
+ * starts a private conversation with it and opens it. One start at a time: a
+ * second click (a double-click, or another card's Chat) while one is running
+ * is ignored, so it never makes a second conversation. `startingId` is the
+ * agent being started, so the cards can wait; `error` says why the last start
+ * failed, in the server's words when it gave some.
  */
 export function useStartAgentChat(projectId: string | undefined) {
   const navigate = useNavigate();
@@ -90,10 +92,12 @@ export function useStartAgentChat(projectId: string | undefined) {
   const userId = currentUserIdOf(useGetCurrentAuthor().data);
   const [startingId, setStartingId] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
+  const inFlight = useRef(false);
 
   const start = useCallback(
     async (applicationId: string, name: string) => {
-      if (projectId === undefined || userId === undefined) return;
+      if (projectId === undefined || userId === undefined || inFlight.current) return;
+      inFlight.current = true;
       setStartingId(applicationId);
       setError(undefined);
       try {
@@ -108,6 +112,7 @@ export function useStartAgentChat(projectId: string | undefined) {
       } catch (cause) {
         setError(serverErrorMessage(cause, t('pages.agents.list.chatFailed', 'The chat could not be started. Try again.')));
       } finally {
+        inFlight.current = false;
         setStartingId(undefined);
       }
     },

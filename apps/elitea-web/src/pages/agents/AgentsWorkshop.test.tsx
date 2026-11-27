@@ -284,6 +284,7 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
   // Issue 3133: the card's Chat starts a private conversation with the agent's default version and opens it.
   it('starts a chat with the agent from its card and opens the conversation', async () => {
     let participants: unknown;
+    let creates = 0;
     server.use(
       getGetCurrentAuthorMockHandler({ id: 5, email: 'me@example.com', name: 'Me' } as never),
       getGetApplicationMockHandler({
@@ -295,7 +296,10 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
         created_at: '2026-01-01T00:00:00Z',
         versions: [{ id: '11', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z', is_default: true }],
       }),
-      http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ id: '77', name: 'Draft agent' }, { status: 201 })),
+      http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => {
+        creates += 1;
+        return HttpResponse.json({ id: '77', name: 'Draft agent' }, { status: 201 });
+      }),
       http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
         participants = await request.json();
         return HttpResponse.json([], { status: 200 });
@@ -308,9 +312,11 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
     expect(cards[0]).toHaveAttribute('data-variant', 'rich');
     const chat = within(cards[0] as HTMLElement).getByTestId('entity-card-primary-action');
     await waitFor(() => expect(chat).toBeEnabled());
-    await user.click(chat);
+    // A double-click makes one conversation, not two.
+    await user.dblClick(chat);
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+    expect(creates).toBe(1);
     expect(JSON.stringify(participants)).toContain('"version_id":"11"');
   });
 

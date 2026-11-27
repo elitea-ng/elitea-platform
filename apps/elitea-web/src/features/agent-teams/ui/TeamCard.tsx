@@ -23,18 +23,17 @@ import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
-import { formatDistanceToNow } from 'date-fns';
-
 import type { AgentTeam } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { cardSurfaceSx } from '@/shared/lib/cardSurface';
+import { updatedAgoLabel } from '@/shared/lib/updatedAgo';
 
 import type { MemberAvatar } from '../model/useTeamMemberAvatars';
 import { TeamAvatarStack, type RenderMemberAvatar } from './TeamAvatarStack';
 
 export interface TeamCardProps {
   readonly team: AgentTeam;
-  readonly avatars: ReadonlyMap<number, MemberAvatar>;
+  readonly avatars: ReadonlyMap<string, MemberAvatar>;
   readonly renderAvatar?: RenderMemberAvatar | undefined;
   readonly starting: boolean;
   readonly onStart: () => void;
@@ -47,14 +46,8 @@ export interface TeamCardProps {
   readonly onDelete?: (() => void) | undefined;
 }
 
-function updatedLabel(updatedAt: string): string | undefined {
-  const parsed = new Date(updatedAt);
-  if (Number.isNaN(parsed.getTime())) return undefined;
-  return t('features.agentTeams.updatedAgo', 'Updated {{distance}} ago', { distance: formatDistanceToNow(parsed) });
-}
-
 export function TeamCard({ team, avatars, renderAvatar, starting, onStart, onExport, exporting, onEdit, onDelete }: TeamCardProps): ReactNode {
-  const updated = updatedLabel(team.updated_at);
+  const updated = updatedAgoLabel(team.updated_at);
   return (
     <Box
       component="article"

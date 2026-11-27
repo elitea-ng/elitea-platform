@@ -234,10 +234,14 @@ describe('TeamsPanel', () => {
 
   it('draws a member with an avatar through the page\'s renderer and the others as a monogram', async () => {
     grant('models.teams.list');
-    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
+    // Application ids are per project: agent 31 of project 2 is not this project's agent 31.
+    const elsewhere = { application_id: 31, project_id: 2, version_id: 51, name: 'Elsewhere' };
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [{ ...TEAM_ROW, members: [...TEAM_ROW.members, elsewhere] }], total: 1 })));
     renderWithQueryAndTheme(<Panel onStarted={vi.fn()} renderMemberAvatar={(avatar) => <span data-testid="live-avatar-probe">{avatar.iconUrl}</span>} />);
     expect(await screen.findByTestId('live-avatar-probe')).toHaveTextContent('/media/mira.png');
-    expect(within(screen.getByTestId('agent-team-avatars-3')).getByTestId('monogram')).toHaveTextContent('CD');
+    expect(screen.getAllByTestId('live-avatar-probe')).toHaveLength(1);
+    const monograms = within(screen.getByTestId('agent-team-avatars-3')).getAllByTestId('monogram');
+    expect(monograms.map((monogram) => monogram.textContent)).toEqual(['CD', 'E']);
   });
 
   it('reads nothing without the list permission', async () => {

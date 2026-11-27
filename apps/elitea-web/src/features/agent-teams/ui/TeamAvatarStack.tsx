@@ -12,7 +12,7 @@ import type { AgentTeam, AgentTeamMember } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { Monogram } from '@/shared/ui/Monogram';
 
-import type { MemberAvatar } from '../model/useTeamMemberAvatars';
+import { memberAvatarKey, type MemberAvatar } from '../model/useTeamMemberAvatars';
 
 /** Draws one member's live avatar; the page passes the shared renderer (a feature does not import another feature). */
 export type RenderMemberAvatar = (avatar: MemberAvatar, size: string) => ReactNode;
@@ -61,7 +61,7 @@ function MemberFace({ entry, avatar, renderAvatar }: { readonly entry: OrderedMe
 
 interface TeamAvatarStackProps {
   readonly team: AgentTeam;
-  readonly avatars: ReadonlyMap<number, MemberAvatar>;
+  readonly avatars: ReadonlyMap<string, MemberAvatar>;
   readonly renderAvatar?: RenderMemberAvatar | undefined;
 }
 
@@ -89,7 +89,7 @@ export function TeamAvatarStack({ team, avatars, renderAvatar }: TeamAvatarStack
               <MemberFace
                 key={`${String(entry.member.project_id)}:${String(entry.member.application_id)}`}
                 entry={entry}
-                avatar={avatars.get(entry.member.application_id)}
+                avatar={avatars.get(memberAvatarKey(entry.member.project_id, entry.member.application_id))}
                 renderAvatar={renderAvatar}
               />
             ))}

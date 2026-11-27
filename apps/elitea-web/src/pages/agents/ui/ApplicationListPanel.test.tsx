@@ -161,15 +161,15 @@ describe('ApplicationListPanel', () => {
       expect(within(without).queryByTestId('chat-message-avatar')).toBeNull();
     });
 
-    it('offers Chat on each card, and waits on the one that is starting', () => {
+    it('offers Chat on each card, and every Chat waits while one is starting', () => {
       const onChat = vi.fn();
-      const { getAllByTestId } = renderWithTheme(
-        <ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{ onChat, chattingId: '2' }} />,
+      const { getAllByTestId, rerender } = renderWithTheme(
+        <ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{ onChat }} />,
       );
-      const buttons = getAllByTestId('entity-card-primary-action');
-      expect(buttons[1]).toBeDisabled();
-      fireEvent.click(buttons[0] as HTMLElement);
+      fireEvent.click(getAllByTestId('entity-card-primary-action')[0] as HTMLElement);
       expect(onChat).toHaveBeenCalledWith(expect.objectContaining({ id: '1', name: 'Dev Coordinator' }));
+      rerender(<ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{ onChat, chattingId: '1' }} />);
+      for (const button of getAllByTestId('entity-card-primary-action')) expect(button).toBeDisabled();
     });
 
     it('keeps the compact tile without the rich option', () => {

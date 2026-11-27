@@ -83,7 +83,7 @@ export interface ApplicationListPanelProps {
 const COMPACT_CARD = 'compact';
 const RICH_CARD = 'rich';
 
-/** What the rich card adds: the Chat action, and which agent's chat is starting (its button waits). */
+/** What the rich card adds: the Chat action, and which agent's chat is starting (every Chat waits for it). */
 export interface RichCardOptions {
   readonly onChat?: (row: ApplicationListRow) => void;
   readonly chattingId?: string | undefined;
@@ -108,7 +108,7 @@ function richFields(row: ApplicationListRow, rich: RichCardOptions): Partial<Ent
     ...(row.updatedAt === undefined ? {} : { updatedAt: row.updatedAt }),
     ...(onChat === undefined
       ? {}
-      : { primaryAction: { label: t('pages.agents.list.chat', 'Chat'), onClick: () => onChat(row), disabled: rich.chattingId === row.id } }),
+      : { primaryAction: { label: t('pages.agents.list.chat', 'Chat'), onClick: () => onChat(row), disabled: rich.chattingId !== undefined } }),
   };
 }
 

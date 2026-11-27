@@ -114,7 +114,6 @@ function TeamsHeader({ canCreate, onCreate, actions }: { readonly canCreate: boo
 function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange, headerActions, renderMemberAvatar }: TeamsListProps): ReactNode {
   const list = useAgentTeamList(projectId, '');
   const writes = useAgentTeamWrites(projectId);
-  const avatars = useTeamMemberAvatars(projectId);
   const [editingTeam, setEditingTeam] = useState<AgentTeam | undefined>(undefined);
   const [deleting, setDeleting] = useState<AgentTeam | undefined>(undefined);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
@@ -139,6 +138,7 @@ function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange
   };
 
   const teams = list.rows;
+  const avatars = useTeamMemberAvatars(projectId, teams.length > 0);
   const editOpen = creating || editingTeam !== undefined;
   return (
     <Box sx={panelSx} data-testid="agent-teams-panel">

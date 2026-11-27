@@ -6,9 +6,8 @@ import Button from '@mui/material/Button';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
-import { formatDistanceToNow } from 'date-fns';
-
 import { t } from '@/shared/i18n';
+import { updatedAgoLabel } from '@/shared/lib/updatedAgo';
 import { Monogram } from '@/shared/ui/Monogram';
 
 import { CardSelectBox } from './EntityCard';
@@ -150,18 +149,9 @@ function CardTitleRow({ item, pinned }: { readonly item: EntityListItem; readonl
   );
 }
 
-/** A row's last change as "Updated 3 days ago", or nothing for a missing or zero-sentinel time. */
-function updatedLabel(updatedAt: string | undefined): string | undefined {
-  if (updatedAt === undefined) return undefined;
-  const parsed = new Date(updatedAt);
-  // The list used to answer "0001-01-01T00:00:00Z" for every row (see the Application schema).
-  if (Number.isNaN(parsed.getTime()) || parsed.getUTCFullYear() < 2000) return undefined;
-  return t('shared.entityList.updatedAgo', 'Updated {{distance}} ago', { distance: formatDistanceToNow(parsed) });
-}
-
 /** The muted footer: the creator, the tag chips and the last change; the fork marker when there is one. */
 function CardFooter({ item, onTagClick }: { readonly item: EntityListItem; readonly onTagClick?: (tag: EntityListTag) => void }): ReactNode {
-  const updated = updatedLabel(item.updatedAt);
+  const updated = updatedAgoLabel(item.updatedAt);
   return (
     <Box sx={styles.footerSx}>
       <EntityCardAuthors authors={item.authors ?? []} />

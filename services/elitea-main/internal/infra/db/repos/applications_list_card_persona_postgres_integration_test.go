@@ -48,6 +48,48 @@ func TestApplicationsRepoPostgres_ListCarriesThePersonaRoleAndAvatarPack(t *test
 	}
 }
 
+// The card describes the version a chat from it runs: the default version,
+// not the first one, when an author gave only a later version a persona.
+func TestApplicationsRepoPostgres_ListTakesThePersonaFromTheDefaultVersion(t *testing.T) {
+	repo, pool := newApplicationsTestRepo(t)
+	ctx := testContext(t)
+	seedUser(t, pool, 42, "default@elitea.ai")
+
+	app := createTestApplication(t, repo, "persona-on-a-later-version", 42, &applications.Version{Name: "base"})
+	later, err := repo.CreateVersion(ctx, testProjectID, app.ID, applications.Version{
+		Name:     "v2",
+		AuthorID: 42,
+		Soul:     json.RawMessage(`{"schema":"elitea.soul/v1","role":"Release manager"}`),
+	})
+	if err != nil {
+		t.Fatalf("create version: %v", err)
+	}
+	listRole := func() any {
+		t.Helper()
+		list, err := repo.List(ctx, applications.ListRequest{ProjectID: testProjectID, Page: 1, PageSize: 50})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		for _, row := range list.Rows {
+			if row.ID == app.ID {
+				return row.Meta["persona_role"]
+			}
+		}
+		t.Fatalf("agent %s not listed", app.ID)
+		return nil
+	}
+
+	if got := listRole(); got != nil {
+		t.Errorf("before the default moves, persona_role = %v, want none (base has no soul)", got)
+	}
+	if err := repo.SetDefaultVersion(ctx, testProjectID, app.ID, later.ID); err != nil {
+		t.Fatalf("set default version: %v", err)
+	}
+	if got := listRole(); got != "Release manager" {
+		t.Errorf("persona_role = %v, want the default version's role", got)
+	}
+}
+
 func TestSurfaceCardPersonaIgnoresEmptyAndMalformedInput(t *testing.T) {
 	meta := map[string]any{}
 	surfaceCardPersona(meta, "   ", "null")
