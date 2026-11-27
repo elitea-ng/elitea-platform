@@ -1,5 +1,5 @@
 /**
- * The step limit in the composer's ⋯ menu: the model steps each run of this
+ * The step limit in Thread settings (#3145; it was the composer's ⋯ menu): the model steps each run of this
  * folder's turns may take (the workspace's agent settings, IPC.md "Step
  * limit"). The row "Step limit" shows the current value; hovering it opens
  * the choices beside it: the default, a few presets, unlimited and a
@@ -68,6 +68,12 @@ function useStepLimit(workspaceId: string): StepLimit | null | undefined {
     };
   }, [workspaceId]);
   return limit;
+}
+
+/** The limit as Thread settings shows it ("1024 steps"), kept current; nothing until the host answered. */
+export function StepLimitValue({ workspaceId }: { workspaceId: string }): React.JSX.Element | null {
+  const limit = useStepLimit(workspaceId);
+  return limit === undefined ? null : <span data-testid="thread-settings-steps-value">{stepsLabel(limit)}</span>;
 }
 
 /** "Custom…": a number of your own, checked before it is sent. */

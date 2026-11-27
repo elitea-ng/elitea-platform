@@ -16,10 +16,20 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-function setPendingRespect(workspaceId: string, respect: boolean): void {
+export function setPendingRespect(workspaceId: string, respect: boolean): void {
   if (respect) optedOut.delete(workspaceId);
   else optedOut.add(workspaceId);
   listeners.forEach((listener) => listener());
+}
+
+/**
+ * The folder's new thread moved to a worktree before its first message (#3144): the choice is the worktree's new
+ * thread's now, and the folder's next new thread starts on again.
+ */
+export function movePendingRespect(from: string, to: string): void {
+  if (!optedOut.has(from)) return;
+  optedOut.delete(from);
+  setPendingRespect(to, false);
 }
 
 /** The choice for the folder's thread not created yet (on unless turned off), and the setter. */

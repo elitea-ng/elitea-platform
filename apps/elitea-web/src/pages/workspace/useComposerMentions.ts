@@ -7,7 +7,7 @@
  * agree on who is in the thread. `requestAddress` lets the Participants tab's "Address" put `@Name ` into the
  * composer of the same thread.
  */
-import { createElement, useEffect, useMemo, useRef, type ReactNode, type RefObject } from 'react';
+import { createElement, useEffect, useMemo, useRef, type RefObject } from 'react';
 
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
@@ -110,11 +110,6 @@ function addressStore(): UseBoundStore<StoreApi<AddressRequests>> {
 
 function useAddressStore<T>(selector: (state: AddressRequests) => T): T {
   return addressStore()(selector);
-}
-
-/** The To chip's place above the input (`render`, with the text being typed); nothing without one. */
-export function ToSlot({ render, draft }: { readonly render: ((draft: string) => ReactNode) | undefined; readonly draft: string }): ReactNode {
-  return render === undefined ? null : render(draft);
 }
 
 /** Puts `@Name ` into the composer of the thread `threadKey` (the Participants tab's "Address"). */

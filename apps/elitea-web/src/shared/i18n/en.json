@@ -7749,5 +7749,7 @@
   "marketplace.teamHire.title": "Hire the team {{name}}",
   "marketplace.teamHire.unavailable": "This agent version cannot be hired now, so the team cannot be hired.",
   "features.chatMessages.agentsMdApplied": "AGENTS.md applied",
-  "features.chatMessages.agentsMdIgnored": "AGENTS.md ignored"
+  "features.chatMessages.agentsMdIgnored": "AGENTS.md ignored",
+  "chat.participants.model": "Model in this thread…",
+  "chat.participants.modelBadge": "Model in this thread: {{model}}"
 }

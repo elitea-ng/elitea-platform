@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "Agenci tego wątku",
   "workspace.participants.search": "Szukaj",
   "workspace.participants.team": "Zespół: {{name}}",
-  "workspace.team.add": "Dodaj zespół"
+  "workspace.team.add": "Dodaj zespół",
+  "workspace.team.noticeClose": "Ukryj w tym wątku",
+  "workspace.team.noticeLess": "Pokaż mniej",
+  "workspace.team.noticeMore": "Dowiedz się więcej",
+  "workspace.to.header": "Wyślij do",
+  "workspace.to.manage": "Zarządzaj uczestnikami…",
+  "workspace.settings.title": "Ustawienia wątku",
+  "workspace.settings.workspace": "Przestrzeń robocza",
+  "workspace.settings.sandbox": "Piaskownica",
+  "workspace.settings.sandboxed": "W piaskownicy",
+  "workspace.settings.subAgents": "Podagenci",
+  "workspace.settings.subAgentsValue": "Tylko do odczytu, dostępni",
+  "workspace.settings.models": "Modele",
+  "workspace.settings.modelCloud": "Własny model (chmura)",
+  "workspace.settings.modelPinned": "{{model}} (przypięty)",
+  "workspace.settings.context": "Kontekst",
+  "workspace.model.own": "Własny model agenta ({{model}})"
 }

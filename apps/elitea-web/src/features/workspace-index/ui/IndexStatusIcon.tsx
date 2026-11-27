@@ -89,3 +89,17 @@ export function IndexStatusIcon(props: IndexStatusIconProps): React.JSX.Element 
   if (ipc === undefined) return null;
   return <Mark ipc={ipc} {...props} />;
 }
+
+function Opener({ ipc, workspaceId }: { ipc: IndexIpc; workspaceId: string }): null {
+  useWorkspaceIndex(ipc, workspaceId, { open: true });
+  return null;
+}
+
+/**
+ * Opens the folder's index while its session page is on screen (`index_open`, which also checks what changed while it
+ * was closed), whether or not its icon is: the icon is in the Participants tab's Thread settings since #3145.
+ */
+export function FolderIndexOpener({ workspaceId, enabled }: { workspaceId: string; enabled: boolean }): React.JSX.Element | null {
+  const ipc = useIndexIpc();
+  return ipc === undefined || !enabled ? null : <Opener ipc={ipc} workspaceId={workspaceId} />;
+}

@@ -8,5 +8,5 @@ export { WorkspaceIndexControl } from './ui/WorkspaceIndexControl';
 export { IndexIpcProvider } from './model/ipcContext';
 export { IndexPanelHost, useHasIndexHost } from './ui/IndexPanelHost';
 export { useIndexIpc } from './model/ipcContext';
-export { IndexStatusIcon } from './ui/IndexStatusIcon';
+export { FolderIndexOpener, IndexStatusIcon } from './ui/IndexStatusIcon';
 export { foldProgress } from './model/progress';

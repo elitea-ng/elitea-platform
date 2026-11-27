@@ -5068,5 +5068,7 @@
   "chat.presence.waitingForYou": "آپ کا انتظار",
   "chat.presence.waking": "دوبارہ شروع ہو رہا ہے",
   "chat.presence.working": "کام کر رہا ہے",
-  "features.chatMessages.ranOutsideSandbox": "سینڈ باکس سے باہر چلایا گیا"
+  "features.chatMessages.ranOutsideSandbox": "سینڈ باکس سے باہر چلایا گیا",
+  "chat.participants.model": "اس تھریڈ میں ماڈل…",
+  "chat.participants.modelBadge": "اس تھریڈ میں ماڈل: {{model}}"
 }

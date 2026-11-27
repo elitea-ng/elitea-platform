@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "Agents van deze thread",
   "workspace.participants.search": "Zoeken",
   "workspace.participants.team": "Team: {{name}}",
-  "workspace.team.add": "Team toevoegen"
+  "workspace.team.add": "Team toevoegen",
+  "workspace.team.noticeClose": "Verbergen voor deze thread",
+  "workspace.team.noticeLess": "Minder weergeven",
+  "workspace.team.noticeMore": "Meer informatie",
+  "workspace.to.header": "Verzenden naar",
+  "workspace.to.manage": "Deelnemers beheren…",
+  "workspace.settings.title": "Thread-instellingen",
+  "workspace.settings.workspace": "Werkruimte",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "In sandbox",
+  "workspace.settings.subAgents": "Subagents",
+  "workspace.settings.subAgentsValue": "Alleen-lezen, aangeboden",
+  "workspace.settings.models": "Modellen",
+  "workspace.settings.modelCloud": "Eigen model (cloud)",
+  "workspace.settings.modelPinned": "{{model}} (vastgezet)",
+  "workspace.settings.context": "Context",
+  "workspace.model.own": "Eigen model van de agent ({{model}})"
 }

@@ -2,8 +2,8 @@
  * The composer footer's controls — where a native chat/IDE app keeps them,
  * each drawn as a native pop-up button (`ComposerPicker`, rows from
  * `native-menu`): who the message goes to (`AgentChip`, which opens the
- * thread's Participants tab, #3081), and where the thread runs (this
- * computer, or the cloud) with the actions that move it.
+ * thread's Participants tab, #3081; in a thread of several agents it is the "To:" picker too, #3145), and where the
+ * thread runs (this computer, or the cloud) with the actions that move it.
  */
 import type { Ref } from 'react';
 
@@ -86,16 +86,73 @@ interface AgentChipProps {
   readonly agentRef?: Ref<HTMLDivElement> | undefined;
   /** Why it cannot open (a thread in the cloud). */
   readonly disabledHint?: string | undefined;
+  /** Addresses the message to an agent of the thread (`@Name` into the composer): the chip's menu, with two or more. */
+  readonly onAddress?: ((agent: ThreadAgent) => void) | undefined;
+}
+
+/** "To: Name" in a thread of several agents (#3145, was the chip above the input): who answers, the agents to address, and the tab. */
+function ToPicker({ label, agents, target, onAddress, onManage, agentRef, disabled }: {
+  readonly label: string;
+  readonly agents: readonly ThreadAgent[];
+  readonly target: number | undefined;
+  readonly onAddress: (agent: ThreadAgent) => void;
+  readonly onManage: () => void;
+  readonly agentRef?: Ref<HTMLDivElement> | undefined;
+  readonly disabled: boolean;
+}): React.JSX.Element {
+  return (
+    <Box ref={agentRef} component="span" sx={{ display: 'inline-flex', minWidth: 0 }}>
+      <ComposerPicker value={label} label={t('widgets.chatBox.floorTarget.change', 'Change who answers')} icon={<GroupsOutlinedIcon aria-hidden />} testId="agent-chip" disabled={disabled}>
+        {(close) => (
+          <>
+            <MenuHeader>{t('workspace.to.header', 'Send to')}</MenuHeader>
+            {agents.filter((agent) => agent.name !== '').map((agent) => (
+              <MenuRow
+                key={agent.participantId}
+                selected={agent.participantId === target}
+                data-testid="workspace-to-chip-option"
+                onClick={() => {
+                  close();
+                  onAddress(agent);
+                }}
+              >
+                <MenuRowIcon>{agent.participantId === target ? <CheckOutlinedIcon /> : null}</MenuRowIcon>
+                <MenuRowText>{agent.name}</MenuRowText>
+              </MenuRow>
+            ))}
+            <MenuDivider />
+            <MenuRow
+              data-testid="agent-chip-manage"
+              onClick={() => {
+                close();
+                onManage();
+              }}
+            >
+              <MenuRowIcon />
+              <MenuRowText>{t('workspace.to.manage', 'Manage participants…')}</MenuRowText>
+            </MenuRow>
+          </>
+        )}
+      </ComposerPicker>
+    </Box>
+  );
 }
 
 /**
- * "To: Reviewer (lead)": who the next message goes to (#3081). It opens the thread's Participants tab, where its agents
- * are added, removed and made lead; the chip itself holds no menu.
+ * "To: Reviewer (lead)": who the next message goes to (#3081). With one agent, or before the thread exists, it opens
+ * the thread's Participants tab, where its agents are added, removed and made lead. In a thread of two or more agents
+ * it is a menu (#3145): the agents, to address the message to one (`@Name`), and "Manage participants…" (the tab).
  */
-export function AgentChip({ selection, draft = '', floor, agentRef, disabledHint }: AgentChipProps): React.JSX.Element | null {
+export function AgentChip({ selection, draft = '', floor, agentRef, disabledHint, onAddress }: AgentChipProps): React.JSX.Element | null {
   const panel = useSidePanelSlot();
   if (selection.empty) return null;
   const label = agentChipLabel(selection, draft, floor);
+  const openTab = (): void => panel?.show(participantsTabId(agentCount(selection, floor)));
+  if (floor !== undefined && floor.agents.length >= 2 && onAddress !== undefined) {
+    const sticky = floor.agents.find((a) => String(a.applicationId) === selection.agentId)?.participantId ?? 0;
+    const target = toTarget(draft, floor.agents, floor.meta, sticky)?.agent.participantId;
+    return <ToPicker label={label} agents={floor.agents} target={target} onAddress={onAddress} onManage={openTab} agentRef={agentRef} disabled={disabledHint !== undefined} />;
+  }
   return (
     <Tooltip title={disabledHint ?? t('workspace.participants.open', 'Agents of this thread')}>
       <Box ref={agentRef} component="span" sx={{ display: 'inline-flex', minWidth: 0 }}>
@@ -103,7 +160,7 @@ export function AgentChip({ selection, draft = '', floor, agentRef, disabledHint
           data-testid="agent-chip"
           disabled={disabledHint !== undefined}
           aria-label={`${t('workspace.agent', 'Agent')}: ${label}`}
-          onClick={() => panel?.show(participantsTabId(agentCount(selection, floor)))}
+          onClick={openTab}
           sx={(theme: Theme) => ({
             minWidth: 0,
             gap: 0.5,

@@ -22,7 +22,7 @@ import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspa
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { createFakeIndexIpc, type FakeIndexIpc } from '@/shared/desktop/indexIpc.fake';
 import { createFakeAppIpc, type FakeAppIpc } from '@/shared/desktop/appEvents.fake';
-import { AppIpcProvider, InspectorScope } from '@/widgets/desktop-shell';
+import { AppIpcProvider, InspectorScope, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -1598,16 +1598,28 @@ describe('WorkspaceSessionPage', () => {
       expect(ipc.calls.started[1]?.compact).toBeUndefined();
     }, testTimeout(30_000));
 
-    it('chooses the turn\'s model and effort from the chip, or with /model, and sends it with the turn', async () => {
+    it('chooses each agent\'s model in Thread settings, or with /model, and sends it with the turn (#3145)', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
+      // The thread once it exists: Coder is its agent.
+      server.use(
+        http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () =>
+          HttpResponse.json({ id: 77, name: 'fix the build', participants: [{ id: 11, entity_name: 'application', entity_meta: { id: 5, name: 'Coder' }, entity_settings: { version_id: 9 } }] }),
+        ),
+      );
       const input = screen.getByTestId('chat-message-input');
-      const chip = await screen.findByTestId('model-chip');
+      // No model chip in the composer: each agent's model is under the Participants tab's Thread settings.
+      expect(within(screen.getByTestId('workspace-composer')).queryByTestId('model-chip')).toBeNull();
+      act(() => useDesktopLayout.getState().showInspector('participants'));
+      const row = await screen.findByTestId('thread-settings-model');
+      expect(row).toHaveAttribute('data-agent-id', '5');
+      const chip = await within(row).findByTestId('model-chip');
       await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
 
       await user.click(chip);
       await user.click(await screen.findByRole('menuitem', { name: /gpt-5/ }));
       await waitFor(() => expect(chip).toHaveTextContent('gpt-5'));
+      expect(row).toHaveAttribute('data-overridden', 'true');
       // gpt-5 supports reasoning: its effort is offered too.
       await user.click(chip);
       await user.click(await screen.findByTestId('model-effort-high'));
@@ -1615,21 +1627,25 @@ describe('WorkspaceSessionPage', () => {
 
       await user.type(input, 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
-      expect(ipc.calls.started[0]?.model).toEqual({ name: 'gpt-5', reasoning_effort: 'high' });
+      // The agent's choice, by agent; no thread-wide model.
+      expect(ipc.calls.started[0]?.agent_models).toEqual([{ application_id: 5, name: 'gpt-5', reasoning_effort: 'high' }]);
+      expect(ipc.calls.started[0]?.model).toBeUndefined();
       ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', model: { name: 'gpt-5', reasoning_effort: 'high', chosen: true, pinned: false } } });
       ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'done', payload: { committed: false, conversation_id: '77', message_ids: [], changed_files: 0 } });
       await waitFor(() => expect(screen.getByTestId('workspace-send-button')).toBeInTheDocument());
 
-      // `/model <name>` as the whole message sets it; nothing goes to the agent.
+      // `/model <name>` as the whole message sets it for the thread's agent; nothing goes to the agent.
       await user.type(input, '/model gpt-4o{Enter}');
-      await waitFor(() => expect(chip).toHaveTextContent('gpt-4o'));
-      expect(chip).not.toHaveTextContent('High');
+      await waitFor(() => expect(within(screen.getByTestId('thread-settings-model')).getByTestId('model-chip')).toHaveTextContent('gpt-4o'));
+      expect(within(screen.getByTestId('thread-settings-model')).getByTestId('model-chip')).not.toHaveTextContent('High');
       await waitFor(() => expect(input).toHaveValue(''));
       expect(ipc.calls.started).toHaveLength(1);
 
-      // `/model` alone opens the chip's menu.
+      // `/model` alone opens the agent's chip menu, with its own model first.
       await user.type(input, '/mod{Enter}');
       expect(await screen.findByRole('menuitem', { name: /gpt-5/ })).toBeInTheDocument();
+      await user.click(await screen.findByTestId('model-own'));
+      await waitFor(() => expect(screen.getByTestId('thread-settings-model')).toHaveAttribute('data-overridden', 'false'));
     });
 
     it('offers no model choice when the agent pins its model, and /model says why', async () => {
@@ -1644,6 +1660,7 @@ describe('WorkspaceSessionPage', () => {
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
       // Without a chip the text is a message like any other, sent without a model.
       expect(ipc.calls.started[0]?.model).toBeUndefined();
+      expect(ipc.calls.started[0]?.agent_models).toBeUndefined();
     });
 
     it('lists the agent\'s skills after the commands, filtered, and sends the one the message starts with', async () => {

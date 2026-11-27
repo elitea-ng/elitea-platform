@@ -81,6 +81,36 @@ describe('the agent chip (#3081)', () => {
     expect(show).toHaveBeenCalledWith('team');
     expect(screen.queryByRole('menu')).toBeNull();
   });
+
+  it('is the To picker in a thread of several agents: addresses one, or opens the tab (#3145)', async () => {
+    const user = userEvent.setup();
+    const show = vi.fn();
+    const onAddress = vi.fn();
+    const slot: SidePanelSlot = { register: () => () => undefined, targets: new Map(), show };
+    const floor = {
+      agents: [
+        { participantId: 11, applicationId: 5, name: 'Coder', versionId: 9, cloud: false },
+        { participantId: 12, applicationId: 6, name: 'Reviewer', versionId: 10, cloud: true },
+      ],
+      meta: { floor: { policy: 'lead', lead_participant_id: 12 } },
+    };
+    render(
+      <SidePanelSlotProvider value={slot}>
+        <AgentChip selection={selection({ conversationId: '77' })} floor={floor} onAddress={onAddress} />
+      </SidePanelSlotProvider>,
+    );
+    const chip = screen.getByTestId('agent-chip');
+    expect(chip).toHaveTextContent('To: Reviewer (lead)');
+    expect(chip).toHaveAttribute('aria-haspopup', 'menu');
+    await user.click(chip);
+    const options = await screen.findAllByTestId('workspace-to-chip-option');
+    expect(options.map((option) => option.textContent)).toEqual(['Coder', 'Reviewer']);
+    await user.click(options[0]!);
+    expect(onAddress).toHaveBeenCalledWith(floor.agents[0]);
+    await user.click(chip);
+    await user.click(await screen.findByTestId('agent-chip-manage'));
+    expect(show).toHaveBeenCalledWith('team');
+  });
 });
 
 describe('the Participants tab’s agents panel (#3081)', () => {
