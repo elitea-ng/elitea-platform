@@ -12,6 +12,7 @@ import { replayView } from '@/features/workspace';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
+import { applyPendingRespect } from './pendingRespect';
 import { ProjectInstructionsSection } from './ProjectInstructionsSection';
 
 const IDLE = { turnId: null, view: replayView([]) };
@@ -80,13 +81,44 @@ describe('the project instructions of a Local work thread (issue 3130)', () => {
     expect(screen.queryByRole('switch')).toBeNull();
   });
 
-  it('keeps the switch on and disabled until the thread has started', async () => {
+  it('lets the switch be turned off before the first message and holds it for the thread that message starts', async () => {
     const ipc = createFakeWorkspaceIpc();
     ipc.setInstructionFiles('ws-1', ['AGENTS.md']);
     mount(ipc, '');
+    const user = userEvent.setup();
     const control = await respectSwitch();
     expect(control).toBeChecked();
-    expect(control).toBeDisabled();
-    expect(screen.getByText('You can change this once the thread has started.')).toBeInTheDocument();
+    expect(control).toBeEnabled();
+    expect(screen.getByText('Applies to the thread your first message starts.')).toBeInTheDocument();
+    await user.click(control);
+    await waitFor(async () => expect(await respectSwitch()).not.toBeChecked());
+    expect(screen.getByTestId('agents-md-ignored')).toBeInTheDocument();
+    // Nothing reaches the host until the thread exists: the send that creates it hands the choice over.
+    expect(ipc.calls.respects).toEqual([]);
+    await applyPendingRespect(ipc, 'ws-1', '90', false);
+    expect(ipc.calls.respects).toEqual([]);
+    await applyPendingRespect(ipc, 'ws-1', '90', true);
+    expect(ipc.calls.respects).toEqual([{ workspaceId: 'ws-1', conversationId: '90', respect: false }]);
+    // Handed over once: the folder's next new thread is on again.
+    await waitFor(async () => expect(await respectSwitch()).toBeChecked());
+    await applyPendingRespect(ipc, 'ws-1', '91', true);
+    expect(ipc.calls.respects).toHaveLength(1);
+  });
+
+  it('keeps a pending choice the host could not take, so the next send hands it over again', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    ipc.setInstructionFiles('ws-2', ['AGENTS.md']);
+    renderWithTheme(
+      <QueryClientProvider client={client}>
+        <ProjectInstructionsSection workspaceId="ws-2" conversationId="" turn={IDLE} ipc={ipc} />
+      </QueryClientProvider>,
+    );
+    await userEvent.setup().click(await respectSwitch());
+    ipc.failNext('setThreadRespectAgentsMd', 'storage', 'The thread history could not be written.');
+    await expect(applyPendingRespect(ipc, 'ws-2', '92', true)).rejects.toBeDefined();
+    expect(await respectSwitch()).not.toBeChecked();
+    await applyPendingRespect(ipc, 'ws-2', '92', true);
+    expect(ipc.calls.respects.at(-1)).toEqual({ workspaceId: 'ws-2', conversationId: '92', respect: false });
   });
 });

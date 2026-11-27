@@ -1350,7 +1350,15 @@ pub fn with_project_instructions(
 #[must_use]
 pub fn instruction_paths(project: &ProjectInstructions) -> Vec<String> {
     let mut paths = project.paths();
-    paths.extend(project.soul.as_ref().map(|soul| soul.path.clone()));
+    // As `with_project_instructions` frames it: a SOUL.md that renders to
+    // nothing adds nothing to the prompt, so it is not listed either.
+    paths.extend(
+        project
+            .soul
+            .as_ref()
+            .filter(|local| !local.soul.render().is_empty())
+            .map(|local| local.path.clone()),
+    );
     paths
 }
 
@@ -2962,7 +2970,7 @@ impl AgentHost {
         let instructions_found = instruction_paths(&project);
         let instructions_applied = self
             .respects_agents_md(&request.workspace_id, &conversation)
-            .await;
+            .await?;
         let project = if instructions_applied {
             project
         } else {
@@ -6600,29 +6608,23 @@ impl AgentHost {
     }
 
     /// Whether the thread applies the folder's project instructions (issue
-    /// 3130): on without a history store, or when its setting cannot be read
-    /// (the default; the read failure is logged).
-    async fn respects_agents_md(&self, workspace_id: &str, conversation: &str) -> bool {
+    /// 3130): on without a history store (the default). A setting that
+    /// cannot be read refuses the turn (`not_signed_in`, `storage`), as the
+    /// thread's pinned skills do: a thread turned off never runs with the
+    /// files because of a failed read.
+    async fn respects_agents_md(
+        &self,
+        workspace_id: &str,
+        conversation: &str,
+    ) -> Result<bool, TurnError> {
         let Some(history) = self.deps.history.clone() else {
-            return true;
+            return Ok(true);
         };
-        let owner = match self.owner(&self.api).await {
-            Ok(owner) => owner,
-            Err(error) => {
-                log::info!(
-                    "the thread's AGENTS.md setting was not read: {}",
-                    error.code
-                );
-                return true;
-            }
-        };
+        let owner = self.owner(&self.api).await?;
         history
             .read_thread_respects_agents_md(owner, workspace_id.to_owned(), conversation.to_owned())
             .await
-            .unwrap_or_else(|error| {
-                log::warn!("the thread's AGENTS.md setting could not be read: {error}");
-                true
-            })
+            .map_err(|e| TurnError::new("storage", e.to_string()))
     }
 
     /// `thread_instructions_status`: the project instruction files the
@@ -6635,7 +6637,7 @@ impl AgentHost {
     /// # Errors
     ///
     /// `invalid_request`, `local_work_disabled`, `workspace_unknown`,
-    /// `workspace_unavailable`.
+    /// `workspace_unavailable`, `not_signed_in`, `storage`, `internal`.
     pub async fn instructions_status(
         &self,
         workspace_id: &str,
@@ -6660,7 +6662,7 @@ impl AgentHost {
         .await
         .map_err(|_| TurnError::new("internal", "the instructions read stopped unexpectedly"))??;
         let respect = match &conversation {
-            Some(conversation) => self.respects_agents_md(workspace_id, conversation).await,
+            Some(conversation) => self.respects_agents_md(workspace_id, conversation).await?,
             None => true,
         };
         Ok(InstructionsStatus {
@@ -6675,7 +6677,8 @@ impl AgentHost {
     ///
     /// # Errors
     ///
-    /// `invalid_request`, `not_signed_in`, or `storage`.
+    /// `invalid_request`, `workspace_unknown`, `not_signed_in`, `storage`,
+    /// `internal`.
     pub async fn set_respect_agents_md(
         &self,
         workspace_id: &str,
@@ -6683,6 +6686,11 @@ impl AgentHost {
         respect: bool,
     ) -> Result<(), TurnError> {
         let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        self.deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
         let history = self.deps.history.clone().ok_or_else(|| {
             TurnError::new(
                 "storage",

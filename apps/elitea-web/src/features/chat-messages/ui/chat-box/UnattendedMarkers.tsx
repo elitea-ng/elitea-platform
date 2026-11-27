@@ -58,14 +58,17 @@ export function ProjectInstructionsMarker({ applied, files }: { readonly applied
   );
 }
 
-/** An answer's run marks, in order: continued automatically, outside the sandbox, Full auto, project instructions. */
+/**
+ * An answer's run marks, in order: continued automatically, outside the sandbox, Full auto, project instructions. The
+ * desktop states project instructions once, in the thread's Participants tab (issue 3130), never under a message.
+ */
 export function AnswerMarkers({ answer }: { readonly answer: Pick<ChatMessage, 'continuedAutomatically' | 'continuationIndex' | 'ranOutsideSandbox' | 'fullAuto' | 'projectInstructions'> }) {
   return (
     <>
       {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
       {answer.ranOutsideSandbox === true && <RanOutsideSandboxMarker />}
       {answer.fullAuto === true && <FullAutoMarker />}
-      {answer.projectInstructions !== undefined && <ProjectInstructionsMarker {...answer.projectInstructions} />}
+      {answer.projectInstructions !== undefined && import.meta.env.MODE !== 'desktop' && <ProjectInstructionsMarker {...answer.projectInstructions} />}
     </>
   );
 }

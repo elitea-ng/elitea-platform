@@ -1287,7 +1287,7 @@
   "workspace.fullAutoMode": "Full auto (answers every approval, also after reading outside content)",
   "workspace.mode.fullAuto": "Full auto",
   "workspace.mode.fullAutoHint": "Answers every approval",
-  "workspace.instructions.afterFirst": "You can change this once the thread has started.",
+  "workspace.instructions.beforeFirst": "Applies to the thread your first message starts.",
   "workspace.instructions.ignored": "AGENTS.md ignored in this thread",
   "workspace.instructions.none": "No AGENTS.md in this folder.",
   "workspace.instructions.respect": "Respect AGENTS.md",

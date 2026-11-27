@@ -1,5 +1,5 @@
 import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -43,6 +43,16 @@ describe('the read-only AGENTS.md marker of a Local work turn (issue 3130)', () 
     renderWithTheme(<AnswerMarkers answer={{ projectInstructions: { applied: true, files: ['AGENTS.md'] } }} />);
     expect(screen.getByTestId('chat-message-project-instructions')).toHaveTextContent('AGENTS.md applied');
     expect(screen.queryByTestId('chat-message-full-auto')).toBeNull();
+  });
+
+  it('is not shown in the desktop build, which states it once in the Participants tab', () => {
+    vi.stubEnv('MODE', 'desktop');
+    try {
+      renderWithTheme(<AnswerMarkers answer={{ projectInstructions: { applied: true, files: ['AGENTS.md'] } }} />);
+      expect(screen.queryByTestId('chat-message-project-instructions')).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

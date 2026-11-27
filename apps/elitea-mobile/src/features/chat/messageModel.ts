@@ -262,12 +262,12 @@ function subAgentsOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatM
   return lanes.length === 0 ? {} : { subAgents: lanes };
 }
 
-
 /** An answer's project instructions record (#3130), as a spreadable field; nothing for a question or without one. */
 function projectInstructionsField(role: string, meta: unknown): { projectInstructions?: ProjectInstructionsRecord } {
   const record = role === 'assistant' ? projectInstructionsOf(meta) : null;
   return record === null ? {} : { projectInstructions: record };
 }
+
 function delegationNoticesOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatMessage, 'delegationNotices'> {
   if (role !== 'assistant') return {};
   const notices = storedDelegationNotices(asRecord(group.meta) ?? asRecord(group.metadata));

@@ -1357,7 +1357,9 @@ Edits apply from the next turn.
 instructions (the AGENTS.md files and the root `SOUL.md`) is the thread's
 own setting, kept by the host in `threads.sqlite` (`thread_settings`,
 schema 7), on unless the person turned it off (`thread_respect_agents_md_set`).
-The host reads it at every turn start, beside the files: off, the turn's
+The host reads it at every turn start, beside the files (a read that fails
+refuses the turn, `not_signed_in` or `storage`: never a silent fallback to
+on): off, the turn's
 system instructions, its sub-agents' and its local consults' carry none of
 the section, so a change made while a turn runs applies from the next turn.
 Hand-offs and later agents of a message are turns of their own and read it
@@ -1365,7 +1367,9 @@ too. Either way the `running` status names the files found
 (`project_instructions`) with `project_instructions_applied`, and the commit's
 `local_work.project_instructions` records `{applied, files}` (contract 1.70).
 A local consult's callee gets the section after its own instructions when the
-thread respects it.
+thread respects it. A choice made before a thread exists is held by the
+shell and set by the send that creates the thread, before its first
+`agent_turn_start`.
 
 **Nonce framing** (AGENTS.md and skills alike, `src/d0/framing.rs`). Every
 thread has a random 128-bit nonce `N` (32 hex digits), drawn when its
@@ -1795,8 +1799,8 @@ audit entry (contract 1.20, #1415).
 | `thread_skills_list` | `{workspace_id, conversation_id}` | `[{project_id, skill_id, available}]` — the project skills pinned to that local thread (ADR-0050 amendment 1, A1.5), oldest first; `available` is `false` when the person can no longer read the skill (deleted, or access lost: a `403` or `404`), so the UI can offer to unpin it; the signed-in account's only. A pin is the skill's id, kept by the host in `threads.sqlite` (`thread_skill_pins`, schema 6); never its text. `[]` without a store. |
 | `thread_skill_pin` | `{workspace_id, conversation_id, project_id, skill_id}` | `null` — pin a project skill to the thread. Every turn there then applies it like a skill the message picked (`ProjectSkillPick`), after the pins and picks fit the usual bound of five skills and 64 KiB together; the host reads the text at each turn under the person's token, and a pinned skill the person can no longer read is skipped. A skill pinned already changes nothing. Pins whose skill is gone are dropped first and never count toward the bound. Rejects `skill_unknown` (the person cannot read it), `thread_skills_full` (five readable ones are pinned), `invalid_request`, `not_signed_in`, `storage`. The host pins project skills only and never reads Marketplace listings: for a listing the UI first runs the fork-only `attach_public_skill` and pins the project's copy. |
 | `thread_skill_unpin` | `{workspace_id, conversation_id, skill_id}` | `boolean` — whether the skill was pinned. |
-| `thread_instructions_status` | `{workspace_id, conversation_id?}` | `{files: string[], respect: boolean}` — the project instruction files at the workspace folder's root (`AGENTS.md`, then `SOUL.md`; a turn also applies the nested `AGENTS.md` of the paths it references, which its `running` status names) and whether the thread respects them (**Respect AGENTS.md**, above). Without `conversation_id` (a thread not created yet) `respect` is `true`. Only reads: it answers while a turn runs. Rejects `invalid_request`, `local_work_disabled`, `workspace_unknown`, `workspace_unavailable`. |
-| `thread_respect_agents_md_set` | `{workspace_id, conversation_id, respect}` | `null` — keep the thread's choice under every spelling the thread is known by; the thread's next turn follows it, a running turn keeps what it started with. A fork keeps the source's choice; deleting the thread forgets it. Rejects `invalid_request`, `not_signed_in`, `storage` (no store). |
+| `thread_instructions_status` | `{workspace_id, conversation_id?}` | `{files: string[], respect: boolean}` — the project instruction files at the workspace folder's root (`AGENTS.md`, then `SOUL.md`; a turn also applies the nested `AGENTS.md` of the paths it references, which its `running` status names) and whether the thread respects them (**Respect AGENTS.md**, above). Without `conversation_id` (a thread not created yet) `respect` is `true`. Only reads: it answers while a turn runs. Rejects `invalid_request`, `local_work_disabled`, `workspace_unknown`, `workspace_unavailable` (the folder cannot be opened), `not_signed_in`, `storage`, `internal`. |
+| `thread_respect_agents_md_set` | `{workspace_id, conversation_id, respect}` | `null` — keep the thread's choice under every spelling the thread is known by; the thread's next turn follows it, a running turn keeps what it started with. A fork keeps the source's choice; deleting the thread forgets it. Rejects `invalid_request`, `workspace_unknown`, `not_signed_in`, `storage` (no store, or the write failed), `internal`. |
 
 **Foreign skill text.** A project skill written in another project, whose current text this project has not trusted (`GET skill_trust`, ADR-0051 amendment 1, A1.6), is applied to the turn as quoted data: its text sits in the runtime's `<untrusted source="skill:NAME">` envelope inside its skill block, and the skills section says so. A skill of the project's own, or one it trusts, is applied as written. A trust read that fails is read as untrusted.
 
