@@ -176,7 +176,9 @@ Strings that have no translation yet are shown in English. Names of products and
 
 A worktree is a separate copy of a git folder on its own branch. The agent works there while you keep using the folder, or while another thread works in it, so several tasks run side by side without touching each other's files.
 
-A new thread in a git folder starts with **Work in** set to **New worktree**. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there. To work in the folder itself, set **Work in** to **This folder** before you send.
+A new thread in a git folder starts with **Work in** set to **New worktree**. Write your message and send it: the app makes the worktree on a new `elitea/…` branch from the folder's current commit, opens the worktree's thread and sends the message there, with the agents you chose for the thread. To work in the folder itself, set **Work in** to **This folder** before you send.
+
+Your first message shows in the thread as soon as you send it, marked **Preparing workspace…** while the app creates the conversation and, with **New worktree**, the worktree. The message box is free again at once, so you can write your next message; send it once the agent is working. If the preparation fails, the message stays in the thread marked **Not sent**, and **Retry** sends it again without making a second thread or worktree.
 
 The app remembers your choice for each folder: after you pick **This folder**, the folder's next new thread starts on **This folder** too, until you pick **New worktree** again. **New thread in a worktree** in the folder's **⋯** or right-click menu always starts on **New worktree**.
 

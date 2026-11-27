@@ -9,7 +9,9 @@
  *   folder's new thread with the composer already on "New worktree";
  * - `holdFirstMessage`: a message written in the folder's new thread with
  *   "New worktree" chosen waits for the worktree's own thread to open, which
- *   sends it (`takeFirstMessage`).
+ *   shows it at once (`peekFirstMessage`) and sends it (`takeFirstMessage`
+ *   once it went). What is held is the page's: the message, and the agents
+ *   chosen for the thread (#3128), so the worktree's thread starts as chosen.
  *
  * The hand-offs are module state, not storage: a reload in between drops the
  * hand-off, and the message is still in the folder thread's draft.
@@ -39,7 +41,7 @@ export function rememberWorkIn(workspaceId: string, choice: WorkIn): void {
 }
 
 const preferred = new Set<string>();
-const held = new Map<string, readonly unknown[]>();
+const held = new Map<string, unknown>();
 /** The new thread of a folder that is open now: it takes the choice at once (no remount brings it there). */
 const listening = new Map<string, () => void>();
 
@@ -62,12 +64,17 @@ export function initialWorkIn(workspaceId: string): WorkIn {
   return preferred.delete(workspaceId) ? 'worktree' : rememberedWorkIn(workspaceId);
 }
 
-export function holdFirstMessage<Args extends readonly unknown[]>(workspaceId: string, args: Args): void {
-  held.set(workspaceId, args);
+export function holdFirstMessage<Held>(workspaceId: string, message: Held): void {
+  held.set(workspaceId, message);
 }
 
-export function takeFirstMessage<Args extends readonly unknown[]>(workspaceId: string): Args | undefined {
-  const args = held.get(workspaceId) as Args | undefined;
+/** The message held for the workspace's new thread, left held (it is shown before it can be sent). */
+export function peekFirstMessage<Held>(workspaceId: string): Held | undefined {
+  return held.get(workspaceId) as Held | undefined;
+}
+
+export function takeFirstMessage<Held>(workspaceId: string): Held | undefined {
+  const message = held.get(workspaceId) as Held | undefined;
   held.delete(workspaceId);
-  return args;
+  return message;
 }

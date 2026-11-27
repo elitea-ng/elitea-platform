@@ -45,6 +45,7 @@ import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
 
 import { EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
 import { ParticipantsTab } from './ParticipantsTab';
+import { PendingFirstMessage } from './PendingFirstMessage';
 import { SessionInspector } from './SessionPanel';
 import { requestAddress } from './useComposerMentions';
 import { ThreadComposer } from './ThreadComposer';
@@ -89,6 +90,9 @@ const sandboxOffer = (workspace: Workspace) => (code: string) =>
 
 const indexSettingsOpener = (hasIndex: boolean): (() => void) | undefined => (hasIndex ? () => useDesktopLayout.getState().showInspector('index') : undefined);
 
+/** The thread has something to show: a turn, or a first message on screen before its turn (#3127). */
+const hasStarted = ({ turn, first }: ThreadSession): boolean => turn.turnId !== null || turn.earlier.length > 0 || first.message !== null;
+
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
   const session = useThreadSession(props);
@@ -103,7 +107,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const continueRequest = turn.view.approvals.find((approval) => inline(approval.kind));
   const [pendingApproval, ...waiting] = turn.view.approvals.filter((approval) => !inline(approval.kind));
   const busy = turn.busy || session.rebind.isPending;
-  const started = turn.turnId !== null || turn.earlier.length > 0;
+  const started = hasStarted(session);
   // The intro stands in for a thread with nothing to show: new, or its history unreadable.
   const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
   const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
@@ -171,6 +175,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
                 resume={{ onResume: (turnId) => void turn.resume(turnId), busy, offers: turn.offersResume }}
               />
               <Exchanges turn={turn} prompts={session.prompts} promptImages={session.promptImages} onFork={forking.onFork} live={{ onRetryTurn: () => session.run('retry'), onContinue: commands.continueTurn }} toolOffer={sandboxOffer(workspace)} />
+              {session.prompts.length === 0 && <PendingFirstMessage slot={session.first} />}
               <approval.Dialog request={continueRequest} queued={0} onRespond={session.answer} />
               <plan.Card proposal={turn.view.planProposal} onRespond={session.answer} />
               <BrowserDownloadCards threadId={conversationId} />

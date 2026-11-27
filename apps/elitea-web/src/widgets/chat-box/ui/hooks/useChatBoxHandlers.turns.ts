@@ -108,6 +108,27 @@ async function deliverTurn(
   return emitted ? {} : { failure: undeliveredText() };
 }
 
+/**
+ * The question's bubble: added, or put in place of the one shown early (same id). A new chat's question is on screen
+ * before its conversation is created (#3127): the composer is already cleared, and creating the conversation and
+ * uploading its files take a while. The full bubble (with the uploaded files) then replaces it.
+ */
+function withQuestion(previous: readonly ChatMessage[], bubble: ChatMessage): readonly ChatMessage[] {
+  return previous.some((message) => message.id === bubble.id) ? previous.map((message) => (message.id === bubble.id ? bubble : message)) : [...previous, bubble];
+}
+
+/** A new chat (no conversation yet): its question shows now (#3127); `true` when it did. */
+function showEarly(deps: ChatBoxHandlerDeps, bubble: ChatMessage): boolean {
+  if (deps.conversationUuid) return false;
+  deps.setChatHistory((prev) => withQuestion(prev, bubble));
+  return true;
+}
+
+/** An abandoned send leaves no bubble, as for a chat that existed (the upload's failure says why). */
+function dropEarly(deps: ChatBoxHandlerDeps, early: boolean, questionId: string): void {
+  if (early) deps.setChatHistory((prev) => prev.filter((message) => message.id !== questionId));
+}
+
 /** Shows the turn as pending, unless the message is for people alone: nobody answers it. */
 function markPendingAnswer(deps: ChatBoxHandlerDeps, questionId: string, payload: Record<string, unknown>): void {
   if (!deps.isStreamingNow && !isPeopleOnlyPayload(payload)) deps.setStreamingInfo(questionId);
@@ -130,6 +151,8 @@ export function createSendQuestion(
     const participant = deps.getActiveParticipant?.() ?? null;
     const userParticipant = deps.getUserParticipant?.();
     const participantId = resolveParticipantId(participant);
+    const bubble = (files?: readonly unknown[]) => buildOptimisticUserMessage(questionId, question, userParticipant, participantId, files);
+    const early = showEarly(deps, bubble());
     const { uuid: resolvedConversationUuid, createdConversation } =
       await resolveConversationForSend(deps, question);
     // The conversation's UUID, not its numeric id — see
@@ -146,7 +169,10 @@ export function createSendQuestion(
     );
     // The conversation is already committed on the server by this point, so it
     // is announced even though this send is being abandoned (see `SendResult`).
-    if (attachmentList === UPLOAD_FAILED) return buildSendResult(createdConversation, false, questionId);
+    if (attachmentList === UPLOAD_FAILED) {
+      dropEarly(deps, early, questionId);
+      return buildSendResult(createdConversation, false, questionId);
+    }
     const payload = (
       deps.generateMessagePayload ?? buildDefaultMessagePayload
     )({
@@ -161,16 +187,7 @@ export function createSendQuestion(
       projectSkillIds,
       addressedTo: addressedWithPick(addressedTo, participant, { userIds, everyone: isMentioningEveryone }, deps.participants),
     });
-    deps.setChatHistory((prev) => [
-      ...prev,
-      buildOptimisticUserMessage(
-        questionId,
-        question,
-        userParticipant,
-        participantId,
-        attachmentList,
-      ),
-    ]);
+    deps.setChatHistory((prev) => withQuestion(prev, bubble(attachmentList)));
     markPendingAnswer(deps, questionId, payload);
     const delivery: Delivery = resolvedConversationUuid
       ? await deliverTurn(deps, {

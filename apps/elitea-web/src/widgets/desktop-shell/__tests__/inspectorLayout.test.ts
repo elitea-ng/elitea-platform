@@ -47,6 +47,19 @@ describe('the inspector layout', () => {
     expect(viewOf(defaultInspectorLayout('local'), [...LOCAL, 'participants'])[0]?.tabs).toEqual(['changes', 'approvals', 'index', 'participants']);
   });
 
+  it('keeps the Participants tab chosen when a team is added or agents removed, never falling back to Changes (#3129)', () => {
+    // The person chose the tab of a team thread before (`team` is placed, last), then of this one-agent thread.
+    const chosen = activateTab(activateTab(defaultInspectorLayout('local'), 'team'), 'participants');
+    expect(viewOf(chosen, [...LOCAL, 'participants'])[0]?.active).toBe('participants');
+    // A team is added: the tab is `team` now, and stays the active one.
+    expect(viewOf(chosen, [...LOCAL, 'team'])[0]?.active).toBe('team');
+    // And back to one agent.
+    const teamChosen = activateTab(chosen, 'team');
+    expect(viewOf(teamChosen, [...LOCAL, 'participants'])[0]?.active).toBe('participants');
+    // Another tab chosen stays chosen.
+    expect(viewOf(activateTab(chosen, 'approvals'), [...LOCAL, 'team'])[0]?.active).toBe('approvals');
+  });
+
   it('closes a tab until it is reopened, in its place', () => {
     const closed = closeTab(moveTab(defaultInspectorLayout('local'), 'index', 1), 'index');
     // The bottom group has nothing to show: it collapses on screen.

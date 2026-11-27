@@ -3,19 +3,21 @@
  * or a new task worktree, which is proposed by default; the person's own
  * choice is remembered for the folder (`rememberWorkIn`) and proposed next
  * time, while the folder menu's "New thread in a worktree" forces it. With "New worktree", Send makes the worktree, hands
- * the message to the worktree's own new thread (`holdFirstMessage`) and opens
- * it; that thread sends it as soon as it can (`takeFirstMessage`), so the
- * person writes once. A worktree the host cannot make (not the repository's
+ * the message and the agents chosen for the thread (`handOver`, #3128) to the worktree's own new thread
+ * (`holdFirstMessage`) and opens it; that thread shows the message at once and sends it as soon as it can
+ * (`useFirstSend`), so the person writes once. A worktree the host cannot make (not the repository's
  * top, a branch in the way) is said above the composer and nothing is sent.
  */
 import { useEffect, useState } from 'react';
 
 import { createSubmitIds } from '@elitea/client-core/conversation';
 
-import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, takeFirstMessage, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
+import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
 import type { WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
 
+import type { SelectionSeed } from './useAgentSelection';
+import type { HandedFirstMessage } from './useFirstSend';
 import type { WorkspaceComposerProps } from './WorkspaceComposer';
 
 type Send = WorkspaceComposerProps['onSend'];
@@ -33,9 +35,9 @@ export interface WorkInInput {
   workspaceId: string;
   /** A new thread of a folder that is its repository's top. */
   offered: boolean;
-  /** The thread can take a message now. */
-  canSend: boolean;
   send: Send;
+  /** The agents chosen for the new thread: the worktree's thread starts with them (#3128). */
+  handOver?: (() => SelectionSeed | undefined) | undefined;
   onError: (message: string) => void;
   /** Open a workspace's new thread (the worktree's). */
   open: (workspaceId: string) => void;
@@ -43,7 +45,7 @@ export interface WorkInInput {
   ipc?: WorktreeIpc;
 }
 
-export function useWorkIn({ workspaceId, offered: asked, canSend, send, onError, open, ipc }: WorkInInput): WorkInControl {
+export function useWorkIn({ workspaceId, offered: asked, send, handOver, onError, open, ipc }: WorkInInput): WorkInControl {
   const start = useStartInWorktree(ipc);
   // Without a host that can make worktrees, nothing is offered and the thread works in the folder.
   const offered = asked && start !== undefined;
@@ -54,13 +56,6 @@ export function useWorkIn({ workspaceId, offered: asked, canSend, send, onError,
 
   useEffect(() => (offered ? listenForWorktree(workspaceId, () => setChosen('worktree')) : undefined), [offered, workspaceId]);
 
-  // The message written in the folder's new thread, sent here once this thread can take it.
-  useEffect(() => {
-    if (!canSend) return;
-    const first = takeFirstMessage<Parameters<Send>>(workspaceId);
-    if (first !== undefined) void send(...first);
-  }, [canSend, workspaceId, send]);
-
   // The new thread's id, kept until its message is handed over (#3077): a retry, or a second call that got past the
   // composer's gate, makes no second worktree (the host answers the one this id made).
   const [threadIds] = useState(createSubmitIds);
@@ -69,7 +64,8 @@ export function useWorkIn({ workspaceId, offered: asked, canSend, send, onError,
     try {
       const entry = await start(workspaceId, threadIds.current());
       threadIds.sent();
-      holdFirstMessage(entry.workspace_id, args);
+      const handed: HandedFirstMessage = { args, seed: handOver?.() };
+      holdFirstMessage(entry.workspace_id, handed);
       open(entry.workspace_id);
       return true;
     } catch (failure) {
