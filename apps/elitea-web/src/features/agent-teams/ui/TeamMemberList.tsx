@@ -15,6 +15,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import type { SxProps, Theme } from '@mui/material/styles';
 
 import type { AgentTeamMember } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
@@ -45,13 +46,24 @@ function RowAction({ label, disabled = false, pressed, testId, onClick, children
   readonly onClick: () => void;
   readonly children: ReactNode;
 }): ReactNode {
-  const button = (
-    <IconButton size="small" aria-label={label} aria-pressed={pressed} disabled={disabled} data-testid={testId} onClick={onClick}>
-      {children}
-    </IconButton>
+  // One element shape whatever the state: a button that turns disabled after
+  // its own press (Move down onto the last row) must keep keyboard focus, so
+  // it is never swapped for a disabled one. `aria-disabled` says it is inert.
+  return (
+    <Tooltip title={label}>
+      <IconButton
+        size="small"
+        aria-label={label}
+        aria-pressed={pressed}
+        aria-disabled={disabled || undefined}
+        data-testid={testId}
+        sx={disabled ? inertSx : undefined}
+        onClick={disabled ? undefined : onClick}
+      >
+        {children}
+      </IconButton>
+    </Tooltip>
   );
-  // A disabled button fires no pointer events; the span keeps its tooltip.
-  return <Tooltip title={label}>{disabled ? <span>{button}</span> : button}</Tooltip>;
 }
 
 function MemberActions({ draft, index, name, onChange }: { readonly draft: TeamDraft; readonly index: number; readonly name: string; readonly onChange: (draft: TeamDraft) => void }): ReactNode {
@@ -121,3 +133,5 @@ export function TeamMemberList({ draft, avatars, renderAvatar, onChange }: TeamM
     </AgentRoster>
   );
 }
+
+const inertSx: SxProps<Theme> = (theme: Theme) => ({ color: theme.vars.palette.action.disabled, cursor: 'default' });

@@ -104,7 +104,7 @@ describe('TeamEditDialog (issue 3142)', () => {
     expect(lead).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'Make CI Doctor the lead' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: 'Remove CI Doctor from the team' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Move Mira up' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Move Mira up' })).toHaveAttribute('aria-disabled', 'true');
     // The tooltip says the same words on hover.
     await user.hover(screen.getByRole('button', { name: 'Remove Mira from the team' }));
     expect(await screen.findByRole('tooltip')).toHaveTextContent('Remove Mira from the team');
@@ -115,6 +115,11 @@ describe('TeamEditDialog (issue 3142)', () => {
     const rows = within(screen.getByRole('list', { name: 'Agents of this team' })).getAllByRole('listitem');
     expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining('CI Doctor'), expect.stringContaining('Mira')]);
     expect(within(rows[1] as HTMLElement).getByTestId('agent-roster-lead-badge')).toBeInTheDocument();
+    // Mira is now last: its Move down turned inert but kept the focus.
+    expect(screen.getByRole('button', { name: 'Move Mira down' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Move Mira down' })).toHaveAttribute('aria-disabled', 'true');
+    await user.keyboard('{Enter}');
+    expect(within(screen.getByRole('list', { name: 'Agents of this team' })).getAllByRole('listitem')[1]).toHaveTextContent('Mira');
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toBeDefined());

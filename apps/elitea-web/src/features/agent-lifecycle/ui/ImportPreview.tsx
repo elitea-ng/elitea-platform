@@ -102,7 +102,8 @@ function PreviewHeader({ summary, face, detail, testIdPrefix }: PreviewHeaderPro
   );
 }
 
-function modelLine(agent: ImportSummaryAgent): string {
+function modelLine(agent: ImportSummaryAgent): string | undefined {
+  if (agent.pipeline) return undefined;
   return agent.model === undefined
     ? t('features.agentLifecycle.import.modelDefault', 'Model: this project\'s default')
     : t('features.agentLifecycle.import.modelNamed', 'Model: {{model}}', { model: agent.model });
@@ -116,14 +117,12 @@ interface FaceProps {
 }
 
 function Face({ agent, avatarUrls, renderAvatar, size = ROSTER_AVATAR_SIZE }: FaceProps): ReactNode {
-  const url = agent.versionKey === undefined ? undefined : avatarUrls.get(agent.versionKey);
-  const iconUrl = url ?? agent.iconUrl;
-  // A zip's own still wins over a pack whose urls belong to another install.
-  const pack = url === undefined ? agent.pack : undefined;
-  if (renderAvatar === undefined || (iconUrl === undefined && pack === undefined)) {
+  // The zip's own still, else an icon on this install; never a URL the file names elsewhere.
+  const iconUrl = (agent.versionKey === undefined ? undefined : avatarUrls.get(agent.versionKey)) ?? agent.iconUrl;
+  if (renderAvatar === undefined || iconUrl === undefined) {
     return <Monogram name={agent.name} size={size} variant="labelSmall" />;
   }
-  return renderAvatar({ iconUrl, pack }, size);
+  return renderAvatar({ iconUrl }, size);
 }
 
 function Stat({ label, value, testId }: { readonly label: string; readonly value: number; readonly testId: string }): ReactNode {

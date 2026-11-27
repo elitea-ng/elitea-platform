@@ -74,7 +74,7 @@ function ImportedModels({ models, testIdPrefix }: { readonly models: ImportFollo
         <Alert severity="warning" data-testid={`${testIdPrefix}-import-model-defaulted`}>
           <Box component="ul" sx={listSx}>
             {defaulted.map((notice) => (
-              <Typography key={notice.agent} component="li" variant="bodySmall">
+              <Typography key={notice.position} component="li" variant="bodySmall">
                 {modelText(notice)}
               </Typography>
             ))}
@@ -84,7 +84,7 @@ function ImportedModels({ models, testIdPrefix }: { readonly models: ImportFollo
       {kept.length > 0 && (
         <Box component="ul" sx={listSx} data-testid={`${testIdPrefix}-import-models`}>
           {kept.map((notice) => (
-            <Typography key={notice.agent} component="li" variant="bodySmall">
+            <Typography key={notice.position} component="li" variant="bodySmall">
               {modelText(notice)}
             </Typography>
           ))}

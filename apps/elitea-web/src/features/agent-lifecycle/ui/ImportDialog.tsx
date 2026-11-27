@@ -6,7 +6,8 @@
  *
  * The primary action says why it cannot run when it cannot (issue 3142): an
  * import in flight uploads the zip's avatar media first, which takes a
- * while for a team, and a button that only greys out read as broken.
+ * while for a team, and a button that only greys out read as broken. While
+ * it runs the dialog stays open, so the person sees its outcome.
  */
 import type { ReactNode } from 'react';
 import { useId, useMemo, useState } from 'react';
@@ -45,8 +46,6 @@ export interface ImportDialogProps {
   readonly testIdPrefix: string;
   /** Draws each agent's live avatar (the page's shared renderer); absent draws monograms. */
   readonly renderAvatar?: RenderImportAvatar | undefined;
-  /** Why Import cannot run now (e.g. no project is selected); shown beside the button. */
-  readonly blockedReason?: string | undefined;
 }
 
 interface Done {
@@ -75,7 +74,6 @@ function confirmText(isTeam: boolean, isImporting: boolean): string {
 interface PreviewActionsProps {
   readonly isTeam: boolean;
   readonly isImporting: boolean;
-  readonly blockedReason: string | undefined;
   readonly avatarCount: number;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
@@ -83,13 +81,16 @@ interface PreviewActionsProps {
 }
 
 /** Cancel and the primary Import, with the reason it cannot run said in words next to it. */
-function PreviewActions({ isTeam, isImporting, blockedReason, avatarCount, onCancel, onConfirm, testIdPrefix }: PreviewActionsProps): ReactNode {
+function progressText(isImporting: boolean, avatarCount: number): string | undefined {
+  if (!isImporting) return undefined;
+  return avatarCount > 0
+    ? t('features.agentLifecycle.import.uploadingAvatars', 'Uploading {{count}} avatar files, then importing…', { count: avatarCount })
+    : t('features.agentLifecycle.import.creating', 'Creating everything in the file…');
+}
+
+function PreviewActions({ isTeam, isImporting, avatarCount, onCancel, onConfirm, testIdPrefix }: PreviewActionsProps): ReactNode {
   const reasonId = useId();
-  const progress =
-    isImporting && avatarCount > 0
-      ? t('features.agentLifecycle.import.uploadingAvatars', 'Uploading {{count}} avatar files, then importing…', { count: avatarCount })
-      : undefined;
-  const reason = blockedReason ?? progress;
+  const reason = progressText(isImporting, avatarCount);
   return (
     <Box sx={actionsSx}>
       {reason !== undefined && (
@@ -97,14 +98,14 @@ function PreviewActions({ isTeam, isImporting, blockedReason, avatarCount, onCan
           {reason}
         </Typography>
       )}
-      <BaseBtn variant="secondary" onClick={onCancel}>
+      <BaseBtn variant="secondary" disabled={isImporting} onClick={onCancel}>
         {t('shared.ui.baseModal.cancel', 'Cancel')}
       </BaseBtn>
       <BaseBtn
         variant="contained"
         color="primary"
         loading={isImporting}
-        disabled={isImporting || blockedReason !== undefined}
+        disabled={isImporting}
         aria-describedby={reason === undefined ? undefined : reasonId}
         data-testid={`${testIdPrefix}-import-confirm`}
         onClick={onConfirm}
@@ -115,20 +116,22 @@ function PreviewActions({ isTeam, isImporting, blockedReason, avatarCount, onCan
   );
 }
 
-export function ImportDialog({ pending, isImporting, onImport, onClose, testIdPrefix, renderAvatar, blockedReason }: ImportDialogProps): ReactNode {
+export function ImportDialog({ pending, isImporting, onImport, onClose, testIdPrefix, renderAvatar }: ImportDialogProps): ReactNode {
   const [refusal, setRefusal] = useState<ImportRefusal>();
   const [done, setDone] = useState<Done>();
   const summary = useMemo(() => (pending === undefined ? undefined : summarizeImportDocument(pending.document, pending.skipped, pending.team)), [pending]);
   const avatarUrls = useImportAvatarUrls(pending?.avatars, summary?.agents);
 
   const close = (): void => {
+    // Escape and the backdrop as well: closing mid-import would hide its outcome.
+    if (isImporting) return;
     setRefusal(undefined);
     setDone(undefined);
     onClose();
   };
 
   const confirm = async (): Promise<void> => {
-    if (pending === undefined || summary === undefined || isImporting || blockedReason !== undefined) return;
+    if (pending === undefined || summary === undefined || isImporting) return;
     setRefusal(undefined);
     try {
       const outcome = await onImport({ document: pending.document, team: pending.team, avatars: pending.avatars });
@@ -159,7 +162,6 @@ export function ImportDialog({ pending, isImporting, onImport, onClose, testIdPr
                 <PreviewActions
                   isTeam={summary?.team !== undefined}
                   isImporting={isImporting}
-                  blockedReason={blockedReason}
                   avatarCount={pending?.avatars?.length ?? 0}
                   onCancel={close}
                   onConfirm={() => void confirm()}

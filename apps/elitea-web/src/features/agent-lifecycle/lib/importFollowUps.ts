@@ -18,6 +18,8 @@ import type { EntityExportDocument } from '../api/lifecycleApi';
 
 /** The model the server pinned one imported agent to (`ImportedAgent.model`). */
 export interface ImportedAgentModelNotice {
+  /** The agent's position in the answer: two agents may share a name. */
+  readonly position: number;
   readonly agent: string;
   readonly model: string;
   readonly contextWindow: number | undefined;
@@ -59,13 +61,14 @@ function toolkitsOf(document: EntityExportDocument, result: unknown): ImportFoll
 }
 
 function modelsOf(result: unknown): ImportFollowUps['models'] {
-  return records((result as Rec | null | undefined)?.['agents']).flatMap((agent) => {
+  return records((result as Rec | null | undefined)?.['agents']).flatMap((agent, position) => {
     const model = agent['model'];
     if (typeof model !== 'object' || model === null) return [];
     const resolved = model as Rec;
     const window = resolved['context_window'];
     return [
       {
+        position,
         agent: text(agent['name']),
         model: text(resolved['name']),
         contextWindow: typeof window === 'number' && window > 0 ? window : undefined,

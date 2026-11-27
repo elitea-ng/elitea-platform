@@ -21,7 +21,7 @@ function notices(summary: ImportDocumentSummary): string[] {
   const lines: string[] = [];
   if (summary.toolkitCount > 0) {
     lines.push(
-      t('features.agentLifecycle.import.noticeToolkits', '{{count}} toolkits import without credentials. Connect them after the import.', {
+      t('features.agentLifecycle.import.noticeToolkits', 'Toolkits in this file: {{count}}. Import never carries credentials: connect the ones that need them after the import.', {
         count: summary.toolkitCount,
       }),
     );
@@ -33,7 +33,7 @@ function notices(summary: ImportDocumentSummary): string[] {
       }),
     );
   }
-  const unnamed = summary.agents.filter((agent) => agent.model === undefined).map((agent) => agent.name);
+  const unnamed = summary.agents.filter((agent) => !agent.pipeline && agent.model === undefined).map((agent) => agent.name);
   if (unnamed.length > 0) {
     lines.push(
       t('features.agentLifecycle.import.noticeNoModel', '{{names}}: the file names no model, so the import gives them this project\'s default model and says which.', {

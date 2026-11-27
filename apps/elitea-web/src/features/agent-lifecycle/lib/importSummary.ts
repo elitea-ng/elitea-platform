@@ -17,12 +17,16 @@ export interface ImportSummaryAgent {
   readonly lead: boolean;
   /** The model the file names; `undefined` when it names none (a blueprint). */
   readonly model: string | undefined;
+  /** A pipeline: it runs its nodes' models, so the import gives it none (issue 3143). */
+  readonly pipeline: boolean;
   /** The first version's `import_version_uuid`: the key of its avatar files in a zip. */
   readonly versionKey: string | undefined;
-  /** An icon the entry already carries (`meta.icon_meta.url`), e.g. a JSON export's. */
+  /**
+   * An icon the entry already carries (`meta.icon_meta.url`), e.g. a JSON
+   * export's, and only when it is this install's own: a preview must not
+   * make the browser fetch a URL an untrusted file names.
+   */
   readonly iconUrl: string | undefined;
-  /** The first version's `avatar_pack`, as the file carries it. */
-  readonly pack: object | undefined;
 }
 
 export interface ImportDocumentSummary {
@@ -61,17 +65,27 @@ function firstVersion(entry: Rec): Rec {
 function summaryAgent(entry: Rec, index: number, leadKey: string | undefined): ImportSummaryAgent {
   const version = firstVersion(entry);
   const key = text(entry['import_uuid']) ?? `#${String(index + 1)}`;
-  const pack = version['avatar_pack'];
   return {
     key,
     name: text(entry['name']) ?? `#${String(index + 1)}`,
     description: text(entry['description']) ?? '',
     lead: leadKey !== undefined && key === leadKey,
     model: text(record(version['llm_settings'])['model_name']),
+    pipeline: version['agent_type'] === 'pipeline',
     versionKey: text(version['import_version_uuid']),
-    iconUrl: text(record(record(version['meta'])['icon_meta'])['url']) ?? text(record(record(entry['meta'])['icon_meta'])['url']),
-    pack: typeof pack === 'object' && pack !== null ? pack : undefined,
+    iconUrl: ownUrl(text(record(record(version['meta'])['icon_meta'])['url']) ?? text(record(record(entry['meta'])['icon_meta'])['url'])),
   };
+}
+
+/** `url` when it points at this install (a path, or this origin); else `undefined`. */
+function ownUrl(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined;
+  if (url.startsWith('/') && !url.startsWith('//')) return url;
+  try {
+    return new URL(url).origin === globalThis.location.origin ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What the confirmation dialog shows before the user commits to the import. */

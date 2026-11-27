@@ -7760,7 +7760,7 @@
   "features.agentLifecycle.import.modelWithWindow": "{{model}} ({{window}}-token context)",
   "features.agentLifecycle.import.noticeHeartbeat": "Heartbeat is configured for {{names}}. Turn it on in the Heartbeat tab after publishing.",
   "features.agentLifecycle.import.noticeNoModel": "{{names}}: the file names no model, so the import gives them this project's default model and says which.",
-  "features.agentLifecycle.import.noticeToolkits": "{{count}} toolkits import without credentials. Connect them after the import.",
+  "features.agentLifecycle.import.noticeToolkits": "Toolkits in this file: {{count}}. Import never carries credentials: connect the ones that need them after the import.",
   "features.agentLifecycle.import.noticesTitle": "Before you import",
   "features.agentLifecycle.import.statAgents": "Agents",
   "features.agentLifecycle.import.statDatasets": "Eval datasets",
@@ -7775,5 +7775,6 @@
   "features.agentTeams.edit.moveDown": "Move {{name}} down",
   "features.agentTeams.edit.moveUp": "Move {{name}} up",
   "features.agentTeams.edit.orderHint": "Agents join a conversation in this order.",
-  "features.agentTeams.edit.removeAgent": "Remove {{name}} from the team"
+  "features.agentTeams.edit.removeAgent": "Remove {{name}} from the team",
+  "features.agentLifecycle.import.creating": "Creating everything in the file…"
 }

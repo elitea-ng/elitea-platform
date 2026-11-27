@@ -92,19 +92,21 @@ describe('ImportDialog (issues 3142 and 3143)', () => {
     expect(rows[1]).toHaveTextContent('Model: frontier-1m');
     expect(screen.getByRole('heading', { name: 'Dev team' })).toBeInTheDocument();
     expect(screen.getByText('Builds the platform')).toBeInTheDocument();
-    expect(screen.getByTestId('teams-import-notices')).toHaveTextContent('1 toolkits import without credentials');
+    expect(screen.getByTestId('teams-import-notices')).toHaveTextContent('Toolkits in this file: 1.');
     expect(screen.getByTestId('teams-import-notices')).toHaveTextContent('Coordinator: the file names no model');
     unmount();
     expect(revoked).toEqual(created);
   });
 
-  it('says why Import cannot run while it uploads the avatar media, and when it is blocked', () => {
+  it('says why Import cannot run while it runs, and keeps the dialog open until it ends', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
     const { rerender } = renderWithProviders(
       <ImportDialog
         pending={teamPending()}
         isImporting
         onImport={vi.fn()}
-        onClose={vi.fn()}
+        onClose={onClose}
         testIdPrefix="teams"
       />,
     );
@@ -112,18 +114,19 @@ describe('ImportDialog (issues 3142 and 3143)', () => {
     expect(confirm).toBeDisabled();
     expect(screen.getByTestId('teams-import-reason')).toHaveTextContent('Uploading 2 avatar files, then importing');
     expect(confirm).toHaveAttribute('aria-describedby', screen.getByTestId('teams-import-reason').id);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
     rerender(
       <ImportDialog
-        pending={teamPending()}
-        isImporting={false}
+        pending={{ ...teamPending(), avatars: [] }}
+        isImporting
         onImport={vi.fn()}
-        onClose={vi.fn()}
+        onClose={onClose}
         testIdPrefix="teams"
-        blockedReason="Select a project first."
       />,
     );
-    expect(screen.getByRole('button', { name: 'Import team' })).toBeDisabled();
-    expect(screen.getByTestId('teams-import-reason')).toHaveTextContent('Select a project first.');
+    expect(screen.getByTestId('teams-import-reason')).toHaveTextContent('Creating everything in the file');
   });
 
   it('names the model each agent got, and warns for the one that got the project default', async () => {
@@ -153,5 +156,36 @@ describe('ImportDialog (issues 3142 and 3143)', () => {
     const warning = await screen.findByTestId('teams-import-model-defaulted');
     expect(warning).toHaveTextContent(/Coordinator: the file names no model, so it runs on this project's default, local-qwen \(262.144-token context\)/);
     expect(screen.getByTestId('teams-import-models')).toHaveTextContent(/Implementer runs on frontier-1m \(1.000.000-token context\)/);
+  });
+
+  it("names no model for a pipeline, and never fetches an icon the file names on another host", async () => {
+    const entry = (name: string, version: Record<string, unknown>, url: string) => ({
+      entity: 'agents',
+      name,
+      versions: [{ name: 'base', ...version, meta: { icon_meta: { url } } }],
+    });
+    renderWithProviders(
+      <ImportDialog
+        pending={{
+          document: {
+            applications: [
+              entry('Flow', { agent_type: 'pipeline' }, '/api/v2/artifacts/flow.png'),
+              entry('Spy', { llm_settings: { model_name: 'gpt-5' } }, 'https://tracker.invalid/pixel.png'),
+            ],
+          },
+          skipped: [],
+        }}
+        isImporting={false}
+        onImport={vi.fn()}
+        onClose={vi.fn()}
+        testIdPrefix="agents"
+        renderAvatar={renderAvatar}
+      />,
+    );
+    const rows = within(await screen.findByRole('list', { name: 'Agents in this file' })).getAllByRole('listitem');
+    expect(within(rows[0] as HTMLElement).getByTestId('live-avatar')).toHaveAttribute('src', '/api/v2/artifacts/flow.png');
+    expect(rows[0]).not.toHaveTextContent('Model:');
+    expect(within(rows[1] as HTMLElement).queryByTestId('live-avatar')).toBeNull();
+    expect(screen.queryByTestId('agents-import-notices')).toBeNull();
   });
 });

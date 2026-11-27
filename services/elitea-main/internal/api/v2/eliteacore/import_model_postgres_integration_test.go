@@ -168,3 +168,37 @@ func TestImportWithoutACatalogueKeepsTheFileModelSettings(t *testing.T) {
 		t.Errorf("stored model %q, want the file's", name)
 	}
 }
+
+// A pipeline runs the models its nodes name: the import leaves its settings
+// as the file carries them and answers no model for it (review of #3148).
+func TestImportLeavesAPipelinesModelSettingsAlone(t *testing.T) {
+	pool := newImportLinkPool(t)
+	catalog := &importModelCatalog{}
+	router := teamImportRouter(eliteacore.NewHandler(pool, eliteacore.WithImportModelCatalog(catalog)))
+
+	pipeline := modelAgent("m-flow", "Dev Flow", map[string]any{"temperature": 0.2})
+	pipeline["versions"].([]map[string]any)[0]["agent_type"] = "pipeline"
+	recorder := teamImportPost(t, router, "/elitea_core/import_wizard/prompt_lib/1", map[string]any{
+		"applications": []map[string]any{pipeline, modelAgent("m-solo", "Dev Solo", nil)},
+	})
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("import: got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var answer importedModelAnswer
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	models := map[string]bool{}
+	for _, agent := range answer.Result.Agents {
+		models[agent.Name] = agent.Model != nil
+	}
+	if models["Dev Flow"] || !models["Dev Solo"] {
+		t.Fatalf("answered models %v, want only Dev Solo's: %s", models, recorder.Body.String())
+	}
+	if name, _ := storedModel(t, pool, "Dev Flow"); name != "" {
+		t.Errorf("the pipeline's stored model is %q, want none", name)
+	}
+	if name, _ := storedModel(t, pool, "Dev Solo"); name != importModelDefault {
+		t.Errorf("the agent's stored model is %q, want %q", name, importModelDefault)
+	}
+}

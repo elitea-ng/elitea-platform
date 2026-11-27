@@ -3414,8 +3414,11 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 			// not an object imported an agent with no model, and answered 201.
 			// The model is pinned to one this install holds, or to the
 			// project's default, before the column is encoded (issue 3143).
-			if resolution := pinImportedModel(models, v); resolution != nil && agentModel == nil {
-				agentModel = resolution
+			// A pipeline runs its nodes' models and keeps its settings. The
+			// answer names the model of the first version actually created.
+			var versionModel *importModelResolution
+			if agentType != "pipeline" {
+				versionModel = pinImportedModel(models, v)
 			}
 			llmJSON, llmErr := importedJSONObject(v, "llm_settings")
 			startersJSON, startersErr := importedJSONArray(v, "conversation_starters")
@@ -3452,6 +3455,10 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 					"msg":   "Import function has been failed: unable to import version " + vName + ": " + err.Error(),
 				})
 				continue
+			}
+
+			if agentModel == nil {
+				agentModel = versionModel
 			}
 
 			vImportUUID, _ := v["import_version_uuid"].(string)
