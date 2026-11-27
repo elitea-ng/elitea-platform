@@ -78,7 +78,8 @@ export function TeamThreadNotice({ team, local, conversationId }: TeamThreadNoti
     <Alert
       severity="info"
       data-testid="workspace-team-notice"
-      sx={{ paddingY: 0, alignItems: 'center', '& .MuiAlert-message': { minWidth: 0, flex: 1, paddingY: 0.5 } }}
+      sx={{ paddingY: 0, alignItems: 'center' }}
+      slotProps={{ message: { sx: { minWidth: 0, flex: 1, paddingY: 0.5 } } }}
       action={
         <IconButton size="small" color="inherit" aria-label={t('workspace.team.noticeClose', 'Hide for this thread')} title={t('workspace.team.noticeClose', 'Hide for this thread')} onClick={close} data-testid="workspace-team-notice-close">
           <CloseIcon fontSize="small" />

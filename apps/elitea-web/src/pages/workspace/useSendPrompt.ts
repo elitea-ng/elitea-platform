@@ -28,7 +28,6 @@ import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
 import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
-import type { AgentModelEntry } from './agentModels';
 import { applyPendingRespect } from './pendingRespect';
 import type { AgentSelection } from './useAgentSelection';
 import { takeRetry, type PendingConversation } from './sendRetry';
@@ -63,6 +62,9 @@ function compactFlag(compact: boolean | undefined): { compact?: true } {
  * The agents' models only when one was chosen (#3145): the host runs each agent on its own choice, else its kept one,
  * else its own model. No thread-wide `model` is sent any more: the started agent's entry is its choice.
  */
+/** One entry of `agent_turn_start.agent_models`: an agent's model in this thread (#3145). */
+export type AgentModelEntry = NonNullable<TurnStartRequest['agent_models']>[number];
+
 function agentModelsField(agentModels: readonly AgentModelEntry[] | undefined): { agent_models?: AgentModelEntry[] } {
   return agentModels === undefined || agentModels.length === 0 ? {} : { agent_models: [...agentModels] };
 }

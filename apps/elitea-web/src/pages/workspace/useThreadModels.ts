@@ -7,11 +7,11 @@ import { useState } from 'react';
 import { floorOf } from '@elitea/client-core/conversation';
 import { useSidePanelSlot } from '@/shared/desktop/inspectorSlot';
 
-import type { AgentModelEntry, AgentModels } from './agentModels';
+import type { AgentModels } from './agentModels';
 import { participantsTabId, pendingAgents } from './ThreadAgentsPanel';
 import type { ModelAgent } from './ThreadSettings';
 import type { AgentSelection } from './useAgentSelection';
-import type { ThreadFloor } from './useSendPrompt';
+import type { AgentModelEntry, ThreadFloor } from './useSendPrompt';
 import { resolveModelName, useAgentModelOptions } from './useTurnModel';
 
 /**

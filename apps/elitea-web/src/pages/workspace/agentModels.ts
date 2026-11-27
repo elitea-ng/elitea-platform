@@ -23,15 +23,11 @@ import { useMemo, useState, useSyncExternalStore } from 'react';
 import { floorOf } from '@elitea/client-core/conversation';
 import { replayView, type WorkspaceTurn } from '@/features/workspace';
 import { toReasoningEffort, type TurnModel, type TurnModelChoice } from '@/shared/desktop/turnModel';
-import type { TurnStartRequest } from '@/shared/desktop/workspaceIpc';
 
 import { useThreadFloor } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
-import type { ThreadFloor } from './useSendPrompt';
+import type { AgentModelEntry, ThreadFloor } from './useSendPrompt';
 import type { ThreadHistory } from './useThreadHistory';
-
-/** One entry of `agent_turn_start.agent_models`. */
-export type AgentModelEntry = NonNullable<TurnStartRequest['agent_models']>[number];
 
 /** A choice made here, and the agent's own model when it was made (choosing that one shows no badge). */
 interface PendingChoice {
