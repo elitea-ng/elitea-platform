@@ -760,7 +760,7 @@ describe('WorkspaceSessionPage', () => {
     expect(await screen.findByText(/Earlier messages of this thread are in the conversation/)).toBeInTheDocument();
   });
 
-  it('keeps the prompt when the host refuses the start', async () => {
+  it('keeps the first message on screen, "Not sent" with Retry, when the host refuses the start (#3127)', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
     ipc.failNext('startTurn', 'local_work_disabled', 'Local work is turned off by your organisation’s policy.');
@@ -773,8 +773,89 @@ describe('WorkspaceSessionPage', () => {
 
     expect(await screen.findByText('Local work is turned off by your organisation’s policy.')).toBeInTheDocument();
     expect(ipc.calls.started).toHaveLength(1);
-    expect(screen.getByTestId('chat-message-input')).toHaveValue('fix the build');
-    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    const pending = screen.getByTestId('pending-first-message');
+    expect(pending).toHaveAttribute('data-state', 'failed');
+    expect(within(pending).getByTestId('your-prompt')).toHaveTextContent('fix the build');
+    expect(within(pending).getByText('Not sent')).toBeInTheDocument();
+    expect(within(pending).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+
+  describe('a new thread\'s first message shows at once (#3127)', () => {
+    /** The conversation's create, held until the test lets it answer. */
+    function holdCreate(): { release: () => void; created: () => number } {
+      let created = 0;
+      let release: () => void = () => undefined;
+      const answered = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      server.use(
+        http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, async () => {
+          created += 1;
+          await answered;
+          return HttpResponse.json({ id: 77, name: 'fix the build' });
+        }),
+      );
+      return { release: () => release(), created: () => created };
+    }
+
+    it('shows the message "Preparing workspace…" while the thread is prepared, with the composer free to write', async () => {
+      serveProject();
+      const create = holdCreate();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      await pickCoder(user);
+      await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      // On screen before the conversation exists and before any turn: the composer is cleared and takes text.
+      const pending = await screen.findByTestId('pending-first-message');
+      expect(within(pending).getByTestId('your-prompt')).toHaveTextContent('fix the build');
+      expect(within(pending).getByText('Preparing workspace…')).toBeInTheDocument();
+      await waitFor(() => expect(create.created()).toBe(1));
+      expect(ipc.calls.started).toHaveLength(0);
+      const input = screen.getByTestId('chat-message-input');
+      expect(input).toHaveValue('');
+      await user.type(input, 'and the docs');
+      expect(input).toHaveValue('and the docs');
+
+      create.release();
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByTestId('pending-first-message')).toBeNull());
+      // The turn's own prompt stands in its place: the message shows once.
+      expect(screen.getAllByTestId('your-prompt')).toHaveLength(1);
+      expect(screen.getByTestId('your-prompt')).toHaveTextContent('fix the build');
+      expect(input).toHaveValue('and the docs');
+    });
+
+    it('repeated Enter while it is prepared makes one conversation and one turn (#3077)', async () => {
+      serveProject();
+      const create = holdCreate();
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      await pickCoder(user);
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'fix the build');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await screen.findByTestId('pending-first-message');
+      await user.type(input, 'again');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      create.release();
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      await waitFor(() => expect(screen.queryByTestId('pending-first-message')).toBeNull());
+      expect(create.created()).toBe(1);
+      expect(ipc.calls.started[0]?.prompt).toBe('fix the build');
+      expect(screen.getAllByTestId('your-prompt')).toHaveLength(1);
+      // What was written meanwhile stays in the composer, unsent.
+      expect(input).toHaveValue('again');
+    });
   });
 
   describe('a pipeline runs in the cloud (#1239 A3)', () => {
@@ -861,9 +942,11 @@ describe('WorkspaceSessionPage', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Send' }));
+    // The message stayed on screen, "Not sent": its Retry sends it again with the same client id.
+    await user.click(await screen.findByTestId('pending-first-message-retry'));
     await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
     expect(ipc.calls.started.map((r) => r.conversation_id)).toEqual(['77', '77']);
+    expect(ipc.calls.started[1]?.submit_id).toBe(ipc.calls.started[0]?.submit_id);
     expect(created).toBe(1);
   });
 
@@ -889,10 +972,10 @@ describe('WorkspaceSessionPage', () => {
     await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(adds).toBe(1));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    const retry = await screen.findByTestId('pending-first-message-retry');
     expect(ipc.calls.started).toHaveLength(0);
 
-    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await user.click(retry);
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
     expect(ipc.calls.started[0]?.conversation_id).toBe('77');
     expect(created).toBe(1);

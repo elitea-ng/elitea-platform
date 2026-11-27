@@ -37,7 +37,7 @@ import PersonAddAltOutlinedIcon from '@mui/icons-material/PersonAddAltOutlined';
 import { t } from '@/shared/i18n';
 
 import type { TransformedParticipant } from '../model/types';
-import { agentContextOf, agentLeadOf } from '../lib/agentContextSlot';
+import { agentAvatarOf, agentContextOf, agentLeadOf } from '../lib/agentContextSlot';
 import { deriveEffectiveMaxVisibleUsers, useContainerWidth } from '../lib/hooks/useContainerWidth';
 import { getChatParticipantUniqueId } from '../lib/helpers';
 import { useParticipantDetailsContext } from '../lib/context/ParticipantDetailsContext';
@@ -93,6 +93,7 @@ interface ParticipantActions {
   /** Opens the consumer's add-participant picker — see `ParticipantsProps`. */
   onAddParticipants?: () => void; renderAgentContext?: ParticipantsProps['renderAgentContext'];
   renderAgentLead?: ParticipantsProps['renderAgentLead'];
+  renderAgentAvatar?: ParticipantsProps['renderAgentAvatar'];
 }
 
 export interface ParticipantsLayoutProps {
@@ -148,6 +149,7 @@ interface ParticipantTypeSectionProps {
   editingToolkit?: string;
   resolveToolkitIcon?: ParticipantsProps['resolveToolkitIcon']; renderAgentContext?: ParticipantsProps['renderAgentContext'];
   renderAgentLead?: ParticipantsProps['renderAgentLead'];
+  renderAgentAvatar?: ParticipantsProps['renderAgentAvatar'];
 }
 
 const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
@@ -155,7 +157,7 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
     title, inspector, participants, collapsed, disabledEdit, activeParticipantId,
     selectedManager, newConversationSelectedManager,
     onSelectParticipant, onDeleteParticipant, onEditParticipant,
-    editingToolkit, resolveToolkitIcon, renderAgentContext, renderAgentLead,
+    editingToolkit, resolveToolkitIcon, renderAgentContext, renderAgentLead, renderAgentAvatar,
   } = props;
 
   const [isExpanded, setIsExpanded] = useState(true);
@@ -216,6 +218,7 @@ const ParticipantTypeSection = memo((props: ParticipantTypeSectionProps) => {
                 resolveToolkitIcon={resolveToolkitIcon}
                 {...agentContextOf(renderAgentContext, participant)}
                 {...agentLeadOf(renderAgentLead, participant)}
+                {...agentAvatarOf(renderAgentAvatar, participant)}
                 {...status}
               />
             );
@@ -280,6 +283,7 @@ function ExpandedParticipantsContent({
           resolveToolkitIcon={actions.resolveToolkitIcon}
           renderAgentContext={actions.renderAgentContext}
           renderAgentLead={actions.renderAgentLead}
+          renderAgentAvatar={actions.renderAgentAvatar}
         />
       ))}
 

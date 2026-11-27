@@ -115,6 +115,7 @@ export { resolveParticipantEntityType } from './lib/participantIcon';
 export { ActionView } from './ui/ActionView';
 export type { ActionViewProps } from './ui/ActionView';
 export { AgentAvatar } from './ui/chat-box/AgentAvatar';
+export { participantIconUrl } from './lib/answerAuthor';
 export type { AgentAvatarProps } from './ui/chat-box/AgentAvatar';
 export { applyLocalAgentState, useAgentAvatarStates } from './model/agentAvatar.store';
 export { ApplicationAnswer } from './ui/chat-box/ApplicationAnswer';

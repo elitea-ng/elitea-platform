@@ -30,7 +30,8 @@ import { useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 import { turnSlots, type TurnSlot } from './chainSlots';
 import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useThreadName } from './useThreadName';
-import { useAgentSelection, type AgentSelection } from './useAgentSelection';
+import { useAgentSelection, type AgentSelection, type SelectionSeed } from './useAgentSelection';
+import { peekHanded, useFirstMessageSlot, type FirstMessageSlot, type HandedFirstMessage } from './useFirstSend';
 import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt, type SendPrompt, type SentImages } from './useSendPrompt';
 import { useSessionCommands, type SessionCommands } from './useSessionCommands';
@@ -167,12 +168,23 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   projects: ReturnType<typeof useBindableProjects>;
   rebind: UseMutationResult<void, Error, number>;
   createAgent: () => void;
+  /** The new thread's first message, on screen before its turn starts (#3127). */
+  first: FirstMessageSlot;
+}
+
+/** The message (and agents) handed to a new thread of the workspace; none for an existing thread. */
+function handedTo(workspaceId: string, conversationId: string): { message: HandedFirstMessage | undefined; seed: SelectionSeed | undefined } {
+  const message = conversationId === '' ? peekHanded(workspaceId) : undefined;
+  return { message, seed: message?.seed };
 }
 
 export function useThreadSession({ ipc, workspace, projectId, conversationId, onAdopt }: ThreadSessionInput): ThreadSession {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const raw = useAgentSelection(workspace.id, projectId);
+  // A worktree's new thread: the message its folder's thread handed it, and the agents chosen there (#3127, #3128).
+  const [handed] = useState(() => handedTo(workspace.id, conversationId));
+  const raw = useAgentSelection(workspace.id, projectId, handed.seed);
+  const first = useFirstMessageSlot(handed.message, workspace.id);
   const turn = useWorkspaceTurn(ipc);
   const [prompts, setPrompts] = useState<string[]>([]);
   const [promptImages, setPromptImages] = useState<SentImages['shown'][]>([]);
@@ -285,6 +297,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     projects,
     rebind,
     createAgent,
+    first,
     canSend,
     sendError,
     send,

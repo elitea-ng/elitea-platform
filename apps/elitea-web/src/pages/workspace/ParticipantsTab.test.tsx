@@ -111,6 +111,29 @@ describe("a Local work thread's Participants tab (issue 3055)", () => {
     expect(screen.queryByTestId('side-panel-tab-participants')).toBeNull();
   });
 
+  it('shows each agent\'s logo or avatar pack in the row\'s avatar place, the letter only without either, and no second avatar (#3131)', async () => {
+    const media = (sha: string, ext: string) => `/api/v2/agent_media/42/${sha.repeat(32)}.${ext}`;
+    const packed = { ...coder, persona: { display_name: 'Coder', avatar_pack_v1: { schema: 'elitea.avatar_pack/v1', slots: { still: { url: media('ab', 'png') }, working: { url: media('cd', 'mp4'), poster_url: media('ab', 'png') } } } } };
+    const logo = { ...reviewer, entity_settings: { ...reviewer.entity_settings, icon_meta: { url: '/icons/42/reviewer.png' } } };
+    const plain = { id: 14, entity_name: 'application', entity_meta: { id: 7, name: 'Dev Coordinator' }, entity_settings: { version_id: 11 } };
+    serve([packed, logo, plain]);
+    mount();
+    const tab = await screen.findByTestId('side-panel-tab-team');
+    await waitFor(() => expect(within(tab).getAllByTestId('participant-avatar')).toHaveLength(2));
+    const avatarOf = (id: number) => within(tab).getAllByTestId('participant-avatar').find((node) => node.getAttribute('data-participant-id') === String(id));
+    // On the deployment's origin (#3132): the page is served from another one here.
+    expect(avatarOf(11)?.querySelector('img')?.getAttribute('src')).toBe(`https://elitea.example${media('ab', 'png')}`);
+    expect(avatarOf(12)?.querySelector('img')?.getAttribute('src')).toBe('https://elitea.example/icons/42/reviewer.png');
+    expect(avatarOf(14)).toBeUndefined();
+    // The agent with neither keeps its letter.
+    expect(within(tab).getByText('D')).toBeInTheDocument();
+    // The right side keeps the chips and the menu, with no second avatar.
+    for (const controls of within(tab).getAllByTestId('participant-lead')) {
+      expect(within(controls).queryByTestId('chat-message-avatar')).toBeNull();
+      expect(within(controls).getByTestId('participant-executor')).toBeInTheDocument();
+    }
+  });
+
   it('follows the other tabs with one agent, which has no lead to make', async () => {
     serve([coder], { local_work: { folder_name: 'repo' } });
     mount();

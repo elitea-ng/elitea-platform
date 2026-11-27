@@ -95,6 +95,7 @@ export const Participants = memo(
     renderContextBudget,
     renderAgentContext,
     renderAgentLead,
+    renderAgentAvatar,
     conversationId,
     maxVisibleUsers = 5,
     isSmallWindow = false,
@@ -277,6 +278,7 @@ export const Participants = memo(
           onAddParticipants,
           renderAgentContext,
           renderAgentLead,
+          renderAgentAvatar,
         }}
         renderContextBudget={renderContextBudget}
         conversationId={conversationId}

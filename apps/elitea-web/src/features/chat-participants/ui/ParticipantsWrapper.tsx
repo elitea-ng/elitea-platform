@@ -32,7 +32,7 @@ import type { Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { useSelectedProjectId } from '../api/useSelectedProjectId';
-import { useAgentContextSlot, type AgentContextRenderer } from '../lib/agentContextSlot';
+import { useAgentContextSlot, useAgentRowSlots, type AgentContextRenderer } from '../lib/agentContextSlot';
 import { getChatParticipantUniqueId } from '../lib/helpers';
 import { ParticipantDetailsProvider } from '../lib/context/ParticipantDetailsContext';
 import { Participants } from './Participants';
@@ -160,7 +160,7 @@ export interface ParticipantsWrapperProps {
    */
   readonly renderContextBudget?: ParticipantsProps['renderContextBudget'];
   readonly renderAgentContext?: AgentContextRenderer; // issue 1610
-  readonly renderAgentLead?: AgentContextRenderer; // issue 1612: an agent row's lead badge and menu
+  readonly renderAgentLead?: AgentContextRenderer; readonly renderAgentAvatar?: AgentContextRenderer; // 1612: lead badge and menu; 3131: logo or live avatar
   /**
    * Optional slot to resolve toolkit/MCP icons.
    * @see ParticipantsProps.resolveToolkitIcon
@@ -233,7 +233,7 @@ export const ParticipantsWrapper = memo(
     onUpdateParticipant,
     onEditParticipant,
     onAddParticipants,
-    renderContextBudget, renderAgentContext, renderAgentLead,
+    renderContextBudget, renderAgentContext, renderAgentLead, renderAgentAvatar,
     resolveToolkitIcon,
     isMcpVisible,
     editingToolkit,
@@ -256,7 +256,7 @@ export const ParticipantsWrapper = memo(
     );
 
     const agentSlot = useAgentContextSlot(renderAgentContext, derived._conversationId);
-    const leadSlot = useAgentContextSlot(renderAgentLead, derived._conversationId).renderAgentContext;
+    const rowSlots = useAgentRowSlots(renderAgentLead, renderAgentAvatar, derived._conversationId);
 
     // Fixes adversarial review C5-wrapper #5: old-app `disabledAdd` gates on
     // BOTH playback state and `users.view` permission, not playback alone.
@@ -294,7 +294,7 @@ export const ParticipantsWrapper = memo(
             resolveToolkitIcon={resolveToolkitIcon}
             isMcpVisible={isMcpVisible}
             renderContextBudget={contextSlot}
-            {...agentSlot} {...(leadSlot ? { renderAgentLead: leadSlot } : {})}
+            {...agentSlot} {...rowSlots}
             {...(derived._conversationId !== undefined ? { conversationId: derived._conversationId } : {})}
             maxVisibleUsers={maxVisibleUsers}
             isSmallWindow={isSmallWindow}
