@@ -1458,8 +1458,12 @@ impl CopyCheckpoints {
     /// The walk, the limits, and what to leave out: nothing is read.
     fn plan(&self) -> ToolResult<CopyPlan> {
         let max_files = self.limits.max_copy_files;
-        let found =
-            folder_scan::scan_with(self.restorer.root(), self.rules, max_files, self.placeholder);
+        let found = folder_scan::scan_with(
+            self.restorer.root(),
+            self.rules,
+            max_files,
+            self.placeholder,
+        );
         if found.truncated {
             return Err(ToolError::new(
                 ErrorCode::TooLarge,
@@ -1643,7 +1647,9 @@ impl CopyCheckpoints {
                     },
                 );
             }
-            manifest.files.insert(name, ManifestFile { sha256: sha, mode });
+            manifest
+                .files
+                .insert(name, ManifestFile { sha256: sha, mode });
         }
         let bytes = serde_json::to_vec(&manifest)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
@@ -2828,7 +2834,7 @@ mod tests {
         );
         // A restore leaves it alone (never deleted as if the turn made it).
         let report = checkpoints.restore(1).expect("restore");
-        assert!(report.deleted.is_empty());
+        assert_eq!(report.deleted, Vec::<String>::new());
         assert!(dir.path().join("cloud.pdf").exists());
     }
 

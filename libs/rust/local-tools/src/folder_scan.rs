@@ -15,7 +15,7 @@
 //!   in what git itself shows.
 //!
 //! Cloud placeholders (a file whose content lives only in iCloud Drive,
-//! OneDrive, Dropbox and the like, see [`is_placeholder`]) are listed apart
+//! `OneDrive`, Dropbox and the like, see [`is_placeholder`]) are listed apart
 //! and never opened. Reading one would start a download.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,14 +50,14 @@ pub const HEAVY_DIRS: &[&str] = &[
 ];
 
 /// macOS `SF_DATALESS`: the file's content is not on this disk (a File
-/// Provider placeholder: iCloud Drive, OneDrive, Dropbox, …). Reading it
+/// Provider placeholder: iCloud Drive, `OneDrive`, Dropbox, …). Reading it
 /// downloads it.
 pub const SF_DATALESS: u32 = 0x4000_0000;
 /// Windows `FILE_ATTRIBUTE_OFFLINE`.
 pub const FILE_ATTRIBUTE_OFFLINE: u32 = 0x0000_1000;
 /// Windows `FILE_ATTRIBUTE_RECALL_ON_OPEN`.
 pub const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
-/// Windows `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (OneDrive's "online-only").
+/// Windows `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (`OneDrive`'s "online-only").
 pub const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
 
 /// Which ignore rules a scan follows.
@@ -336,13 +336,13 @@ mod tests {
 
     #[test]
     fn placeholders_are_listed_apart_and_never_counted_as_files() {
+        fn simulated(path: &Path, metadata: &std::fs::Metadata) -> bool {
+            path.ends_with("cloud.pdf") || is_placeholder(path, metadata)
+        }
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("here.txt"), "x").unwrap();
         std::fs::write(dir.path().join("cloud.pdf"), "").unwrap();
         std::fs::write(dir.path().join(".old.pages.icloud"), "stub").unwrap();
-        fn simulated(path: &Path, metadata: &std::fs::Metadata) -> bool {
-            path.ends_with("cloud.pdf") || is_placeholder(path, metadata)
-        }
         let found = scan_with(dir.path(), ScanRules::Folder, 100, simulated);
         assert_eq!(
             found.placeholders.iter().collect::<Vec<_>>(),

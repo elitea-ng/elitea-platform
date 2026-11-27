@@ -65,7 +65,10 @@ fn before_image(session: &LocalSession, path: &str, stat: Option<folder_scan::Fi
     ) else {
         return opaque;
     };
-    match session.checkpoints().file_at(seq, &ws_path, MAX_IMAGE_BYTES) {
+    match session
+        .checkpoints()
+        .file_at(seq, &ws_path, MAX_IMAGE_BYTES)
+    {
         Ok(Some(bytes)) => Image::Bytes(bytes),
         // Left out of the checkpoint (too large, a placeholder), too large
         // to keep, or unreadable: its size only.
@@ -169,7 +172,10 @@ mod tests {
 
     #[test]
     fn a_command_with_a_read_only_sandbox_is_not_scanned() {
-        assert!(may_write("run_command", &serde_json::json!({"command": "make"})));
+        assert!(may_write(
+            "run_command",
+            &serde_json::json!({"command": "make"})
+        ));
         assert!(!may_write(
             "run_command",
             &serde_json::json!({"command": "ls", "sandbox": "read-only"})
@@ -193,6 +199,9 @@ mod tests {
         background.started("dev", FolderScan::default());
         background.started("watch", FolderScan::default());
         let taken = background.state.lock().unwrap().take();
-        assert_eq!(taken.map(|(_, commands)| commands).unwrap(), ["dev", "watch"]);
+        assert_eq!(
+            taken.map(|(_, commands)| commands).unwrap(),
+            ["dev", "watch"]
+        );
     }
 }

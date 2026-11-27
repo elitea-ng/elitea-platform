@@ -129,10 +129,16 @@ async fn going_on_without_undo_is_asked_once_before_the_first_change() {
     assert_eq!(written["status"], "ok", "{written}");
     assert_eq!(fx.asked(), 1);
     let asked = fx.prompt.asked.lock().expect("lock")[0].clone();
-    assert!(asked.message.contains("cannot be undone"), "{}", asked.message);
-    assert!(asked.payload[NO_UNDO_PAYLOAD_KEY]["reason"]
-        .as_str()
-        .is_some_and(|reason| reason.contains("more than 2 files")));
+    assert!(
+        asked.message.contains("cannot be undone"),
+        "{}",
+        asked.message
+    );
+    assert!(
+        asked.payload[NO_UNDO_PAYLOAD_KEY]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("more than 2 files"))
+    );
     // Asked once per turn.
     let again = fx.write("w2", "other.md").await;
     assert_eq!(again["status"], "ok", "{again}");
@@ -150,9 +156,11 @@ async fn a_no_refuses_every_change_of_the_turn_and_changes_nothing() {
     let fx = fixture("reject", 2);
     let refused = fx.write("w1", "new.md").await;
     assert_eq!(refused["code"], "local_tools.rejected", "{refused}");
-    assert!(refused["message"]
-        .as_str()
-        .is_some_and(|text| text.contains("too large to save for undo")));
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("too large to save for undo"))
+    );
     assert!(!fx.root.join("new.md").exists());
     let again = fx.write("w2", "other.md").await;
     assert_eq!(again["code"], "local_tools.rejected", "{again}");
@@ -163,12 +171,16 @@ async fn a_no_refuses_every_change_of_the_turn_and_changes_nothing() {
 #[tokio::test]
 async fn an_unattended_turn_is_refused_without_a_question() {
     let fx = fixture("approve", 2);
-    fx.session.rules().set_unattended(Some(Unattended::default()));
+    fx.session
+        .rules()
+        .set_unattended(Some(Unattended::default()));
     let refused = fx.write("w", "new.md").await;
     assert_eq!(refused["code"], "local_tools.rejected", "{refused}");
-    assert!(refused["message"]
-        .as_str()
-        .is_some_and(|text| text.contains("unattended")));
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("unattended"))
+    );
     assert_eq!(fx.asked(), 0);
     assert!(!fx.root.join("new.md").exists());
 }
@@ -179,9 +191,11 @@ async fn a_full_auto_turn_is_refused_without_a_question_and_bypass_still_asks() 
     fx.session.set_profile(PermissionProfile::FullAuto);
     let refused = fx.write("w", "new.md").await;
     assert_eq!(refused["code"], "local_tools.rejected", "{refused}");
-    assert!(refused["message"]
-        .as_str()
-        .is_some_and(|text| text.contains("Full auto")));
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("Full auto"))
+    );
     assert_eq!(fx.asked(), 0);
 
     let bypass = fixture("approve", 2);

@@ -192,7 +192,7 @@ describe('WorkspacesPage', () => {
     await waitFor(() => expect(screen.queryByTestId('workspaces-page')).toBeNull());
   });
 
-  it('shows each folder\'s code index on its row', async () => {
+  it('shows each folder\'s index on its row', async () => {
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER, { ...FOLDER, id: 'w2', name: 'notes' }] });
     mount(ipc, '/workspaces', createFakeIndexIpc({ statuses: { w1: { state: 'ready', entities: 42 } } }));
     const rows = await screen.findAllByTestId('workspace-row');
@@ -308,7 +308,7 @@ describe('WorkspaceSessionPage', () => {
     );
   }
 
-  it('shows the folder\'s code index in the inspector, opened from the toolbar menu', async () => {
+  it('shows the folder\'s index in the inspector, opened from the toolbar menu', async () => {
     serveProject();
     const indexIpc = createFakeIndexIpc({ statuses: { w1: { state: 'stale' } } });
     mount(createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] }), '/workspaces/w1', indexIpc);

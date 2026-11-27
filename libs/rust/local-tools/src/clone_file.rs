@@ -54,10 +54,7 @@ pub fn clone_file(source: &File, target: &Path) -> std::io::Result<()> {
     }
     #[cfg(target_os = "linux")]
     {
-        let created = File::options()
-            .write(true)
-            .create_new(true)
-            .open(target)?;
+        let created = File::options().write(true).create_new(true).open(target)?;
         rustix::fs::ioctl_ficlone(&created, source).map_err(|error| {
             drop(created);
             let _ = std::fs::remove_file(target);
@@ -108,11 +105,13 @@ pub fn copy_into(
     let stored = (|| {
         if try_clone && clone_file(source, target).is_ok() {
             let mut clone = File::open(target)?;
-            return Ok(hash_file(&mut clone, max_bytes)?.map(|(len, sha256)| Copied {
-                sha256,
-                len,
-                method: CopyMethod::Clone,
-            }));
+            return Ok(
+                hash_file(&mut clone, max_bytes)?.map(|(len, sha256)| Copied {
+                    sha256,
+                    len,
+                    method: CopyMethod::Clone,
+                }),
+            );
         }
         let mut out = File::options().write(true).create_new(true).open(target)?;
         let mut hasher = Sha256::new();
@@ -181,7 +180,9 @@ mod tests {
         // Without anything in the way, an unclonable source is copied.
         std::fs::remove_file(&target).ok();
         let mut source = File::open(dir.path().join("src")).unwrap();
-        let copied = copy_into(&mut source, &target, 1024, true).unwrap().unwrap();
+        let copied = copy_into(&mut source, &target, 1024, true)
+            .unwrap()
+            .unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"data");
         assert_eq!(copied.len, 4);
     }
@@ -193,7 +194,10 @@ mod tests {
         let target = dir.path().join("out");
         for try_clone in [true, false] {
             let mut source = File::open(dir.path().join("src")).unwrap();
-            assert_eq!(copy_into(&mut source, &target, 50, try_clone).unwrap(), None);
+            assert_eq!(
+                copy_into(&mut source, &target, 50, try_clone).unwrap(),
+                None
+            );
             assert!(!target.exists());
         }
     }

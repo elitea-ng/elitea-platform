@@ -1827,7 +1827,10 @@ impl LocalSession {
                  the person what you would change instead."
             )));
         }
-        tracing::warn!(reason, "local turn runs without a checkpoint, as the person agreed");
+        tracing::warn!(
+            reason,
+            "local turn runs without a checkpoint, as the person agreed"
+        );
         if let Ok(mut turn) = self.turn.lock() {
             turn.skipped = Some(reason);
         }

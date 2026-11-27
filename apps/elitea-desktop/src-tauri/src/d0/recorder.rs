@@ -672,8 +672,7 @@ impl Recorder {
     /// Whether some command's changes could not be listed.
     #[must_use]
     pub fn has_unlisted_commands(&self) -> bool {
-        self.with(|state| state.commands_unlisted)
-            .unwrap_or(false)
+        self.with(|state| state.commands_unlisted).unwrap_or(false)
     }
 
     /// Before the first change of `paths` (workspace-relative, as the model
@@ -960,7 +959,8 @@ fn kept(image: &Image) -> Option<&[u8]> {
 
 /// [`diff`] of two contents (`None`: absent).
 pub(crate) fn diff_bytes(path: &str, old: Option<&[u8]>, new: Option<&[u8]>) -> FileChange {
-    let image = |bytes: Option<&[u8]>| bytes.map_or(Image::Absent, |bytes| Image::Bytes(bytes.to_vec()));
+    let image =
+        |bytes: Option<&[u8]>| bytes.map_or(Image::Absent, |bytes| Image::Bytes(bytes.to_vec()));
     diff(path, &image(old), &image(new))
 }
 
@@ -977,9 +977,12 @@ pub(crate) fn diff(path: &str, old: &Image, new: &Image) -> FileChange {
         size_after: new.len(),
         ..FileChange::default()
     };
-    let texts = kept(old)
-        .zip(kept(new))
-        .and_then(|(old, new)| Some((std::str::from_utf8(old).ok()?, std::str::from_utf8(new).ok()?)));
+    let texts = kept(old).zip(kept(new)).and_then(|(old, new)| {
+        Some((
+            std::str::from_utf8(old).ok()?,
+            std::str::from_utf8(new).ok()?,
+        ))
+    });
     let Some((old_text, new_text)) = texts else {
         // Binary, or not kept: changed, with its sizes, no line diff.
         return FileChange {
