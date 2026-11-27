@@ -76,7 +76,7 @@ To change the map:
 the one id per role. Review holds the meaning and the upgrade note. When you
 change a role's value, change its mapped legacy id too. That is a visible
 change (ADR-0062 decision 5). What this means for operators:
-`docs/upgrading/2026-11-26-3091-colour-roles-hand-tuned-legacy-ids.md`.
+`docs/upgrading/2026-11-27-3091-colour-roles-hand-tuned-legacy-ids.md`.
 
 ## Where the values come from
 
