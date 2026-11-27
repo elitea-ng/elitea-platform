@@ -33,6 +33,7 @@ import {
   type MarketplaceFilters,
   type MarketplaceSearch,
 } from './filters';
+import { kindLabel } from './listing';
 import type { ListingCardData, MarketplaceKind } from './types';
 import { ListingSection } from './ui/ListingSection';
 import { MarketplaceBrowse } from './ui/MarketplaceBrowse';
@@ -114,8 +115,8 @@ export function Marketplace(): ReactNode {
     });
   };
 
-  const kindLabel = kind === 'agents' ? t('marketplace.kind.agents', 'Agents') : t('marketplace.kind.skills', 'Skills');
-  const summary = t('marketplace.summary.count', '{{kind}}: {{count}}', { count: listings.total, kind: kindLabel });
+  const label = kindLabel(kind);
+  const summary = t('marketplace.summary.count', '{{kind}}: {{count}}', { count: listings.total, kind: label });
 
   return (
     <Box data-testid="marketplace" sx={pageSx}>
@@ -139,7 +140,7 @@ export function Marketplace(): ReactNode {
           listings={listings}
           featured={featured}
           popular={popular}
-          kindLabel={kindLabel}
+          kindLabel={label}
           filtered={filtered}
         />
       </Box>

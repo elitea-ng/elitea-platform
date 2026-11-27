@@ -12,6 +12,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
+import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
@@ -40,13 +41,16 @@ export interface TeamCardProps {
   /** Saves the team as a zip that Workshop › Agents › Import reads back (issue 3010). */
   readonly onExport: () => void;
   readonly exporting: boolean;
+  /** Lists the team in the Marketplace (issue 3137); absent for a caller who may not publish. */
+  readonly onPublish?: (() => void) | undefined;
+  readonly publishing?: boolean | undefined;
   /** Absent for a caller who may not edit teams. */
   readonly onEdit?: (() => void) | undefined;
   /** Absent for a caller who may not delete teams; opens the confirmation. */
   readonly onDelete?: (() => void) | undefined;
 }
 
-export function TeamCard({ team, avatars, renderAvatar, starting, onStart, onExport, exporting, onEdit, onDelete }: TeamCardProps): ReactNode {
+export function TeamCard({ team, avatars, renderAvatar, starting, onStart, onExport, exporting, onPublish, publishing, onEdit, onDelete }: TeamCardProps): ReactNode {
   const updated = updatedAgoLabel(team.updated_at);
   return (
     <Box
@@ -69,6 +73,8 @@ export function TeamCard({ team, avatars, renderAvatar, starting, onStart, onExp
           team={team}
           exporting={exporting}
           onExport={onExport}
+          onPublish={onPublish}
+          publishing={publishing}
           onEdit={onEdit}
           onDelete={onDelete}
         />
@@ -112,14 +118,16 @@ export function TeamCard({ team, avatars, renderAvatar, starting, onStart, onExp
   );
 }
 
-/** The overflow (⋯) menu: Export, Edit, then Delete after a divider in the error colour. */
+/** The overflow (⋯) menu: Export, Publish to Marketplace, Edit, then Delete after a divider in the error colour. */
 function TeamMenu({
   team,
   exporting,
   onExport,
+  onPublish,
+  publishing = false,
   onEdit,
   onDelete,
-}: Pick<TeamCardProps, 'team' | 'exporting' | 'onExport' | 'onEdit' | 'onDelete'>): ReactNode {
+}: Pick<TeamCardProps, 'team' | 'exporting' | 'onExport' | 'onPublish' | 'publishing' | 'onEdit' | 'onDelete'>): ReactNode {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const label = t('features.agentTeams.moreActions', 'More actions for {{name}}', { name: team.name });
   const run = (action: () => void) => () => {
@@ -154,6 +162,18 @@ function TeamMenu({
           </ListItemIcon>
           <ListItemText>{t('features.agentTeams.exportAction', 'Export')}</ListItemText>
         </MenuItem>
+        {onPublish !== undefined && (
+          <MenuItem
+            disabled={publishing}
+            onClick={run(onPublish)}
+            data-testid={`agent-team-publish-${String(team.id)}`}
+          >
+            <ListItemIcon>
+              <StorefrontOutlinedIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>{t('features.agentTeams.publishAction', 'Publish to Marketplace')}</ListItemText>
+          </MenuItem>
+        )}
         {onEdit !== undefined && (
           <MenuItem
             onClick={run(onEdit)}

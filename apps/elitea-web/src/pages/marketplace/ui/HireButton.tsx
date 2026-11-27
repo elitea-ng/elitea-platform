@@ -21,7 +21,11 @@ import { PERMISSIONS } from '@/shared/lib/permissions';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { HireWizard } from '../hire/HireWizard';
+import { TeamHireDialog } from '../hire/TeamHireDialog';
 import type { HireMode } from '../hire/hireModel';
+
+/** models.teams.create (shared 0233): a team hire saves a team. */
+const TEAM_CREATE_PERMISSION = 'models.teams.create';
 
 export interface HireButtonProps {
   readonly projectId: string | undefined;
@@ -35,7 +39,13 @@ export function HireButton({ projectId, detail }: HireButtonProps): ReactNode {
   const [mode, setMode] = useState<HireMode | undefined>();
   const hired = detail.listing.hired[0];
   const delisted = detail.listing.state === 'delisted';
-  const canHire = permissions.has(PERMISSIONS.applications.create) && !delisted && projectId !== undefined;
+  const { team } = detail;
+  // A team hire creates agents AND a saved team, so it also needs the team create permission.
+  const canHire =
+    permissions.has(PERMISSIONS.applications.create) &&
+    (team === undefined || permissions.has(TEAM_CREATE_PERMISSION)) &&
+    !delisted &&
+    projectId !== undefined;
   const pick = (next: HireMode): void => {
     setMenuOpen(false);
     setMode(next);
@@ -75,13 +85,24 @@ export function HireButton({ projectId, detail }: HireButtonProps): ReactNode {
           {t('marketplace.listing.fork', 'Fork')}
         </MenuItem>
       </Menu>
-      <HireWizard
-        open={mode !== undefined}
-        onClose={() => setMode(undefined)}
-        projectId={projectId}
-        detail={detail}
-        initialMode={mode ?? 'install'}
-      />
+      {team === undefined ? (
+        <HireWizard
+          open={mode !== undefined}
+          onClose={() => setMode(undefined)}
+          projectId={projectId}
+          detail={detail}
+          initialMode={mode ?? 'install'}
+        />
+      ) : (
+        <TeamHireDialog
+          open={mode !== undefined}
+          onClose={() => setMode(undefined)}
+          projectId={projectId}
+          detail={detail}
+          team={team}
+          initialMode={mode ?? 'install'}
+        />
+      )}
     </Box>
   );
 }

@@ -30,6 +30,7 @@ import { SidePanelTab } from '@/shared/ui/side-panel';
 
 import { SORT_OPTIONS, TIERS } from '../constants';
 import { sortFromSearch, type MarketplaceFilters } from '../filters';
+import { kindFromSearch, kindLabel } from '../listing';
 import type { MarketplaceKind } from '../types';
 
 export interface MarketplaceBrowseProps {
@@ -211,6 +212,44 @@ function BrowseSelects({ filters, facets, onChange }: PanelPartProps): ReactNode
   );
 }
 
+function searchPlaceholder(kind: MarketplaceKind): string {
+  if (kind === 'skills') return t('marketplace.browse.searchSkills', 'Search for skills');
+  if (kind === 'teams') return t('marketplace.browse.searchTeams', 'Search for teams');
+  return t('marketplace.browse.searchAgents', 'Search for agents');
+}
+
+const KINDS: readonly MarketplaceKind[] = ['agents', 'skills', 'teams'];
+
+/** The Kind radios: agents, skills or teams. */
+function KindChoice({
+  kind,
+  onKindChange,
+}: {
+  readonly kind: MarketplaceKind;
+  readonly onKindChange: (kind: MarketplaceKind) => void;
+}): ReactNode {
+  return (
+    <FormControl component="fieldset">
+      <FormLabel component="legend">{t('marketplace.browse.kind', 'Kind')}</FormLabel>
+      <RadioGroup
+        value={kind}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => onKindChange(kindFromSearch(event.target.value))}
+      >
+        {KINDS.map((value) => (
+          <FormControlLabel
+            key={value}
+            value={value}
+            sx={optionSx}
+            control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" sx={controlSx} />}
+            label={kindLabel(value)}
+            data-testid={`marketplace-kind-${value}`}
+          />
+        ))}
+      </RadioGroup>
+    </FormControl>
+  );
+}
+
 export function MarketplaceBrowse({
   filters,
   typedQuery,
@@ -233,37 +272,10 @@ export function MarketplaceBrowse({
           value={typedQuery}
           onChange={(event: ChangeEvent<HTMLInputElement>) => onTypedQueryChange(event.target.value)}
           label={t('marketplace.browse.search', 'Search')}
-          placeholder={
-            kind === 'agents'
-              ? t('marketplace.browse.searchAgents', 'Search for agents')
-              : t('marketplace.browse.searchSkills', 'Search for skills')
-          }
+          placeholder={searchPlaceholder(kind)}
           slotProps={{ htmlInput: { 'data-testid': 'marketplace-search' } }}
         />
-        <FormControl component="fieldset">
-          <FormLabel component="legend">{t('marketplace.browse.kind', 'Kind')}</FormLabel>
-          <RadioGroup
-            value={kind}
-            onChange={(event: ChangeEvent<HTMLInputElement>) =>
-              onKindChange(event.target.value === 'skills' ? 'skills' : 'agents')
-            }
-          >
-            <FormControlLabel
-              value="agents"
-              sx={optionSx}
-              control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" sx={controlSx} />}
-              label={t('marketplace.kind.agents', 'Agents')}
-              data-testid="marketplace-kind-agents"
-            />
-            <FormControlLabel
-              value="skills"
-              sx={optionSx}
-              control={<BaseCheckbox mode={CHECKBOX_MODES.radio} size="small" sx={controlSx} />}
-              label={t('marketplace.kind.skills', 'Skills')}
-              data-testid="marketplace-kind-skills"
-            />
-          </RadioGroup>
-        </FormControl>
+        <KindChoice kind={kind} onKindChange={onKindChange} />
         <FormControlLabel
           sx={optionSx}
           control={

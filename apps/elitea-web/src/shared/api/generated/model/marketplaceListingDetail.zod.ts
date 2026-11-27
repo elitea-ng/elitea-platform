@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { MarketplaceListingSummary } from "./marketplaceListingSummary.zod";
+import { MarketplaceTeamDetail } from "./marketplaceTeamDetail.zod";
 import { MarketplaceVersion } from "./marketplaceVersion.zod";
 
 export const MarketplaceListingDetail = zod
@@ -65,8 +66,11 @@ export const MarketplaceListingDetail = zod
       .describe(
         "The caller is a platform administrator and may yank, delist and feature.",
       ),
+    team: MarketplaceTeamDetail.optional(),
   })
-  .describe("The listing page read (internal/marketplace/search.go Get).\n");
+  .describe(
+    "The listing page read (internal/marketplace/search.go Get). A team listing (kind `team`) also carries `team`: its current version's members, each resolved as its own listing.\n",
+  );
 
 export type MarketplaceListingDetail = zod.input<
   typeof MarketplaceListingDetail

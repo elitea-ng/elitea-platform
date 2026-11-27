@@ -11,7 +11,7 @@ Marketplace is the shared library of published agents and skills, visible across
 
 The **Browse** tab of the right sidebar holds every control for the list. Search matches the name, the description, and the soul summary. The server counts each facet value over the whole Marketplace. A facet ignores its own filter, so a count shows what one more click adds.
 
-- **Kind**: **Agents** or **Skills**.
+- **Kind**: **Agents**, **Skills** or **Teams**.
 - **Category** and **Tag**: tick as many as you like. A listing shows if it carries any of them.
 - **Publisher**: the person who published the listing.
 - **Max tier**: the highest risk tier to show (low, medium, high, critical).
@@ -129,6 +129,14 @@ When a version is yanked, every installed agent and fork that holds it shows a b
 ## Add a skill
 
 **Add to an agent** on a skill listing has a version pick. A yanked version is disabled. The skill is forked into your project and attached to the agent versions you choose. The Marketplace counts the add as a hire.
+
+## Teams
+
+A saved team (Workshop › Agents › Teams) can be listed too. **Publish to Marketplace** on a team row lists it, as long as every agent of the team is itself published to the Marketplace: otherwise the row names the agents to publish first. The team version pins each member to the version its listing has at that moment, and the team listing's requirements are everything its members need together. Publish again to add a new version.
+
+A team listing shows its members, each a link to its own listing, and marks the lead. **Hire** opens one dialog for the whole team: choose **Install** or **Fork**, name the team, and connect what each member needs, as you would for one agent. With **Install**, a member your project already installed from the same version is reused, not hired twice; **Fork** makes new editable agents for every member. The hire creates the agents and the saved team in one step: when one member cannot be hired (an unbound toolkit, a yanked version, an approval a personal project cannot give), nothing is created and the dialog names that member. Hiring a team needs the right to create agents and to create teams.
+
+A team carries no credentials, scheduled runs or mandates: each member is hired with your own connections, and a member above low tier, or with write tools, waits for its own hire approval.
 
 ## Publish with release notes
 

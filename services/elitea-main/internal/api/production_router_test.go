@@ -2338,6 +2338,8 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/marketplace_feedback_report/prompt_lib/{projectID}/{listingID}",
 		"POST /api/v2/elitea_core/marketplace_hire/prompt_lib/{projectID}",
 		"POST /api/v2/elitea_core/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}",
+		"POST /api/v2/elitea_core/marketplace_team_hire/prompt_lib/{projectID}",
+		"POST /api/v2/elitea_core/marketplace_team_publish/prompt_lib/{projectID}/{teamID}",
 		"POST /api/v2/elitea_core/marketplace_upgrade/prompt_lib/{projectID}/{applicationID}",
 		"POST /api/v2/elitea_core/marketplace_upstream/prompt_lib/{projectID}/{applicationID}",
 		"POST /api/v2/elitea_core/mcp_authorization_challenge/prompt_lib/{projectID}/{toolkitID}",

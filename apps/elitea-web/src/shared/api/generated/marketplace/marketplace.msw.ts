@@ -55,6 +55,8 @@ import type {
   MarketplaceListingPage,
   MarketplaceListingSummary,
   MarketplaceOrigin,
+  MarketplaceTeamHireResult,
+  MarketplaceTeamPublishResult,
   MarketplaceUpgradePlan,
   MarketplaceUpgradePolicy,
   MarketplaceUpgradeResult,
@@ -231,6 +233,53 @@ export const getGetMarketplaceListingResponseMock = (
   })),
   can_manage: faker.datatype.boolean(),
   can_moderate: faker.datatype.boolean(),
+  team: faker.helpers.arrayElement([
+    {
+      version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      floor_policy: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      lead_position: faker.number.int({ min: 0, max: 16 }),
+      members: Array.from(
+        { length: faker.number.int({ min: 1, max: 10 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        position: faker.number.int({ min: 1, max: 16 }),
+        listing_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        description: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        icon_url: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        hireable: faker.datatype.boolean(),
+        requirements: {
+          items: Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => ({
+            key: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            tools: Array.from(
+              { length: faker.number.int({ min: 1, max: 10 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            has_write_tools: faker.datatype.boolean(),
+          })),
+          model_class: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          tier: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          has_write_tools: faker.datatype.boolean(),
+        },
+        hired_application_id: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+      })),
+    },
+    undefined,
+  ]),
   ...overrideResponse,
 });
 
@@ -354,6 +403,44 @@ export const getHireMarketplaceListingResponseMock = (
     faker.string.alpha({ length: { min: 10, max: 20 } }),
     undefined,
   ]),
+  ...overrideResponse,
+});
+
+export const getPublishMarketplaceTeamResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceTeamPublishResult, object>> = {},
+): MarketplaceTeamPublishResult => ({
+  listing_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  version_name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  digest: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  ...overrideResponse,
+});
+
+export const getHireMarketplaceTeamResponseMock = (
+  overrideResponse: Partial<Extract<MarketplaceTeamHireResult, object>> = {},
+): MarketplaceTeamHireResult => ({
+  team_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  mode: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  members: Array.from(
+    { length: faker.number.int({ min: 1, max: 10 }) },
+    (_, i) => i + 1,
+  ).map(() => ({
+    position: faker.number.int(),
+    application_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    version_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    reused: faker.datatype.boolean(),
+    tools_enabled: faker.datatype.boolean(),
+    awaiting_approval: faker.datatype.boolean(),
+    change_request_id: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    unbound: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+  })),
   ...overrideResponse,
 });
 
@@ -1073,6 +1160,59 @@ export const getHireMarketplaceListingMockHandler = (
   );
 };
 
+export const getPublishMarketplaceTeamMockHandler = (
+  overrideResponse?:
+    | MarketplaceTeamPublishResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) =>
+        Promise<MarketplaceTeamPublishResult> | MarketplaceTeamPublishResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_team_publish/prompt_lib/:projectId/:teamId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getPublishMarketplaceTeamResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
+export const getHireMarketplaceTeamMockHandler = (
+  overrideResponse?:
+    | MarketplaceTeamHireResult
+    | ((
+        info: Parameters<Parameters<typeof http.post>[1]>[0],
+      ) => Promise<MarketplaceTeamHireResult> | MarketplaceTeamHireResult),
+  options?: RequestHandlerOptions,
+) => {
+  return http.post(
+    "*/elitea_core/marketplace_team_hire/prompt_lib/:projectId",
+    async (info: Parameters<Parameters<typeof http.post>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getHireMarketplaceTeamResponseMock(),
+        { status: 201 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGetMarketplaceOriginMockHandler = (
   overrideResponse?:
     | MarketplaceOrigin
@@ -1392,6 +1532,8 @@ export const getMarketplaceMock = () => [
   getUpdateMarketplaceListingMockHandler(),
   getSetMarketplaceVersionStateMockHandler(),
   getHireMarketplaceListingMockHandler(),
+  getPublishMarketplaceTeamMockHandler(),
+  getHireMarketplaceTeamMockHandler(),
   getGetMarketplaceOriginMockHandler(),
   getGetMarketplaceBindingsMockHandler(),
   getSetMarketplaceBindingsMockHandler(),

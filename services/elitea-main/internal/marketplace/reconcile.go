@@ -47,6 +47,21 @@ WHERE dismissed_at IS NULL AND created_at < clock_timestamp() - interval '`+dism
 	}
 	var dismissed int64
 	for _, s := range scopes {
+		if s.kind == KindTeam {
+			// A hired team lives in the central elitea_chat.agent_teams (shared
+			// 0233), never in a tenant schema; deleting the project deletes it.
+			tag, err := db.Exec(ctx, `
+UPDATE elitea_marketplace.installs i
+SET dismissed_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE i.project_id = $1 AND i.entity_kind = 'team' AND i.dismissed_at IS NULL
+  AND i.created_at < clock_timestamp() - interval '`+dismissalGrace+`'
+  AND NOT EXISTS (SELECT 1 FROM elitea_chat.agent_teams t WHERE t.id = i.entity_id AND t.project_id = i.project_id)`, s.project)
+			if err != nil {
+				return dismissed, fmt.Errorf("marketplace: record the removed team hires of project %d: %w", s.project, err)
+			}
+			dismissed += tag.RowsAffected()
+			continue
+		}
 		table := "applications"
 		if s.kind == KindSkill {
 			table = "skills"

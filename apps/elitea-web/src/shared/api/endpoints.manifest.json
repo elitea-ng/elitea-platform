@@ -4680,6 +4680,32 @@
       ]
     },
     {
+      "$comment": "WRITE. The team hire dialog: Install or Fork a team listing, each member with its bindings (issue 3137).",
+      "id": "marketplace.hireTeam",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_team_hire/prompt_lib/{projectId}",
+      "operationId": "hireMarketplaceTeam",
+      "source": "generated",
+      "responseSchema": "MarketplaceTeamHireResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Publish to Marketplace on a saved team row (issue 3137).",
+      "id": "marketplace.publishTeam",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_team_publish/prompt_lib/{projectId}/{teamId}",
+      "operationId": "publishMarketplaceTeam",
+      "source": "generated",
+      "responseSchema": "MarketplaceTeamPublishResult",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
+      ]
+    },
+    {
       "$comment": "READ. The requirements of a hired agent's pinned version and what each is bound to now.",
       "id": "marketplace.getBindings",
       "method": "GET",
