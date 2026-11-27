@@ -33,19 +33,34 @@ only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
 differ.
 
 `legacy-roles.json` maps a role to its generic legacy id,
-`{ "<role>": ["<legacy id>"] }` (ADR-0062 decision 1.4). A deployment that
-hand-tunes that id keeps the colour in the role: `resolveScheme` gives a role
-the first value the pack tunes, the role id first, then its legacy id. A
-value counts as tuned when it differs from what the id gets unstated (its
-default, re-hued), so a pin at the default under another hue counts too.
-`brand.onBrand` reaches `role.onPrimary` as it reaches
-`primary.contrastText`. PR 4 (#3092) makes theme-gate check 10 count reads
-of the ids on this file, and the stage 4 script rewrites only them (ADR-0062
-Rollout). Put an id there only by hand, only when its meaning is the role and
-its colour here is the role's in both schemes. A role has one id at most: a
-role cannot hold two tuned colours. A change of the map adds an upgrade note.
-`__tests__/roles.test.ts` fails when the rule breaks. What this means for
-operators: `docs/upgrading/2026-11-26-3091-colour-roles-hand-tuned-legacy-ids.md`.
+`{ "<role>": ["<legacy id>"] }` (ADR-0062 decision 1.4). A role has exactly one
+id, or no entry. A role cannot hold two tuned colours, so a second id would lose
+one of them.
+
+`resolveScheme` gives a role the first value that the pack tunes: the role id
+first, then its legacy id. A value is tuned when it differs from the value that
+the id gets unstated (its default, re-hued). So a pin at the default under
+another hue is tuned too. `brand.onBrand` gives its colour to `role.onPrimary`,
+and in light to `role.onSignal`, when the pack does not tune that id. It always
+gives its colour to `primary.contrastText`.
+
+Shared code reads `role.textMuted` for muted text, not `text.default`. It reads
+`role.signal` for the focus ring, not `focus.ring` (`tokens.json` `focus.color`
+is `signal`). `text.default` and `focus.ring` are not on the map. From PR 4
+(#3092), theme-gate check 10 counts reads of the ids on the map. The stage 4
+script (ADR-0062 Rollout) rewrites only those ids.
+
+To change the map:
+
+- Add an id by hand. Its meaning must be the role.
+- Its colour here must be the role's colour in both schemes.
+- Add an upgrade note for each change of the map.
+
+`__tests__/roles.test.ts` holds the ids, the one list per id, the colours and
+the one id per role. Review holds the meaning and the upgrade note. A change of
+a role's value also changes its mapped legacy id. That is a visible change
+(ADR-0062 decision 5). What this means for operators:
+`docs/upgrading/2026-11-26-3091-colour-roles-hand-tuned-legacy-ids.md`.
 
 ## Where the values come from
 
