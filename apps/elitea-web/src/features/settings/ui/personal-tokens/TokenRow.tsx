@@ -10,15 +10,16 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import SvgIcon from '@mui/material/SvgIcon';
 import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 import { tokenExpiryStatus } from '@/entities/token';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
-import { useTheme } from '@mui/material/styles';
 import type { PersonalAccessToken } from '@/entities/token';
 import { OpenEyeIcon } from '@/shared/ui/icons/open-eye-icon';
+import { AttentionIcon } from '@/shared/ui/icons/attention-icon';
 import { RemoveIcon } from '@/shared/ui/icons/remove-icon';
+import { SuccessIcon } from '@/shared/ui/icons/success-icon';
+import { StatusChip } from '@/shared/ui/status-chip';
 import { tokenRowStyles } from './TokenRow.styles';
 
 /* ── expiry cell ───────────────────────────────────────────────────────── */
@@ -28,7 +29,6 @@ export const ExpiryCell = memo(function ExpiryCell({
 }: {
   expires: string | null;
 }) {
-  const theme = useTheme();
   const now = Date.now();
   const status = tokenExpiryStatus(expires, now);
 
@@ -39,33 +39,33 @@ export const ExpiryCell = memo(function ExpiryCell({
     return t('entities.token.expiry.expired', 'Expired');
   }, [status]);
 
-  const statusColor = useMemo(() => {
-    if (status === 'never' || status === 'safe') return theme.vars.palette.status.published;
-    if (status === 'warning') return theme.vars.palette.status.onModeration;
-    return theme.vars.palette.icon.fill.disabled;
-  }, [status, theme.vars.palette.status.published, theme.vars.palette.status.onModeration, theme.vars.palette.icon.fill.disabled]);
-
-  const s = tokenRowStyles.expiry();
-
-  return (
-    <Box sx={s.container}>
-      <Box
-        sx={{
-          width: 16,
-          height: 16,
-          borderRadius: 'var(--el-shape-radiusPill, 9999px)',
-          backgroundColor: statusColor,
-          flexShrink: 0,
-        }}
+  // The legacy ExpiryInDays: a success icon while the token is valid, an attention icon for the last 7 days,
+  // a remove icon in the disabled colour once it has expired; the word muted only then.
+  if (status === 'warning') {
+    return (
+      <StatusChip
+        tone="warning"
+        icon={<AttentionIcon />}
+        label={statusLabel}
       />
-      <Typography
-        variant="bodySmall"
-        sx={s.text}
-        color={status === 'expired' ? 'text.primary' : 'text.secondary'}
-      >
-        {statusLabel}
-      </Typography>
-    </Box>
+    );
+  }
+  if (status === 'expired') {
+    return (
+      <StatusChip
+        tone="neutral"
+        icon={<RemoveIcon />}
+        label={statusLabel}
+        muted
+      />
+    );
+  }
+  return (
+    <StatusChip
+      tone="success"
+      icon={<SuccessIcon />}
+      label={statusLabel}
+    />
   );
 });
 
