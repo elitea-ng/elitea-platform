@@ -16,21 +16,17 @@ import { fileURLToPath } from 'node:url';
 import type { AstroIntegration } from 'astro';
 import { parse, stringify } from 'yaml';
 
-const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+// A static import: the config's Vite module runner is closed by astro:build:done, so a dynamic import there fails.
+import { buildBlueprints } from '../../../../scripts/blueprints/build.mjs';
 
-interface BuiltBlueprints {
-  files: Map<string, Uint8Array>;
-}
+const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 
 export function blueprintDownloads(): AstroIntegration {
   return {
     name: 'elitea-blueprints',
     hooks: {
       'astro:build:done': async ({ dir, logger }) => {
-        const builder = (await import(path.join(repositoryRoot, 'scripts/blueprints/build.mjs'))) as {
-          buildBlueprints: (options: { root: string; parseYaml: (text: string) => unknown; dumpYaml: (value: unknown) => string }) => Promise<BuiltBlueprints>;
-        };
-        const { files } = await builder.buildBlueprints({ root: repositoryRoot, parseYaml: parse, dumpYaml: stringify });
+        const { files } = await buildBlueprints({ root: repositoryRoot, parseYaml: parse, dumpYaml: stringify });
         const out = path.join(fileURLToPath(dir), 'blueprints');
         for (const [relative, data] of files) {
           if (relative === 'release-notes.md') continue;
