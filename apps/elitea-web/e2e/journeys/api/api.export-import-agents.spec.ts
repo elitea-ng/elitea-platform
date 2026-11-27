@@ -54,6 +54,7 @@ import {
 } from '../../fixtures/api';
 import {
   EXPORT_SCRUBBED_SETTING_KEYS,
+  expectedImportedModel,
   FIXTURE_MODEL,
   applicationIsGone,
   attachToolkitToVersion,
@@ -126,7 +127,8 @@ test('EXP-001: an exported agent imports back with its core fields intact', asyn
     const deletedId = createdId;
     createdId = undefined;
 
-    importedId = importedAgentId(await importWizard(request, buildImportPayloadFromExport(exported.parsed)));
+    const answer = await importWizard(request, buildImportPayloadFromExport(exported.parsed));
+    importedId = importedAgentId(answer);
     expect(importedId, 'the import reused the deleted id').not.toBe(deletedId);
 
     const imported = await readApplication(request, importedId);
@@ -135,7 +137,8 @@ test('EXP-001: an exported agent imports back with its core fields intact', asyn
 
     const version = defaultVersionOf(imported);
     expect(version.instructions).toBe('Answer questions about Python testing.');
-    expect(version.llm_settings?.['model_name']).toBe(FIXTURE_MODEL);
+    // The import pins a model this install holds: the file's, else the project default (issue 3143).
+    expect(version.llm_settings?.['model_name']).toBe(expectedImportedModel(answer, FIXTURE_MODEL));
     expect(version.llm_settings?.['temperature']).toBe(0.5);
     expect(version.llm_settings?.['max_tokens']).toBe(2048);
     expect(variablesAsRecord(version)).toStrictEqual({ language: 'Python', framework: 'pytest' });
@@ -184,7 +187,8 @@ test('EXP-002: every populated field survives the round trip', async ({ request 
     await expectDeleted(request, createdId);
     createdId = undefined;
 
-    importedId = importedAgentId(await importWizard(request, buildImportPayloadFromExport(exported.parsed)));
+    const answer = await importWizard(request, buildImportPayloadFromExport(exported.parsed));
+    importedId = importedAgentId(answer);
     const imported = await readApplication(request, importedId);
     const importedVersion = defaultVersionOf(imported);
 
@@ -195,7 +199,10 @@ test('EXP-002: every populated field survives the round trip', async ({ request 
     expect(importedVersion.welcome_message).toBe(originalVersion.welcome_message);
     expect(importedVersion.conversation_starters).toStrictEqual(originalVersion.conversation_starters);
     expect(variablesAsRecord(importedVersion)).toStrictEqual(variablesAsRecord(originalVersion));
-    for (const setting of ['model_name', 'temperature', 'max_tokens'] as const) {
+    expect(importedVersion.llm_settings?.['model_name'], 'the import pinned another model than it answered').toBe(
+      expectedImportedModel(answer, originalVersion.llm_settings?.['model_name']),
+    );
+    for (const setting of ['temperature', 'max_tokens'] as const) {
       expect(
         importedVersion.llm_settings?.[setting],
         `llm_settings.${setting} did not survive the round trip`,

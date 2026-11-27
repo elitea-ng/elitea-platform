@@ -630,6 +630,7 @@ export * from "./importSkillBody.zod";
 export * from "./importWizardRequest.zod";
 export * from "./importWizardResponse.zod";
 export * from "./importedAgent.zod";
+export * from "./importedAgentModel.zod";
 export * from "./importedEvaluation.zod";
 export * from "./importedEvaluationCase.zod";
 export * from "./importedEvaluationDataset.zod";

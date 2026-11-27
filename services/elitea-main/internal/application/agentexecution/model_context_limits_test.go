@@ -151,3 +151,58 @@ func TestCurrentModelContextLimitsPreserveExplicitInputCeiling(t *testing.T) {
 		}
 	}
 }
+
+// Issue 3143: a run's context window is its model's, and a version that
+// names no model this catalogue holds runs on the project default. A
+// blueprint names none, so before the import pinned a model every imported
+// agent ran on a 256k default although a 1M model was configured. The
+// settings the import now writes (the model's name and project) select the
+// 1M model and its window.
+func TestImportedAgentContextWindowFollowsThePinnedModel(t *testing.T) {
+	small, large, output := 262_144, 1_000_000, 32_000
+	reasoning := false
+	defaultName, defaultProject := "local-qwen", int32(7)
+	models := &currentAgentModelCatalogStub{response: configurationapp.CurrentModelCatalogResponse{
+		Items: []configurationapp.CurrentModelCatalogItem{
+			{Name: "local-qwen", ProjectID: 7, ContextWindow: &small, MaxOutputTokens: &output, SupportsReasoning: &reasoning},
+			{Name: "frontier-1m", ProjectID: 1, Shared: true, ContextWindow: &large, MaxOutputTokens: &output, SupportsReasoning: &reasoning},
+		},
+		DefaultModelName: &defaultName, DefaultModelProjectID: &defaultProject,
+	}}
+	service, err := NewCurrentApplicationToolSnapshotService(
+		&currentAgentSettingsResolverStub{}, &currentAgentNameResolverStub{}, models,
+		&currentAgentGuardrailStub{}, &currentProjectContextStub{}, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		llm    string
+		window uint32
+	}{
+		{"a blueprint's settings, stored as the file had them", `{"reasoning_effort":"high"}`, 262_144},
+		{"the settings the import pins", `{"reasoning_effort":"high","model_name":"frontier-1m","model_project_id":1}`, 1_000_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := service.FreezeCurrentApplicationVersion(context.Background(), CurrentApplicationVersionFreezeRequest{
+				ProjectID: 7, ActorUserID: 11,
+				VersionDetails: json.RawMessage(`{"agent_type":"agent","llm_settings":` + test.llm + `,"tools":[]}`),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			version, err := decodeCurrentApplicationVersion(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			limits, err := currentFrozenModelContextLimits(version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if limits.ContextWindowTokens != test.window {
+				t.Fatalf("context window %d, want %d", limits.ContextWindowTokens, test.window)
+			}
+		})
+	}
+}

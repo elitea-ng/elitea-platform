@@ -160,6 +160,10 @@ type Handler struct {
 	// cap for a new agent's tier (import_validation.go, ADR-0041 decision 3).
 	// Nil checks the caps' shape only.
 	runCaps *workerruncaps.Checker
+
+	// importModels is the model catalogue an import pins each agent's model
+	// against (issue 3143, import_model.go); nil stores the file's settings.
+	importModels ImportModelCatalog
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -3314,6 +3318,11 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 		skills   [][]any            // per-version skill refs, in the same order
 	}
 	importedAgents := make([]importedAgentInfo, 0)
+	// One catalogue read for every agent of the import (issue 3143).
+	var models importModelResolver
+	if len(agentEntries) > 0 {
+		models = h.importModelResolverFor(ctx, projectID)
+	}
 
 	for _, ae := range agentEntries {
 		app := ae.raw
@@ -3374,6 +3383,8 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 		var versionDetails map[string]any
 		var versionToolRefs [][]map[string]any
 		var versionSkillRefs [][]any
+		// The model the agent's first version runs on, as the import pinned it.
+		var agentModel *importModelResolution
 
 		for _, vRaw := range versions {
 			v, ok := vRaw.(map[string]any)
@@ -3401,6 +3412,14 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 			// that cannot be encoded, is reported. It used to take the same
 			// empty default as an absent key, so a file whose llm_settings was
 			// not an object imported an agent with no model, and answered 201.
+			// The model is pinned to one this install holds, or to the
+			// project's default, before the column is encoded (issue 3143).
+			// A pipeline runs its nodes' models and keeps its settings. The
+			// answer names the model of the first version actually created.
+			var versionModel *importModelResolution
+			if agentType != "pipeline" {
+				versionModel = pinImportedModel(models, v)
+			}
 			llmJSON, llmErr := importedJSONObject(v, "llm_settings")
 			startersJSON, startersErr := importedJSONArray(v, "conversation_starters")
 			// Before meta is encoded: it rewrites meta.icon_meta to this
@@ -3436,6 +3455,10 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 					"msg":   "Import function has been failed: unable to import version " + vName + ": " + err.Error(),
 				})
 				continue
+			}
+
+			if agentModel == nil {
+				agentModel = versionModel
 			}
 
 			vImportUUID, _ := v["import_version_uuid"].(string)
@@ -3599,6 +3622,9 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 			"owner_id":        projectID,
 			"versions":        createdVersions,
 			"version_details": versionDetails,
+		}
+		if agentModel != nil && len(createdVersions) > 0 {
+			agentResult["model"] = agentModel
 		}
 		resultAgents = append(resultAgents, agentResult)
 		importedAgents = append(importedAgents, importedAgentInfo{

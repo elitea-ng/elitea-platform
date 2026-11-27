@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} 沒有團隊名稱。",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} 重複列出了一個成員。",
   "features.agentLifecycle.import.team.tooManyMembers": "一個團隊最多有 {{limit}} 個代理。",
-  "features.agentLifecycle.import.teamLead": "負責人：{{name}}",
-  "features.agentLifecycle.import.teamName": "團隊：{{name}}",
   "features.agentTeams.exportAction": "匯出",
   "features.agentTeams.exportMemberFailed": "無法匯出團隊：無法讀取代理 {{name}}。",
   "features.agentLifecycle.import.teamOnAgents": "此 zip 是一個團隊，請從代理清單匯入。",

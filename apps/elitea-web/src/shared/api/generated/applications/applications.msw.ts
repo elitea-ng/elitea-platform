@@ -13432,6 +13432,22 @@ export const getImportWizardResponseMock = (
             },
             null,
           ]),
+          model: faker.helpers.arrayElement([
+            {
+              name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              project_id: faker.number.int(),
+              context_window: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+              defaulted: faker.datatype.boolean(),
+              requested: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
         })),
         toolkits: Array.from(
           { length: faker.number.int({ min: 1, max: 10 }) },
@@ -14229,6 +14245,22 @@ export const getImportWizardResponseMock = (
             },
             null,
           ]),
+          model: faker.helpers.arrayElement([
+            {
+              name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+              project_id: faker.number.int(),
+              context_window: faker.helpers.arrayElement([
+                faker.number.int(),
+                undefined,
+              ]),
+              defaulted: faker.datatype.boolean(),
+              requested: faker.helpers.arrayElement([
+                faker.string.alpha({ length: { min: 10, max: 20 } }),
+                undefined,
+              ]),
+            },
+            undefined,
+          ]),
         })),
         toolkits: Array.from(
           { length: faker.number.int({ min: 1, max: 10 }) },
@@ -14958,6 +14990,22 @@ export const getImportTeamResponseMock = (): TeamImportResponse => ({
             ]),
           },
           null,
+        ]),
+        model: faker.helpers.arrayElement([
+          {
+            name: faker.string.alpha({ length: { min: 10, max: 20 } }),
+            project_id: faker.number.int(),
+            context_window: faker.helpers.arrayElement([
+              faker.number.int(),
+              undefined,
+            ]),
+            defaulted: faker.datatype.boolean(),
+            requested: faker.helpers.arrayElement([
+              faker.string.alpha({ length: { min: 10, max: 20 } }),
+              undefined,
+            ]),
+          },
+          undefined,
         ]),
       })),
       toolkits: Array.from(

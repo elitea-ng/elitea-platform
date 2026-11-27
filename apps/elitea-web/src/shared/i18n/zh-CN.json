@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} 没有团队名称。",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} 重复列出了一个成员。",
   "features.agentLifecycle.import.team.tooManyMembers": "一个团队最多有 {{limit}} 个智能体。",
-  "features.agentLifecycle.import.teamLead": "负责人：{{name}}",
-  "features.agentLifecycle.import.teamName": "团队：{{name}}",
   "features.agentTeams.exportAction": "导出",
   "features.agentTeams.exportMemberFailed": "无法导出团队：无法读取智能体 {{name}}。",
   "features.agentLifecycle.import.teamOnAgents": "此 zip 是一个团队，请从智能体列表导入。",

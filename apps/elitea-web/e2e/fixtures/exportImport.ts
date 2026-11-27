@@ -101,6 +101,8 @@ export interface ImportedAgent {
   readonly description?: string;
   readonly owner_id?: string;
   readonly version_details?: ImportedVersionDetails | null;
+  /** The model the import pinned the agent to on this install (issue 3143). */
+  readonly model?: { readonly name: string; readonly defaulted: boolean; readonly requested?: string };
 }
 
 /**
@@ -531,6 +533,21 @@ export function importedAgentId(answer: ImportAnswer): string {
     throw new Error(`the import answered an agent with no id: ${answer.text.slice(0, 300)}`);
   }
   return id;
+}
+
+/**
+ * The model the stored version must name after an import: the one the
+ * answer says it pinned (issue 3143). An install whose catalogue lacks the
+ * file's model pins the project default and says so; one that has it keeps
+ * it. Without a catalogue the import answers no model and keeps the file's.
+ */
+export function expectedImportedModel(answer: ImportAnswer, fileModel: unknown): unknown {
+  const model = answer.body.result?.agents?.[0]?.model;
+  if (model === undefined) return fileModel;
+  if (!model.defaulted && model.name !== fileModel) {
+    throw new Error(`the import kept a model the file did not name: ${answer.text.slice(0, 300)}`);
+  }
+  return model.name;
 }
 
 /* ── the JSON bundle ─────────────────────────────────────────────────────── */

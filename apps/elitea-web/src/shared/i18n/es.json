@@ -4976,8 +4976,6 @@
   "features.agentLifecycle.import.team.noName": "{{file}} no tiene nombre de equipo.",
   "features.agentLifecycle.import.team.repeatedMember": "{{file}} enumera un miembro dos veces.",
   "features.agentLifecycle.import.team.tooManyMembers": "Un equipo tiene como máximo {{limit}} agentes.",
-  "features.agentLifecycle.import.teamLead": "Líder: {{name}}",
-  "features.agentLifecycle.import.teamName": "Equipo: {{name}}",
   "features.agentTeams.exportAction": "Exportar",
   "features.agentTeams.exportMemberFailed": "No se pudo exportar el equipo: no se pudo leer el agente {{name}}.",
   "features.agentLifecycle.import.teamOnAgents": "Este zip es un equipo. Impórtelo desde la lista de agentes.",

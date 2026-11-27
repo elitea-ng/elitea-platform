@@ -21476,9 +21476,42 @@ components:
             Key ALWAYS present in the marshaled map — null only when every
             version insert failed (versionDetails stays nil,
             handler.go:2555).
+        model: { $ref: '#/components/schemas/ImportedAgentModel' }
       description: >
         NOTE(W2): internal/api/v2/eliteacore/handler.go:2663-2670 —
         version_details unconditionally present (hence required+nullable).
+
+    ImportedAgentModel:
+      type: object
+      required: [name, project_id, defaulted]
+      properties:
+        name:
+          type: string
+          description: The model of this install the agent's first version runs on.
+        project_id:
+          type: integer
+          format: int32
+          description: The project that holds the model (the public project for a shared model).
+        context_window:
+          type: integer
+          description: >
+            The model's context window in tokens, as the model catalogue
+            describes it. Absent when the catalogue does not describe one.
+        defaulted:
+          type: boolean
+          description: >
+            True when the file named no model this install holds (a
+            blueprint names none) and the agent got the project's default
+            model instead.
+        requested:
+          type: string
+          description: The model the file named; absent when it named none.
+      description: >
+        The model an import pinned an agent to (issue 3143): the model the
+        file names when this install's catalogue holds it, else the
+        project's default model. Present when the import could read the
+        catalogue and it holds a model. NOTE(W2):
+        internal/api/v2/eliteacore/import_model.go:40.
 
     ImportedToolkit:
       type: object

@@ -212,6 +212,7 @@ function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange
         projectId={projectId}
         open={editOpen}
         team={creating ? undefined : editingTeam}
+        renderAvatar={renderMemberAvatar}
         onClose={() => {
           setEditingTeam(undefined);
           onCreatingChange(false);

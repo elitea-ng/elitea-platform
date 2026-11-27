@@ -5,8 +5,9 @@ import { ImportDocumentError } from './importError';
 import type { ReadImportResult } from './importTypes';
 import { assemble } from './mergeVersionFiles';
 import { MAX_FILE_BYTES, parseMarkdownFull, tooLarge } from './parseAgentMarkdown';
-import type { ImportTeam } from './teamManifest';
 import { readZipEntries } from './importZip';
+
+export { ImportDocumentError } from './importError';
 
 /**
  * Reads an exported agent or pipeline file back into the document the import
@@ -22,18 +23,6 @@ import { readZipEntries } from './importZip';
  * not an agent export, and posting it would reach the server's own 400 with a
  * message about a key the user never saw. Reporting it here names the file.
  */
-export interface ImportDocumentSummary {
-  readonly names: readonly string[];
-  /** Set when the file is a team zip: the team its agents form. */
-  readonly team?: { readonly name: string; readonly lead: string | undefined } | undefined;
-  readonly toolkitCount: number;
-  readonly skillCount: number;
-  /** Parts of the file the import cannot carry; shown, not dropped silently. */
-  readonly skipped: readonly string[];
-}
-
-export { ImportDocumentError } from './importError';
-
 export function parseImportDocument(text: string): EntityExportDocument {
   let parsed: unknown;
   try {
@@ -58,25 +47,6 @@ export function parseImportDocument(text: string): EntityExportDocument {
     );
   }
   return document;
-}
-
-/** What the confirmation dialog shows before the user commits to the import. */
-export function summarizeImportDocument(
-  document: EntityExportDocument,
-  skipped: readonly string[] = [],
-  team?: ImportTeam,
-): ImportDocumentSummary {
-  const names = (document.applications ?? []).map((entry, index) => {
-    const name = typeof entry === 'object' && entry !== null ? (entry as { name?: unknown }).name : undefined;
-    return typeof name === 'string' && name !== '' ? name : `#${String(index + 1)}`;
-  });
-  return {
-    names,
-    toolkitCount: document.toolkits?.length ?? 0,
-    skillCount: document.skills?.length ?? 0,
-    skipped,
-    ...(team === undefined ? {} : { team: { name: team.name, lead: team.leadName } }),
-  };
 }
 
 /* ── Markdown and zip import (#1996, issue 3137) ─────────────────────────── */

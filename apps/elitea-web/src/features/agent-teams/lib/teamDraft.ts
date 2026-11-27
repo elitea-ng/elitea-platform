@@ -64,6 +64,17 @@ export function withoutMember(draft: TeamDraft, index: number): TeamDraft {
   return { ...draft, members: draft.members.filter((_, at) => at !== index), lead };
 }
 
+/** Moves the member at `index` by `delta` places (the join order); the lead follows its member. */
+export function withMemberMoved(draft: TeamDraft, index: number, delta: number): TeamDraft {
+  const target = index + delta;
+  const moved = draft.members[index];
+  if (moved === undefined || delta === 0 || target < 0 || target >= draft.members.length) return draft;
+  const leadMember = draft.lead > 0 ? draft.members[draft.lead - 1] : undefined;
+  const members = draft.members.filter((_, at) => at !== index);
+  members.splice(target, 0, moved);
+  return { ...draft, members, lead: leadMember === undefined ? 0 : members.indexOf(leadMember) + 1 };
+}
+
 export function hasMember(draft: TeamDraft, applicationId: number, projectId: number): boolean {
   return draft.members.some((member) => member.application_id === applicationId && member.project_id === projectId);
 }
