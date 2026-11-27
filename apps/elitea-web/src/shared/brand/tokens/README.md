@@ -15,6 +15,12 @@ submodule. Since brand guide v3 the values come from client-core's
   `background.*` under `TypeBackground`, `text.*` under `TypeText`, the extra
   leaves of the six MUI roles (`primary`, `secondary`, `info`, `warning`,
   `error`, `success`) under `PaletteColor`, everything else under `Palette`.
+- Copy the pack to
+  `services/elitea-main/internal/api/v2/branding/product_default.pack.json`,
+  and add the new id to `addedDefaultIDs` in
+  `services/elitea-main/internal/application/brandpackage/package.go`.
+  Packages of the earlier release then stay untouched exports. The Go job
+  holds both.
 - `libs/ts/client-core/src/brand/identity.ts` holds the product name and
   `brand.hue`; `defaultPack.gen.ts` there restates the hue and each scheme's
   `primary.main` / `text.button.primary` for the mobile app.
@@ -27,8 +33,8 @@ submodule. Since brand guide v3 the values come from client-core's
 The 27 roles of `tokens.json` (`schemes.dark` / `schemes.light`) are ids
 `role.<name>` in both scheme records, with the `tokens.json` values verbatim
 (ADR-0062 decision 1). New shared code reads a role
-(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`); the
-legacy ids below stay for the call sites that read them. Change a role here
+(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`), and
+`focus.ring` for focus rings; the legacy ids below stay for the call sites that read them. Change a role here
 only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
 differ.
 
@@ -47,8 +53,9 @@ another hue is tuned too. `brand.onBrand` gives its colour to each label role
 default colours this is `role.onPrimary`, and in light `role.onSignal`. It
 always gives its colour to `primary.contrastText`.
 
-Shared code reads `role.textMuted` for muted text, not `text.default`. It reads
-`focus.ring` for the focus ring, as every ring reads it today. `text.default`
+New code reads `role.textMuted` for muted text, not `text.default`. Shared code
+reads `focus.ring` for the focus ring, as every ring reads it today, so a tuned
+ring loses nothing. `text.default`
 and `focus.ring` are not on the map. From PR 4 (#3092), theme-gate check 10
 counts reads of the ids on the map. It does not count reads of `text.default`:
 review holds that rule. The stage 4 script (ADR-0062 Rollout) rewrites only the
