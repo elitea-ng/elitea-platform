@@ -7,14 +7,11 @@ import { useNavigate } from '@tanstack/react-router';
 
 import { conversationApi } from '@/entities/conversation';
 import { useAddParticipantMutation } from '@/entities/participant';
-import type { ApplicationVersionDetail, SocialAuthorProfile } from '@/shared/api/generated/model';
+import type { ApplicationVersionDetail } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
-import { unwrapBody } from '@/shared/api/unwrap';
 import { t } from '@/shared/i18n';
-import { applicationParticipant } from '@/shared/lib/editorTestConversation';
 
-/** `ChatBox` truncates a conversation name to 50 characters; match it so the sidebar entry reads the same everywhere. */
-const MAX_CONVERSATION_NAME = 50;
+import { currentUserIdOf, openAgentConversation, type AgentChatInput } from '../lib/useStartAgentChat';
 
 export interface ChatWithAgentButtonProps {
   readonly projectId: string | undefined;
@@ -53,28 +50,6 @@ export interface ChatWithAgentButtonProps {
  *    renders this only for a writer: a PUBLIC agent viewed from the public
  *    project would attach cleanly and then refuse every message.
  */
-/** Everything one click needs, gathered so the callback closes over ONE ref-stable object instead of eleven values (the hook-deps budget is 8). */
-interface StartChatInput {
-  readonly projectId: string;
-  readonly applicationId: string;
-  readonly name: string | undefined;
-  readonly versionId: string;
-  readonly agentType: string;
-  readonly userId: string;
-}
-
-/**
- * `shared/api/unwrap.ts` is the ONE place envelope knowledge lives (R-A6,
- * `elitea/no-adhoc-envelope-unwrap`), so the transport peel comes from
- * `unwrapBody` rather than from a local `.data` read of this query's own
- * shape. `unwrapBody` makes no claim about the body — the cast below is the
- * caller's own, and the 401 variant it ignores is unreachable anyway
- * (`eliteaFetch` throws on non-2xx).
- */
-function currentAuthorOf(data: unknown): SocialAuthorProfile | undefined {
-  return unwrapBody(data) as SocialAuthorProfile | undefined;
-}
-
 export function ChatWithAgentButton({
   projectId,
   applicationId,
@@ -93,18 +68,17 @@ export function ChatWithAgentButton({
   // conversation without the mapping refuses every send as 422. The adhoc
   // send path posts the same entry (`useChatBoxSend.helpers.ts`'s
   // `adhocParticipants`).
-  const authorQuery = useGetCurrentAuthor();
-  const userId = currentAuthorOf(authorQuery.data)?.id;
+  const userId = currentUserIdOf(useGetCurrentAuthor().data);
 
   const versionId = activeVersion?.id;
   const agentType = activeVersion?.agent_type ?? 'openai';
   // Memoized so the callback's dependency is referentially stable — the same
   // reason the pipeline twin memoizes its copy (exhaustive-deps errors on an
   // inline object).
-  const input: StartChatInput | undefined = useMemo(
+  const input: AgentChatInput | undefined = useMemo(
     () =>
       projectId !== undefined && applicationId !== undefined && versionId !== undefined && userId !== undefined
-        ? { projectId, applicationId, name, versionId, agentType, userId: String(userId) }
+        ? { projectId, applicationId, name, versionId: String(versionId), agentType, userId }
         : undefined,
     [projectId, applicationId, name, versionId, agentType, userId],
   );
@@ -114,27 +88,7 @@ export function ChatWithAgentButton({
     setIsStarting(true);
     let conversationId: string;
     try {
-      const conversation = await createConversation({
-        projectId: input.projectId,
-        name:
-          (input.name ?? '').slice(0, MAX_CONVERSATION_NAME) || t('pages.agents.chatWithAgent.defaultName', 'New Chat'),
-        is_private: true,
-      });
-      conversationId = String(conversation.id);
-      await addParticipants({
-        projectId: input.projectId,
-        conversationId,
-        participants: [
-          { entity_name: 'user', entity_meta: { id: Number(input.userId) } },
-          applicationParticipant({
-            applicationId: input.applicationId,
-            projectId: input.projectId,
-            name: input.name,
-            versionId: input.versionId,
-            agentType: input.agentType,
-          }),
-        ],
-      });
+      conversationId = await openAgentConversation({ createConversation, addParticipants }, input);
     } catch (error) {
       onError(error);
       setIsStarting(false);

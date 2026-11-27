@@ -47,6 +47,8 @@ export interface EntityImportButtonProps {
   readonly testIdPrefix: string;
   /** False on the Pipelines list: a team makes agents and a team, so it is imported from the Agents list. */
   readonly acceptsTeams?: boolean;
+  /** The button's words: "Import team" on the Teams page (issue 3134); "Import" by default. */
+  readonly label?: string;
 }
 
 interface PendingImport {
@@ -111,7 +113,7 @@ function ImportPreview({ summary, refusal, testIdPrefix }: { readonly summary: I
   );
 }
 
-export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true }: EntityImportButtonProps): ReactNode {
+export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true, label }: EntityImportButtonProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<PendingImport>();
   const [error, setError] = useState<string>();
@@ -165,7 +167,7 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix, accept
         data-testid={`${testIdPrefix}-import-button`}
         onClick={() => inputRef.current?.click()}
       >
-        {t('features.agentLifecycle.import.button', 'Import')}
+        {label ?? t('features.agentLifecycle.import.button', 'Import')}
       </BaseBtn>
       <input
         ref={inputRef}

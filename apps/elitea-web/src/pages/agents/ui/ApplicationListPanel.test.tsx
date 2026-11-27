@@ -1,3 +1,4 @@
+import { fireEvent, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
@@ -133,5 +134,47 @@ describe('ApplicationListPanel', () => {
     const images = container.querySelectorAll('img[data-testid="application-card-icon"]');
     expect(images).toHaveLength(1);
     expect(images[0]).toHaveAttribute('src', '/icons/1/picked.png');
+  });
+
+  describe('the rich Agents card (issue 3133)', () => {
+    const RICH_ROWS: readonly ApplicationListRow[] = [
+      { id: '1', name: 'Dev Coordinator', description: 'Leads the team', iconUrl: '/media/coordinator.png', personaRole: 'Coordinator', updatedAt: '2026-11-20T10:00:00Z' },
+      { id: '2', name: 'Dev Implementer', description: 'Writes the code' },
+    ];
+
+    it('plays the agent\'s own avatar through the live renderer, idle while the card is hovered, and a monogram without one', () => {
+      const { getAllByTestId } = renderWithTheme(
+        <ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{}} />,
+      );
+      const [withIcon, without] = getAllByTestId('entity-card') as [HTMLElement, HTMLElement];
+      const avatar = within(withIcon).getByTestId('chat-message-avatar');
+      expect(avatar).toHaveAttribute('data-motion', 'still');
+      fireEvent.pointerEnter(withIcon);
+      expect(avatar).toHaveAttribute('data-motion', 'idle');
+      fireEvent.pointerLeave(withIcon);
+      expect(avatar).toHaveAttribute('data-motion', 'still');
+      fireEvent.focusIn(within(withIcon).getByTestId('entity-card-name'));
+      expect(avatar).toHaveAttribute('data-motion', 'idle');
+      expect(within(withIcon).getByTestId('entity-card-subtitle')).toHaveTextContent('Coordinator');
+      expect(within(withIcon).getByTestId('entity-card-description')).toHaveTextContent('Leads the team');
+      expect(within(without).getByTestId('monogram')).toHaveTextContent('DI');
+      expect(within(without).queryByTestId('chat-message-avatar')).toBeNull();
+    });
+
+    it('offers Chat on each card, and every Chat waits while one is starting', () => {
+      const onChat = vi.fn();
+      const { getAllByTestId, rerender } = renderWithTheme(
+        <ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{ onChat }} />,
+      );
+      fireEvent.click(getAllByTestId('entity-card-primary-action')[0] as HTMLElement);
+      expect(onChat).toHaveBeenCalledWith(expect.objectContaining({ id: '1', name: 'Dev Coordinator' }));
+      rerender(<ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} rich={{ onChat, chattingId: '1' }} />);
+      for (const button of getAllByTestId('entity-card-primary-action')) expect(button).toBeDisabled();
+    });
+
+    it('keeps the compact tile without the rich option', () => {
+      const { getAllByTestId } = renderWithTheme(<ApplicationListPanel {...BASE_PROPS} rows={RICH_ROWS} isLoading={false} isError={false} />);
+      expect(getAllByTestId('entity-card')[0]).not.toHaveAttribute('data-variant');
+    });
   });
 });

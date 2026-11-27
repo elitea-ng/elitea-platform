@@ -85,6 +85,7 @@ export function EntityFolderScope({ projectId, kind, permissions, children }: En
     return {
       columnLabel: t('widgets.entityFolders.column', 'Folder'),
       renderCardAction: (item) => control(item, folderOfEntity(known, item.id)),
+      isPinned: (item) => pinned.has(Number(item.id)),
       renderCell: (item) => {
         const current = folderOfEntity(known, item.id);
         return (

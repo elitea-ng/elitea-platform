@@ -120,10 +120,11 @@ async function makeGithubToolkit(page: Page, suffix: string, selectedTools: read
  * host INSIDE the compose network that answers 2xx, so the credential passes
  * its check; no vendor is contacted.
  */
-// The native stack (E2E_STACK=native) runs elitea-web's nginx as a non-root
-// process, on 8080 instead of 80, and its workflow names the URL here.
+// elitea-web's nginx runs as a non-root process on 8080 in every stack since
+// #2954 (an unprivileged process cannot bind 80), so the default names that
+// port; a stack that serves it elsewhere names the URL here.
 const STANDIN_PROVIDER_BASE_URL =
-  process.env['E2E_STANDIN_PROVIDER_BASE_URL'] ?? 'http://elitea-web/app';
+  process.env['E2E_STANDIN_PROVIDER_BASE_URL'] ?? 'http://elitea-web:8080/app';
 
 const ahaToolkitIds: string[] = [];
 const ahaCredentialIds: string[] = [];
