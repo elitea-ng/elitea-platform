@@ -31,6 +31,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, clickCreateButton } from '../../fixtures/api';
 import { createConfiguration, deleteConfiguration } from '../../fixtures/configurations';
+import { openMuiSelect } from '../../fixtures/muiSelect';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 readsPlatformFlags(test);
@@ -183,6 +184,16 @@ function ahaConfigPicker(page: Page) {
 }
 
 /**
+ * Opens the Aha Configuration picker from the keyboard, never by clicking it
+ * (#3156). A click races MUI's opening-mouseup selection: it picked a random
+ * saved row and closed the menu, so AHA-3's "New project credentials" click
+ * found no menu. See `fixtures/muiSelect.ts` for the full mechanism.
+ */
+async function openAhaConfigPicker(page: Page): Promise<void> {
+  await openMuiSelect(ahaConfigPicker(page));
+}
+
+/**
  * Opens the edit page for a saved toolkit and waits for its Toolkit Name
  * field — expanding the "Configuration" accordion first when the edit route
  * renders it collapsed (measured: the create route renders it expanded by
@@ -297,7 +308,7 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   await expect(picker, 'the toolkit form must render an Aha Configuration credential picker').toBeVisible({
     timeout: 20_000,
   });
-  await picker.click();
+  await openAhaConfigPicker(page);
 
   // CREATE section, both scopes, at the top of the listbox.
   const listbox = page.getByRole('listbox');
@@ -316,7 +327,7 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   await expect(picker).toHaveText(new RegExp(projectName));
 
   // Reopening shows it selected (aria-selected), the modern equivalent of a checkmark.
-  await picker.click();
+  await openAhaConfigPicker(page);
   await expect(page.getByRole('option').filter({ hasText: projectName })).toHaveAttribute('aria-selected', 'true', {
     timeout: 10_000,
   });
@@ -340,10 +351,17 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   // it opens the real create-credential route in a NEW tab so the toolkit
   // form keeps its unsaved edits (issue 1965), so the round trip is driven in
   // that tab while this one stays on the form.
-  await picker.click();
+  // The option is clicked inside the open listbox, never the trigger, so the
+  // mousedown lands on the option itself and MUI's click handler opens the tab
+  // synchronously, inside the user gesture. `role=option` exists only while
+  // the CREATE rows stay direct `MenuItem` children of the Select
+  // (`src/features/credentials/ui/credentialsSelectMenuItems.tsx` records why
+  // a wrapper breaks that); this locator depends on that structure.
+  await openAhaConfigPicker(page);
+  const createProjectOption = page.getByRole('listbox').getByRole('option', { name: /New project .*credentials/i });
   const [createTab] = await Promise.all([
     page.context().waitForEvent('page', { timeout: 15_000 }),
-    page.getByText(/New project .*credentials/i).click(),
+    createProjectOption.click(),
   ]);
   await expect(createTab).toHaveURL(/\/credentials\/create-credential\/aha/, { timeout: 15_000 });
   await expect(page, 'the toolkit form tab must stay where it was').not.toHaveURL(/create-credential/);
@@ -356,7 +374,7 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   // Back on a fresh toolkit form, the personal credential also works as the
   // toolkit's reference — proving the toolkit accepts either credential scope.
   await gotoCreateAhaToolkit(page);
-  await ahaConfigPicker(page).click();
+  await openAhaConfigPicker(page);
   await page.getByRole('option').filter({ hasText: personalName }).click();
   await page.getByRole('textbox', { name: 'Toolkit Name' }).fill(tag('tk_personal_ref'));
   const [saveResp] = await Promise.all([
@@ -389,7 +407,7 @@ test('AHA-4: a project credential is shared and usable by another project member
   try {
     const otherPage = await otherContext.newPage();
     await gotoCreateAhaToolkit(otherPage);
-    await ahaConfigPicker(otherPage).click();
+    await openAhaConfigPicker(otherPage);
 
     const sharedOption = otherPage.getByRole('option').filter({ hasText: projectName });
     await expect(sharedOption, 'a project credential must be visible to another project member').toHaveCount(1, {
@@ -447,7 +465,7 @@ test('AHA-4b: a personal credential is invisible to another project member', asy
   try {
     const otherPage = await otherContext.newPage();
     await gotoCreateAhaToolkit(otherPage);
-    await ahaConfigPicker(otherPage).click();
+    await openAhaConfigPicker(otherPage);
     await expect(
       otherPage.getByRole('option').filter({ hasText: personalName }),
       'a personal credential must not be visible to a different project member',
@@ -473,7 +491,7 @@ test('AHA-5: multiple personal and multiple project credentials all appear in SA
   for (const name of projectNames) await seedAhaCredential(page.request, name, { shared: true });
 
   await gotoCreateAhaToolkit(page);
-  await ahaConfigPicker(page).click();
+  await openAhaConfigPicker(page);
   for (const name of [...personalNames, ...projectNames]) {
     await expect(
       page.getByRole('option').filter({ hasText: name }),
@@ -670,7 +688,7 @@ test('AHA-9: the TOOLS section offers every served tool, selection persists, and
   await seedAhaCredential(page.request, credentialName, { shared: true });
 
   await gotoCreateAhaToolkit(page);
-  await ahaConfigPicker(page).click();
+  await openAhaConfigPicker(page);
   await page.getByRole('option').filter({ hasText: credentialName }).click();
 
   await expect(page.getByRole('button', { name: /find.project/i })).toBeVisible({ timeout: 15_000 });
@@ -755,7 +773,7 @@ test('AHA-9b: the MCP access setting persists after Save', async ({ page }) => {
   await seedAhaCredential(page.request, credentialName, { shared: true });
 
   await gotoCreateAhaToolkit(page);
-  await ahaConfigPicker(page).click();
+  await openAhaConfigPicker(page);
   await page.getByRole('option').filter({ hasText: credentialName }).click();
 
   const mcpToggle = page.getByRole('switch', { name: 'Enable MCP access for selected tools' });
@@ -869,7 +887,7 @@ test('AHA-10b: the Aha Configuration dropdown supports search/filter', async ({ 
   const name = tag('search_probe');
   await seedAhaCredential(page.request, name, { shared: false });
   await gotoCreateAhaToolkit(page);
-  await ahaConfigPicker(page).click();
+  await openAhaConfigPicker(page);
   // Scoped to the OPEN DROPDOWN POPUP (`role="listbox"`), not the page —
   // an earlier, unscoped `page.getByPlaceholder(/search/i)` matched the
   // unrelated "Search tools" field further down the same form (the TOOLS
