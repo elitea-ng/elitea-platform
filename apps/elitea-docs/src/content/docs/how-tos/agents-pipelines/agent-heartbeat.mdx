@@ -25,7 +25,7 @@ The digest is data, never instructions. The platform keeps only the SHA-256 of e
 
 ## Turn the heartbeat on
 
-1. In the agent's version meta, add a `proactivity` block. An empty block uses the defaults:
+1. Open the agent editor's **Heartbeat** tab and fill in **Heartbeat schedule**: **Mode**, **Wake every**, **Jitter (%)**, **Act in**, **Quiet hours** (**From**, **To**, **Time zone**), what **A wake reads**, and the **Daily limits**. An empty field keeps its default. The section writes the `proactivity` block of the version's meta. The same block in JSON, as an export or the API carries it:
 
    ```json
    {
@@ -41,7 +41,7 @@ The digest is data, never instructions. The platform keeps only the SHA-256 of e
    }
    ```
 
-2. **Publish** the agent. The heartbeat reads the block of the published release, never of a draft.
+2. **Save** and **Publish** the agent. The heartbeat reads the block of the published release, never of a draft.
 3. Open the agent editor's **Heartbeat** tab and turn on **Heartbeat on**. You become the heartbeat's owner: the person the agent notifies and acts for.
 4. To let the agent start runs, paste the ID of a **delegated mandate of yours** for this agent and select **Save mandate**. Without a mandate the agent can send you messages, but each `act` becomes a message that tells you why it did not act.
 
@@ -54,6 +54,8 @@ The digest is data, never instructions. The platform keeps only the SHA-256 of e
 | `act_target` | `home_thread` (default) or `new_conversation`. `workspace_thread` is not available yet. |
 
 Save refuses a block that is not valid (`proactivity_invalid`).
+
+An agent file or a [blueprint](/how-tos/agents-pipelines/blueprints) carries the schedule, but never **Heartbeat on** or the mandate. After an import, the import summary tells you to turn the heartbeat on in this tab.
 
 ## Who can turn it on
 
