@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "Esperándote",
   "chat.presence.waking": "Reanudando",
   "chat.presence.working": "Trabajando",
-  "features.chatMessages.ranOutsideSandbox": "Se ejecutó fuera del entorno aislado"
+  "features.chatMessages.ranOutsideSandbox": "Se ejecutó fuera del entorno aislado",
+  "chat.participants.model": "Modelo en este hilo…",
+  "chat.participants.modelBadge": "Modelo en este hilo: {{model}}"
 }

@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "Czeka na Ciebie",
   "chat.presence.waking": "Wznawianie",
   "chat.presence.working": "Pracuje",
-  "features.chatMessages.ranOutsideSandbox": "Uruchomiono poza piaskownicą"
+  "features.chatMessages.ranOutsideSandbox": "Uruchomiono poza piaskownicą",
+  "chat.participants.model": "Model w tym wątku…",
+  "chat.participants.modelBadge": "Model w tym wątku: {{model}}"
 }

@@ -7776,5 +7776,7 @@
   "features.agentTeams.edit.moveUp": "Move {{name}} up",
   "features.agentTeams.edit.orderHint": "Agents join a conversation in this order.",
   "features.agentTeams.edit.removeAgent": "Remove {{name}} from the team",
-  "features.agentLifecycle.import.creating": "Creating everything in the file…"
+  "features.agentLifecycle.import.creating": "Creating everything in the file…",
+  "chat.participants.model": "Model in this thread…",
+  "chat.participants.modelBadge": "Model in this thread: {{model}}"
 }

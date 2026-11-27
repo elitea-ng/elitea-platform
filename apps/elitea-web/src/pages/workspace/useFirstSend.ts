@@ -17,16 +17,18 @@ import { useEffect, useRef, useState } from 'react';
 
 import { holdFirstMessage, peekFirstMessage, takeFirstMessage } from '@/features/workspace-worktrees';
 
+import type { PreThreadChoices } from './preThreadChoices';
 import type { SelectionSeed } from './useAgentSelection';
 import type { WorkspaceComposerProps } from './WorkspaceComposer';
 
 type Send = WorkspaceComposerProps['onSend'];
 type FirstSendArgs = Parameters<Send>;
 
-/** What a folder's new thread hands to its worktree's thread: the message, and the agents chosen for it (#3128). */
+/** What a folder's new thread hands to its worktree's thread: the message, the agents (#3128) and the modes (#3144) chosen for it. */
 export interface HandedFirstMessage {
   readonly args: FirstSendArgs;
   readonly seed?: SelectionSeed | undefined;
+  readonly choices?: PreThreadChoices | undefined;
   /**
    * A thread already took it up. A later mount of the worktree's thread (navigating away and back) shows it "Not sent"
    * with Retry and never sends it on its own, so a failed or in-flight hand-off is not sent twice.

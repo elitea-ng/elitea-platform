@@ -42,8 +42,16 @@ export interface BypassMode {
   cancel: () => void;
 }
 
-export function useBypassMode(workspaceId: string): BypassMode {
-  const [on, setOn] = useState(() => readFlag(bypassKey(workspaceId)));
+/**
+ * `initial`: a worktree's new thread starts in its folder's choice (#3144). It is kept for the worktree as any choice
+ * is; the warning stays the folder's, so turning it on again there asks first.
+ */
+export function useBypassMode(workspaceId: string, initial?: boolean): BypassMode {
+  const [on, setOn] = useState(() => {
+    if (initial === undefined) return readFlag(bypassKey(workspaceId));
+    writeFlag(bypassKey(workspaceId), initial);
+    return initial;
+  });
   const [confirming, setConfirming] = useState(false);
   // What runs once a confirmed turn-on lands (the composer leaves plan mode).
   const pending = useRef<(() => void) | undefined>(undefined);

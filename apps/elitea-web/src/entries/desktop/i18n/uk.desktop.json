@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "Агенти цієї гілки",
   "workspace.participants.search": "Пошук",
   "workspace.participants.team": "Команда: {{name}}",
-  "workspace.team.add": "Додати команду"
+  "workspace.team.add": "Додати команду",
+  "workspace.team.noticeClose": "Приховати в цьому ланцюжку",
+  "workspace.team.noticeLess": "Згорнути",
+  "workspace.team.noticeMore": "Докладніше",
+  "workspace.to.header": "Кому надіслати",
+  "workspace.to.manage": "Керувати учасниками…",
+  "workspace.settings.title": "Налаштування ланцюжка",
+  "workspace.settings.workspace": "Робочий простір",
+  "workspace.settings.sandbox": "Пісочниця",
+  "workspace.settings.sandboxed": "У пісочниці",
+  "workspace.settings.subAgents": "Субагенти",
+  "workspace.settings.subAgentsValue": "Лише для читання, доступні",
+  "workspace.settings.models": "Моделі",
+  "workspace.settings.modelCloud": "Власна модель (хмара)",
+  "workspace.settings.modelPinned": "{{model}} (закріплена)",
+  "workspace.settings.context": "Контекст",
+  "workspace.model.own": "Власна модель агента ({{model}})"
 }

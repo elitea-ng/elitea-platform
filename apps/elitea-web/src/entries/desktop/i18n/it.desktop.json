@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "Agenti di questo thread",
   "workspace.participants.search": "Cerca",
   "workspace.participants.team": "Team: {{name}}",
-  "workspace.team.add": "Aggiungi team"
+  "workspace.team.add": "Aggiungi team",
+  "workspace.team.noticeClose": "Nascondi per questo thread",
+  "workspace.team.noticeLess": "Mostra meno",
+  "workspace.team.noticeMore": "Scopri di più",
+  "workspace.to.header": "Invia a",
+  "workspace.to.manage": "Gestisci partecipanti…",
+  "workspace.settings.title": "Impostazioni del thread",
+  "workspace.settings.workspace": "Workspace",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "In sandbox",
+  "workspace.settings.subAgents": "Sub-agenti",
+  "workspace.settings.subAgentsValue": "Sola lettura, offerti",
+  "workspace.settings.models": "Modelli",
+  "workspace.settings.modelCloud": "Un proprio modello (cloud)",
+  "workspace.settings.modelPinned": "{{model}} (fissato)",
+  "workspace.settings.context": "Contesto",
+  "workspace.model.own": "Modello proprio dell’agente ({{model}})"
 }

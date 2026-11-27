@@ -19,7 +19,7 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -257,6 +257,13 @@ pub struct TurnRequest {
     /// The agent runs in the cloud (its participant's `executor: cloud`):
     /// the host relays the conversation text to it, never the workspace.
     pub cloud: bool,
+    /// The model the person chose for each agent of the thread (#3145), by
+    /// the agent's application id: a later local agent of the message (a
+    /// routed agent or a hand-off) runs on its own choice, kept in its own
+    /// session as `model` is. The UI sends the choices made since the page
+    /// opened (each with every message); an agent without one runs on its
+    /// kept choice, else its own model. Never applied to a cloud agent.
+    pub agent_models: BTreeMap<i64, ModelChoice>,
 }
 
 /// `LocalTurnStartRequest.floor_turn` (contract 1.47).
@@ -2838,6 +2845,7 @@ impl AgentHost {
             addressed_to: Vec::new(),
             participant_id: None,
             floor_turn: None,
+            agent_models: std::collections::BTreeMap::new(),
             cloud: false,
         };
         let need_version = self.caches.version(&version_key).is_none();
@@ -4460,7 +4468,13 @@ impl AgentHost {
             mentions: Vec::new(),
             skills: Vec::new(),
             compact: false,
-            model: None,
+            // The person's choice for this agent in the thread (#3145); none
+            // for a cloud agent, which runs on its own version's model.
+            model: if target.cloud {
+                None
+            } else {
+                next.agent_models.get(&target.application_id).cloned()
+            },
             project_skills: Vec::new(),
             command: None,
             images: Vec::new(),
@@ -4479,6 +4493,7 @@ impl AgentHost {
                 defaults: next.defaults.clone(),
             }),
             cloud: target.cloud,
+            agent_models: next.agent_models.clone(),
         })
     }
 

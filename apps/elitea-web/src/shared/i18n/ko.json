@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "사용자를 기다리는 중",
   "chat.presence.waking": "재개 중",
   "chat.presence.working": "작업 중",
-  "features.chatMessages.ranOutsideSandbox": "샌드박스 밖에서 실행됨"
+  "features.chatMessages.ranOutsideSandbox": "샌드박스 밖에서 실행됨",
+  "chat.participants.model": "이 스레드의 모델…",
+  "chat.participants.modelBadge": "이 스레드의 모델: {{model}}"
 }

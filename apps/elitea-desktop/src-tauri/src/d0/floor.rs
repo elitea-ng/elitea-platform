@@ -59,8 +59,11 @@
 //! on the handing turn and `turn_continued` (kind [`HANDED_KIND`]) when the
 //! receiver starts; a loop guard's stop is a `floor_stopped` with `guard`.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
+use super::definition::ModelChoice;
 use super::turn::{TurnError, TurnRequest};
 use crate::seed;
 
@@ -299,6 +302,9 @@ pub struct FloorNext {
     pub hand_id: Option<String>,
     /// The agent that handed the floor, for a hand-off.
     pub from: Option<i64>,
+    /// The person's model choice per agent (#3145): the next local agent
+    /// runs on its own, a hand-off's receiver too (a model is no permission).
+    pub agent_models: BTreeMap<i64, ModelChoice>,
 }
 
 impl FloorNext {
@@ -327,6 +333,7 @@ impl FloorNext {
                 .unwrap_or_default(),
             hand_id: None,
             from: None,
+            agent_models: request.agent_models.clone(),
         }
     }
 }
@@ -369,6 +376,7 @@ pub fn next(
             .unwrap_or_default(),
         hand_id: None,
         from: None,
+        agent_models: request.agent_models.clone(),
     })
 }
 
@@ -496,6 +504,7 @@ mod tests {
             addressed_to: Vec::new(),
             participant_id: None,
             floor_turn: None,
+            agent_models: std::collections::BTreeMap::new(),
             cloud: false,
         }
     }
@@ -524,6 +533,20 @@ mod tests {
             ..turn(Some(next))
         };
         assert_eq!(addressed(&named, &answering(2)), vec![88]);
+    }
+
+    /// #3145: the person's model per agent goes with the message to every
+    /// later turn of it, a hand-off's too (a model choice is no permission).
+    #[test]
+    fn the_messages_later_turns_carry_each_agents_model_choice() {
+        let choice = ModelChoice::parse("gpt-5", Some("high")).unwrap();
+        let request = TurnRequest {
+            agent_models: std::iter::once((6, choice.clone())).collect(),
+            ..turn(None)
+        };
+        let hand = FloorNext::template(&request, "q-1", "u-1");
+        assert_eq!(hand.agent_models.get(&6), Some(&choice));
+        assert!(!hand.agent_models.contains_key(&5));
     }
 
     #[test]

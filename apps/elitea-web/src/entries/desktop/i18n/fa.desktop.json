@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "عامل‌های این رشته",
   "workspace.participants.search": "جستجو",
   "workspace.participants.team": "تیم: {{name}}",
-  "workspace.team.add": "افزودن تیم"
+  "workspace.team.add": "افزودن تیم",
+  "workspace.team.noticeClose": "پنهان کردن برای این رشته",
+  "workspace.team.noticeLess": "نمایش کمتر",
+  "workspace.team.noticeMore": "بیشتر بدانید",
+  "workspace.to.header": "ارسال به",
+  "workspace.to.manage": "مدیریت شرکت‌کنندگان…",
+  "workspace.settings.title": "تنظیمات رشته",
+  "workspace.settings.workspace": "فضای کاری",
+  "workspace.settings.sandbox": "سندباکس",
+  "workspace.settings.sandboxed": "در سندباکس",
+  "workspace.settings.subAgents": "عامل‌های فرعی",
+  "workspace.settings.subAgentsValue": "فقط‌خواندنی، در دسترس",
+  "workspace.settings.models": "مدل‌ها",
+  "workspace.settings.modelCloud": "مدل خودش (ابر)",
+  "workspace.settings.modelPinned": "{{model}} (سنجاق‌شده)",
+  "workspace.settings.context": "زمینه",
+  "workspace.model.own": "مدل خود عامل ({{model}})"
 }

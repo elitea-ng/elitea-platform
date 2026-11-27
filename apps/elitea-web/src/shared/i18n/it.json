@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "In attesa di te",
   "chat.presence.waking": "Ripresa in corso",
   "chat.presence.working": "Al lavoro",
-  "features.chatMessages.ranOutsideSandbox": "Eseguito fuori dalla sandbox"
+  "features.chatMessages.ranOutsideSandbox": "Eseguito fuori dalla sandbox",
+  "chat.participants.model": "Modello in questo thread…",
+  "chat.participants.modelBadge": "Modello in questo thread: {{model}}"
 }

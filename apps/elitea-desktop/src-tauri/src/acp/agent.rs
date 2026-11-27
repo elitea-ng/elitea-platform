@@ -1179,6 +1179,7 @@ impl Connection {
                 addressed_to: Vec::new(),
                 participant_id: None,
                 floor_turn: None,
+                agent_models: std::collections::BTreeMap::new(),
                 cloud: false,
             })
             .await;

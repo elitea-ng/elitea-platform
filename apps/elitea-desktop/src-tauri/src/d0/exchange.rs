@@ -668,6 +668,7 @@ mod tests {
             defaults: crate::d0::turn::DefaultVersions::default(),
             hand_id: None,
             from: None,
+            agent_models: std::collections::BTreeMap::new(),
         }
     }
 

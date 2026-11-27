@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "あなたを待っています",
   "chat.presence.waking": "再開中",
   "chat.presence.working": "作業中",
-  "features.chatMessages.ranOutsideSandbox": "サンドボックス外で実行"
+  "features.chatMessages.ranOutsideSandbox": "サンドボックス外で実行",
+  "chat.participants.model": "このスレッドのモデル…",
+  "chat.participants.modelBadge": "このスレッドのモデル: {{model}}"
 }

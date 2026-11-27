@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "Vous attend",
   "chat.presence.waking": "Reprise",
   "chat.presence.working": "Travaille",
-  "features.chatMessages.ranOutsideSandbox": "Exécuté hors du bac à sable"
+  "features.chatMessages.ranOutsideSandbox": "Exécuté hors du bac à sable",
+  "chat.participants.model": "Modèle dans ce fil…",
+  "chat.participants.modelBadge": "Modèle dans ce fil : {{model}}"
 }

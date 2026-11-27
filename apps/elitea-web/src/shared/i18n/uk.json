@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "Чекає на вас",
   "chat.presence.waking": "Відновлюється",
   "chat.presence.working": "Працює",
-  "features.chatMessages.ranOutsideSandbox": "Виконано поза пісочницею"
+  "features.chatMessages.ranOutsideSandbox": "Виконано поза пісочницею",
+  "chat.participants.model": "Модель у цьому треді…",
+  "chat.participants.modelBadge": "Модель у цьому треді: {{model}}"
 }

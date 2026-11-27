@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "正在等待你",
   "chat.presence.waking": "正在恢复",
   "chat.presence.working": "正在工作",
-  "features.chatMessages.ranOutsideSandbox": "在沙盒外运行"
+  "features.chatMessages.ranOutsideSandbox": "在沙盒外运行",
+  "chat.participants.model": "此会话中的模型…",
+  "chat.participants.modelBadge": "此会话中的模型：{{model}}"
 }

@@ -59,7 +59,7 @@ import { threadDraftKey, useCarriedDraft } from './useCarriedDraft';
 import { useComposerSubmit } from './useComposerSubmit';
 import { useImageAttachments } from './useImageAttachments';
 import type { SentImages } from './useSendPrompt';
-import { agentToken, mentionItems, ToSlot, useAddressRequests, useMentionMenu } from './useComposerMentions';
+import { agentToken, mentionItems, useAddressRequests, useMentionMenu } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
 import { WorkspaceSendControl } from './WorkspaceSendControl';
 import type { CustomCommand, TurnCommand, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
@@ -139,9 +139,8 @@ export interface WorkspaceComposerProps {
   unsent?: UnsentSteers | undefined;
   /** The input became non-empty or empty (and again when this callback changes): the idle-compaction hold (`useIdleHold`). */
   onDraftChange?: ((hasDraft: boolean) => void) | undefined;
-  /** The thread's agents, first in the "@" menu with two or more (ADR-0061 decision 2b); the To chip above (`renderTo`) reads the text. */
+  /** The thread's agents, first in the "@" menu with two or more (ADR-0061 decision 2b). */
   agents?: readonly ThreadAgent[] | undefined;
-  renderTo?: ((draft: string) => ReactNode) | undefined;
 }
 
 /** What `/steps <value>` asks for (`composer.stepsCommand`). */
@@ -212,7 +211,7 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
   const locked = props.readOnly === true;
   const steering = steersNow(busy, props.onSteer);
   const [hasDraft, setHasDraft] = useState(false);
-  // The text, for the To chip (`renderTo`).
+  // The text, for the footer's To chip (`agentPicker`).
   const [draft, setDraft] = useState('');
   const inputRef = useRef<ComposerHandle>(null);
   useAddressRequests(props.conversationId, inputRef);
@@ -374,7 +373,6 @@ export function WorkspaceComposer(props: WorkspaceComposerProps): React.JSX.Elem
       <SkillPinError message={pinError} />
       <RetryUnsent unsent={props.unsent} busy={busy} hasDraft={hasDraft} canSend={canSend} onClick={retryUnsent} />
       <SteeringQueue queue={props.queue} input={inputRef} onRestored={() => setHasDraft(true)} />
-      <ToSlot render={props.renderTo} draft={draft} />
       <NewChatInput
         ref={inputRef}
         // Stop is drawn by `WorkspaceSendControl`, in Send's place: the input draws no Stop of its own.

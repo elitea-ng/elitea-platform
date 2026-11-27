@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "ينتظرك",
   "chat.presence.waking": "يستأنف",
   "chat.presence.working": "يعمل",
-  "features.chatMessages.ranOutsideSandbox": "شُغّل خارج بيئة العزل"
+  "features.chatMessages.ranOutsideSandbox": "شُغّل خارج بيئة العزل",
+  "chat.participants.model": "النموذج في هذه المحادثة…",
+  "chat.participants.modelBadge": "النموذج في هذه المحادثة: {{model}}"
 }

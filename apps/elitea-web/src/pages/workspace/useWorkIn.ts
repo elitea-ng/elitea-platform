@@ -3,7 +3,8 @@
  * or a new task worktree, which is proposed by default; the person's own
  * choice is remembered for the folder (`rememberWorkIn`) and proposed next
  * time, while the folder menu's "New thread in a worktree" forces it. With "New worktree", Send makes the worktree, hands
- * the message and the agents chosen for the thread (`handOver`, #3128) to the worktree's own new thread
+ * the message, the agents (`handOver`, #3128), the modes (`handOverChoices`, #3144) and "Respect AGENTS.md" chosen for
+ * the thread to the worktree's own new thread
  * (`holdFirstMessage`) and opens it; that thread shows the message at once and sends it as soon as it can
  * (`useFirstSend`), so the person writes once. A worktree the host cannot make (not the repository's
  * top, a branch in the way) is said above the composer and nothing is sent.
@@ -12,10 +13,12 @@ import { useEffect, useState } from 'react';
 
 import { createSubmitIds } from '@elitea/client-core/conversation';
 
-import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, useStartInWorktree, type WorkIn } from '@/features/workspace-worktrees';
+import { holdFirstMessage, initialWorkIn, listenForWorktree, rememberWorkIn, StartInWorktreeError, useStartInWorktree, useWorktreeIpc, type WorkIn } from '@/features/workspace-worktrees';
 import type { WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { t } from '@/shared/i18n';
 
+import { movePendingRespect } from './pendingRespect';
+import type { PreThreadChoices } from './preThreadChoices';
 import type { SelectionSeed } from './useAgentSelection';
 import type { HandedFirstMessage } from './useFirstSend';
 import type { WorkspaceComposerProps } from './WorkspaceComposer';
@@ -38,15 +41,19 @@ export interface WorkInInput {
   send: Send;
   /** The agents chosen for the new thread: the worktree's thread starts with them (#3128). */
   handOver?: (() => SelectionSeed | undefined) | undefined;
+  /** The composer's modes chosen for the new thread: the worktree's thread starts in them (#3144). */
+  handOverChoices?: (() => PreThreadChoices | undefined) | undefined;
   onError: (message: string) => void;
   /** Open a workspace's new thread (the worktree's). */
   open: (workspaceId: string) => void;
-  /** The host client; the Tauri one when not given (tests pass a fake). */
+  /** The host client; the app's (`WorktreeIpcProvider`, else the Tauri one) when not given. */
   ipc?: WorktreeIpc;
 }
 
-export function useWorkIn({ workspaceId, offered: asked, send, handOver, onError, open, ipc }: WorkInInput): WorkInControl {
-  const start = useStartInWorktree(ipc);
+export function useWorkIn({ workspaceId, offered: asked, send, handOver, handOverChoices, onError, open, ipc }: WorkInInput): WorkInControl {
+  // The provided host (tests), else the app's (its context, else the Tauri one).
+  const host = useWorktreeIpc();
+  const start = useStartInWorktree(ipc ?? host);
   // Without a host that can make worktrees, nothing is offered and the thread works in the folder.
   const offered = asked && start !== undefined;
   // Read once, at mount: the folder may become "offered" a moment later (its git state is read), and keeps the proposal.
@@ -63,11 +70,14 @@ export function useWorkIn({ workspaceId, offered: asked, send, handOver, onError
     if (start === undefined) return false;
     // The agents as they were when the message was sent: a change made while the worktree is made is not carried.
     const seed = handOver?.();
+    const choices = handOverChoices?.();
     try {
       const entry = await start(workspaceId, threadIds.current());
       threadIds.sent();
-      const handed: HandedFirstMessage = { args, seed };
+      const handed: HandedFirstMessage = { args, seed, choices };
       holdFirstMessage(entry.workspace_id, handed);
+      // "Respect AGENTS.md" turned off for this new thread goes with it, and no longer applies to the folder's next one.
+      movePendingRespect(workspaceId, entry.workspace_id);
       open(entry.workspace_id);
       return true;
     } catch (failure) {

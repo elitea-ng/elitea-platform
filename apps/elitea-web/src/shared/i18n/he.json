@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "ממתין לך",
   "chat.presence.waking": "ממשיך",
   "chat.presence.working": "עובד",
-  "features.chatMessages.ranOutsideSandbox": "הורץ מחוץ לארגז החול"
+  "features.chatMessages.ranOutsideSandbox": "הורץ מחוץ לארגז החול",
+  "chat.participants.model": "המודל בשרשור הזה…",
+  "chat.participants.modelBadge": "המודל בשרשור הזה: {{model}}"
 }

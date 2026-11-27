@@ -1,21 +1,10 @@
 /**
- * "To: Name" above a Local work thread's composer (ADR-0061 decision 2b, #3056), as the chat shows it: in a thread of
- * two or more agents, who answers the message being typed, by the rule Main routes on (client-core `firstAnswerer`):
- * the first agent it addresses, else the lead, else the composer's agent (the sticky one). Picking another agent
- * addresses the message to it (`@Name` into the composer), the chat's chip under a lead.
+ * Who answers a Local work thread's message (ADR-0061 decision 2b, #3056), as the chat shows it: in a thread of two or
+ * more agents, by the rule Main routes on (client-core `firstAnswerer`): the first agent it addresses, else the lead,
+ * else the composer's agent (the sticky one). The composer footer's "To:" chip (`AgentChip`) shows it, and its menu
+ * addresses the message to another agent (`@Name` into the composer); it was a second chip above the input until #3145.
  */
-import type { ReactNode } from 'react';
-import { useState } from 'react';
-
-import Box from '@mui/material/Box';
-import ButtonBase from '@mui/material/ButtonBase';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
-import type { Theme } from '@mui/material/styles';
-import Typography from '@mui/material/Typography';
-
 import { FLOOR_POLICY, addressedTo, firstAnswerer, floorOf } from '@elitea/client-core/conversation';
-import { t } from '@/shared/i18n';
 
 import { requestAddress, useThreadFloor } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
@@ -23,18 +12,12 @@ import type { ThreadFloor } from './useSendPrompt';
 
 const NO_AGENTS: readonly ThreadAgent[] = [];
 
-/** The composer's agents and To chip for a local thread (`conversationId` `''`: none, a new thread or the cloud copy). */
-export function useComposerTeam(projectId: number, conversationId: string, local: boolean, agentId: string): { agents: readonly ThreadAgent[]; floor?: ThreadFloor; renderTo?: (draft: string) => ReactNode } {
+/** The composer's agents for a local thread (`conversationId` `''`: none, a new thread or the cloud copy), and addressing one. */
+export function useComposerTeam(projectId: number, conversationId: string, local: boolean): { agents: readonly ThreadAgent[]; floor?: ThreadFloor; onAddress: (agent: ThreadAgent) => void } {
   const floor = useThreadFloor(projectId, local ? conversationId : '');
-  if (floor === undefined) return { agents: NO_AGENTS };
-  const sticky = floor.agents.find((agent) => String(agent.applicationId) === agentId)?.participantId ?? 0;
-  return {
-    agents: floor.agents,
-    floor,
-    renderTo: (draft) => (
-      <WorkspaceToChip draft={draft} agents={floor.agents} meta={floor.meta} fallbackParticipantId={sticky} onAddress={(agent) => requestAddress(conversationId, agent.name)} />
-    ),
-  };
+  const onAddress = (agent: ThreadAgent): void => requestAddress(conversationId, agent.name);
+  if (floor === undefined) return { agents: NO_AGENTS, onAddress };
+  return { agents: floor.agents, floor, onAddress };
 }
 
 export interface ToTarget {
@@ -52,54 +35,4 @@ export function toTarget(draft: string, agents: readonly ThreadAgent[], meta: un
   const agent = agents.find((candidate) => candidate.participantId === id);
   if (agent === undefined) return undefined;
   return { agent, isLead: addressed.length === 0 && floor.policy === FLOOR_POLICY.Lead && floor.leadParticipantId === id };
-}
-
-export interface WorkspaceToChipProps {
-  readonly draft: string;
-  readonly agents: readonly ThreadAgent[];
-  readonly meta: unknown;
-  /** The composer's agent (an unaddressed message without a lead goes to it); 0 for none. */
-  readonly fallbackParticipantId: number;
-  readonly onAddress: (agent: ThreadAgent) => void;
-}
-
-export function WorkspaceToChip({ draft, agents, meta, fallbackParticipantId, onAddress }: WorkspaceToChipProps): ReactNode {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  if (agents.length < 2) return null;
-  const target = toTarget(draft, agents, meta, fallbackParticipantId);
-  const name = target?.agent.name ?? t('widgets.chatBox.floorTarget.pick', 'pick an agent');
-  const label = target?.isLead === true
-    ? t('widgets.chatBox.floorTarget.lead', 'To: {{name}} (lead)', { name })
-    : t('widgets.chatBox.floorTarget.label', 'To: {{name}}', { name });
-  return (
-    <Box sx={{ display: 'flex' }}>
-      <ButtonBase
-        data-testid="workspace-to-chip"
-        aria-haspopup="menu"
-        aria-label={t('widgets.chatBox.floorTarget.change', 'Change who answers')}
-        onClick={(event) => setAnchor(event.currentTarget)}
-        sx={(theme: Theme) => ({
-          paddingX: 1,
-          paddingY: 0.25,
-          borderRadius: theme.vars.shape.radiusMd,
-          border: `0.0625rem solid ${theme.vars.palette.border.lines}`,
-          color: theme.vars.palette.text.secondary,
-        })}
-      >
-        <Typography variant="labelSmall" color="inherit">{label}</Typography>
-      </ButtonBase>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)}>
-        {agents.filter((agent) => agent.name !== '').map((agent) => (
-          <MenuItem
-            key={agent.participantId}
-            selected={agent.participantId === target?.agent.participantId}
-            onClick={() => { setAnchor(null); onAddress(agent); }}
-            data-testid="workspace-to-chip-option"
-          >
-            {agent.name}
-          </MenuItem>
-        ))}
-      </Menu>
-    </Box>
-  );
 }

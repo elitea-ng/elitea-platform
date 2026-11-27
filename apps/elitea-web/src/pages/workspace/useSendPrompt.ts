@@ -26,7 +26,6 @@ import { getApplication } from '@/shared/api/generated/applications/applications
 import { unwrapBody } from '@/shared/api/unwrap';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
 import { describeWorkspaceError, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
-import type { TurnModelChoice } from '@/shared/desktop/turnModel';
 import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
 import { applyPendingRespect } from './pendingRespect';
@@ -44,8 +43,8 @@ export interface SentImages {
 export interface SendPrompt {
   canSend: boolean;
   sendError: string | null;
-  /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the skills it invokes with "/"; `compact`: `/compact` was asked for; `model`: the model chip's choice; `command`: the custom command it runs. */
-  send: (prompt: string, mode: TurnModeChoice, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages) => Promise<boolean>;
+  /** `mentions`: the workspace paths the prompt references with "@"; `skills`: the skills it invokes with "/"; `compact`: `/compact` was asked for; `agentModels`: the model chosen for each agent of the thread (#3145); `command`: the custom command it runs. */
+  send: (prompt: string, mode: TurnModeChoice, mentions: string[], skills?: TurnStartRequest['skills'], compact?: boolean, agentModels?: readonly AgentModelEntry[], command?: TurnCommand, images?: SentImages) => Promise<boolean>;
   /** The composer got focus with an agent selected: the host reads ahead what the send will need. */
   prewarm: () => void;
 }
@@ -59,9 +58,15 @@ function compactFlag(compact: boolean | undefined): { compact?: true } {
   return compact === true ? { compact: true } : {};
 }
 
-/** A model only when one was chosen: without it the host runs the thread's kept model. */
-function modelField(model: TurnModelChoice | undefined): { model?: TurnModelChoice } {
-  return model === undefined ? {} : { model };
+/**
+ * The agents' models only when one was chosen (#3145): the host runs each agent on its own choice, else its kept one,
+ * else its own model. No thread-wide `model` is sent any more: the started agent's entry is its choice.
+ */
+/** One entry of `agent_turn_start.agent_models`: an agent's model in this thread (#3145). */
+export type AgentModelEntry = NonNullable<TurnStartRequest['agent_models']>[number];
+
+function agentModelsField(agentModels: readonly AgentModelEntry[] | undefined): { agent_models?: AgentModelEntry[] } {
+  return agentModels === undefined || agentModels.length === 0 ? {} : { agent_models: [...agentModels] };
 }
 
 /** The start request's `images`, only when the message carries some. */
@@ -300,7 +305,7 @@ export function useSendPrompt(
   const agent = selection.agents.find((a) => a.id === selection.agentId);
   const version = selection.versions.find((v) => String(v.id) === selection.versionId);
 
-  const send = async (prompt: string, mode: TurnModeChoice, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, model?: TurnModelChoice, command?: TurnCommand, images?: SentImages): Promise<boolean> => {
+  const send = async (prompt: string, mode: TurnModeChoice, mentions: string[], skills: TurnStartRequest['skills'] = [], compact?: boolean, agentModels?: readonly AgentModelEntry[], command?: TurnCommand, images?: SentImages): Promise<boolean> => {
     if (agent === undefined || version === undefined || prompt.trim() === '' || turn.busy || inFlight.current) return false;
     inFlight.current = true;
     setSending(true);
@@ -343,7 +348,7 @@ export function useSendPrompt(
         mentions,
         skills,
         ...compactFlag(compact),
-        ...modelField(model),
+        ...agentModelsField(agentModels),
         ...commandField(command),
         ...imagesField(images),
         submit_id: submitId,

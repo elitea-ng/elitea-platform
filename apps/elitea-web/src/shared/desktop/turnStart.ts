@@ -45,6 +45,11 @@ export interface TurnStartRequest {
   compact?: boolean;
   /** Another chat model of the project for this turn and the thread's next ones (IPC.md "Model per turn"). */
   model?: TurnModelChoice | undefined;
+  /**
+   * The model the person chose for each agent of the thread (IPC.md "Model per agent", #3145), by application id: the
+   * started agent runs on its entry when `model` is absent, and so does a later local agent of the message.
+   */
+  agent_models?: { application_id: number; name: string; reasoning_effort?: TurnModelChoice['reasoning_effort'] }[] | undefined;
   /** A custom command the person picked with "/": the host reads and expands its file itself, and records the prompt as `/<name> <arguments>`. */
   command?: TurnCommand | undefined;
   /** Images attached to the message (IPC.md "Image input"), by the tokens `attachment_add` / `attachment_add_bytes` answered; at most five. */

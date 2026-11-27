@@ -1108,5 +1108,21 @@
   "workspace.participants.open": "Agents de ce fil",
   "workspace.participants.search": "Rechercher",
   "workspace.participants.team": "Équipe : {{name}}",
-  "workspace.team.add": "Ajouter une équipe"
+  "workspace.team.add": "Ajouter une équipe",
+  "workspace.team.noticeClose": "Masquer pour ce fil",
+  "workspace.team.noticeLess": "Afficher moins",
+  "workspace.team.noticeMore": "En savoir plus",
+  "workspace.to.header": "Envoyer à",
+  "workspace.to.manage": "Gérer les participants…",
+  "workspace.settings.title": "Paramètres du fil",
+  "workspace.settings.workspace": "Espace de travail",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "Dans la sandbox",
+  "workspace.settings.subAgents": "Sous-agents",
+  "workspace.settings.subAgentsValue": "En lecture seule, proposés",
+  "workspace.settings.models": "Modèles",
+  "workspace.settings.modelCloud": "Son propre modèle (cloud)",
+  "workspace.settings.modelPinned": "{{model}} (épinglé)",
+  "workspace.settings.context": "Contexte",
+  "workspace.model.own": "Modèle propre à l’agent ({{model}})"
 }

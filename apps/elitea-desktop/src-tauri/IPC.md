@@ -440,7 +440,7 @@ failed tool's `tool_result` event carries its `code` (without the
 
 | Command | Arguments | Result |
 | --- | --- | --- |
-| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, full_auto?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], participant_id?: number, cloud_agent?: boolean, submit_id?: string}` (**Unattended turns**, **Several agents in a thread**, below; `submit_id`: the message's client id, a UUID kept until the message is sent — a second call with it in the same workspace, while the first runs or after it started, answers the first call's `{turn_id, execution_id}` and starts nothing; a refused start is forgotten so its retry runs, #3077) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
+| `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode, mentions?: string[], skills?: (string \| {source: "project", id: number \| string})[], compact?: boolean, model?: {name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}, command?: {name, arguments?: string}, images?: {source: "clipboard" \| "file", token: string}[], bypass_approvals?: boolean, full_auto?: boolean, unattended?: UnattendedGrant, addressed_to?: number[], participant_id?: number, cloud_agent?: boolean, submit_id?: string, agent_models?: {application_id: number, name: string, reasoning_effort?: "auto" \| "off" \| "low" \| "medium" \| "high"}[]}` (**Unattended turns**, **Several agents in a thread**, **Model per agent**, below; `submit_id`: the message's client id, a UUID kept until the message is sent — a second call with it in the same workspace, while the first runs or after it started, answers the first call's `{turn_id, execution_id}` and starts nothing; a refused start is forgotten so its retry runs, #3077) (`reasoning_effort` `"none"`, from an older client or a kept choice, is read as `"off"`) | `{turn_id, execution_id}` |
 | `attachment_add` | `{workspace_id, path}` | `{token, name, mime, bytes, width, height, thumbnail}` — attaches the image file at the **absolute** `path` (a `files_dropped` path, or a picked file) to the workspace's next turn ("Image input", below). Blocking work runs off the async workers. Rejects `path_denied`, `not_found`, `image_too_large`, `invalid_request` (not PNG/JPEG/WebP/GIF, a relative path, a link, not a regular file), `workspace_unknown`, `local_work_disabled`, `not_signed_in`. |
 | `attachment_add_bytes` | `{workspace_id, mime, data, name?}` | The same answer for a pasted image: `data` is base64, at most 10 MiB decoded; `mime` is what the clipboard said and is ignored (the type is sniffed from the bytes); `name` defaults to `pasted-image`. Rejects `image_too_large`, `invalid_request`, `workspace_unknown`, `local_work_disabled`. |
 | `attachment_remove` | `{workspace_id, token}` | `null`. Forgets an image the person took off the composer (an unknown token is not an error). |
@@ -973,6 +973,21 @@ workspace whose settings say `allow_model_override: false` refuses it with
 on the agent's model). The model a turn ran on is on its `status`
 `running` event (`model`) and in the commit (`assistant_message.model_name`,
 client contract 1.17).
+
+**Model per agent** (#3145). `agent_models` is the person's model choice
+for each agent of the thread, by its application id (at most 64; each
+checked like `model`). A start without `model` runs its agent on that
+agent's entry, and the host keeps it in that agent's session as it keeps
+`model` (with two or more agents each agent has its own session, so each
+keeps its own choice; with one agent it is the thread's). A later local
+agent of the message, a routed one or a hand-off's receiver, runs on its
+own entry too (`FloorNext.agent_models`); without one it runs on its kept
+choice, else its own model. A cloud agent never takes one (it runs its own
+version's model). The UI sends the entries chosen since the thread's page
+opened with each message, so an agent that only answers through the floor
+gets its choice; a choice an agent already ran on is not sent again (its
+session keeps it, and the host re-checks it there). Choosing the agent's own
+model puts the agent back on it, as with `model`.
 
 **Reasoning** (issue 1228). A model's reasoning streams as `thinking_delta`
 events (a `thinking_end` closes each block) and each model step's reasoning

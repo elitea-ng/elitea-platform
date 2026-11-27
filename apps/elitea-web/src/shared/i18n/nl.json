@@ -5066,5 +5066,7 @@
   "chat.presence.waitingForYou": "Wacht op jou",
   "chat.presence.waking": "Wordt hervat",
   "chat.presence.working": "Bezig",
-  "features.chatMessages.ranOutsideSandbox": "Buiten de sandbox uitgevoerd"
+  "features.chatMessages.ranOutsideSandbox": "Buiten de sandbox uitgevoerd",
+  "chat.participants.model": "Model in deze thread…",
+  "chat.participants.modelBadge": "Model in deze thread: {{model}}"
 }
