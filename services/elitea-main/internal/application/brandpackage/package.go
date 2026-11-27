@@ -28,8 +28,9 @@
 //
 // A package is a whole pack; the database layer is per-key. ValuesFromPack
 // maps every scalar and asset field to its section key. Scheme tokens are
-// carried over ONLY when the package states any and they differ from the
-// product default's — an untouched export re-imports as "nothing hand-tuned"
+// carried over unless both records are untouched exports (untouchedRecord):
+// every stated id has the product default's value, and every missing id is
+// on addedDefaultIDs. An untouched export re-imports as "nothing hand-tuned"
 // rather than pinning every token and switching hue derivation off.
 package brandpackage
 
@@ -706,13 +707,31 @@ func assetValue(v string) string {
 	return ""
 }
 
+// addedDefaultIDs names the scheme ids that the product default gained after
+// it stated 408 ids per scheme: a full group ("role.", the 27 ids of ADR-0062
+// decision 1) or one id. A package downloaded before an id was added does not
+// state it, and it is still an untouched export. Add each new default id here,
+// in the PR that adds it to the product default:
+// TestAddedDefaultIDs_CoverTheProductDefault fails until then.
+var addedDefaultIDs = []string{"role."}
+
+// addedDefaultID reports whether id is on addedDefaultIDs.
+func addedDefaultID(id string) bool {
+	for _, entry := range addedDefaultIDs {
+		if id == entry || (strings.HasSuffix(entry, ".") && strings.HasPrefix(id, entry)) {
+			return true
+		}
+	}
+	return false
+}
+
 // untouchedRecord reports whether a package's scheme record is an export of
 // a product default with nothing changed: every id it states has base's value
 // (hex case aside, for a hand-edited package), and every base id it lacks is
-// a `role.*` id. A package exported before ADR-0062 decision 1 states the 408
-// earlier ids and lacks only the 27 `role.*` ids (408 -> 435). A length check
-// called every such package hand-tuned and carried all its ids, rgba ones
-// included, into scheme_tokens, which then refused the import and the
+// on addedDefaultIDs. A package downloaded before ADR-0062 decision 1 states
+// the 408 earlier ids and lacks only the 27 role.* ids (408 -> 435). A length
+// check called every such package hand-tuned and carried all its ids, rgba
+// ones included, into scheme_tokens, which then refused the import and the
 // restore (the section takes six-digit hex only). A record that lacks any
 // other id is carried as before: a deployment that states some ids at their
 // default values pins them, and under another brand hue they do not re-hue.
@@ -723,7 +742,7 @@ func untouchedRecord(a, b map[string]string) bool {
 		}
 	}
 	for k := range b {
-		if _, ok := a[k]; !ok && !strings.HasPrefix(k, "role.") {
+		if _, ok := a[k]; !ok && !addedDefaultID(k) {
 			return false
 		}
 	}
