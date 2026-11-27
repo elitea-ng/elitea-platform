@@ -34,5 +34,9 @@ export const TEAM_COPY = {
   ranOutsideSandboxLabel: 'This answer ran commands outside the sandbox, in a folder its owner trusts.',
   fullAuto: 'Ran in Full auto',
   fullAutoLabel: 'This answer ran in Full auto: the agent answered every approval for its owner, including those asked after reading outside content.',
+  agentsMdApplied: 'AGENTS.md applied',
+  agentsMdIgnored: 'AGENTS.md ignored',
+  agentsMdLabel: (applied: boolean, files: readonly string[]) =>
+    `${applied ? 'This answer applied' : 'This answer ignored'} the folder's project instructions${files.length > 0 ? `: ${files.join(', ')}` : ''}.`,
   activity: ACTIVITY,
 } as const;

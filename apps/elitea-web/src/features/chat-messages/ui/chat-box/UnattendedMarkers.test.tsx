@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
-import { ranInFullAuto } from '@/shared/lib/localWork';
+import { projectInstructionsOf, ranInFullAuto } from '@/shared/lib/localWork';
 
 import { stoppedAtStepLimit, unattendedMarksOf } from '../../lib/unattendedMarks';
-import { ContinuedAutomaticallyLabel, FullAutoMarker, StepLimitNotice } from './UnattendedMarkers';
+import { AnswerMarkers, ContinuedAutomaticallyLabel, FullAutoMarker, ProjectInstructionsMarker, StepLimitNotice } from './UnattendedMarkers';
 
 describe('the "Ran in Full auto" marker (issue 3079)', () => {
   it('is set only by a meta.local_work.full_auto record', () => {
@@ -21,6 +21,28 @@ describe('the "Ran in Full auto" marker (issue 3079)', () => {
   it('renders the marker text', () => {
     renderWithTheme(<FullAutoMarker />);
     expect(screen.getByTestId('chat-message-full-auto')).toHaveTextContent('Ran in Full auto');
+  });
+});
+
+describe('the read-only AGENTS.md marker of a Local work turn (issue 3130)', () => {
+  it('is read from a meta.local_work.project_instructions record only', () => {
+    const meta = { local_work: { project_instructions: { applied: false, files: ['AGENTS.md', 7] } } };
+    expect(projectInstructionsOf(meta)).toEqual({ applied: false, files: ['AGENTS.md'] });
+    expect(unattendedMarksOf(meta)).toEqual({ projectInstructions: { applied: false, files: ['AGENTS.md'] } });
+    for (const other of [undefined, null, {}, { local_work: {} }, { local_work: { project_instructions: true } }, { local_work: { project_instructions: { files: [] } } }, { local_work: { project_instructions: { applied: true } } }]) {
+      expect(projectInstructionsOf(other)).toBeUndefined();
+    }
+  });
+
+  it('says whether the turn applied or ignored AGENTS.md, naming the files in its title', () => {
+    const { unmount } = renderWithTheme(<ProjectInstructionsMarker applied={false} files={['AGENTS.md', 'apps/web/AGENTS.md']} />);
+    const marker = screen.getByTestId('chat-message-project-instructions');
+    expect(marker).toHaveTextContent('AGENTS.md ignored');
+    expect(marker).toHaveAttribute('title', 'AGENTS.md, apps/web/AGENTS.md');
+    unmount();
+    renderWithTheme(<AnswerMarkers answer={{ projectInstructions: { applied: true, files: ['AGENTS.md'] } }} />);
+    expect(screen.getByTestId('chat-message-project-instructions')).toHaveTextContent('AGENTS.md applied');
+    expect(screen.queryByTestId('chat-message-full-auto')).toBeNull();
   });
 });
 

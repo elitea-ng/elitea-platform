@@ -540,13 +540,18 @@ impl TurnEvents {
         self.send_status(payload);
     }
 
-    /// `status` `running`, naming the AGENTS.md files the turn applies
-    /// (`project_instructions`, only when there are some) and the model it
-    /// runs on (`model`: `{name, reasoning_effort?, chosen, pinned}`, #1228).
-    pub fn running(&self, project_instructions: &[String], model: &Value) {
+    /// `status` `running`, naming the project instruction files the
+    /// folder holds for the turn (`project_instructions`, only when there
+    /// are some) with whether the thread applied them
+    /// (`project_instructions_applied`: false when "Respect AGENTS.md" is
+    /// off, issue 3130; the recorded event is the turn's audit), and the
+    /// model it runs on (`model`: `{name, reasoning_effort?, chosen,
+    /// pinned}`, #1228).
+    pub fn running(&self, project_instructions: &[String], applied: bool, model: &Value) {
         let mut payload = json!({ "phase": Phase::Running.as_str(), "model": model });
         if !project_instructions.is_empty() {
             payload["project_instructions"] = json!(project_instructions);
+            payload["project_instructions_applied"] = json!(applied);
         }
         self.clock().running_since = Some(Instant::now());
         self.send_status(payload);
@@ -844,7 +849,7 @@ mod tests {
         events.timed(Timed::Participant, Duration::from_millis(80));
         events.status(Phase::Starting, None);
         events.status(Phase::Starting, Some("again"));
-        events.running(&[], &Value::Null);
+        events.running(&[], true, &Value::Null);
         // Two overlapping tool calls, then a later one: their union.
         events.tool_began();
         events.tool_began();

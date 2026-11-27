@@ -65,6 +65,29 @@ export function ranInFullAuto(meta: unknown): boolean {
   return typeof record === 'object' && record !== null && !Array.isArray(record);
 }
 
+/** What a Local work turn recorded about its folder's project instructions (issue 3130). */
+export interface ProjectInstructionsRecord {
+  /** The turn's prompt carried them: false when the thread's "Respect AGENTS.md" was off. */
+  readonly applied: boolean;
+  readonly files: readonly string[];
+}
+
+/**
+ * The answer's turn recorded whether it applied its folder's project instructions (AGENTS.md; issue 3130: Main
+ * stores the commit's `local_work.project_instructions`). Absent (no instruction files, or a server before contract
+ * 1.70), the chat shows nothing.
+ */
+export function projectInstructionsOf(meta: unknown): ProjectInstructionsRecord | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const localWork = (meta as { readonly local_work?: unknown }).local_work;
+  if (typeof localWork !== 'object' || localWork === null) return undefined;
+  const record = (localWork as { readonly project_instructions?: unknown }).project_instructions;
+  if (typeof record !== 'object' || record === null) return undefined;
+  const { applied, files } = record as { readonly applied?: unknown; readonly files?: unknown };
+  if (typeof applied !== 'boolean' || !Array.isArray(files)) return undefined;
+  return { applied, files: files.filter((file): file is string => typeof file === 'string') };
+}
+
 /**
  * The newest answer in the list was produced on a desktop (`meta.executed_by
  * === 'desktop'`). The server refuses to regenerate such an answer

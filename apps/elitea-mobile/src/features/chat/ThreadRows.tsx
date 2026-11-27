@@ -106,10 +106,11 @@ export function PersistedMessage({
       onActions={message.text.trim() !== '' || answer ? onActions : null}
       actions={answer && !message.isStreaming ? actions : undefined}
       footer={
-        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 || message.ranOutsideSandbox || message.fullAuto ? (
+        message.attachments.length > 0 || tools.length > 0 || (message.delegationNotices?.length ?? 0) > 0 || message.ranOutsideSandbox || message.fullAuto || message.projectInstructions ? (
           <>
             {message.ranOutsideSandbox ? <OutsideSandboxMarker /> : null}
             {message.fullAuto ? <FullAutoMarker /> : null}
+            {message.projectInstructions ? <ProjectInstructionsMarker {...message.projectInstructions} /> : null}
             <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
             {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
             <DelegationNoticeCards notices={message.delegationNotices ?? []} />
@@ -146,6 +147,20 @@ export function FullAutoMarker() {
       <Icon name="warning" size={14} tone="danger" />
       <Text variant="footnote" tone="danger">
         {TEAM_COPY.fullAuto}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * Issue 3130: whether the answer's Local work turn applied its folder's AGENTS.md (the desktop
+ * thread's "Respect AGENTS.md"). Read-only: the switch is the desktop's.
+ */
+export function ProjectInstructionsMarker({ applied, files }: { applied: boolean; files: readonly string[] }) {
+  return (
+    <View style={styles.sandbox} accessible accessibilityRole="text" accessibilityLabel={TEAM_COPY.agentsMdLabel(applied, files)} testID="project-instructions">
+      <Text variant="footnote" tone="secondary">
+        {applied ? TEAM_COPY.agentsMdApplied : TEAM_COPY.agentsMdIgnored}
       </Text>
     </View>
   );

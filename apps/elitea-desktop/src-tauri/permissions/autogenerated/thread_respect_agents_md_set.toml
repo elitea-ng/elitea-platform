@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-respect-agents-md-set"
+description = "Enables the thread_respect_agents_md_set command without any pre-configured scope."
+commands.allow = ["thread_respect_agents_md_set"]
+
+[[permission]]
+identifier = "deny-thread-respect-agents-md-set"
+description = "Denies the thread_respect_agents_md_set command without any pre-configured scope."
+commands.deny = ["thread_respect_agents_md_set"]

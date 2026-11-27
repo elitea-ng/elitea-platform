@@ -129,6 +129,8 @@ export interface ChatMessage {
   readonly ranOutsideSandbox?: boolean | undefined;
   /** Persisted `meta.local_work.full_auto` (ADR-0061 amendment of 2026-11-26): the answer's Local work turn ran in Full auto. */
   readonly fullAuto?: boolean | undefined;
+  /** Persisted `meta.local_work.project_instructions` (issue 3130): whether the Local work turn applied its folder's AGENTS.md. */
+  readonly projectInstructions?: { readonly applied: boolean; readonly files: readonly string[] } | undefined;
   /** Persisted `meta.run_brief` (ADR-0045 decision 11): the chain's run brief, on the chain root's answer. */
   readonly runBrief?: RunBriefView | undefined;
   /** Persisted `meta.goal_check`: the goal check of this answer's run. */

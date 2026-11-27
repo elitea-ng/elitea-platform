@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "Réussi",
   "workspace.tool.failed": "Échec",
   "workspace.tool.truncated": "(sortie tronquée)",
-  "workspace.agentsMdApplied": "AGENTS.md appliqué",
   "workspace.cancel": "Annuler",
   "workspace.commitFailed.retry": "Réessayer",
   "workspace.git": "Git",

@@ -4,6 +4,8 @@
  * the host reads the text at every turn under the person's own token. Wire shapes are the host's (snake_case).
  */
 
+import { threadInstructionsCommands, type ThreadInstructionsCommands } from './threadInstructionsIpc';
+
 /** One project skill pinned to a thread. */
 interface ThreadSkillPin {
   projectId: number;
@@ -15,8 +17,8 @@ export interface ListedThreadSkill extends ThreadSkillPin {
   available: boolean;
 }
 
-/** The thread-skill half of `WorkspaceIpc`. */
-export interface ThreadSkillCommands {
+/** The thread-skill half of `WorkspaceIpc`, with the thread's project-instructions setting (same thread store). */
+export interface ThreadSkillCommands extends ThreadInstructionsCommands {
   /** `thread_skills_list`: the thread's pins, oldest first (none when it has none). */
   threadSkills(workspaceId: string, conversationId: string): Promise<ListedThreadSkill[]>;
   /**
@@ -39,6 +41,7 @@ interface WirePin {
 
 export function threadSkillCommands(invoke: Invoke): ThreadSkillCommands {
   return {
+    ...threadInstructionsCommands(invoke),
     threadSkills: async (workspaceId, conversationId) =>
       (await invoke<WirePin[]>('thread_skills_list', { workspace_id: workspaceId, conversation_id: conversationId })).map((pin) => ({
         projectId: pin.project_id,

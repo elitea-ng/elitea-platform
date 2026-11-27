@@ -85,11 +85,11 @@ describe('useWorkspaceTurn', () => {
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
     await act(() => result.current.start(REQUEST));
     act(() => {
-      ipc.emit(ev(1, { kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md'] } }));
+      ipc.emit(ev(1, { kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md'], project_instructions_applied: false } }));
       ipc.emit(ev(2, { kind: 'text_delta', payload: { text: 'working' } }));
       ipc.emit(ev(3, { kind: 'status', payload: { phase: 'committing' } }));
     });
-    expect(result.current.view.projectInstructions).toEqual(['AGENTS.md']);
+    expect(result.current.view.projectInstructions).toEqual({ files: ['AGENTS.md'], applied: false });
     act(() => result.current.clear());
     expect(result.current.turnId).toBe('turn-1');
     act(() => {

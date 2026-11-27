@@ -138,6 +138,9 @@ struct State {
     /// The turn ran in Full auto (issue 3079): what it answered, the first
     /// [`MAX_FULL_AUTO_ASKS`] of them, and how many.
     full_auto: Option<(Vec<Value>, u64)>,
+    /// The folder's project instructions (issue 3130): the files found and
+    /// whether the thread applied them; `None` when the folder had none.
+    project_instructions: Option<(Vec<String>, bool)>,
     paths: Vec<String>,
     enforcement: Option<String>,
     /// What the weakest enforcement left out (Landlock only: credentials
@@ -618,6 +621,15 @@ impl Recorder {
         let _ = self.with(|state| state.trusted = trusted);
     }
 
+    /// The folder's project instructions this turn found (issue 3130) and
+    /// whether the thread applied them: the report carries
+    /// `project_instructions` when there were some.
+    pub fn set_project_instructions(&self, files: &[String], applied: bool) {
+        let _ = self.with(|state| {
+            state.project_instructions = (!files.is_empty()).then(|| (files.to_vec(), applied));
+        });
+    }
+
     /// The turn runs in Full auto (issue 3079): the report carries
     /// `full_auto`, even when it answered nothing.
     pub fn set_full_auto(&self, on: bool) {
@@ -679,6 +691,11 @@ impl Recorder {
             // Issue 3079: what Full auto answered (contract 1.69).
             if let Some((asks, answered)) = &state.full_auto {
                 report["full_auto"] = json!({ "answered": answered, "asks": asks });
+            }
+            // Issue 3130: whether the folder's project instructions applied
+            // (contract 1.70).
+            if let Some((files, applied)) = &state.project_instructions {
+                report["project_instructions"] = json!({ "applied": applied, "files": files });
             }
             if !state.memories_saved.is_empty() {
                 report["memories_saved"] = json!(state.memories_saved);

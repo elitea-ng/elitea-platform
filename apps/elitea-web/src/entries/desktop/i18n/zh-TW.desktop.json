@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "成功",
   "workspace.tool.failed": "失敗",
   "workspace.tool.truncated": "（輸出已截斷）",
-  "workspace.agentsMdApplied": "已應用 AGENTS.md",
   "workspace.cancel": "取消",
   "workspace.commitFailed.retry": "重試",
   "workspace.git": "Git",

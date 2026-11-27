@@ -736,3 +736,66 @@ async fn a_failed_unattended_handing_turn_ends_its_chain_failed() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(starts(&h).len(), 1);
 }
+
+/// Issue 3130: the thread's "Respect AGENTS.md" applies to every agent of
+/// the thread: the lead's turn and the turn handed to another local agent
+/// both carry the folder's AGENTS.md when it is on, and neither does when
+/// it is off.
+async fn a_handed_turn_follows_respect_agents_md(respect: bool) {
+    let thread = Thread::new(handed(&[(99, "Linter", HAND_1)]), |n| match n {
+        0 => hand_to(&[99]),
+        1 => say("Handed."),
+        _ => say("Reviewed."),
+    });
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    h.host
+        .set_respect_agents_md(&h.workspace_id, "42", respect)
+        .await
+        .unwrap();
+    let started = h
+        .host
+        .start(TurnRequest {
+            prompt: "Fix the build".into(),
+            ..request(&h.workspace_id)
+        })
+        .await
+        .unwrap();
+    until_done_of(&h, &started.turn_id).await;
+    let continued = event_of(&h, "turn_continued", Some(&started.turn_id)).await;
+    assert_eq!(continued.payload["executor"], "local");
+    let next = continued.payload["next_turn_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until_done_of(&h, &next).await;
+
+    let model = bodies(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(model.len(), 3, "the lead's two steps, then the receiver's");
+    for (step, body) in model.iter().enumerate() {
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+        assert_eq!(
+            system.contains("Run task test."),
+            respect,
+            "step {step}: {system}"
+        );
+    }
+    let running = h
+        .emitter
+        .all()
+        .into_iter()
+        .find(|e| e.turn_id == next && e.kind == "status" && e.payload["phase"] == "running")
+        .unwrap();
+    assert_eq!(running.payload["project_instructions_applied"], respect);
+}
+
+#[tokio::test]
+async fn a_handed_turn_applies_agents_md_when_the_thread_respects_it() {
+    a_handed_turn_follows_respect_agents_md(true).await;
+}
+
+#[tokio::test]
+async fn a_handed_turn_ignores_agents_md_when_the_thread_does_not() {
+    a_handed_turn_follows_respect_agents_md(false).await;
+}

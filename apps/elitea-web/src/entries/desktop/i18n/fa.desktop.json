@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "موفق",
   "workspace.tool.failed": "ناموفق",
   "workspace.tool.truncated": "(خروجی کوتاه شد)",
-  "workspace.agentsMdApplied": "AGENTS.md اعمال شد",
   "workspace.cancel": "انصراف",
   "workspace.commitFailed.retry": "تلاش دوباره",
   "workspace.git": "Git",

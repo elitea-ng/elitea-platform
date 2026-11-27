@@ -50,6 +50,8 @@
     "allow-thread-skills-list",
     "allow-thread-skill-pin",
     "allow-thread-skill-unpin",
+    "allow-thread-instructions-status",
+    "allow-thread-respect-agents-md-set",
     "allow-session-info",
     "allow-checkpoint-restore",
     "allow-checkpoint-preview",

@@ -26,8 +26,8 @@ import { floorOf } from '@elitea/client-core/conversation';
 import { agentExecutorOf } from '@/features/localWork/model';
 import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { useModalAnimation } from '@/features/a11y/motion';
-import { participantAgentId, participantName, participantUserId } from '@/features/chat/messageModel';
-import { PackAvatar } from '@/features/chat/AssistantAvatar';
+import { participantAgentId, participantIconPath, participantName, participantUserId } from '@/features/chat/messageModel';
+import { PackAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
 import { participantAvatarPack } from '@/features/chat/avatarPackMedia';
 import { ProbationBadge } from '@/features/workforce/ProbationBadge';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
@@ -100,6 +100,17 @@ function ExecutorBadge({ name, cloud, participantId }: { name: string; cloud: bo
       </Text>
     </View>
   );
+}
+
+/**
+ * An agent row's avatar place (#3131, #3130): its avatar pack's still, else its logo (`icon_meta`,
+ * read from the participant as web and desktop read it), else its monogram. The logo is downloaded
+ * only when there is no pack (the pack's still wins).
+ */
+function AgentRowAvatar({ projectId, participant, name }: { projectId: number; participant: Participant; name: string }) {
+  const pack = participantAvatarPack(participant);
+  const icon = useAgentIconUri(projectId, pack === undefined ? participantIconPath(participant) : null);
+  return <PackAvatar projectId={projectId} pack={pack} motion="still" name={name} imageUri={icon} mark={false} size={36} />;
 }
 
 /** Agents and pipelines: the participants a lead can be. */
@@ -264,8 +275,7 @@ function SheetBody({
                     p.entity_name === 'user' ? (
                       <Avatar name={name} kind="person" size={36} decorative />
                     ) : (
-                      // An agent's own avatar pack still in the row's avatar place (#3131), else its monogram.
-                      <PackAvatar projectId={projectId} pack={participantAvatarPack(p)} motion="still" name={name} imageUri={null} mark={false} size={36} />
+                      <AgentRowAvatar projectId={projectId} participant={p} name={name} />
                     )
                   }
                   trailing={

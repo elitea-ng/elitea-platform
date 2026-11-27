@@ -60,8 +60,8 @@ export interface TurnView extends SteerView, ChainView {
   approvals: ApprovalRequestPayload[];
   error?: { code: string; message: string };
   done?: TurnDone;
-  /** The AGENTS.md files the host applied to this turn (from `status` `running`). */
-  projectInstructions?: string[];
+  /** The project instruction files the folder held for this turn and whether it applied them (`status` `running`, issue 3130). */
+  projectInstructions?: { files: string[]; applied: boolean };
   /** The turn's commit (after `done`) did not land: "Retry" sends it again. */
   commitFailed?: { executionId: string; code: string; message: string; seq: number };
   /** The latest model call's context occupancy (the composer's meter). */
@@ -148,7 +148,7 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   let next: TurnView = { ...view, phase: event.payload.phase };
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
-  if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
+  if (event.payload.project_instructions !== undefined) next.projectInstructions = { files: event.payload.project_instructions, applied: event.payload.project_instructions_applied !== false };
   if (event.payload.model !== undefined) next.model = event.payload.model;
   if (event.payload.note !== undefined) next.note = event.payload.note;
   next = withChainStatus(next, event.payload);

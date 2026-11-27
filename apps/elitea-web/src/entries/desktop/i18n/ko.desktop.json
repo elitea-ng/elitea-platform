@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "성공",
   "workspace.tool.failed": "실패",
   "workspace.tool.truncated": "(출력이 잘렸습니다)",
-  "workspace.agentsMdApplied": "AGENTS.md 적용됨",
   "workspace.cancel": "취소",
   "workspace.commitFailed.retry": "다시 시도",
   "workspace.git": "Git",

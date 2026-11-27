@@ -38,7 +38,7 @@ import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { SkippedCapabilitiesNotice } from './SkippedCapabilitiesNotice';
 import { skippedCapabilitiesOf } from '../../lib/skippedCapabilities';
 import { GroundingIndicator } from './GroundingIndicator';
-import { ContinuedAutomaticallyLabel, FullAutoMarker, RanOutsideSandboxMarker, StepLimitNotice } from './UnattendedMarkers';
+import { AnswerMarkers, StepLimitNotice } from './UnattendedMarkers';
 import { stoppedAtStepLimit } from '../../lib/unattendedMarks';
 import { groundingOf } from '../../lib/grounding';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
@@ -277,7 +277,7 @@ export function ApplicationAnswer({
           motion={motion}
         />
       )}
-      {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}{answer.ranOutsideSandbox === true && <RanOutsideSandboxMarker />}{answer.fullAuto === true && <FullAutoMarker />}
+      <AnswerMarkers answer={answer} />
       <RunBriefCard value={answer.runBrief} />
 
       {!isProcessing && toolActions.length === 0 && <PersistedMessageTrace value={answer.persistedTrace} />}

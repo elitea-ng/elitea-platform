@@ -13,6 +13,7 @@ import type { HostInvoke } from './hostBridge';
 import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
+import type { ProjectInstructionsFields } from './threadInstructionsIpc';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import { exchangeCommands, steeringCommands, type ExchangeCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, threadSkillCommands, type ThreadForkCommands, type ThreadSkillCommands } from './threadForkIpc';
@@ -168,10 +169,9 @@ export interface ModelRetryPayload {
 export type AgentEvent =
   | (EventBase & {
       kind: 'status';
-      payload: UnattendedStatusFields & {
+      payload: UnattendedStatusFields & ProjectInstructionsFields & {
         phase: TurnPhase;
         message?: string;
-        project_instructions?: string[];
         /** On the first `running`: the model the turn runs on. */
         model?: TurnModel;
         /** On `running` again: the run went on past its step limit, for the n-th time, from the host's own `host_prompt` (never the person's message). */
