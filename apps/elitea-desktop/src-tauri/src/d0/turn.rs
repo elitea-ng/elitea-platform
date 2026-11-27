@@ -260,9 +260,9 @@ pub struct TurnRequest {
     /// The model the person chose for each agent of the thread (#3145), by
     /// the agent's application id: a later local agent of the message (a
     /// routed agent or a hand-off) runs on its own choice, kept in its own
-    /// session as `model` is. The UI sends every agent's choice with each
-    /// message; an agent without one runs on its kept choice, else its own
-    /// model. Never applied to a cloud agent.
+    /// session as `model` is. The UI sends the choices made since the page
+    /// opened (each with every message); an agent without one runs on its
+    /// kept choice, else its own model. Never applied to a cloud agent.
     pub agent_models: BTreeMap<i64, ModelChoice>,
 }
 

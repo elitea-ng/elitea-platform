@@ -208,6 +208,26 @@ describe('the choices made before the first message carry into the thread it cre
     await waitFor(() => expect(screen.getByTestId('mode-picker')).toHaveTextContent('Bypass'));
   });
 
+  it('a new worktree thread runs its agent on the model chosen for it before the first message (#3145)', async () => {
+    onTestFinished(forgetKept);
+    server.use(http.get(`${BASE}/configurations/models/:project`, () => HttpResponse.json({ items: [{ name: 'gpt-4o', project_id: 42 }, { name: 'gpt-5', project_id: 42 }], total: 2 })));
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
+    mount(ipc);
+    const user = await ready();
+
+    act(() => useDesktopLayout.getState().showInspector('participants'));
+    // The row re-renders once the agent's version is read: its chip is read afresh, not held from before.
+    const chip = (): HTMLElement => within(screen.getByTestId('thread-settings-model')).getByTestId('model-chip');
+    await waitFor(() => expect(chip()).toHaveTextContent('gpt-4o'));
+    await user.click(chip());
+    await user.click(await screen.findByRole('menuitem', { name: /gpt-5/u }));
+    await chooseWorktree(user);
+    await sendFirst(user, ipc, 'fix the build');
+
+    expect(ipc.calls.started[0]?.workspace_id).toMatch(/^wt-/u);
+    expect(ipc.calls.started[0]?.agent_models).toEqual([{ application_id: 5, name: 'gpt-5' }]);
+  });
+
   it('a thread in the folder itself keeps the confirmed Full auto from its first turn on', async () => {
     onTestFinished(forgetKept);
     window.localStorage.setItem('el.desktop.workspace.w1.workIn', 'folder');

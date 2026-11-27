@@ -43,7 +43,8 @@ export function useFullAutoMode(local: boolean, planMode: boolean, confirmed = f
   const [confirming, setConfirming] = useState(false);
   // Plan mode (`/plan` included) and a policy that stops allowing it end the choice: coming back asks again. While the
   // policy is read, a handed choice waits (it reads as off, and `settling` holds the first send).
-  const known = !local || status.data !== undefined;
+  // A failed read is known too: it reads as off, so a handed choice never holds the first send for good.
+  const known = !local || status.data !== undefined || status.isError;
   if (chosen && (planMode || (known && !allowed))) setChosen(false);
   // What runs once a confirmed turn-on lands (the composer leaves plan mode and Bypass).
   const pending = useRef<(() => void) | undefined>(undefined);

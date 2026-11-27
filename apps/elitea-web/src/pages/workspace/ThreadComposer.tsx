@@ -309,7 +309,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     offered: offersWorkIn(canBranch, local, conversationId),
     send: controls.remembering(bound.onSend),
     handOver: () => selectionSeed(session.raw, projectId),
-    handOverChoices: modes.choices,
+    handOverChoices: () => ({ ...modes.choices(), agentModels: models.handed() }),
     onError: commands.showText,
     open: (id) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: id } }),
   });

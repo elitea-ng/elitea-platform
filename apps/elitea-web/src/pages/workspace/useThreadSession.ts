@@ -175,10 +175,15 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   handedChoices: PreThreadChoices | undefined;
 }
 
-/** The message (and agents) handed to a new thread of the workspace; none for an existing thread. */
+/**
+ * The message (and agents) handed to a new thread of the workspace; none for an existing thread. The choices apply on
+ * the mount that takes the message up only: a later mount (the message `adopted`, shown "Not sent") keeps what the
+ * person set since, so a Bypass or Full auto turned off is not turned back on.
+ */
 function handedTo(workspaceId: string, conversationId: string): { message: HandedFirstMessage | undefined; seed: SelectionSeed | undefined; choices: PreThreadChoices | undefined; planMode: boolean } {
   const message = conversationId === '' ? peekHanded(workspaceId) : undefined;
-  return { message, seed: message?.seed, choices: message?.choices, planMode: message?.choices?.planMode === true };
+  const choices = message?.adopted === true ? undefined : message?.choices;
+  return { message, seed: message?.seed, choices, planMode: choices?.planMode === true };
 }
 
 export function useThreadSession({ ipc, workspace, projectId, conversationId, onAdopt }: ThreadSessionInput): ThreadSession {

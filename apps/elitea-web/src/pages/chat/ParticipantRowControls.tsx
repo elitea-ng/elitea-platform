@@ -152,7 +152,7 @@ export function ParticipantRowControls({ row, actions, presenceOnly = false }: P
         data-executor={row.cloud ? 'cloud' : 'local'}
       />
       {row.isLead && <Chip size="small" label={t('chat.lead.badge', 'Lead')} data-testid="participant-lead-badge" />}
-      <ModelBadge model={actions?.modelOf?.(row.participantId)} />
+      <ModelBadge model={row.cloud ? undefined : actions?.modelOf?.(row.participantId)} />
       {actions !== undefined && <RowMenu row={row} actions={actions} />}
     </Box>
   );

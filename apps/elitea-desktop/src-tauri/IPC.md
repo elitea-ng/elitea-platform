@@ -983,9 +983,11 @@ keeps its own choice; with one agent it is the thread's). A later local
 agent of the message, a routed one or a hand-off's receiver, runs on its
 own entry too (`FloorNext.agent_models`); without one it runs on its kept
 choice, else its own model. A cloud agent never takes one (it runs its own
-version's model). The UI sends every agent's entry with each message, so an
-agent that only ever answers through the floor gets its choice; choosing
-the agent's own model puts the agent back on it, as with `model`.
+version's model). The UI sends the entries chosen since the thread's page
+opened with each message, so an agent that only answers through the floor
+gets its choice; a choice an agent already ran on is not sent again (its
+session keeps it, and the host re-checks it there). Choosing the agent's own
+model puts the agent back on it, as with `model`.
 
 **Reasoning** (issue 1228). A model's reasoning streams as `thinking_delta`
 events (a `thinking_end` closes each block) and each model step's reasoning

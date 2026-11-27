@@ -128,7 +128,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const openCreateAgent = (): void => setCreateAgentOpen(true);
   // Each agent's model in this thread (#3145), and where the Participants tab shows "Thread settings".
-  const models = useSessionAgentModels(projectId, conversationId, turn, session.history, raw.agentId);
+  const models = useSessionAgentModels(projectId, conversationId, turn, session.history, raw.agentId, session.handedChoices);
   const [settingsHost, setSettingsHost] = useState<HTMLElement | null>(null);
 
   return (

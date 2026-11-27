@@ -8,7 +8,7 @@
  * it hides it for this thread (kept on this computer once the thread exists; a new thread's choice moves to it with
  * the first message, as the composer's other choices do not need to: it is only shown again in another thread).
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import CloseIcon from '@mui/icons-material/Close';
 import Alert from '@mui/material/Alert';
@@ -54,10 +54,12 @@ function writeDismissed(conversationId: string): void {
 function useDismissed(conversationId: string): [boolean, () => void] {
   const [closed, setClosed] = useState<{ id: string; closed: boolean }>(() => ({ id: conversationId, closed: readDismissed(conversationId) }));
   if (closed.id !== conversationId) {
-    // The new thread's first message named it: a notice closed before then stays closed, and is kept for it now.
-    if (closed.closed && closed.id === '') writeDismissed(conversationId);
+    // The new thread's first message named it: a notice closed before then stays closed (kept for it below).
     setClosed({ id: conversationId, closed: closed.closed && closed.id === '' ? true : readDismissed(conversationId) });
   }
+  useEffect(() => {
+    if (closed.closed && closed.id !== '') writeDismissed(closed.id);
+  }, [closed]);
   return [closed.closed, () => {
     writeDismissed(conversationId);
     setClosed({ id: conversationId, closed: true });

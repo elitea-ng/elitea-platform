@@ -12,9 +12,11 @@
  *   before this change keeps applying: to the lead, or to the single agent.
  * - What the person chose here that no turn ran on yet (`pending`), by agent (application id), for this visit.
  *
- * Every send carries every agent's choice (`agent_models`): the turn's agent runs on its own, and so does a later agent
- * of the message that the host starts itself (a routed agent, a hand-off). Choosing the agent's own model puts it back
- * on it (the host then keeps no choice). A cloud agent runs on its own version's model: it has no choice here.
+ * A send carries the choices made here (`agent_models`): the turn's agent runs on its own, and so does a later agent of
+ * the message that the host starts itself (a routed agent, a hand-off). A kept choice is not sent again: the agent's
+ * session applies it, and the host re-checks it there (pinned since, turned off, no longer listed). Choosing the agent's
+ * own model puts it back on it (the host then keeps no choice). A cloud agent runs on its own version's model: it has
+ * no choice here. The choices made before the first message go with it to a new worktree's thread (`handed`, #3144).
  */
 import { useMemo, useState, useSyncExternalStore } from 'react';
 
@@ -36,6 +38,9 @@ interface PendingChoice {
   readonly choice: TurnModelChoice;
   readonly own: string | null;
 }
+
+/** The choices made in a folder's new thread, handed with its first message to the worktree's thread (#3144). */
+export type HandedAgentModels = ReadonlyArray<readonly [number, PendingChoice]>;
 
 /** One turn as the kept choices read it: its agent (from `floor`) and the model it ran on. */
 export interface TurnModelRecord {
@@ -82,8 +87,10 @@ export interface AgentModels {
   overrideOf: (applicationId: number) => TurnModelChoice | undefined;
   /** Chooses `choice` for the agent; `own` is its configured model (choosing it puts the agent back on it). */
   choose: (applicationId: number, choice: TurnModelChoice, own: string | null) => void;
-  /** What a send carries (`agent_models`): every agent's choice, the kept ones and those made here. */
+  /** What a send carries (`agent_models`): the choices made here (the host keeps and applies the earlier ones). */
   entries: () => AgentModelEntry[];
+  /** The choices made here, to hand to a new worktree's thread with the first message. */
+  handed: () => HandedAgentModels;
   /** The agent whose model menu is to open (a row's "Model in this thread…", `/model`); `null`: none. */
   editing: number | null;
   edit: (applicationId: number | null) => void;
@@ -105,8 +112,8 @@ function changed(store: Store): void {
 }
 
 /** The thread's choices made here: one store per session page, shared by the composer and the Participants tab. */
-export function useAgentModelStore(): Store {
-  const [store] = useState<Store>(() => ({ pending: new Map(), editing: null, version: 0, listeners: new Set() }));
+export function useAgentModelStore(seed?: HandedAgentModels): Store {
+  const [store] = useState<Store>(() => ({ pending: new Map(seed), editing: null, version: 0, listeners: new Set() }));
   useSyncExternalStore(
     (listener) => {
       store.listeners.add(listener);
@@ -132,15 +139,13 @@ export function agentModelsOf(store: Store, kept: ReadonlyMap<number, TurnModelC
       store.pending.set(applicationId, { choice, own });
       changed(store);
     },
-    entries: () => {
-      const all = new Map<number, TurnModelChoice>(kept);
-      for (const [id, pending] of store.pending) all.set(id, pending.choice);
-      return [...all].map(([applicationId, choice]) => ({
+    entries: () =>
+      [...store.pending].map(([applicationId, { choice }]) => ({
         application_id: applicationId,
         name: choice.name,
         ...(choice.reasoning_effort === undefined ? {} : { reasoning_effort: choice.reasoning_effort }),
-      }));
-    },
+      })),
+    handed: () => [...store.pending],
     editing: store.editing,
     edit: (applicationId) => {
       store.editing = applicationId;
@@ -180,8 +185,8 @@ function threadAgentOf(floor: ThreadFloor | undefined, composerAgentId: string):
 }
 
 /** The session page's agent models: the store, the thread's agents and the turns it read. */
-export function useSessionAgentModels(projectId: number, conversationId: string, turn: Pick<WorkspaceTurn, 'turnId' | 'view' | 'earlier'>, history: ThreadHistory, composerAgentId: string): AgentModels {
-  const store = useAgentModelStore();
+export function useSessionAgentModels(projectId: number, conversationId: string, turn: Pick<WorkspaceTurn, 'turnId' | 'view' | 'earlier'>, history: ThreadHistory, composerAgentId: string, handed?: { readonly agentModels?: HandedAgentModels | undefined }): AgentModels {
+  const store = useAgentModelStore(handed?.agentModels);
   const floor = useThreadFloor(projectId, conversationId);
   return useThreadAgentModels(store, turn, history, floor?.agents ?? NO_AGENTS, threadAgentOf(floor, composerAgentId));
 }

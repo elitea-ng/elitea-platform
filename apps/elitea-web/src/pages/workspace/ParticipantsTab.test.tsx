@@ -221,6 +221,7 @@ describe('each agent\'s model in the thread (#3145)', () => {
       overrideOf: (applicationId) => (applicationId === 5 ? { name: 'gpt-5' } : undefined),
       choose: vi.fn(),
       entries: () => [],
+      handed: () => [],
       editing: null,
       edit,
       dropPending: vi.fn(),

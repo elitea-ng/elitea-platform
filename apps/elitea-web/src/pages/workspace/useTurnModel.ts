@@ -87,7 +87,8 @@ export function useAgentModelOptions(workspaceId: string, projectId: number, app
   const version = useGetApplicationVersionDetail(String(projectId), applicationId, versionId, { query: { enabled: enabled && versionId > 0, staleTime: 30_000 } });
   const allowed = useQuery({ queryKey: ['workspace', 'model-override', workspaceId], queryFn: () => modelOverrideAllowed(workspaceId), staleTime: 30_000, enabled });
   const own = useMemo(() => agentModel(version.data), [version.data]);
-  const offered = enabled && allowed.data !== false && !own.pinned;
+  // A pinned version offers no choice: with a version to read, nothing is offered until it was read.
+  const offered = enabled && (versionId === 0 || version.isSuccess) && allowed.data !== false && !own.pinned;
   const catalogue = useListConfigurationModels(String(projectId), { section: 'llm', include_shared: true }, { query: { enabled: offered, staleTime: 60_000 } });
   const models = useMemo(() => chatModels(catalogue.data), [catalogue.data]);
   return { offered, own: own.name, ownEffort: own.effort, pinned: own.pinned, models, loaded: catalogue.isSuccess ? models : undefined };

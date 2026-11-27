@@ -1,7 +1,7 @@
 /**
  * Each agent's model in a desktop thread (#3145): the host keeps a choice per agent session; a turn without an agent
  * (one agent, or a thread from before) is the lead's, else the single agent's; choosing the agent's own model clears
- * the badge; every send carries every agent's choice.
+ * the badge; a send carries the choices made here (the host applies the kept ones); they go to a new worktree's thread.
  */
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -49,17 +49,15 @@ describe('keptModels', () => {
 });
 
 describe('agentModelsOf', () => {
-  it('shows a choice made here over the kept one, none for the agent’s own model, and sends every choice', () => {
+  it('shows a choice made here over the kept one, none for the agent’s own model, and sends only the choices made here', () => {
     const { result } = renderHook(() => useAgentModelStore());
     const kept = new Map([[6, { name: 'mini' }]]);
     act(() => agentModelsOf(result.current, kept).choose(5, { name: 'gpt-5', reasoning_effort: 'high' }, 'agent-model'));
     let models = agentModelsOf(result.current, kept);
     expect(models.overrideOf(5)).toEqual({ name: 'gpt-5', reasoning_effort: 'high' });
     expect(models.overrideOf(6)).toEqual({ name: 'mini' });
-    expect(models.entries()).toEqual([
-      { application_id: 6, name: 'mini' },
-      { application_id: 5, name: 'gpt-5', reasoning_effort: 'high' },
-    ]);
+    // The kept one is the host's: it applies it (and re-checks it) without the UI sending it again.
+    expect(models.entries()).toEqual([{ application_id: 5, name: 'gpt-5', reasoning_effort: 'high' }]);
 
     // Back to the agent's own model: no badge, and the host is told so (it then keeps no choice).
     act(() => models.choose(6, { name: 'agent-6-model' }, 'agent-6-model'));
@@ -71,7 +69,18 @@ describe('agentModelsOf', () => {
     act(() => models.dropPending());
     models = agentModelsOf(result.current, kept);
     expect(models.overrideOf(5)).toBeUndefined();
-    expect(models.entries()).toEqual([{ application_id: 6, name: 'mini' }]);
+    expect(models.overrideOf(6)).toEqual({ name: 'mini' });
+    expect(models.entries()).toEqual([]);
+  });
+
+  it('hands the choices made here to a new worktree’s thread, which starts from them (#3144)', () => {
+    const { result: folder } = renderHook(() => useAgentModelStore());
+    act(() => agentModelsOf(folder.current, new Map()).choose(5, { name: 'gpt-5' }, 'agent-model'));
+    const handed = agentModelsOf(folder.current, new Map()).handed();
+    const { result: worktree } = renderHook(() => useAgentModelStore(handed));
+    const models = agentModelsOf(worktree.current, new Map());
+    expect(models.overrideOf(5)).toEqual({ name: 'gpt-5' });
+    expect(models.entries()).toEqual([{ application_id: 5, name: 'gpt-5' }]);
   });
 
   it('says which agent’s model menu to open, once', () => {
