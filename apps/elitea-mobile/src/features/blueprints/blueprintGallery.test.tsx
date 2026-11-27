@@ -20,28 +20,28 @@ function idleBuilder(): AgentBuilder {
   };
 }
 
-test('the gallery lists the agent and team blueprints', () => {
-  render(<AgentBuilderView builder={idleBuilder()} onSaved={jest.fn()} />);
-  fireEvent.press(screen.getByTestId('agent-builder-blueprints'));
+test('the gallery lists the agent and team blueprints', async () => {
+  await render(<AgentBuilderView builder={idleBuilder()} onSaved={jest.fn()} />);
+  await fireEvent.press(screen.getByTestId('agent-builder-blueprints'));
 
   for (const agent of BLUEPRINTS.agents) expect(screen.getByTestId(`blueprint-${agent.slug}`)).toBeTruthy();
-  fireEvent.press(screen.getByText('Teams'));
+  await fireEvent.press(screen.getByText('Teams'));
   const team = BLUEPRINTS.teams[0];
   expect(screen.getByTestId(`blueprint-${team.slug}`)).toBeTruthy();
   expect(screen.getByText(`Members: ${(team.members ?? []).join(', ')}`)).toBeTruthy();
 });
 
-test('Craft from it fills the builder with the brief, and Generate sends it', () => {
+test('Craft from it fills the builder with the brief, and Generate sends it', async () => {
   const builder = idleBuilder();
-  render(<AgentBuilderView builder={builder} onSaved={jest.fn()} />);
-  fireEvent.press(screen.getByTestId('agent-builder-blueprints'));
+  await render(<AgentBuilderView builder={builder} onSaved={jest.fn()} />);
+  await fireEvent.press(screen.getByTestId('agent-builder-blueprints'));
   const agent = BLUEPRINTS.agents[0];
 
-  fireEvent.press(screen.getByTestId(`blueprint-craft-${agent.slug}`));
+  await fireEvent.press(screen.getByTestId(`blueprint-craft-${agent.slug}`));
 
   expect(screen.queryByTestId('blueprint-gallery')).toBeNull();
   expect(screen.getByTestId('agent-builder-request').props.value).toBe(agent.brief);
   expect(builder.generate).not.toHaveBeenCalled();
-  fireEvent.press(screen.getByText('Generate'));
+  await fireEvent.press(screen.getByText('Generate'));
   expect(builder.generate).toHaveBeenCalledWith(agent.brief);
 });
