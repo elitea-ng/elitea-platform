@@ -17,3 +17,4 @@
 2080 libs/rust/local-tools/src/checkpoint.rs  # #2086 (#2085) replaced the direct loose-ref prune that #2080's squash carried with ref locking on purpose: the prune now takes the ref's lock and removes the reflog first
 2724 .github/workflows/ci-web-coverage.yml  # #2721: the routing condition was rewritten (schedules, dispatches and pushes route too); the shards are routed again
 3037 apps/elitea-web/src/pages/admin/AdminLayout.tsx  # #3046 (R3.6, issue 2537) removed the TEMPORARY Roles link on purpose, as #3037 marked it: Access is a real console item now, so the nav lists Roles itself
+3071 apps/elitea-web/src/pages/workspace/ThreadToolbar.tsx  # #3149 (#3145) decluttered the thread header on purpose: the agent presence and the floor left the toolbar for the composer and the Participants tab
