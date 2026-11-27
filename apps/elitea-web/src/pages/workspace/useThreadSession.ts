@@ -191,7 +191,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const queryClient = useQueryClient();
   // A worktree's new thread: the message its folder's thread handed it, and the agents chosen there (#3127, #3128).
   const [handed] = useState(() => handedTo(workspace.id, conversationId));
-  const raw = useAgentSelection(workspace.id, projectId, handed.seed);
+  const raw = useAgentSelection(workspace.id, projectId, handed.seed, workspace.kind);
   const first = useFirstMessageSlot(handed.message, workspace.id);
   const turn = useWorkspaceTurn(ipc);
   const [prompts, setPrompts] = useState<string[]>([]);

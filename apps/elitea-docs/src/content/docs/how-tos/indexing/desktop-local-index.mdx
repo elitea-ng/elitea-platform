@@ -1,24 +1,35 @@
 ---
 title: "Search a local folder (desktop)"
-description: "How the Elitea desktop app indexes a folder on your computer for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
+description: "How the Elitea desktop app indexes a folder on your computer (code, and the text of PDF and Office documents) for agents, and how to add search by meaning with a model that runs locally or, if your organisation allows it, through your deployment."
 ---
 
-The Elitea desktop app keeps a **code index** for each folder you work in with **Local work**. Agents use it through the `search_workspace` tool, the `repo_map` tool (a ranked overview of the files and symbols most relevant to a task, sized to a token budget) and the code-graph tools to find files, symbols and the code that relates to a question, without reading the whole folder.
+The Elitea desktop app keeps a **folder index** for each folder you work in with **Local work**, whether it holds code, documents or both, and whether or not it is a git repository. Agents use it through the `search_workspace` tool, the `repo_map` tool (a ranked overview of the files and symbols most relevant to a task, sized to a token budget) and the code-graph tools to find files, symbols, passages of documents and the code that relates to a question, without reading the whole folder.
+
+<Note>
+Earlier versions called this the **code index**. It is the same index, with the same settings.
+</Note>
 
 ## What the index holds
 
 - **Words and identifiers.** Every source file and document is split into chunks and indexed for full-text search. Identifiers are also split (`parseUserId` matches *parse user id*).
+- **Documents.** The text of PDF, Word, Excel, PowerPoint, OpenDocument, RTF, e-book and e-mail files, split into chunks like any other document, so a search finds what a report or a spreadsheet says. The index chip and the index settings show how many documents are indexed.
 - **Code structure.** Files, functions, types and how they call or import each other. A search ranks code that is linked to a match a little higher.
 - **Meaning (optional, off by default).** Vectors that let a search find code by what it does even when the words differ.
 
 The index is built on your computer and kept in the app's data. It follows the folder's ignore rules and your organisation's file access rules (`path_deny`). While the folder is open, it refreshes on its own a few seconds after files change.
+
+### How documents are read
+
+The text of a PDF or Office file is read out by the app's bundled document extractor, the same one the agent's `read_document` tool uses. It runs as a separate process under the operating system's sandbox. It can only read, it has no network, it cannot see your credentials or the files your organisation's rules deny, and it is stopped if it runs too long. A file it cannot read is left out on its own, and the rest of the folder is still indexed. Files larger than 16 MB are not indexed.
+
+If documents cannot be read safely on your computer (a build without the extractor, or a sandbox that cannot hide the denied files), the index settings say so and PDF and Office files are left out. They are never parsed inside the app itself.
 
 ## Turn the index on
 
 <Steps>
 1. Open the folder in **Local work**.
 2. Select the index chip next to the folder's name.
-3. Select **Turn on**. The first build reads every file; later refreshes read only what changed.
+3. Select **Turn on**. The first build reads every file; later refreshes read only what changed. When it is ready, the chip reads, for example, *Ready · 12.4K entities · 7 documents*.
 </Steps>
 
 ## Add search by meaning

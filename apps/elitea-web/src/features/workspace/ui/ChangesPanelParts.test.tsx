@@ -117,4 +117,55 @@ describe('ChangedFilesCard, panel variant', () => {
     expect(toggle).toHaveTextContent('This turn');
     expect(screen.queryByRole('button', { name: /Undo turn|Restore folder|Revert/ })).toBeNull();
   });
+
+  it("shows a binary file's sizes and the command that changed it, and keeps its Open, Reveal and Revert", async () => {
+    const ipc = createFakeWorkspaceIpc();
+    ipc.setChanges('t1', {
+      files: [
+        { path: 'out/report.pdf', status: 'modified', added: 0, removed: 0, diff: '', binary: true, size_before: 1_200_000, size_after: 1_400_000, command: 'make report' },
+        { path: 'new.xlsx', status: 'added', added: 0, removed: 0, diff: '', binary: true, size_after: 2048 },
+      ],
+      latest: true,
+    });
+    const open = vi.fn<(path: string) => void>();
+    const reveal = vi.fn<(path: string) => void>();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithTheme(
+      <QueryClientProvider client={client}>
+        <ChangedFilesCard
+          ipc={ipc}
+          turnId="t1"
+          variant="panel"
+          fileActions={(file) => (
+            <>
+              <button type="button" aria-label={`Reveal ${file.path} in Finder`} onClick={() => reveal(file.path)}>
+                r
+              </button>
+              <button type="button" aria-label={`Open ${file.path}`} onClick={() => open(file.path)}>
+                o
+              </button>
+            </>
+          )}
+        />
+      </QueryClientProvider>,
+    );
+    const user = userEvent.setup();
+    const rows = await screen.findAllByTestId('changed-file');
+    const first = within(rows[0] as HTMLElement);
+    expect(first.getByTestId('change-sizes')).toHaveTextContent('1.2 MB → 1.4 MB');
+    expect(first.queryByTestId('change-counts')).toBeNull();
+    expect(first.getByTestId('change-command')).toHaveTextContent('by a command: make report');
+    expect(within(rows[1] as HTMLElement).getByTestId('change-sizes')).toHaveTextContent('2.0 KB');
+    expect(within(rows[1] as HTMLElement).queryByTestId('change-command')).toBeNull();
+
+    screen.getByRole('button', { name: 'Open out/report.pdf' }).focus();
+    await user.keyboard('{Enter}');
+    screen.getByRole('button', { name: 'Reveal out/report.pdf in Finder' }).focus();
+    await user.keyboard('{Enter}');
+    expect(open).toHaveBeenCalledWith('out/report.pdf');
+    expect(reveal).toHaveBeenCalledWith('out/report.pdf');
+    screen.getByRole('button', { name: 'Revert out/report.pdf' }).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(ipc.calls.restores).toEqual([{ turnId: 't1', path: 'out/report.pdf' }]));
+  });
 });

@@ -206,6 +206,13 @@ const CONSEQUENTIAL_NEVER_REMEMBERED: &str =
 /// (`{plan}`, Markdown), beside [`PAYLOAD_KEY`].
 pub const PLAN_PAYLOAD_KEY: &str = "plan_proposal";
 
+/// The payload key of the question a turn asks before its first change in
+/// a folder too large to checkpoint (`{reason}`): go on without undo
+/// ("approve") or make no change. It carries no [`PAYLOAD_KEY`], so no rule,
+/// bypass mode or grant answers it: it goes to the person every time, and
+/// an unattended or Full auto turn never asks it (the change is refused).
+pub const NO_UNDO_PAYLOAD_KEY: &str = "no_undo";
+
 /// The answer that accepts a proposed plan (the only one that does).
 pub const ACCEPT: &str = "accept";
 

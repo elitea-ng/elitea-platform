@@ -25,6 +25,8 @@ import { t } from '@/shared/i18n';
 import { parseUnifiedDiff } from '@/shared/lib/unifiedDiff';
 import { DiffView } from '@/shared/ui/DiffView';
 
+import { CommandNote, showsSizes, SizeChange } from './ChangesDetails';
+
 const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
 
 /** `src/app/main.rs` → name `main.rs`, folder `src/app`. */
@@ -126,8 +128,9 @@ export function PanelFileRow({ file, busy, onRevert, fileActions, onContextMenu 
       <Typography variant="bodySmall" component="span" sx={(theme: Theme) => ({ ...ONE_LINE, flex: 1, minWidth: 0, color: theme.vars.palette.text.metrics })}>
         {dir}
       </Typography>
+      {file.command !== undefined && <CommandNote command={file.command} />}
       <Box component="span" className="changes-row-meta" sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-        <Counts added={file.added} removed={file.removed} />
+        {showsSizes(file) ? <SizeChange file={file} /> : <Counts added={file.added} removed={file.removed} />}
         <Typography variant="labelSmall" component="span" aria-label={status.label} sx={(theme: Theme) => ({ width: '0.75rem', textAlign: 'center', fontWeight: 600, color: status.color(theme) })}>
           {status.letter}
         </Typography>

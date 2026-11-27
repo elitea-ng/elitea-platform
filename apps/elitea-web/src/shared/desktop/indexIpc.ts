@@ -18,8 +18,12 @@ export type IndexState = 'off' | 'building' | 'ready' | 'stale' | 'stale_policy'
 
 export interface IndexStatus {
   state: IndexState;
-  /** Documents of the last build. */
+  /** Files of the last build. */
   files: number;
+  /** Of those, the PDF, Office, e-mail and e-book files, read as text by the sandboxed extractor. */
+  documents?: number;
+  /** Why PDF and Office files are not indexed here (no extractor in this build, or no sandbox that can confine it); `null` when they are. */
+  documents_unavailable?: string | null;
   entities: number;
   relations: number;
   /** 0 until embeddings exist. */
@@ -226,6 +230,8 @@ export const INDEX_EVENT_CHANNEL = 'index://event';
 export const OFF_STATUS: IndexStatus = Object.freeze({
   state: 'off',
   files: 0,
+  documents: 0,
+  documents_unavailable: null,
   entities: 0,
   relations: 0,
   vectors: 0,

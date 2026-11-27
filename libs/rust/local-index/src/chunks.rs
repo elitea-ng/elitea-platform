@@ -66,10 +66,20 @@ pub struct ChunkRow {
     pub text_hash: String,
 }
 
+/// Whether `path` is a PDF, Office, e-mail or e-book file: its chunks are
+/// cut from the text the sandboxed extractor read out of it.
+fn is_extracted(path: &str) -> bool {
+    elitea_doc_extract::is_document_type(elitea_content_source::mime_of(path))
+}
+
 /// The kind of a file, by its extension: markdown, HTML and prose
-/// extensions are docs; every other text file is code.
+/// extensions, and the documents read through the extractor, are docs;
+/// every other text file is code.
 #[must_use]
 pub fn kind_of(path: &str) -> ChunkKind {
+    if is_extracted(path) {
+        return ChunkKind::Docs;
+    }
     let extension = extension_of(path);
     match kind_of_extension(&extension) {
         Kind::Markdown | Kind::Html => ChunkKind::Docs,
@@ -267,7 +277,13 @@ pub fn chunk_document(path: &str, text: &str) -> Vec<ChunkRow> {
     let total_lines = starts.len();
     let mut covered = vec![false; total_lines + 1];
     let mut ranges: Vec<(usize, usize)> = Vec::new();
-    let pieces = chunk(text, path, &ChunkingConfig::default()).unwrap_or_default();
+    // A document's extracted text is prose: cut as a text file is.
+    let route = if is_extracted(path) {
+        format!("{path}.txt")
+    } else {
+        path.to_owned()
+    };
+    let pieces = chunk(text, &route, &ChunkingConfig::default()).unwrap_or_default();
     let mut cursor = 0;
     for piece in &pieces {
         let Some((start, end)) = locate(text, &piece.text, cursor) else {

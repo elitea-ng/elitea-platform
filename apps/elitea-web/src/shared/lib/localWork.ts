@@ -67,7 +67,7 @@ export function ranInFullAuto(meta: unknown): boolean {
 
 /** What a Local work turn recorded about its folder's project instructions (issue 3130). */
 export interface ProjectInstructionsRecord {
-  /** The turn's prompt carried them: false when the thread's "Respect AGENTS.md" was off. */
+  /** The turn's prompt carried them: false when the thread's "Respect project instructions" was off. */
   readonly applied: boolean;
   readonly files: readonly string[];
 }

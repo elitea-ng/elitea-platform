@@ -3,7 +3,7 @@
  * composer while the thread is not running here, and the dialogs behind it
  * and behind the composer footer's run-location menu (`ComposerControls`).
  */
-
+import Typography from '@mui/material/Typography';
 
 import { ChangedFilesCard, useWorkspaceIpc } from '@/features/workspace';
 import {
@@ -14,6 +14,7 @@ import {
   SendToCloudDialog,
   TakeBackDialog,
 } from '@/features/workspace-handoff';
+import { t } from '@/shared/i18n';
 
 import { ThreadPullRequestCredential } from './ThreadPullRequestCredential';
 
@@ -24,11 +25,16 @@ export function HandoffBanner({ handoff, projectId }: { handoff: ThreadHandoff; 
   if (handoff.status === undefined) return null;
   // Renders nothing unless later cloud turns can still be taken back here.
   if (!handoff.offLaptop) return <RemainingTurnsBanner status={handoff.status} onTakeBack={() => handoff.open('takeBackRest')} />;
-  // The owner (who sent it from here) chooses what the cloud pushes and opens pull requests through.
-  const pullRequests =
-    handoff.status.sent_from_here && handoff.status.executor === 'cloud' && handoff.uuid !== undefined ? (
-      <ThreadPullRequestCredential projectId={String(projectId)} conversationUuid={handoff.uuid} />
-    ) : undefined;
+  // The owner (who sent it from here) chooses what the cloud pushes and opens pull requests through. A folder with no
+  // upstream (not a repository: its changes travel in a private shadow copy) can never open a pull request: no picker.
+  const owned = handoff.status.sent_from_here && handoff.status.executor === 'cloud' && handoff.uuid !== undefined;
+  const pullRequests = !owned ? undefined : handoff.status.has_upstream === false ? (
+    <Typography variant="bodySmall" color="text.secondary" data-testid="handoff-no-pull-requests">
+      {t('workspace.handoff.noUpstream', 'This folder has no remote repository, so the cloud cannot push or open pull requests; take the thread back to get its changes.')}
+    </Typography>
+  ) : (
+    <ThreadPullRequestCredential projectId={String(projectId)} conversationUuid={handoff.uuid ?? ''} />
+  );
   return <CloudThreadBanner status={handoff.status} onTakeBack={() => handoff.open('takeBack')} onErase={() => handoff.open('erase')} pullRequests={pullRequests} />;
 }
 

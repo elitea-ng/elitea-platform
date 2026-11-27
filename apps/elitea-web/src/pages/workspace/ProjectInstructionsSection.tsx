@@ -1,7 +1,8 @@
 /**
- * The project instructions of a Local work thread in its Participants tab (issue 3130): the folder's AGENTS.md
- * (and SOUL.md, and the nested AGENTS.md the turn on screen applied) listed once, here, instead of a notice under
- * every message, with the thread's "Respect AGENTS.md" switch.
+ * The project instructions of a Local work thread in its Participants tab (issue 3130): the folder's AGENTS.md, or
+ * the root README/NOTES file the host falls back to without one (and SOUL.md, and the nested AGENTS.md the turn on
+ * screen applied) listed once, here, instead of a notice under every message, with the thread's "Respect project
+ * instructions" switch (stored as before: `respect_agents_md`).
  *
  * The switch is the thread's own setting, kept by the desktop host: on by default, shown only when the folder holds
  * project instructions, and disabled until the host has said what the thread keeps. Before the first message the
@@ -89,7 +90,7 @@ export function ProjectInstructionsSection(props: ProjectInstructionsSectionProp
       <Typography variant="labelSmall" color="text.secondary">{t('workspace.instructions.title', 'Project instructions')}</Typography>
       {files.length === 0 ? (
         <Typography variant="bodySmall" color="text.secondary" data-testid="project-instructions-none">
-          {t('workspace.instructions.none', 'No AGENTS.md in this folder.')}
+          {t('workspace.instructions.none', 'No AGENTS.md, README or NOTES file in this folder.')}
         </Typography>
       ) : (
         <>
@@ -101,11 +102,11 @@ export function ProjectInstructionsSection(props: ProjectInstructionsSectionProp
           <FormControlLabel
             data-testid="respect-agents-md"
             control={<Switch size="small" checked={respect} disabled={disabled} onChange={(_event, next) => toggle(next)} />}
-            label={<Typography variant="bodySmall">{t('workspace.instructions.respect', 'Respect AGENTS.md')}</Typography>}
+            label={<Typography variant="bodySmall">{t('workspace.instructions.respect', 'Respect project instructions')}</Typography>}
           />
           {!respect && (
             <Typography variant="bodySmall" color="warning.main" component="output" data-testid="agents-md-ignored">
-              {t('workspace.instructions.ignored', 'AGENTS.md ignored in this thread')}
+              {t('workspace.instructions.ignored', 'Project instructions ignored in this thread')}
             </Typography>
           )}
           {thread === undefined && (

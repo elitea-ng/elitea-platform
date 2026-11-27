@@ -14,6 +14,7 @@ import type { PlanProposalPayload, PlanView } from './planIpc';
 import type { ProcessTurnEvent } from './processTypes';
 import type { SubAgentFinishedPayload, SubAgentInnerEvent, SubAgentStartedPayload } from './subAgentIpc';
 import type { ProjectInstructionsFields } from './threadInstructionsIpc';
+import type { ChangedFile, TurnChanges } from './turnChanges';
 import type { ThinkingDeltaPayload, ThinkingEndPayload, TurnModel } from './turnModel';
 import { exchangeCommands, steeringCommands, type ExchangeCommands, type SteeringCommands, type SteeringEvent } from './steeringIpc';
 import { threadForkCommands, threadSkillCommands, type ThreadForkCommands, type ThreadSkillCommands } from './threadForkIpc';
@@ -59,24 +60,7 @@ export interface TurnStarted {
  * `continue` / `cancel` answer an `mcp_authorization` request; `accept` / `decline` a `plan_proposed` card; the rest a tool's
  * approval (`continue` takes `allow_once` too; `allow_thread` answers a `computer` ask with `can_remember_thread`). `deny_with_feedback` denies any card with the person's text (IPC.md "Decline with feedback"). */
 export type ApprovalDecision = 'allow_once' | 'allow_always' | 'allow_thread' | 'deny' | 'deny_with_feedback' | 'continue' | 'cancel' | 'accept' | 'decline';
-type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
-
-export interface ChangedFile {
-  path: string;
-  status: ChangeStatus;
-  added: number;
-  removed: number;
-  /** Unified diff text; may be empty for binary or very large files. */
-  diff: string;
-}
-
-export interface TurnChanges {
-  files: ChangedFile[];
-  /** The newest turn of its folder whose changes stand: "Undo turn" is for it only; an older turn offers "Restore folder to before this turn". */
-  latest: boolean;
-  /** Its changes were undone (its own undo, or the folder restored to before an earlier turn): nothing to undo. */
-  undone: boolean;
-}
+export type { ChangedFile, NotSaved, TurnChanges } from './turnChanges';
 
 /** `checkpoint_preview`: what restoring the folder to before a turn would do now (later turns and the person's own edits included). */
 export interface RestorePreview {

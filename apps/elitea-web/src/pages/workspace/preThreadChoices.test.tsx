@@ -1,8 +1,8 @@
 /**
  * Every choice made in a folder's new thread before its first message is the thread's from its first turn (#3144):
- * the mode (Full auto, Bypass, Plan), "Run to completion", "Respect AGENTS.md" and "Work in". With "Work in › New
+ * the mode (Full auto, Bypass, Plan), "Run to completion", "Respect project instructions" and "Work in". With "Work in › New
  * worktree" the message moves to the worktree's own new thread, a new session of another workspace: before #3144 it
- * started in Act there, with the folder's Run to completion and AGENTS.md respected. Full auto is still confirmed when
+ * started in Act there, with the folder's Run to completion and project instructions respected. Full auto is still confirmed when
  * picked and never kept (ADR-0061): carried into the thread being created only.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
@@ -147,7 +147,7 @@ async function ready(): Promise<ReturnType<typeof userEvent.setup>> {
 }
 
 describe('the choices made before the first message carry into the thread it creates (#3144)', () => {
-  it('a new worktree thread starts in the confirmed Full auto, with Run to completion off and AGENTS.md not respected', async () => {
+  it('a new worktree thread starts in the confirmed Full auto, with Run to completion off and project instructions not respected', async () => {
     onTestFinished(forgetKept);
     const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
     mount(ipc);
@@ -163,7 +163,7 @@ describe('the choices made before the first message carry into the thread it cre
     expect(started?.workspace_id).toMatch(/^wt-/u);
     expect(started).toMatchObject({ plan_mode: false, bypass_approvals: true, full_auto: true });
     expect(started?.unattended).toBeUndefined();
-    // "Respect AGENTS.md" off reached the worktree's thread before its first turn.
+    // "Respect project instructions" off reached the worktree's thread before its first turn.
     expect(ipc.calls.respects).toEqual([{ workspaceId: started?.workspace_id, conversationId: '77', respect: false }]);
     // The worktree's thread shows the mode it runs in: Full auto, not Act.
     await waitFor(() => expect(screen.getByTestId('mode-picker')).toHaveTextContent('Full auto'));

@@ -1,11 +1,15 @@
 /**
- * "Create a Local coding agent": what a session offers when the bound
- * project has no classic agent (issue #1218, stage 3).
+ * "Create a Local coding agent" / "Create a Local documents agent": what a
+ * session offers when the bound project has no classic agent (issue #1218,
+ * stage 3). Both are always offered; the folder's kind picks which one comes
+ * first (`defaultLocalAgent`): the documents agent for a folder of documents
+ * or a mixed one, the coding agent for a git or code folder.
  *
  * The agent is an ordinary one, created only on the person's click, in the
  * bound project, through the public create-application API under their own
  * permissions: the reviewed instructions shipped with the desktop entry
- * (`entries/desktop/agents/local-coding-agent.md`), the project's default
+ * (`entries/desktop/agents/local-coding-agent.md`,
+ * `local-documents-agent.md`), the project's default
  * chat model and `meta.step_limit: 100`. No tools are attached: a local turn
  * gets its file and shell tools from the desktop host. Once created it is
  * edited, versioned and governed on the web like any other agent.
@@ -13,15 +17,30 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 
-import instructions from '@/entries/desktop/agents/local-coding-agent.md?raw';
+import codingInstructions from '@/entries/desktop/agents/local-coding-agent.md?raw';
+import documentsInstructions from '@/entries/desktop/agents/local-documents-agent.md?raw';
 import { useListModelsQuery, type ConfigModel } from '@/shared/api/configurationsApi';
 import { createApplication, getListApplicationsQueryKey } from '@/shared/api/generated/applications/applications';
 import { usePermissionList } from '@/shared/api/generated/auth/auth';
 import type { ApplicationCreateRequest, Permission } from '@/shared/api/generated/model';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { productName } from '@/shared/brand';
+import type { FolderKind } from '@/shared/desktop/workspace';
 
-const LOCAL_CODING_AGENT_NAME = 'Local coding agent';
+/** The two agents a session offers to create. */
+export type LocalAgentKind = 'coding' | 'documents';
+
+const LOCAL_AGENT_NAMES: Record<LocalAgentKind, string> = { coding: 'Local coding agent', documents: 'Local documents agent' };
+
+/** The agent a folder of `kind` offers first: documents for a folder of documents or a mixed one; coding otherwise (and for a host that does not say). */
+export function defaultLocalAgent(kind: FolderKind | undefined): LocalAgentKind {
+  return kind === 'documents' || kind === 'mixed' ? 'documents' : 'coding';
+}
+
+/** The name the agent of `kind` is created under (the session's default pick looks for it). */
+export function localAgentName(kind: LocalAgentKind): string {
+  return LOCAL_AGENT_NAMES[kind];
+}
 /** The agent's own step limit: a workspace turn's default, set explicitly so the platform's stamp does not lower it. */
 const LOCAL_CODING_AGENT_STEPS = 100;
 
@@ -37,21 +56,34 @@ export interface LocalCodingAgent {
   creating: boolean;
   /** The last create's failure, written for a person. */
   error: string | undefined;
-  create: () => void;
+  /** Create the agent of `kind` (the coding agent when not given). */
+  create: (kind?: LocalAgentKind) => void;
 }
+
+const DESCRIPTIONS: Record<LocalAgentKind, (product: string) => string> = {
+  coding: (product) => `Explores, edits and tests code in a folder on your computer, through the ${product} desktop app.`,
+  documents: (product) => `Reads, summarises and edits documents in a folder on your computer, through the ${product} desktop app.`,
+};
+
+const INSTRUCTIONS: Record<LocalAgentKind, string> = { coding: codingInstructions, documents: documentsInstructions };
 
 /** The create-application body for `model` (the project's default chat model). */
 export function localCodingAgentBody(model: Pick<ConfigModel, 'name' | 'project_id'>): ApplicationCreateRequest {
+  return localAgentBody('coding', model);
+}
+
+/** The create-application body of the agent of `kind` for `model`. */
+export function localAgentBody(kind: LocalAgentKind, model: Pick<ConfigModel, 'name' | 'project_id'>): ApplicationCreateRequest {
   const modelProject = Number(model.project_id);
   return {
-    name: LOCAL_CODING_AGENT_NAME,
-    description: `Explores, edits and tests code in a folder on your computer, through the ${productName()} desktop app.`,
+    name: LOCAL_AGENT_NAMES[kind],
+    description: DESCRIPTIONS[kind](productName()),
     type: 'interface',
     versions: [
       {
         agent_type: 'openai',
         // The shipped prompt names the product as {{product}} (ADR-0052 W4).
-        instructions: instructions.replaceAll('{{product}}', productName()),
+        instructions: INSTRUCTIONS[kind].replaceAll('{{product}}', productName()),
         llm_settings: { model_name: model.name, ...(Number.isInteger(modelProject) ? { model_project_id: modelProject } : {}) },
         meta: { step_limit: LOCAL_CODING_AGENT_STEPS },
       },
@@ -92,9 +124,9 @@ export function useLocalCodingAgent(projectId: number, wanted: boolean): LocalCo
   const model = defaultModel(models.data?.items ?? [], models.data?.default_model_name ?? '');
 
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (kind: LocalAgentKind) => {
       if (model === undefined) throw new Error('This project has no chat model.');
-      await createApplication(project, localCodingAgentBody(model));
+      await createApplication(project, localAgentBody(kind, model));
     },
     // The session's agent list reads again and picks the new agent.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: getListApplicationsQueryKey(project) }),
@@ -104,6 +136,6 @@ export function useLocalCodingAgent(projectId: number, wanted: boolean): LocalCo
     state: offerState({ permissions: queryState(permissions), mayCreate, models: queryState(models), hasModel: model !== undefined }),
     creating: mutation.isPending,
     error: mutation.error === null ? undefined : mutation.error.message,
-    create: () => mutation.mutate(),
+    create: (kind = 'coding') => mutation.mutate(kind),
   };
 }

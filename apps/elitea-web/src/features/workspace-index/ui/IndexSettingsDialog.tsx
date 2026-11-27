@@ -1,6 +1,6 @@
 /**
- * A workspace's code index settings: turn it on (the code structure, parsed
- * on this computer, free), refresh it (only what changed is read) or rebuild
+ * A workspace's folder index settings: turn it on (the code structure and the
+ * text of its documents, read on this computer, free), refresh it (only what changed is read) or rebuild
  * it (everything is read again), cancel a running build, turn it off (the
  * build is kept), or remove it (asks first), and choose how it searches by
  * meaning (`EmbeddingsSection`). When the policy turns the index off, the dialog says so
@@ -53,11 +53,18 @@ function summary(status: IndexStatus, progress: IndexProgress | null): string {
       return t('workspace.index.summary.stalePolicy', 'Your organisation’s file access rules changed since this index was built. Agents get it again once it is rebuilt under the new rules.');
     case 'ready':
     case 'stale':
-      return t('workspace.index.summary.built', '{{files}} files, {{entities}} entities and {{relations}} relations.', {
-        files: String(status.files),
-        entities: String(status.entities),
-        relations: String(status.relations),
-      });
+      return (status.documents ?? 0) > 0
+        ? t('workspace.index.summary.builtDocuments', '{{files}} files ({{documents}} documents), {{entities}} entities and {{relations}} relations.', {
+            files: String(status.files),
+            documents: String(status.documents),
+            entities: String(status.entities),
+            relations: String(status.relations),
+          })
+        : t('workspace.index.summary.built', '{{files}} files, {{entities}} entities and {{relations}} relations.', {
+            files: String(status.files),
+            entities: String(status.entities),
+            relations: String(status.relations),
+          });
   }
 }
 
@@ -73,6 +80,11 @@ function Details({ status, progress }: { status: IndexStatus; progress: IndexPro
       {status.state === 'stale' && status.changed_files > 0 && (
         <Typography variant="bodySmall" sx={mutedSx}>
           {t('workspace.index.changedSince', '{{files}} files changed since; it refreshes a few seconds after the agent’s changes.', { files: String(status.changed_files) })}
+        </Typography>
+      )}
+      {status.state !== 'off' && typeof status.documents_unavailable === 'string' && (
+        <Typography variant="bodySmall" sx={mutedSx} data-testid="index-documents-unavailable">
+          {status.documents_unavailable}
         </Typography>
       )}
       {status.state === 'stale' && status.changed_files === 0 && (
@@ -186,7 +198,7 @@ function Built({ status, progress, embeddings }: { status: IndexStatus; progress
       <Typography variant="bodySmall" sx={mutedSx}>
         {t(
           'workspace.index.intro',
-          'Agents can search this folder’s code structure (files, symbols and how they relate). It is parsed on this computer, kept in the app’s data, and costs nothing.',
+          'Agents can search this folder’s code structure (files, symbols and how they relate) and the text of its documents (PDF, Word, Excel, PowerPoint and more). It is read on this computer, kept in the app’s data, and costs nothing.',
         )}
       </Typography>
       <Details status={status} progress={progress} />
@@ -209,7 +221,7 @@ function Body({ index, confirming, embeddings }: BodyProps): React.JSX.Element {
     <>
       {view?.kind === 'disabled' && (
         <Alert severity="info" data-testid="index-policy-off">
-          {t('workspace.index.policyOff', 'The local code index is turned off by your organisation’s policy.')}
+          {t('workspace.index.policyOff', 'The local folder index is turned off by your organisation’s policy.')}
         </Alert>
       )}
       {view === undefined && loadError !== null && <Alert severity="error">{describeIndexError(loadError)}</Alert>}
@@ -234,7 +246,7 @@ export function IndexSettingsDialog({ open, onClose, name, index, embeddings }: 
 
   return (
     <Dialog open={open} onClose={close} aria-labelledby="workspace-index-title" fullWidth maxWidth="sm">
-      <DialogTitle id="workspace-index-title">{t('workspace.index.title', 'Code index · {{name}}', { name })}</DialogTitle>
+      <DialogTitle id="workspace-index-title">{t('workspace.index.title', 'Folder index · {{name}}', { name })}</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <Body index={index} confirming={confirming} embeddings={embeddings} />
       </DialogContent>

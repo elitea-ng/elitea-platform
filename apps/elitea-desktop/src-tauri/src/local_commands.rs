@@ -38,6 +38,7 @@ use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
 use crate::workspaces::{AgentSettings, STEP_LIMIT_RANGE, Workspace, WorkspaceStore};
+use elitea_local_tools::checkpoint::CheckpointInfo;
 use elitea_local_tools::find::FoundPath;
 
 pub struct LocalState {
@@ -502,9 +503,16 @@ pub async fn open_path(
         .map_err(|e| IpcError::new("os_refused", format!("could not open it: {e}")))
 }
 
+/// Each folder's `kind` is sampled here, off the main thread: a folder on
+/// a slow drive never freezes the window.
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, IpcError> {
-    Ok(state.workspaces.list()?)
+pub async fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, IpcError> {
+    let workspaces = state.workspaces.clone();
+    Ok(
+        tokio::task::spawn_blocking(move || workspaces.list_with_kinds())
+            .await
+            .map_err(|e| IpcError::new("internal", e.to_string()))??,
+    )
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace; also
@@ -1327,6 +1335,35 @@ pub struct TurnChanges {
     latest: bool,
     /// Its changes were undone (no undo is offered).
     undone: bool,
+    /// What the turn's checkpoint left out (a change to one of these
+    /// files cannot be undone); `null` when it left nothing out.
+    not_saved: Option<NotSaved>,
+    /// Some command ran while the folder was too large to scan: its
+    /// changes may be missing from `files`.
+    commands_unlisted: bool,
+}
+
+/// The files a turn's checkpoint left out, at most 50 named per list.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct NotSaved {
+    too_large: Vec<String>,
+    too_large_count: usize,
+    placeholders: Vec<String>,
+    placeholder_count: usize,
+}
+
+/// The `not_saved` of a checkpoint: `None` when it left nothing out.
+fn not_saved(info: Option<CheckpointInfo>) -> Option<NotSaved> {
+    let info = info?;
+    if info.too_large_count == 0 && info.placeholder_count == 0 {
+        return None;
+    }
+    Some(NotSaved {
+        too_large: info.too_large,
+        too_large_count: info.too_large_count,
+        placeholders: info.placeholders,
+        placeholder_count: info.placeholder_count,
+    })
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1335,10 +1372,13 @@ pub fn turn_changes(
     turn_id: String,
 ) -> Result<TurnChanges, IpcError> {
     let offer = state.agents.undo_offer(&turn_id)?;
+    let coverage = state.agents.changes_coverage(&turn_id)?;
     Ok(TurnChanges {
         files: state.agents.changes(&turn_id)?,
         latest: offer.latest,
         undone: offer.undone,
+        not_saved: not_saved(coverage.not_saved),
+        commands_unlisted: coverage.commands_unlisted,
     })
 }
 
@@ -1425,6 +1465,41 @@ mod tests {
         assert_eq!(bad.code, "invalid_request");
         let many = (1..=65).map(|id| entry(id, "gpt-5", None)).collect();
         assert_eq!(agent_models_of(many).unwrap_err().code, "invalid_request");
+    }
+
+    #[test]
+    fn turn_changes_name_what_the_checkpoint_left_out() {
+        assert_eq!(not_saved(None), None);
+        assert_eq!(not_saved(Some(CheckpointInfo::default())), None);
+        let info = CheckpointInfo {
+            too_large: vec!["video.mov".into()],
+            too_large_count: 3,
+            placeholders: vec!["cloud.pdf".into()],
+            placeholder_count: 1,
+            ..CheckpointInfo::default()
+        };
+        let changes = TurnChanges {
+            files: Vec::new(),
+            latest: true,
+            undone: false,
+            not_saved: not_saved(Some(info)),
+            commands_unlisted: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).unwrap(),
+            serde_json::json!({
+                "files": [],
+                "latest": true,
+                "undone": false,
+                "not_saved": {
+                    "too_large": ["video.mov"],
+                    "too_large_count": 3,
+                    "placeholders": ["cloud.pdf"],
+                    "placeholder_count": 1,
+                },
+                "commands_unlisted": true,
+            })
+        );
     }
 
     #[test]

@@ -32,8 +32,38 @@ const chip = (): HTMLElement => screen.getByTestId('index-status-chip');
 
 async function openDialog(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
   await user.click(chip());
-  return screen.findByRole('dialog', { name: 'Code index · app' });
+  return screen.findByRole('dialog', { name: 'Folder index · app' });
 }
+
+describe('the folder index and its documents', () => {
+  it('names the index after the folder, not its code, on the chip and in the dialog', async () => {
+    const user = userEvent.setup();
+    mount(createFakeIndexIpc({ statuses: { w1: READY } }));
+    await waitFor(() => expect(chip()).toHaveAccessibleName(/^Folder index: Ready/));
+    const dialog = await openDialog(user);
+    expect(dialog).not.toHaveTextContent(/code index/i);
+    expect(dialog).toHaveTextContent('the text of its documents');
+  });
+
+  it('counts the PDF and Office files indexed on the chip and in the summary', async () => {
+    const user = userEvent.setup();
+    mount(createFakeIndexIpc({ statuses: { w1: { ...READY, documents: 7, watching: true } } }));
+    await waitFor(() => expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities · 7 documents · Watching/));
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByTestId('index-summary')).toHaveTextContent('120 files (7 documents), 12400 entities and 3000 relations.');
+  });
+
+  it('leaves documents off the chip when none are indexed, and says why they are not', async () => {
+    const user = userEvent.setup();
+    const reason = 'This build has no document extractor, so PDF and Office files are not indexed.';
+    mount(createFakeIndexIpc({ statuses: { w1: { ...READY, documents: 0, documents_unavailable: reason } } }));
+    await waitFor(() => expect(chip()).toHaveTextContent(/Ready · 12(\.4)?K entities/));
+    expect(chip()).not.toHaveTextContent('documents');
+    const dialog = await openDialog(user);
+    expect(within(dialog).getByTestId('index-documents-unavailable')).toHaveTextContent(reason);
+    expect(within(dialog).getByTestId('index-summary')).toHaveTextContent('120 files, 12400 entities and 3000 relations.');
+  });
+});
 
 describe('IndexStatusChip states', () => {
   it.each([

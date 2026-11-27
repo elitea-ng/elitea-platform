@@ -30,6 +30,11 @@ pub struct Workspace {
     /// folder is inside a git work tree. `get` leaves it `false`.
     #[serde(default)]
     pub is_git: bool,
+    /// What the folder mostly holds ([`folder_kind`]): computed for the UI
+    /// (`list_with_kinds`, `add`, `bind_project`); `list` and `get` leave it
+    /// `mixed`.
+    #[serde(default)]
+    pub kind: FolderKind,
     /// A task worktree's workspace (#1235, src/worktrees.rs): the workspace
     /// whose repository it is a linked worktree of. Its folder is in that
     /// workspace's host data; it is listed with it, never on its own.
@@ -203,6 +208,129 @@ fn in_git_tree(path: &Path) -> bool {
     path.ancestors().any(|dir| dir.join(".git").exists())
 }
 
+/// What a folder mostly holds, for the UI's chip, the agent it offers
+/// first and the turn's environment line.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FolderKind {
+    /// Inside a git work tree, whatever it holds.
+    Git,
+    /// A project marker ([`elitea_local_tools::project::MARKER_FILES`]) or
+    /// mostly source files, and few documents.
+    Code,
+    /// Mostly documents (Office files, PDFs, Markdown, text) and no marker.
+    Documents,
+    /// Both, or nothing either way (an empty folder).
+    #[default]
+    Mixed,
+}
+
+/// The most entries [`folder_kind`] looks at: a sample, never a walk of a
+/// large tree.
+pub const KIND_SAMPLE_ENTRIES: usize = 400;
+
+/// How deep below the folder [`folder_kind`] looks.
+const KIND_SAMPLE_DEPTH: usize = 3;
+
+/// Folders the sample never enters: dependencies and build output say
+/// nothing about what the person keeps here.
+const KIND_SKIPPED_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    "__pycache__",
+    "venv",
+];
+
+const DOCUMENT_EXTENSIONS: &[&str] = &[
+    "docx", "doc", "pdf", "xlsx", "xls", "pptx", "ppt", "md", "txt", "rtf", "odt", "ods", "odp",
+    "pages", "numbers", "key", "csv",
+];
+
+const CODE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "py", "go", "java", "kt", "c", "h", "cc", "cpp", "hpp",
+    "cs", "rb", "php", "swift", "scala", "sh", "lua", "dart", "sql", "vue", "svelte",
+];
+
+#[cfg(test)]
+thread_local! {
+    /// How many entries `folder_kind` looked at on this thread (tests only).
+    static KIND_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The folder's kind: `git` when it is in a git work tree (nothing more is
+/// read), else from a breadth-first sample of at most
+/// [`KIND_SAMPLE_ENTRIES`] names at most three levels down. Only names
+/// and entry types are read: no file is opened, so a cloud placeholder is
+/// never downloaded. Hidden entries and [`KIND_SKIPPED_DIRS`] are left out.
+#[must_use]
+pub fn folder_kind(path: &Path, is_git: bool) -> FolderKind {
+    if is_git {
+        return FolderKind::Git;
+    }
+    let (mut code, mut documents, mut marker) = (0_usize, 0_usize, false);
+    let mut seen = 0_usize;
+    let mut queue = std::collections::VecDeque::from([(path.to_path_buf(), 0_usize)]);
+    'walk: while let Some((dir, depth)) = queue.pop_front() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if seen >= KIND_SAMPLE_ENTRIES {
+                break 'walk;
+            }
+            seen += 1;
+            #[cfg(test)]
+            KIND_ENTRIES.with(|entries| entries.set(entries.get() + 1));
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if depth + 1 < KIND_SAMPLE_DEPTH && !KIND_SKIPPED_DIRS.contains(&name.as_ref()) {
+                    queue.push_back((entry.path(), depth + 1));
+                }
+                continue;
+            }
+            if depth <= 1 && elitea_local_tools::project::MARKER_FILES.contains(&name.as_ref()) {
+                marker = true;
+            }
+            let extension = name
+                .rsplit_once('.')
+                .map_or_else(String::new, |(_, ext)| ext.to_ascii_lowercase());
+            if DOCUMENT_EXTENSIONS.contains(&extension.as_str()) {
+                documents += 1;
+            } else if CODE_EXTENSIONS.contains(&extension.as_str()) {
+                code += 1;
+            }
+        }
+    }
+    classify(code, documents, marker)
+}
+
+/// Mostly (four in five or more) one or the other; a marker makes it code
+/// unless documents are the large majority.
+fn classify(code: usize, documents: usize, marker: bool) -> FolderKind {
+    let code = code + usize::from(marker);
+    let total = code + documents;
+    if total == 0 {
+        return FolderKind::Mixed;
+    }
+    if documents * 5 >= total * 4 && !marker {
+        FolderKind::Documents
+    } else if code * 5 >= total * 4 || (marker && documents * 5 < total * 4) {
+        FolderKind::Code
+    } else {
+        FolderKind::Mixed
+    }
+}
+
 impl WorkspaceStore {
     #[must_use]
     pub fn new(dir: PathBuf) -> Self {
@@ -266,6 +394,25 @@ impl WorkspaceStore {
             .collect())
     }
 
+    /// [`Self::list`] with each folder's `kind` sampled too
+    /// ([`folder_kind`]): only for what the UI shows (`workspace_list`, off
+    /// the main thread), never for the host's own lookups, since sampling a
+    /// folder on a slow or network drive can block.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn list_with_kinds(&self) -> Result<Vec<Workspace>, HostError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .map(|mut workspace| {
+                workspace.kind = folder_kind(Path::new(&workspace.path), workspace.is_git);
+                workspace
+            })
+            .collect())
+    }
+
     /// One workspace, read for the host's own use: `is_git` is NOT computed
     /// (it is `false`), so a lookup never stats the file system.
     ///
@@ -318,6 +465,7 @@ impl WorkspaceStore {
                 path: path.clone(),
                 project_id: None,
                 is_git: false,
+                kind: FolderKind::default(),
                 parent_id: None,
                 thread_uuid: None,
             };
@@ -325,8 +473,10 @@ impl WorkspaceStore {
             self.write(&all)?;
             Ok(workspace)
         })?;
+        let is_git = in_git_tree(&canonical);
         Ok(Workspace {
-            is_git: in_git_tree(&canonical),
+            is_git,
+            kind: folder_kind(&canonical, is_git),
             ..workspace
         })
     }
@@ -362,6 +512,7 @@ impl WorkspaceStore {
                 path,
                 project_id: parent.project_id,
                 is_git: false,
+                kind: FolderKind::default(),
                 parent_id: Some(parent.id),
                 thread_uuid: Some(thread_uuid.to_owned()),
             };
@@ -505,8 +656,10 @@ impl WorkspaceStore {
             self.write(&all)?;
             Ok(updated)
         })?;
+        let is_git = in_git_tree(Path::new(&workspace.path));
         Ok(Workspace {
-            is_git: in_git_tree(Path::new(&workspace.path)),
+            is_git,
+            kind: folder_kind(Path::new(&workspace.path), is_git),
             ..workspace
         })
     }
@@ -683,6 +836,114 @@ mod tests {
         assert!(folder.path().exists(), "the folder itself is never touched");
         assert!(store.add(&folder.path().join("missing")).is_err());
         assert!(store.bind_project("nope", 1).is_err());
+    }
+
+    fn touch(root: &Path, names: &[&str]) {
+        for name in names {
+            let path = root.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x").unwrap();
+        }
+    }
+
+    #[test]
+    fn a_folder_kind_is_read_from_its_names() {
+        let docs = tempfile::tempdir().unwrap();
+        touch(
+            docs.path(),
+            &[
+                "Plan.docx",
+                "Budget.xlsx",
+                "notes/minutes.md",
+                "scan.pdf",
+                "deck.pptx",
+            ],
+        );
+        assert_eq!(folder_kind(docs.path(), false), FolderKind::Documents);
+
+        let code = tempfile::tempdir().unwrap();
+        touch(code.path(), &["Cargo.toml", "README.md", "src/main.rs"]);
+        assert_eq!(folder_kind(code.path(), false), FolderKind::Code);
+        // A marker one level down counts; its content is never read.
+        let nested = tempfile::tempdir().unwrap();
+        touch(
+            nested.path(),
+            &["app/package.json", "README.md", "guide.md"],
+        );
+        assert_eq!(folder_kind(nested.path(), false), FolderKind::Code);
+
+        let mixed = tempfile::tempdir().unwrap();
+        touch(
+            mixed.path(),
+            &["report.docx", "data.pdf", "run.py", "clean.py"],
+        );
+        assert_eq!(folder_kind(mixed.path(), false), FolderKind::Mixed);
+        assert_eq!(
+            folder_kind(tempfile::tempdir().unwrap().path(), false),
+            FolderKind::Mixed
+        );
+        // Dependencies, build output and hidden folders say nothing.
+        let deps = tempfile::tempdir().unwrap();
+        touch(
+            deps.path(),
+            &[
+                "a.docx",
+                "b.pdf",
+                "node_modules/x/index.js",
+                "node_modules/y/index.js",
+                ".cache/z.js",
+            ],
+        );
+        assert_eq!(folder_kind(deps.path(), false), FolderKind::Documents);
+        // In a git work tree nothing is read.
+        assert_eq!(folder_kind(code.path(), true), FolderKind::Git);
+    }
+
+    #[test]
+    fn the_folder_kind_samples_a_bounded_number_of_entries() {
+        let big = tempfile::tempdir().unwrap();
+        for dir in 0..20 {
+            for file in 0..50 {
+                touch(big.path(), &[&format!("d{dir}/f{file}.docx")]);
+            }
+        }
+        let looked = || KIND_ENTRIES.with(std::cell::Cell::get);
+        let before = looked();
+        assert_eq!(folder_kind(big.path(), false), FolderKind::Documents);
+        assert_eq!(
+            looked() - before,
+            KIND_SAMPLE_ENTRIES,
+            "1020 entries, only the sample read"
+        );
+        let before = looked();
+        assert_eq!(folder_kind(big.path(), true), FolderKind::Git);
+        assert_eq!(looked(), before, "a git folder is not sampled");
+    }
+
+    #[test]
+    fn the_listed_kind_is_recomputed_each_time() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        touch(folder.path(), &["a.docx"]);
+        let store = WorkspaceStore::new(app.path().to_owned());
+        let added = store.add(folder.path()).unwrap();
+        assert_eq!(added.kind, FolderKind::Documents);
+        touch(
+            folder.path(),
+            &["go.mod", "main.go", "x.go", "y.go", "z.go"],
+        );
+        assert_eq!(store.list_with_kinds().unwrap()[0].kind, FolderKind::Code);
+        // The host's own lookups never sample the folder.
+        let looked = || KIND_ENTRIES.with(std::cell::Cell::get);
+        let before = looked();
+        assert_eq!(
+            store.get(&added.id).unwrap().unwrap().kind,
+            FolderKind::Mixed
+        );
+        assert_eq!(store.list().unwrap()[0].kind, FolderKind::Mixed);
+        assert_eq!(looked(), before, "list() and get() read no folder names");
+        let json = serde_json::to_value(&store.list_with_kinds().unwrap()[0]).unwrap();
+        assert_eq!(json["kind"], "code");
     }
 
     #[test]

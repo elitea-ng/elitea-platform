@@ -42,7 +42,7 @@ function setup(options: Omit<FakeIndexOptions, 'statuses'> = {}, status: Partial
 async function section(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
   await user.click(await screen.findByTestId('index-status-chip'));
   const dialog = await screen.findByRole('dialog', {
-    name: 'Code index · app',
+    name: 'Folder index · app',
   });
   const found = await within(dialog).findByTestId('index-embeddings');
   await within(found).findByRole('radiogroup');

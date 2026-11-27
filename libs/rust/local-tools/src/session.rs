@@ -30,8 +30,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::approvals::{
-    ACCEPT, ChoiceStore, DECLINE, PAYLOAD_KEY, PLAN_PAYLOAD_KEY, PermissionProfile, RuleApprovals,
-    RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
+    ACCEPT, ChoiceStore, DECLINE, NO_UNDO_PAYLOAD_KEY, PAYLOAD_KEY, PLAN_PAYLOAD_KEY,
+    PermissionProfile, RuleApprovals, RulesEngine, ToolCall, ToolKind, WorkspaceSettings,
 };
 use crate::budget::{self, Budgets, SpillStore};
 use crate::checkpoint::{CheckpointInfo, Checkpoints, RestoreReport};
@@ -53,6 +53,8 @@ use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
 mod hooks;
+#[cfg(all(test, unix))]
+mod no_undo_tests;
 mod processes;
 #[cfg(all(test, unix))]
 mod push_tests;
@@ -110,8 +112,23 @@ pub struct SessionConfig {
 struct Turn {
     label: String,
     checkpoint: Option<u64>,
-    /// Why the turn has no checkpoint, when taking one was not possible.
+    /// Why the turn has no checkpoint, when taking one was not possible
+    /// (and the person agreed to go on without undo).
     skipped: Option<String>,
+    /// Why the turn makes no change at all: the folder is too large to
+    /// checkpoint, and the person said no to going on without undo, or
+    /// nobody could be asked ([`LocalSession::no_undo_refusal`]).
+    refused: Option<String>,
+    /// What the turn's checkpoint left out (too large, placeholders).
+    taken: Option<CheckpointInfo>,
+}
+
+/// What [`LocalSession::take_checkpoint`] found.
+enum CheckpointStep {
+    /// Taken now or earlier in the turn, or the turn goes on without one.
+    Ready,
+    /// The folder is too large to checkpoint (the reason): ask first.
+    TooLarge(String),
 }
 
 /// One session's local tools.
@@ -128,6 +145,10 @@ pub struct LocalSession {
     /// directory; kept across a reopen for [`budget::SPILL_RETENTION`]).
     spill: SpillStore,
     turn: Mutex<Turn>,
+    /// Held while the turn's checkpoint is taken or the person is asked
+    /// about going on without one: concurrent changes wait, and are asked
+    /// once.
+    checkpoint_gate: tokio::sync::Mutex<()>,
     /// The edit tools the current model is offered.
     edit_profile: Mutex<EditProfile>,
     /// Whether the current model can see images: `read_file` returns an
@@ -885,6 +906,7 @@ impl LocalSession {
             documents: config.documents,
             spill,
             turn: Mutex::new(Turn::default()),
+            checkpoint_gate: tokio::sync::Mutex::new(()),
             edit_profile: Mutex::new(EditProfile::default()),
             vision: AtomicBool::new(false),
             project: Mutex::new(None),
@@ -1043,8 +1065,7 @@ impl LocalSession {
         if let Ok(mut turn) = self.turn.lock() {
             *turn = Turn {
                 label: label.to_owned(),
-                checkpoint: None,
-                skipped: None,
+                ..Turn::default()
             };
         }
     }
@@ -1057,10 +1078,19 @@ impl LocalSession {
     }
 
     /// Why the current turn changed files without a checkpoint (the folder
-    /// was too large to copy), if it did: such a turn cannot be undone.
+    /// was too large to copy, and the person agreed), if it did: such a
+    /// turn cannot be undone.
     #[must_use]
     pub fn turn_checkpoint_skipped(&self) -> Option<String> {
         self.turn.lock().ok().and_then(|turn| turn.skipped.clone())
+    }
+
+    /// The current turn's checkpoint, with what it left out
+    /// ([`CheckpointInfo::too_large`], [`CheckpointInfo::placeholders`]):
+    /// a change to one of those files cannot be undone.
+    #[must_use]
+    pub fn turn_checkpoint_info(&self) -> Option<CheckpointInfo> {
+        self.turn.lock().ok().and_then(|turn| turn.taken.clone())
     }
 
     #[must_use]
@@ -1759,37 +1789,116 @@ impl LocalSession {
             }
         }
         self.authorize(call_id, call, &message).await?;
-        self.blocking(Self::ensure_checkpoint).await
+        self.ensure_checkpoint(call_id).await
     }
 
-    /// Take the turn's checkpoint before its first change. A copy
-    /// checkpoint of a folder too large to copy is skipped (and reported);
-    /// any other failure refuses the change.
-    fn ensure_checkpoint(&self) -> ToolResult<()> {
+    /// Before the turn's first change: take its checkpoint. A folder too
+    /// large to checkpoint is never changed silently (ADR-0029 amendment
+    /// of 2026-11-27): the person is asked once per turn whether to go on
+    /// without undo, and a turn nobody can be asked about (unattended,
+    /// Full auto) makes no change. A "no" refuses every change of the
+    /// turn. Any other failure refuses the change.
+    async fn ensure_checkpoint(self: &Arc<Self>, call_id: &str) -> ToolResult<()> {
+        // Taken (or agreed to go without) already: later changes of the
+        // turn neither queue behind the gate nor leave the async runtime.
+        if self.turn.lock().is_ok_and(|turn| {
+            turn.refused.is_none() && (turn.checkpoint.is_some() || turn.skipped.is_some())
+        }) {
+            return Ok(());
+        }
+        let _gate = self.checkpoint_gate.lock().await;
+        let reason = match self.blocking(Self::take_checkpoint).await? {
+            CheckpointStep::Ready => return Ok(()),
+            CheckpointStep::TooLarge(reason) => reason,
+        };
+        if let Some(refusal) = self.no_undo_refusal(&reason) {
+            return Err(self.refuse_turn(refusal));
+        }
+        let request = ApprovalRequest {
+            subject: call_id.to_owned(),
+            message: format!(
+                "This folder is too large to save for undo ({reason}). If the agent goes on, \
+                 the changes it makes in this turn cannot be undone."
+            ),
+            available_actions: vec!["approve".to_owned(), "reject".to_owned()],
+            payload: json!({ NO_UNDO_PAYLOAD_KEY: { "reason": reason } }),
+        };
+        let approved = matches!(
+            self.approvals.request(request).await,
+            Ok(ApprovalOutcome::Decided { ref action, .. }) if action == "approve"
+        );
+        if !approved {
+            return Err(self.refuse_turn(format!(
+                "Not changed: this folder is too large to save for undo ({reason}), and the \
+                 person chose not to go on without undo. Make no changes in this turn; tell \
+                 the person what you would change instead."
+            )));
+        }
+        tracing::warn!(
+            reason,
+            "local turn runs without a checkpoint, as the person agreed"
+        );
+        if let Ok(mut turn) = self.turn.lock() {
+            turn.skipped = Some(reason);
+        }
+        Ok(())
+    }
+
+    /// Why a turn may not go on without undo without asking: nobody is
+    /// there to agree. An unattended turn and a Full auto one make no
+    /// change in a folder too large to checkpoint.
+    fn no_undo_refusal(&self, reason: &str) -> Option<String> {
+        let who = if self.engine.unattended().is_some() {
+            "this turn runs unattended"
+        } else if self.engine.profile() == PermissionProfile::FullAuto {
+            "this thread runs in Full auto"
+        } else {
+            return None;
+        };
+        Some(format!(
+            "Not changed: this folder is too large to save for undo ({reason}), and {who}, so \
+             nobody can agree to changes that cannot be undone. Make no changes in this turn; \
+             report what you would change. The person can run the turn themselves and agree \
+             to go on without undo."
+        ))
+    }
+
+    /// Refuse this change and every later one of the turn.
+    fn refuse_turn(&self, message: String) -> ToolError {
+        if let Ok(mut turn) = self.turn.lock() {
+            turn.refused = Some(message.clone());
+        }
+        ToolError::new(ErrorCode::Rejected, message)
+    }
+
+    /// The checkpoint step of [`Self::ensure_checkpoint`], off the async
+    /// runtime: the checkpoint, whose stat-only plan refuses a folder too
+    /// large ([`ErrorCode::TooLarge`]) before any file is read, in one walk.
+    fn take_checkpoint(&self) -> ToolResult<CheckpointStep> {
         let mut turn = self
             .turn
             .lock()
             .map_err(|_| ToolError::new(ErrorCode::Io, "the turn state is unavailable"))?;
+        if let Some(refused) = &turn.refused {
+            return Err(ToolError::new(ErrorCode::Rejected, refused.clone()));
+        }
         if turn.checkpoint.is_some() || turn.skipped.is_some() {
-            return Ok(());
+            return Ok(CheckpointStep::Ready);
         }
         let label = if turn.label.is_empty() {
             "turn".to_owned()
         } else {
             turn.label.clone()
         };
-        match self.checkpoints.create(&label) {
+        let created = self.checkpoints.create(&label);
+        match created {
             Ok(info) => {
                 turn.checkpoint = Some(info.seq);
-                Ok(())
+                turn.taken = Some(info);
+                Ok(CheckpointStep::Ready)
             }
             Err(error) if error.code() == ErrorCode::TooLarge => {
-                tracing::warn!(
-                    reason = error.message(),
-                    "local turn runs without a checkpoint"
-                );
-                turn.skipped = Some(error.message().to_owned());
-                Ok(())
+                Ok(CheckpointStep::TooLarge(error.message().to_owned()))
             }
             Err(error) => Err(ToolError::new(
                 error.code(),
@@ -1969,7 +2078,7 @@ impl LocalSession {
         self.unchanged_grant(&call, &spec)?;
         self.unchanged_trust(&spec)?;
         if mode != SandboxMode::ReadOnly {
-            self.blocking(Self::ensure_checkpoint).await?;
+            self.ensure_checkpoint(call_id).await?;
         }
         if background {
             return self
@@ -2059,7 +2168,7 @@ impl LocalSession {
         self.authorize(call_id, call, "run the tests").await?;
         self.unchanged_trust(&spec)?;
         if mode != SandboxMode::ReadOnly {
-            self.blocking(Self::ensure_checkpoint).await?;
+            self.ensure_checkpoint(call_id).await?;
         }
         let started = std::time::SystemTime::now();
         // Cargo's artifact records are left out of what is kept: they

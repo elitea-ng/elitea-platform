@@ -375,9 +375,54 @@ impl Tool for ObservedTool {
         let plan = (tool == EXIT_PLAN_MODE.name && !self.remote)
             .then(|| args.get("plan").and_then(Value::as_str).map(str::to_owned))
             .flatten();
+        // A command's changes: the folder before it runs (stat only), and
+        // after (below), in the session its file tools' before-images use.
+        // Once a scan found the folder too large this turn, no command of
+        // the turn walks it again (the tab already says so).
+        let scanned_session = (!self.remote
+            && super::command_changes::may_write(&tool, &args)
+            && !observer.recorder.has_unlisted_commands())
+        .then(|| observer.session.clone())
+        .flatten();
+        let scan_before = match &scanned_session {
+            Some(session) => {
+                let session = session.clone();
+                tokio::task::spawn_blocking(move || super::command_changes::scan(&session))
+                    .await
+                    .ok()
+                    .map(|scan| scan.ok_or(()))
+            }
+            None => None,
+        };
         let running = ToolTimer::begin(&observer.events);
         let result = self.inner.execute(ctx.clone(), args).await;
         drop(running);
+        if let (Some(session), Some(before)) = (scanned_session, scan_before) {
+            let recorder = observer.recorder.clone();
+            let label = command.clone().unwrap_or_else(|| "the tests".to_owned());
+            let background = result
+                .as_ref()
+                .ok()
+                .is_some_and(|value| value.get("process_id").is_some());
+            let _ = tokio::task::spawn_blocking(move || {
+                let Ok(before) = before else {
+                    recorder.commands_unlisted();
+                    return;
+                };
+                let Some(after) = super::command_changes::scan(&session) else {
+                    recorder.commands_unlisted();
+                    return;
+                };
+                recorder.background().rebase(&session, &recorder, &before);
+                super::command_changes::record(&session, &recorder, &before, &after, &label);
+                if background {
+                    recorder.background().started(&label, after);
+                } else {
+                    recorder.background().rebase(&session, &recorder, &after);
+                }
+            })
+            .await;
+        }
         // Content from outside the folder entered the turn (ADR-0061
         // decision 5f): its host commands are asked from now on.
         if reads_outside_content(&tool, self.remote)

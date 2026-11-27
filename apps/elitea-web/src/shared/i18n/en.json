@@ -7743,11 +7743,14 @@
   "marketplace.teamHire.reused": "Uses the agent this project already installed from this version.",
   "marketplace.teamHire.title": "Hire the team {{name}}",
   "marketplace.teamHire.unavailable": "This agent version cannot be hired now, so the team cannot be hired.",
-  "features.chatMessages.agentsMdApplied": "AGENTS.md applied",
-  "features.chatMessages.agentsMdIgnored": "AGENTS.md ignored",
+  "features.chatMessages.agentsMdApplied": "Project instructions applied",
+  "features.chatMessages.agentsMdIgnored": "Project instructions ignored",
+  "chat.participants.model": "Model in this thread…",
+  "chat.participants.modelBadge": "Model in this thread: {{model}}",
   "features.agentLifecycle.import.agentCount": "{{count}} agents",
   "features.agentLifecycle.import.agentsList": "Agents in this file",
   "features.agentLifecycle.import.confirmTeam": "Import team",
+  "features.agentLifecycle.import.creating": "Creating everything in the file…",
   "features.agentLifecycle.import.importing": "Importing…",
   "features.agentLifecycle.import.kindAgents": "Agents to import",
   "features.agentLifecycle.import.kindTeam": "Team to import",
@@ -7775,8 +7778,5 @@
   "features.agentTeams.edit.moveDown": "Move {{name}} down",
   "features.agentTeams.edit.moveUp": "Move {{name}} up",
   "features.agentTeams.edit.orderHint": "Agents join a conversation in this order.",
-  "features.agentTeams.edit.removeAgent": "Remove {{name}} from the team",
-  "features.agentLifecycle.import.creating": "Creating everything in the file…",
-  "chat.participants.model": "Model in this thread…",
-  "chat.participants.modelBadge": "Model in this thread: {{model}}"
+  "features.agentTeams.edit.removeAgent": "Remove {{name}} from the team"
 }

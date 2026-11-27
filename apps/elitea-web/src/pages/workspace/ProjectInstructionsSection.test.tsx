@@ -1,6 +1,6 @@
 /**
  * The project instructions in a Local work thread's Participants tab (issue 3130): the folder's AGENTS.md listed
- * once, the thread's "Respect AGENTS.md" switch (on by default, kept by the host, so a reopened thread shows its
+ * once, the thread's "Respect project instructions" switch (on by default, kept by the host, so a reopened thread shows its
  * choice), the plain "ignored" line when it is off, and no switch when the folder holds no instructions.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -26,7 +26,7 @@ function mount(ipc: FakeWorkspaceIpc, conversationId = '77', turn: Parameters<ty
   );
 }
 
-const respectSwitch = () => screen.findByRole('switch', { name: 'Respect AGENTS.md' });
+const respectSwitch = () => screen.findByRole('switch', { name: 'Respect project instructions' });
 
 describe('the project instructions of a Local work thread (issue 3130)', () => {
   it('lists the root files and the nested ones the turn applied, with the switch on by default', async () => {
@@ -50,7 +50,7 @@ describe('the project instructions of a Local work thread (issue 3130)', () => {
     const user = userEvent.setup();
     await user.click(await respectSwitch());
     await waitFor(() => expect(ipc.calls.respects).toEqual([{ workspaceId: 'ws-1', conversationId: '77', respect: false }]));
-    expect(await screen.findByTestId('agents-md-ignored')).toHaveTextContent('AGENTS.md ignored in this thread');
+    expect(await screen.findByTestId('agents-md-ignored')).toHaveTextContent('Project instructions ignored in this thread');
     await waitFor(async () => expect(await respectSwitch()).not.toBeChecked());
     await user.click(await respectSwitch());
     await waitFor(() => expect(ipc.calls.respects.at(-1)).toEqual({ workspaceId: 'ws-1', conversationId: '77', respect: true }));
@@ -70,14 +70,14 @@ describe('the project instructions of a Local work thread (issue 3130)', () => {
     expect(screen.getByTestId('agents-md-ignored')).toBeInTheDocument();
     // Another thread of the folder keeps the default.
     mount(ipc, '78');
-    await waitFor(() => expect(screen.getAllByRole('switch', { name: 'Respect AGENTS.md' })).toHaveLength(2));
-    expect(screen.getAllByRole('switch', { name: 'Respect AGENTS.md' })[1]).toBeChecked();
+    await waitFor(() => expect(screen.getAllByRole('switch', { name: 'Respect project instructions' })).toHaveLength(2));
+    expect(screen.getAllByRole('switch', { name: 'Respect project instructions' })[1]).toBeChecked();
   });
 
   it('shows no switch when the folder holds no AGENTS.md', async () => {
     const ipc = createFakeWorkspaceIpc();
     mount(ipc);
-    expect(await screen.findByTestId('project-instructions-none')).toHaveTextContent('No AGENTS.md in this folder.');
+    expect(await screen.findByTestId('project-instructions-none')).toHaveTextContent('No AGENTS.md, README or NOTES file in this folder.');
     expect(screen.queryByRole('switch')).toBeNull();
   });
 

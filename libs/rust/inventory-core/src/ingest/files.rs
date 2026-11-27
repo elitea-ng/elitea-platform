@@ -60,6 +60,17 @@ impl Selection {
             {
                 Ok(())
             }
+            // A PDF or Office file its source lists as text: the source
+            // reads it out itself (the desktop's sandboxed extractor), and
+            // its fetch hands over that text, never the file's bytes.
+            Err(Skipped::UnsupportedExtension)
+                if elitea_content_source::is_text(mime)
+                    && elitea_doc_extract::is_document_type(elitea_content_source::mime_of(
+                        path,
+                    )) =>
+            {
+                Ok(())
+            }
             verdict => verdict,
         }
     }
@@ -190,6 +201,29 @@ mod tests {
         assert_eq!(
             Selection::default().admit_document("page.html", "text/html"),
             Ok(())
+        );
+    }
+
+    /// A PDF a source lists as text (it extracts the text itself) is
+    /// admitted; the same file listed as a PDF needs an extractor in this
+    /// build, and an unknown binary listed as text stays out.
+    #[test]
+    fn a_document_its_source_reads_as_text_is_admitted() {
+        assert_eq!(
+            Selection::default().admit_document("report.pdf", "text/plain"),
+            Ok(())
+        );
+        assert_eq!(
+            Selection::default().admit_document("report.pdf", "application/pdf"),
+            if elitea_doc_extract::can_extract("application/pdf") {
+                Ok(())
+            } else {
+                Err(Skipped::UnsupportedExtension)
+            }
+        );
+        assert_eq!(
+            Selection::default().admit_document("image.png", "text/plain"),
+            Err(Skipped::UnsupportedExtension)
         );
     }
 

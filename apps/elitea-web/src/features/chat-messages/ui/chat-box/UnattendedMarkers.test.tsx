@@ -37,11 +37,11 @@ describe('the read-only AGENTS.md marker of a Local work turn (issue 3130)', () 
   it('says whether the turn applied or ignored AGENTS.md, naming the files in its title', () => {
     const { unmount } = renderWithTheme(<ProjectInstructionsMarker applied={false} files={['AGENTS.md', 'apps/web/AGENTS.md']} />);
     const marker = screen.getByTestId('chat-message-project-instructions');
-    expect(marker).toHaveTextContent('AGENTS.md ignored');
+    expect(marker).toHaveTextContent('Project instructions ignored');
     expect(marker).toHaveAttribute('title', 'AGENTS.md, apps/web/AGENTS.md');
     unmount();
     renderWithTheme(<AnswerMarkers answer={{ projectInstructions: { applied: true, files: ['AGENTS.md'] } }} />);
-    expect(screen.getByTestId('chat-message-project-instructions')).toHaveTextContent('AGENTS.md applied');
+    expect(screen.getByTestId('chat-message-project-instructions')).toHaveTextContent('Project instructions applied');
     expect(screen.queryByTestId('chat-message-full-auto')).toBeNull();
   });
 

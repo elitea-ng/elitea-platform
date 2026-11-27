@@ -1,0 +1,6 @@
+---
+date: 2026-11-27
+---
+## Local work in folders without git: documents, safe undo and a documents agent
+
+The desktop app now treats a folder that is not a git repository as a first-class **Local work** folder. The **Workspaces** list shows a **Code** or **Documents** chip instead of **Git**. Undo is faster and safer: unchanged files are not copied again, cloud files are never downloaded, large files are named, and in a folder too large to save for undo the app asks before the agent changes anything (an unattended or Full auto turn makes no change there). The **Changes** tab lists every file a turn changed, commands' changes included, with sizes for binary files and **Open** and **Reveal** on each row. A new **Local documents agent** reads, summarises and edits documents, saves edited Office files as new files, and is offered first in a documents folder. A folder without git and without `AGENTS.md` uses its `README.md` or `NOTES.md` as its project instructions, and the switch is now **Respect project instructions**. The **Folder index** also indexes the text of PDF and Office files, so agents can search what they say. See [Working with documents and folders without git](/how-tos/chat-conversations/desktop-folders-without-git).

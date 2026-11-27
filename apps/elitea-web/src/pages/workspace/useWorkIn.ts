@@ -3,7 +3,7 @@
  * or a new task worktree, which is proposed by default; the person's own
  * choice is remembered for the folder (`rememberWorkIn`) and proposed next
  * time, while the folder menu's "New thread in a worktree" forces it. With "New worktree", Send makes the worktree, hands
- * the message, the agents (`handOver`, #3128), the modes (`handOverChoices`, #3144) and "Respect AGENTS.md" chosen for
+ * the message, the agents (`handOver`, #3128), the modes (`handOverChoices`, #3144) and "Respect project instructions" chosen for
  * the thread to the worktree's own new thread
  * (`holdFirstMessage`) and opens it; that thread shows the message at once and sends it as soon as it can
  * (`useFirstSend`), so the person writes once. A worktree the host cannot make (not the repository's
@@ -76,7 +76,7 @@ export function useWorkIn({ workspaceId, offered: asked, send, handOver, handOve
       threadIds.sent();
       const handed: HandedFirstMessage = { args, seed, choices };
       holdFirstMessage(entry.workspace_id, handed);
-      // "Respect AGENTS.md" turned off for this new thread goes with it, and no longer applies to the folder's next one.
+      // "Respect project instructions" turned off for this new thread goes with it, and no longer applies to the folder's next one.
       movePendingRespect(workspaceId, entry.workspace_id);
       open(entry.workspace_id);
       return true;
