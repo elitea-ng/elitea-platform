@@ -91,6 +91,18 @@ jobs:
         run: |
           bash scripts/ci/check-rust-toolchain.sh
           bash scripts/ci/check-rust-toolchain-test.sh
+      # The blueprint release assets (issue 3137) are built here as a dry run,
+      # exactly as publish.yml builds them, so a blueprint that breaks the
+      # builder's checks (front matter, team manifest, avatar limits, the 40 MB
+      # tree budget) fails the pull request and not the release. The import of
+      # each built asset through the real import validation runs in ci-go's
+      # api-core shard (TestBlueprintsImportRoundTrip with ELITEA_BLUEPRINTS_DIR).
+      - name: Blueprint builder tests and release asset dry run
+        if: ${{ !cancelled() }}
+        run: |
+          node --test --test-reporter=spec scripts/blueprints/build.test.mjs
+          node scripts/blueprints/build.mjs --release-dir "${RUNNER_TEMP}/blueprint-assets" --version 0.0.0-dry-run
+          ls -l "${RUNNER_TEMP}/blueprint-assets"
       # One zip everywhere (PR #1546): the zip-9 CVE pin, and the five
       # `[patch.crates-io]` entries that carry it, held across every tracked
       # Cargo.lock. dependency-scanning.yml runs the gate itself; the self-test

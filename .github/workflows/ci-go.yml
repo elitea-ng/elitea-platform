@@ -577,8 +577,23 @@ jobs:
           ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
         run: bash scripts/nats/ci-secure-test-env.sh
 
+      # The blueprint release assets (issue 3137), built as publish.yml builds
+      # them, for TestBlueprintsImportRoundTrip in the eliteacore package of
+      # this shard: with ELITEA_BLUEPRINTS_DIR set it imports every built
+      # asset as it is through the real import and team import routes, so an
+      # asset Import would refuse fails here and never reaches a release.
+      - name: Install the blueprint builder's YAML dependency (api-core)
+        if: matrix.name == 'api-core'
+        uses: ./.github/actions/ci-scripts-deps
+        with:
+          npm-cache: "false"
+      - name: Build the blueprint release assets (api-core)
+        if: matrix.name == 'api-core'
+        run: node scripts/blueprints/build.mjs --out "${RUNNER_TEMP}/blueprints"
+
       - name: Run tests (shard)
         env:
+          ELITEA_BLUEPRINTS_DIR: ${{ matrix.name == 'api-core' && format('{0}/blueprints', runner.temp) || '' }}
           # The packages of this shard (the select step above). With it,
           # workspace-run.sh runs only these packages and names each module
           # it leaves to another shard.
