@@ -2187,6 +2187,47 @@ async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
     assert!(second.payload.get("project_instructions").is_none());
 }
 
+/// A folder without AGENTS.md (a folder of documents, a project that never
+/// adopted the convention): its root README.md is the project instructions,
+/// listed by the Participants section, applied, and named in the commit.
+#[tokio::test]
+async fn without_agents_md_the_root_readme_is_the_project_instructions() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("README.md"), "Keep the tone formal.").unwrap();
+    std::fs::write(h.folder.path().join("NOTES.md"), "Notes are not read.").unwrap();
+    let status = h
+        .host
+        .instructions_status(&h.workspace_id, None)
+        .await
+        .unwrap();
+    assert_eq!(status.files, ["README.md"]);
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let running = events
+        .iter()
+        .find(|e| e.kind == "status" && e.payload["phase"] == "running")
+        .unwrap();
+    assert_eq!(
+        running.payload["project_instructions"],
+        json!(["README.md"])
+    );
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    assert!(system.contains("Keep the tone formal."), "{system}");
+    assert!(!system.contains("Notes are not read."), "{system}");
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(
+        body["local_work"]["project_instructions"],
+        json!({"applied": true, "files": ["README.md"]})
+    );
+}
+
 /// Issue 3130: with the thread's "Respect AGENTS.md" off, the next turn's
 /// prompt carries none of the files (nor SOUL.md), the running status and
 /// the commit record that they were found and not applied, and turning it

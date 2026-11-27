@@ -2,7 +2,7 @@
  * The choices a folder's new thread makes in its composer before the first message (#3144): the mode (Plan, Bypass,
  * Full auto) and "Run to completion". With "Work in › New worktree" the first message moves to the worktree's own new
  * thread, which is a new session of another workspace: its composer starts from these, not from that workspace's kept
- * choices, so the thread runs from its first turn as chosen, and each agent's model chosen there (`agentModels`). "Respect AGENTS.md" moves with the message too
+ * choices, so the thread runs from its first turn as chosen, and each agent's model chosen there (`agentModels`). "Respect project instructions" moves with the message too
  * (`movePendingRespect`), and the agents (`SelectionSeed`, #3128).
  *
  * Full auto is in it only once the person confirmed it in this composer (ADR-0061): it is the thread being created

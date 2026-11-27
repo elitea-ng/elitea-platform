@@ -1,7 +1,7 @@
 /**
  * A local thread's project instructions (IPC.md "Project instructions", issue 3130), kept beside `workspaceIpc.ts`.
  * The folder's AGENTS.md (and SOUL.md) are read by the desktop host at every turn start; whether a thread applies
- * them ("Respect AGENTS.md") is the thread's own setting, kept in the host's thread store, on by default. A change
+ * them ("Respect project instructions") is the thread's own setting, kept in the host's thread store, on by default. A change
  * applies from the thread's next turn, for every agent of the thread. Wire shapes are the host's (snake_case).
  */
 
@@ -9,7 +9,7 @@
 export interface ProjectInstructionsFields {
   /** The files the folder held for the turn (the root's first, then the nested ones of the referenced paths). */
   project_instructions?: string[];
-  /** Whether the turn applied them: false when the thread does not respect AGENTS.md. Present with the files. */
+  /** Whether the turn applied them: false when the thread does not respect project instructions. Present with the files. */
   project_instructions_applied?: boolean;
 }
 

@@ -81,21 +81,21 @@ A thread that had one model chosen for the whole thread before keeps it for its 
 
 A Local work thread holds agents only: the tab shows no toolkit, pipeline or MCP sections.
 
-## Project instructions (AGENTS.md)
+## Project instructions
 
-The desktop app reads the thread folder's project instructions at the start of every turn: the `AGENTS.md` at the folder's root, the `AGENTS.md` of the folders of the files you reference with **@**, and the root `SOUL.md`. In a worktree, they are the worktree's files. They go into the agent's prompt after its own instructions, which outrank them.
+The desktop app reads the thread folder's project instructions at the start of every turn: the `AGENTS.md` at the folder's root, the `AGENTS.md` of the folders of the files you reference with **@**, and the root `SOUL.md`. A folder that is not a git repository and has no `AGENTS.md` at its root (a folder of documents or notes) uses its root `README.md` instead, else `README.txt`, else `NOTES.md`; a README in a subfolder, or in a git repository, is never used. See [Working with documents and folders without git](/how-tos/chat-conversations/desktop-folders-without-git). In a worktree, they are the worktree's files. They go into the agent's prompt after its own instructions, which outrank them.
 
-The **Participants** tab lists them once, under **Project instructions**, below the agents: the file names, for example `AGENTS.md` and `apps/web/AGENTS.md`. The conversation no longer shows a notice under each message.
+The **Participants** tab lists them once, under **Project instructions**, below the agents: the file names, for example `AGENTS.md` and `apps/web/AGENTS.md`, or `README.md` when the folder falls back to it. The conversation no longer shows a notice under each message.
 
-**Respect AGENTS.md** is the thread's own switch:
+**Respect project instructions** is the thread's own switch (it was called **Respect AGENTS.md** before; the choice you made is kept):
 
-- It is on by default when the folder holds project instructions. Without any, the tab says **No AGENTS.md in this folder.** and shows no switch. In a new thread you can turn it off before the first message; the thread that message starts keeps it off from its first turn.
-- Turn it off to run the thread without the files. The tab then says **AGENTS.md ignored in this thread**. Turn it on again to apply them.
+- It is on by default when the folder holds project instructions. Without any, the tab says **No AGENTS.md, README or NOTES file in this folder.** and shows no switch. In a new thread you can turn it off before the first message; the thread that message starts keeps it off from its first turn.
+- Turn it off to run the thread without the files. The tab then says **Project instructions ignored in this thread**. Turn it on again to apply them.
 - A change applies from the thread's next turn. A turn that is already running keeps what it started with.
 - It applies to every agent of the thread that runs on this computer: the lead, the other agents, the agents a turn hands the floor to, the agents it consults, and its sub-agents. An agent in the cloud never gets the files either way.
 - The choice belongs to the thread. It stays when you close and reopen the thread or restart the app, a fork of the thread keeps it, and other threads of the same folder are not affected.
 
-Each turn records whether it applied the project instructions and which files the folder held. The web and mobile app show it on the answer as **AGENTS.md applied** or **AGENTS.md ignored**.
+Each turn records whether it applied the project instructions and which files the folder held. The web and mobile app show it on the answer as **Project instructions applied** or **Project instructions ignored**.
 
 ## Address an agent
 
@@ -178,7 +178,7 @@ A Local work thread opened in the web app or the mobile app is read-only. Its pa
 
 An answer whose turn ran a command outside the sandbox is marked **Ran outside the sandbox**. The marker appears only on answers the desktop app reported that way.
 
-An answer whose folder held project instructions is marked **AGENTS.md applied** or **AGENTS.md ignored**, read-only: the **Respect AGENTS.md** switch is in the desktop app (see [Project instructions](#project-instructions-agentsmd)).
+An answer whose folder held project instructions is marked **Project instructions applied** or **Project instructions ignored**, read-only: the **Respect project instructions** switch is in the desktop app (see [Project instructions](#project-instructions)).
 
 ## On this computer or in the cloud
 

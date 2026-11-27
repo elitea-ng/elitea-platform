@@ -335,7 +335,7 @@ export function useSendPrompt(
       const conversationId = ensured.id;
       const floor = await threadFloor(queryClient, projectId, conversationId, selection.conversationId !== '', ensured.agents, ensured.meta);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
-      // "Respect AGENTS.md" turned off before the first message: the host keeps it before the first turn (#3130).
+      // "Respect project instructions" turned off before the first message: the host keeps it before the first turn (#3130).
       await applyPendingRespect(ipc, workspace.id, conversationId, startsNew);
       const base: TurnStartRequest = {
         workspace_id: workspace.id,

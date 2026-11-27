@@ -14,7 +14,8 @@
  *
  * Below them, "Thread settings" (#3145): the composer's `ThreadSettings` (where the thread works and runs, the sandbox,
  * the sub-agents, the step limit, each agent's model, the meters) rendered into `settingsRef`, then the thread's project
- * instructions (issue 3130): the folder's AGENTS.md, once, with the thread's "Respect AGENTS.md" switch
+ * instructions (issue 3130): the folder's AGENTS.md (or a non-git folder's README/NOTES fallback), once, with the thread's
+ * "Respect project instructions" switch
  * (`ProjectInstructionsSection`). Each row's "Model in this thread…" opens that agent's model there, and a row whose
  * agent runs on another model than its own says which.
  */

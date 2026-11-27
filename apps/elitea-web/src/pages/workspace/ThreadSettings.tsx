@@ -10,7 +10,7 @@
  * - Models: each agent's model in this thread (`AgentModelRow`), its own unless chosen here (`agentModels`).
  * - Context and index: the language servers, the folder's index and the context ring.
  *
- * "Respect AGENTS.md" follows in the tab (`ProjectInstructionsSection`), under the same heading. The composer renders
+ * "Respect project instructions" follows in the tab (`ProjectInstructionsSection`), under the same heading. The composer renders
  * this into the tab (a portal), so its controls stay in the composer's state.
  */
 import { useEffect, useRef, type ReactNode } from 'react';

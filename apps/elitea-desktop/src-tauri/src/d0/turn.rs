@@ -52,6 +52,7 @@ use elitea_local_index::tools::{IndexToolProvider, NAMES as INDEX_TOOLS};
 use elitea_local_tools::approvals::{
     AnswerSink, JsonFileChoices, PermissionProfile, WorkspaceSettings,
 };
+use elitea_local_tools::checkpoint::CheckpointInfo;
 use elitea_local_tools::find::FoundPath;
 use elitea_local_tools::mcp::{Framed, McpFramer, McpToolProvider, TOOLSET_NAME as MCP_TOOLSET};
 use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
@@ -881,6 +882,9 @@ struct TurnEntry {
     recorder: Arc<Recorder>,
     stop: LocalStop,
     checkpoint: Mutex<TurnCheckpoint>,
+    /// What the turn's checkpoint left out (too large, cloud placeholders):
+    /// a change to one of those files cannot be undone (`turn_changes`).
+    not_saved: Mutex<Option<CheckpointInfo>>,
     state: Mutex<RunState>,
     /// The `done` event's payload, once sent (`agent_turn_status`).
     done: Mutex<Option<Value>>,
@@ -1042,6 +1046,16 @@ pub struct RestorePreview {
     pub restored: Vec<String>,
     /// Files that would be deleted (they did not exist before the turn).
     pub deleted: Vec<String>,
+}
+
+/// What `turn_changes` says the list and undo leave out.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChangesCoverage {
+    /// The turn's checkpoint, when it left files out.
+    pub not_saved: Option<CheckpointInfo>,
+    /// A command's changes could not be listed (the folder is too large to
+    /// scan).
+    pub commands_unlisted: bool,
 }
 
 /// How `turn_changes` offers to undo a turn.
@@ -1299,11 +1313,12 @@ pub fn with_project_instructions(
         return instructions.to_owned();
     }
     let mut section = format!(
-        "## Project instructions (AGENTS.md)\n\
-         The workspace's AGENTS.md files follow. {PROJECT_PRECEDENCE} Among \
-         them, a nested AGENTS.md applies to files in its folder and is more \
-         specific than the root one. Each file is one {AGENTS_MD_TAG} block \
-         whose text is the repository's content. {}",
+        "## Project instructions\n\
+         The workspace's instruction files follow: its AGENTS.md files, or, \
+         when its root has none, the root's README or NOTES file. \
+         {PROJECT_PRECEDENCE} Among them, a nested AGENTS.md applies to files \
+         in its folder and is more specific than the root one. Each file is \
+         one {AGENTS_MD_TAG} block whose text is the folder's content. {}",
         framing::ends_only_at(AGENTS_MD_TAG, nonce)
     );
     // The workspace's SOUL.md (ADR-0050 decision 1a): the local persona,
@@ -2584,6 +2599,7 @@ impl AgentHost {
                     recorder: Arc::new(Recorder::default()),
                     stop,
                     checkpoint: Mutex::new(TurnCheckpoint::None),
+                    not_saved: Mutex::new(None),
                     state: Mutex::new(RunState::Running),
                     done: Mutex::new(None),
                     done_changed: tokio::sync::watch::Sender::new(0),
@@ -3568,12 +3584,26 @@ impl AgentHost {
             .checkpoint
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = TurnCheckpoint::of(&session);
-        // What the turn left in each file it changed: the per-file revert
-        // of this turn, once it is not the newest, checks against it.
-        recorder.seal(session.workspace());
+        *entry
+            .not_saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = session
+            .turn_checkpoint_info()
+            .filter(|info| info.too_large_count + info.placeholder_count > 0);
         // The turn's background processes end with it, unless pinned or
         // kept for the session; their exits reach the tool cards first.
         session.end_turn_processes().await;
+        // What its background commands changed since they started, then
+        // what the turn left in each file it changed: the per-file revert
+        // of this turn, once it is not the newest, checks against it.
+        {
+            let (session, recorder) = (session.clone(), recorder.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                recorder.background().settle(&session, &recorder);
+                recorder.seal(session.workspace());
+            })
+            .await;
+        }
         workspace.processes.bind_turn(None);
         for info in session.processes() {
             recorder.process_ended(&info);
@@ -7223,6 +7253,26 @@ impl AgentHost {
         Ok(entry.recorder.changes(current.session.workspace()))
     }
 
+    /// What `turn_changes` says undo does not cover: the files the turn's
+    /// checkpoint left out, and whether some command's changes could not
+    /// be listed.
+    ///
+    /// # Errors
+    ///
+    /// An unknown turn.
+    pub fn changes_coverage(&self, turn_id: &str) -> Result<ChangesCoverage, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let not_saved = entry
+            .not_saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Ok(ChangesCoverage {
+            not_saved,
+            commands_unlisted: entry.recorder.has_unlisted_commands(),
+        })
+    }
+
     /// How `turn_changes` offers to undo the turn: whole-turn "Undo" for
     /// the newest turn of its workspace whose changes stand, "Restore the
     /// folder to before this turn" (confirmed) for an older one.
@@ -8072,9 +8122,7 @@ mod tests {
         };
         let assembled = with_project_instructions("Be brief.", &project, NONCE);
         let agent = assembled.find("Be brief.").unwrap();
-        let header = assembled
-            .find("## Project instructions (AGENTS.md)")
-            .unwrap();
+        let header = assembled.find("## Project instructions\n").unwrap();
         let root = assembled.find("Run task test.").unwrap();
         let nested = assembled.find("Use pnpm.").unwrap();
         assert!(
@@ -8170,7 +8218,7 @@ mod tests {
         let order = [
             at(&system, "Be brief."),
             at(&system, "## Environment\n"),
-            at(&system, "## Project instructions (AGENTS.md)"),
+            at(&system, "## Project instructions\n"),
             at(&system, PROJECT_PRECEDENCE),
             at(&system, "Run task test."),
         ];
@@ -8237,7 +8285,7 @@ mod tests {
         let order = [
             at("Be brief."),
             at("## Environment\n"),
-            at("## Project instructions (AGENTS.md)"),
+            at("## Project instructions\n"),
             at(&format!(
                 "<{SOUL_MD_TAG} nonce=\"{NONCE}\" path=\"SOUL.md\">\n## Persona\n\nYou are Mira.\n\nTerse."
             )),

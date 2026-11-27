@@ -1,0 +1,57 @@
+---
+title: "Working with documents and folders without git (desktop)"
+description: "How the Elitea desktop app handles a Local work folder that is not a git repository: folder kinds, undo, the Changes tab, the Local documents agent, project instructions and the folder index."
+---
+
+A **Local work** folder in the Elitea desktop app does not have to be a git repository. A folder of code without `.git`, a folder of documents, notes or data, or a mix of both works the same way: the agent reads, edits and searches it, and you can see and undo what it changed.
+
+## What the app calls your folder
+
+The **Workspaces** list shows a chip for each folder:
+
+- **Git**: the folder is inside a git repository.
+- **Code**: no git, but the folder is a code project. It has a project file such as `package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml` or `pom.xml` at the top or one level down, or it is mostly source files.
+- **Documents**: no git, and the folder is mostly documents (Word, Excel, PowerPoint, PDF, Markdown, text, CSV).
+- No chip: a mix of both, or an empty folder.
+
+The app works this out from file names only, from a sample of at most 400 entries three levels deep. It never opens a file to decide, so a cloud file that is not downloaded stays in the cloud. Dependency and build folders (`node_modules`, `target`, `dist`, `build`, `vendor`) and hidden ones are left out. The chip is worked out again each time the list is shown.
+
+The agent is told the same thing: in a folder without git, its environment says "a folder of documents, not under version control" (or "of code", or just "a folder"), not that something is missing.
+
+## Undo without git
+
+Without git, the app keeps its own copy of the folder before the agent's first change in a turn, in the app's data, never in the folder. **Undo** on the turn, or **Revert** on a single file in the **Changes** tab, puts files back from that copy.
+
+- Files that did not change since the last copy are not read again, and on macOS and Linux the copy uses the file system's clone where it can, so it is fast even in a large folder.
+- Cloud files that are not downloaded (iCloud Drive, OneDrive, Dropbox) are never opened. They are left out of the copy and named in the **Changes** tab.
+- Files over 64 MiB are left out of the copy and named too: a change to one of them cannot be undone.
+- Files your `.gitignore` names are still saved. Only dependency and build folders are left out, and a folder with an ordinary name such as `target`, `venv` or `Pods` only when it sits next to the project file of the tool that makes it (`Cargo.toml`, `requirements.txt`, `Podfile`), so your own `target` folder of spreadsheets keeps its undo.
+
+**When the folder is too large to save.** Before the agent's first change in such a folder, the app asks you whether to go on without undo. Say no and the agent makes no change in that turn; it tells you what it would change instead. A turn nobody can be asked about, an unattended run or a thread in **Full auto**, never goes on without undo: it makes no change and says why.
+
+## The Changes tab lists everything
+
+The **Changes** tab lists every file the turn changed, including files a command created, changed or deleted. Those rows say **by a command** and name it.
+
+- A binary or very large file shows its size before and after (for example **1.2 MB → 1.4 MB**) instead of a diff.
+- **Open** opens the file with its usual app, **Reveal** shows it in Finder or Explorer, and **Revert** puts that one file back.
+- When the turn's copy left files out, or a command ran while the folder was too large to scan, the tab says so above the list.
+
+This works in git folders too, and a file is never listed twice.
+
+## The Local documents agent
+
+A project with no agents offers two agents to create, both always available:
+
+- **Local documents agent**: reads, summarises, compares and edits documents. It reads PDF and Office files with the app's document reader, cites the file it read, and never claims to have run tests. In a documents folder it saves an edited Word, Excel or PowerPoint file as a new file next to it, `<name> (edited).docx`, unless you ask it to change the original. Every change it makes can be undone as above.
+- **Local coding agent**: explores, edits and tests code.
+
+In a **Documents** folder, or one with no chip, the documents agent is offered first and picked by default when the project has it. In a **Git** or **Code** folder the coding agent is. You can pick either agent, or any other agent of the project, in the composer.
+
+## Project instructions without AGENTS.md
+
+The agent follows the folder's `AGENTS.md`. A folder without git and without an `AGENTS.md` at its top uses its `README.md`, else `README.txt`, else `NOTES.md`, as its project instructions. A README in a subfolder is never used, and neither is a git repository's README. The **Participants** tab lists the file that applies, and **Respect project instructions** turns it off for a thread. See [Project instructions](/how-tos/chat-conversations/desktop-multi-agent#project-instructions).
+
+## Search the folder's documents
+
+The **Folder index** indexes the folder's code and the text of its documents, so the agent can search what a PDF or a Word file says. See [Local index](/how-tos/indexing/desktop-local-index).

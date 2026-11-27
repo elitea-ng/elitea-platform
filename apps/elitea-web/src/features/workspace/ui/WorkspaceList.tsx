@@ -46,6 +46,19 @@ const headSx = (theme: Theme) => ({
 
 const cellSx = { padding: '0 12px', height: 32, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 0 } as const;
 
+/** What the folder mostly holds (IPC.md "Workspaces"): Git inside a git work tree, else Code or Documents; a mixed folder has no chip. */
+function kindLabel(workspace: Workspace): string | undefined {
+  if (workspace.is_git) return t('workspace.git', 'Git');
+  if (workspace.kind === 'code') return t('workspace.kind.code', 'Code');
+  if (workspace.kind === 'documents') return t('workspace.kind.documents', 'Documents');
+  return undefined;
+}
+
+function FolderKindChip({ workspace }: { workspace: Workspace }): React.JSX.Element | null {
+  const label = kindLabel(workspace);
+  return label === undefined ? null : <Chip size="small" variant="outlined" label={label} data-testid="folder-kind-chip" />;
+}
+
 export function WorkspaceList({ workspaces, projects, onSelect, onContextMenu, indexCell }: WorkspaceListProps): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const projectName = (workspace: Workspace): string | undefined => projects.find((p) => p.id === workspace.project_id)?.name;
@@ -113,7 +126,7 @@ export function WorkspaceList({ workspaces, projects, onSelect, onContextMenu, i
                   <Typography variant="labelMedium" component="span" sx={(theme: Theme) => ({ overflow: 'hidden', textOverflow: 'ellipsis', color: theme.vars.palette.text.secondary })}>
                     {workspace.name}
                   </Typography>
-                  {workspace.is_git && <Chip size="small" variant="outlined" label={t('workspace.git', 'Git')} />}
+                  <FolderKindChip workspace={workspace} />
                 </Box>
               </Box>
               <Box component="td" sx={cellSx} title={workspace.path}>

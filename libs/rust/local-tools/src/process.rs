@@ -1426,7 +1426,9 @@ mod tests {
             .expect("spawn");
         tokio::time::sleep(Duration::from_millis(200)).await;
         drop(registry);
-        assert!(pinned.wait_exit(Duration::from_secs(1)).await);
+        // `wait_exit` returns at the exit: the bound only has to outlast a
+        // loaded machine's kill and reap, never the test's own pace.
+        assert!(pinned.wait_exit(Duration::from_secs(5)).await);
         assert!(stubborn.wait_exit(Duration::from_secs(5)).await);
         assert_eq!(stubborn.info().signal.as_deref(), Some("SIGKILL"));
     }

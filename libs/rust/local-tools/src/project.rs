@@ -43,6 +43,21 @@ use crate::workspace::{EntryKind, EntryStamp, Intent, Workspace, WsPath};
 /// The largest marker file detection reads.
 pub const MAX_MARKER_BYTES: u64 = 1024 * 1024;
 
+/// Every marker file [`detect`] looks for in a folder (the table above).
+/// A folder holding one is a code project, whatever its runner: the
+/// desktop's folder kind reads only these names, never their content.
+pub const MARKER_FILES: &[&str] = &[
+    "Cargo.toml",
+    "go.mod",
+    "package.json",
+    "pyproject.toml",
+    "pytest.ini",
+    "setup.cfg",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+];
+
 /// The most directories one level below the root that detection looks in.
 pub const MAX_SUBDIRS: usize = 64;
 
@@ -1184,6 +1199,27 @@ mod tests {
             .iter()
             .map(|runner| (runner.kind, runner.dir.display_string()))
             .collect()
+    }
+
+    /// The folder kind trusts [`super::MARKER_FILES`]: it must name every
+    /// file detection looks for in a folder with none of them.
+    #[test]
+    fn marker_files_are_every_marker_detection_looks_for() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = Workspace::open(dir.path(), &[]).expect("workspace");
+        let mut looked: Vec<String> = detect(&workspace, &[])
+            .stamps
+            .iter()
+            .map(|(path, _)| path.display_string())
+            .filter(|name| !name.is_empty() && name != ".")
+            .collect();
+        looked.sort();
+        let mut markers: Vec<String> = super::MARKER_FILES
+            .iter()
+            .map(|m| (*m).to_owned())
+            .collect();
+        markers.sort();
+        assert_eq!(looked, markers);
     }
 
     #[test]

@@ -251,6 +251,100 @@ impl DocumentExtractor for SidecarExtractor<'_> {
     }
 }
 
+/// The bundled extractor process as an owned [`DocumentExtractor`], for a
+/// reader that outlives one call (the desktop's folder index, ADR-0029
+/// decision 7): the same sidecar `read_document` runs, under the same
+/// read-only, network-off sandbox with the workspace's deny list, the same
+/// wall-clock limit ([`SIDECAR_TIMEOUT`]) and answer limit. Nothing is ever
+/// parsed in this process: a sandbox that cannot hide the denied paths
+/// fails each extraction ([`Self::check`] says so up front).
+#[derive(Clone, Debug)]
+pub struct SandboxedSidecar {
+    program: PathBuf,
+    request: SandboxRequest,
+    config: SandboxConfig,
+    timeout: Duration,
+}
+
+impl SandboxedSidecar {
+    /// The sidecar at `program`, confined to reading `workspace` with its
+    /// `path_deny` and deny list hidden (a workspace without one gets the
+    /// person's credentials under HOME, as host git does).
+    #[must_use]
+    pub fn for_workspace(program: PathBuf, workspace: &Workspace, config: SandboxConfig) -> Self {
+        let deny_paths = workspace.deny_list().map_or_else(
+            || {
+                crate::deny::DenyList::env_home_credentials()
+                    .paths()
+                    .to_vec()
+            },
+            |deny| deny.paths().to_vec(),
+        );
+        let root = workspace.root().to_path_buf();
+        Self {
+            program,
+            request: SandboxRequest {
+                mode: crate::policy::SandboxMode::ReadOnly,
+                network: false,
+                git_roots: vec![root.clone()],
+                deny_paths,
+                deny_globs: workspace.deny_patterns().to_vec(),
+                deny_root: Some(root),
+                ..SandboxRequest::default()
+            },
+            config,
+            timeout: SIDECAR_TIMEOUT,
+        }
+    }
+
+    /// The same with another wall-clock limit.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// The sandbox request each run is confined by.
+    #[must_use]
+    pub fn request(&self) -> &SandboxRequest {
+        &self.request
+    }
+
+    /// Whether this machine can run the sidecar confined, hiding what the
+    /// request denies.
+    ///
+    /// # Errors
+    ///
+    /// Why documents cannot be extracted here (no sandbox, or one that
+    /// cannot hide the denied paths).
+    pub fn check(&self) -> Result<(), String> {
+        let argv = vec![self.program.display().to_string()];
+        let prepared = sandbox::prepare(&self.request, &argv, &self.config)
+            .map_err(|error| error.message().to_owned())?;
+        if prepared.hides_denied {
+            Ok(())
+        } else {
+            Err(
+                "the sandbox here cannot hide the credentials the session denies, so documents are not extracted"
+                    .to_owned(),
+            )
+        }
+    }
+}
+
+impl DocumentExtractor for SandboxedSidecar {
+    fn extract(
+        &self,
+        mime: &str,
+        bytes: Vec<u8>,
+        range: &PageRange,
+    ) -> Result<PagedText, ExtractFailure> {
+        SidecarExtractor::new(&self.program, &self.request, &self.config)
+            .with_timeout(self.timeout)
+            .extract(mime, bytes, range)
+    }
+}
+
 #[derive(Deserialize)]
 struct DocumentArgs {
     path: String,

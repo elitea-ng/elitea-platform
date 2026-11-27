@@ -8,8 +8,8 @@
  * tab shows the queue behind it and what was decided); Plan — the agent's
  * checklist (offered once it keeps one, or in plan mode); Processes — the
  * folder's background processes and their terminals (offered once it has
- * one); Index — the folder's local code index; Context — what fills the
- * model's window (`ContextPanel`, lazy), its chip naming the share in use.
+ * one); Index — the folder's local index of its code and documents;
+ * Context — what fills the model's window (`ContextPanel`, lazy), its chip naming the share in use.
  */
 import { lazy, Suspense, useState } from 'react';
 

@@ -124,6 +124,7 @@ type Workspace = {
   name: string;             // the folder's name
   project_id: number | null; // the project local turns run in; a turn needs one
   is_git: boolean;          // inside a git work tree (computed when listed)
+  kind: "git" | "code" | "documents" | "mixed"; // what the folder mostly holds (computed when listed, see below)
   parent_id?: string;       // a task worktree's workspace: the folder it was made from (#1235)
   thread_uuid?: string;     // a task worktree's workspace: the thread it was made for
 };
@@ -142,6 +143,19 @@ type Workspace = {
 
 Workspaces are stored in the app data directory (`workspaces.json`), never
 inside the folder.
+
+`kind` is computed with `is_git` by `workspace_list`, `workspace_open` and
+`workspace_bind_project`, from names only (no file is opened): `git` inside a
+git work tree (nothing more is read); otherwise a breadth-first sample of at
+most 400 entries, three levels deep, hidden entries and dependency or build
+folders (`node_modules`, `target`, `dist`, `build`, `vendor`, `__pycache__`,
+`venv`) left out. A project marker (`Cargo.toml`, `go.mod`, `package.json`,
+`pyproject.toml`, `pytest.ini`, `setup.cfg`, `pom.xml`, `build.gradle(.kts)`)
+at the top or one level down, or four in five sampled files being source
+code, makes it `code`; four in five being documents (Office, PDF, Markdown,
+text, CSV) with no marker makes it `documents`; anything else, or an empty
+folder, is `mixed`. The app shows a Code or Documents chip from it and offers
+the Local documents agent first for `documents` and `mixed`.
 
 ## Parallel agents: task worktrees (`src/worktrees.rs`, `src/worktree_commands.rs`, `libs/rust/local-tools/src/{worktree,apply}.rs`, #1235)
 
@@ -453,7 +467,7 @@ failed tool's `tool_result` event carries its `code` (without the
 | `agent_turn_steer` | `{turn_id, text}` | `{steer_id}` — queues `text` against the running turn: the agent gets it as a user message of the same turn at the next safe point (**Steering**, below). Rejects `turn_not_running` once the turn is cancelled or its run ended (send the text as the next turn), `steer_invalid` (empty, only whitespace, or more than 16 KiB of UTF-8), `steer_queue_full` (10 messages wait already), `steer_turn_full` (the turn has 10 steering messages already, taken and waiting together: the most its commit carries; the UI shows the message and the person sends the text as the next turn), `turn_unknown` / `turn_expired`. |
 | `agent_turn_steer_update` | `{turn_id, steer_id, text: string \| null}` | `null` — changes a waiting message (`text`), or removes it (`null`). Rejects `steer_not_pending` (the agent has it already, or it was removed), `turn_not_running`, `steer_invalid`, `turn_unknown` / `turn_expired`. |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "allow_thread" \| "deny" \| "deny_with_feedback" \| "continue" \| "cancel" \| "accept" \| "decline", feedback?: string}` (`continue` is `allow_once` and `cancel` is `deny`, the MCP sign-in card's answers; `accept` and `decline` answer a `plan_proposed` card, where only `accept` accepts, and on any other card both deny; `deny_with_feedback` denies any card (declines a plan card) and tells the agent why. `feedback`, taken by `decline` and `deny_with_feedback`, is the person's text for the model, kept to 2 KiB of UTF-8 (the UI's box stops there too), control characters other than newlines and tabs dropped; it travels only with a denial, never an approval, and `deny_with_feedback` without any is `deny`) | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
-| `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean}` |
+| `turn_changes` | `{turn_id}` | `{files: FileChange[], latest: boolean, undone: boolean, not_saved: NotSaved \| null, commands_unlisted: boolean}` |
 | `checkpoint_preview` | `{turn_id}` | `{restored: string[], deleted: string[]}` — a dry run of restoring the folder to before the turn |
 | `checkpoint_restore` | `{turn_id, path?: string, confirm_older?: boolean}` | `{restored: string[]}` |
 | `checkpoint_after` | `{turn_id}` | `{turn_id: string \| null}` — the turn whose checkpoint is the folder as `turn_id` left it: the first later turn of the same workspace (any thread) that changed files and was not undone. `null` when no later turn changed the folder (it is already as that turn left it, the person's own edits aside). A fork from a turn offers "Restore files to this point" with it: `checkpoint_preview` of the answered turn, then `checkpoint_restore` with `confirm_older` (Thread history, "Fork point"). Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep. Changes nothing. |
@@ -1360,16 +1374,22 @@ mention, the `AGENTS.md` of every folder between it and the root, nearest
 first, deduplicated. Reads go through the confined workspace: a symlinked
 file or folder is not read and a `path_deny` match is refused. All files
 together are capped at 32 KiB; a cut file ends with a truncation note and
-files past the cap are skipped. They end the system instructions, after
+files past the cap are skipped. In a folder that is not a git work tree,
+when the root has no `AGENTS.md`, the root's `README.md`, else `README.txt`,
+else `NOTES.md` is read in its place (same matching, confinement and cap); a
+nested folder's README never is, and neither is a git repository's.
+They end the system instructions, after
 the agent's own instructions and the environment section (which outrank
 them, as does any picked skill, as the section's preamble says), as one
-`## Project instructions (AGENTS.md)` section with one
+`## Project instructions` section with one
 `<agents_md nonce="…" path="…">` block per file. The path is escaped as an
 attribute value (`&`, `"`, `<`, `>` and control characters as entities).
 Edits apply from the next turn.
 
-**Respect AGENTS.md** (issue 3130). Whether a thread applies the project
-instructions (the AGENTS.md files and the root `SOUL.md`) is the thread's
+**Respect project instructions** (issue 3130; named "Respect AGENTS.md"
+before the fallback, the stored setting and the command are unchanged).
+Whether a thread applies the project
+instructions (the AGENTS.md files or the root's fallback, and the root `SOUL.md`) is the thread's
 own setting, kept by the host in `threads.sqlite` (`thread_settings`,
 schema 7), on unless the person turned it off (`thread_respect_agents_md_set`).
 The host reads it at every turn start, beside the files (a read that fails
@@ -1432,13 +1452,31 @@ type FileChange = {
   added: number;  // lines
   removed: number;
   diff: string;   // unified diff; empty for a binary file
+  binary?: true;        // no line diff: binary, or too large to keep
+  size_before?: number; // bytes before the turn (absent: it did not exist)
+  size_after?: number;  // bytes now (absent: deleted)
+  command?: string;     // the command that changed it first; absent: a file tool did
+};
+
+type NotSaved = {
+  too_large: string[];       // over the checkpoint's per-file limit (at most 50 named)
+  too_large_count: number;
+  placeholders: string[];    // cloud placeholders, never opened (at most 50 named)
+  placeholder_count: number;
 };
 ```
 
 `turn_changes` covers files the turn's file tools (`write_file`,
 `edit_file`, `multi_edit`, `apply_patch`) changed, against what they held before the turn
-first changed them. A file only a shell command changed is not listed (D0),
-but `checkpoint_restore` undoes it with the rest of the turn.
+first changed them, and files a command created, changed or deleted, found
+by comparing the folder before and after the command (`command` names it; a
+file a file tool changed first is listed once, as the tool's). A binary or
+large file has no diff: `binary` with its sizes before and after.
+`checkpoint_restore` undoes both kinds with the rest of the turn.
+`not_saved` names what the turn's checkpoint left out (files over the size
+limit, cloud placeholders): a change to one of those cannot be undone.
+`commands_unlisted` is `true` when a command ran while the folder was too
+large to scan, so its changes may be missing from the list.
 
 **Undo is for the newest turn.** `turn_changes`' `latest` is `true` for the
 newest turn of its workspace that changed files and was not undone; `undone`
@@ -1814,7 +1852,7 @@ audit entry (contract 1.20, #1415).
 | `thread_skills_list` | `{workspace_id, conversation_id}` | `[{project_id, skill_id, available}]` — the project skills pinned to that local thread (ADR-0050 amendment 1, A1.5), oldest first; `available` is `false` when the person can no longer read the skill (deleted, or access lost: a `403` or `404`), so the UI can offer to unpin it; the signed-in account's only. A pin is the skill's id, kept by the host in `threads.sqlite` (`thread_skill_pins`, schema 6); never its text. `[]` without a store. |
 | `thread_skill_pin` | `{workspace_id, conversation_id, project_id, skill_id}` | `null` — pin a project skill to the thread. Every turn there then applies it like a skill the message picked (`ProjectSkillPick`), after the pins and picks fit the usual bound of five skills and 64 KiB together; the host reads the text at each turn under the person's token, and a pinned skill the person can no longer read is skipped. A skill pinned already changes nothing. Pins whose skill is gone are dropped first and never count toward the bound. Rejects `skill_unknown` (the person cannot read it), `thread_skills_full` (five readable ones are pinned), `invalid_request`, `not_signed_in`, `storage`. The host pins project skills only and never reads Marketplace listings: for a listing the UI first runs the fork-only `attach_public_skill` and pins the project's copy. |
 | `thread_skill_unpin` | `{workspace_id, conversation_id, skill_id}` | `boolean` — whether the skill was pinned. |
-| `thread_instructions_status` | `{workspace_id, conversation_id?}` | `{files: string[], respect: boolean}` — the project instruction files at the workspace folder's root (`AGENTS.md`, then `SOUL.md`; a turn also applies the nested `AGENTS.md` of the paths it references, which its `running` status names) and whether the thread respects them (**Respect AGENTS.md**, above). Without `conversation_id` (a thread not created yet) `respect` is `true`. Only reads: it answers while a turn runs. Rejects `invalid_request`, `local_work_disabled`, `workspace_unknown`, `workspace_unavailable` (the folder cannot be opened), `not_signed_in`, `storage`, `internal`. |
+| `thread_instructions_status` | `{workspace_id, conversation_id?}` | `{files: string[], respect: boolean}` — the project instruction files at the workspace folder's root (`AGENTS.md`, then `SOUL.md`; a turn also applies the nested `AGENTS.md` of the paths it references, which its `running` status names) and whether the thread respects them (**Respect project instructions**, above). Without `conversation_id` (a thread not created yet) `respect` is `true`. Only reads: it answers while a turn runs. Rejects `invalid_request`, `local_work_disabled`, `workspace_unknown`, `workspace_unavailable` (the folder cannot be opened), `not_signed_in`, `storage`, `internal`. |
 | `thread_respect_agents_md_set` | `{workspace_id, conversation_id, respect}` | `null` — keep the thread's choice under every spelling the thread is known by; the thread's next turn follows it, a running turn keeps what it started with. A fork keeps the source's choice; deleting the thread forgets it. Rejects `invalid_request`, `workspace_unknown`, `not_signed_in`, `storage` (no store, or the write failed), `internal`. |
 
 **Foreign skill text.** A project skill written in another project, whose current text this project has not trusted (`GET skill_trust`, ADR-0051 amendment 1, A1.6), is applied to the turn as quoted data: its text sits in the runtime's `<untrusted source="skill:NAME">` envelope inside its skill block, and the skills section says so. A skill of the project's own, or one it trusts, is applied as written. A trust read that fails is read as untrusted.
@@ -2055,7 +2093,9 @@ sent anywhere: there are no embeddings yet.
 ```ts
 type IndexStatus = {
   state: "off" | "building" | "ready" | "stale" | "stale_policy" | "error";
-  files: number;          // documents of the last build
+  files: number;          // files of the last build
+  documents: number;      // of those, PDF/Office/e-mail/e-book files, read as text by the sandboxed extractor
+  documents_unavailable: string | null; // why PDF and Office files are left out (no extractor, or no sandbox that hides the deny list)
   entities: number;
   relations: number;
   vectors: number;        // 0 until embeddings exist
@@ -3319,7 +3359,7 @@ order. Kinds and payloads:
 
 | `kind` | `payload` |
 | --- | --- |
-| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], project_instructions_applied?: boolean, model?: TurnModel, continued?: number, host_prompt?: string, continued_automatically?: true, continuation_index?: number, unattended?: object, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the project instruction files the folder holds for the turn, in order (the AGENTS.md paths, then `SOUL.md`), with `project_instructions_applied` (`false` when the thread does not respect AGENTS.md, issue 3130); `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`reasoning_effort`: `auto`, `off`, `low`, `medium` or `high`; `off` is no thinking, which a build before ADR-0038 named `none`) (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `continued_automatically`, `continuation_index` and `unattended` mark an unattended turn and its place in its chain (**Unattended turns**); `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
+| `status` | `{phase: "resolving" \| "starting" \| "running" \| "done" \| "cancelled" \| "error", message?: string, project_instructions?: string[], project_instructions_applied?: boolean, model?: TurnModel, continued?: number, host_prompt?: string, continued_automatically?: true, continuation_index?: number, unattended?: object, note?: string, timings?: Timing[]}` — `timings` (below) are the turn's phases measured since the previous `status`; `project_instructions` (on `running` only, when any) lists the project instruction files the folder holds for the turn, in order (the AGENTS.md paths or the root's README/NOTES fallback, then `SOUL.md`), with `project_instructions_applied` (`false` when the thread does not respect project instructions, issue 3130); `model` (on the first `running`) is the model the turn runs on, `{name, reasoning_effort?, chosen, pinned}` (`reasoning_effort`: `auto`, `off`, `low`, `medium` or `high`; `off` is no thinking, which a build before ADR-0038 named `none`) (`chosen`: the person's choice over the agent's model; `pinned`: the agent pins its model, so no choice is offered); `continued` and `host_prompt` (on a later `running`) say the run went on past its step limit for the n-th time from the host's own prompt, which is not the person's message; `continued_automatically`, `continuation_index` and `unattended` mark an unattended turn and its place in its chain (**Unattended turns**); `note` (on `done`) is `step_limit_reached` when the turn stopped at its limit |
 | `text_delta` | `{text}` — model text as it streams |
 | `thinking_delta` | `{text}` — the model's reasoning as it streams (the gateway's `reasoning_content` / `reasoning` deltas), sent next to `text_delta` as it arrives; the transcript folds it into a collapsed "Thinking" block of the step (issue 1228). Never logged |
 | `thinking_end` | `{chars: number}` — a reasoning block closed (the model moved on to its answer or its tool calls, or its stream ended); `chars` is its length |
