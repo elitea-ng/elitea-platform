@@ -308,6 +308,9 @@ func (h *Handler) performHire(ctx context.Context, external pgx.Tx, in hireInput
 		slog.ErrorContext(ctx, "marketplace hire: read the version failed", "listing_id", listingID, "error", err)
 		return nil, failHire(http.StatusInternalServerError, "internal_error", "Failed to hire.")
 	}
+	if version.ListingKind == marketplace.KindTeam {
+		return nil, failHire(http.StatusBadRequest, "invalid_request", "A team is hired with marketplace_team_hire.")
+	}
 	if version.ListingKind != marketplace.KindAgent {
 		return nil, failHire(http.StatusBadRequest, "invalid_request", "A skill is added to an agent, not hired.")
 	}

@@ -5539,6 +5539,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
+				// Saved teams in the Marketplace (ADR-0051 amendment, issue
+				// 3137; shared 0286). Publishing a team takes the agent publish
+				// permission and the team read; hiring one creates agents AND a
+				// team, so it takes both create permissions.
+				r.With(projectPermission("models.applications.publish.post"), projectPermission(agentteamsdomain.ListPermission)).
+					Post("/marketplace_team_publish/prompt_lib/{projectID}/{teamID}", coreHandler.MarketplaceTeamPublish)
+				r.With(projectPermission("models.applications.applications.create"), projectPermission(agentteamsdomain.CreatePermission)).
+					Post("/marketplace_team_hire/prompt_lib/{projectID}", coreHandler.MarketplaceTeamHire)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
 				// Feedback per listing version (ADR-0051 decision 5, issue

@@ -16589,8 +16589,142 @@ components:
         can_moderate:
           type: boolean
           description: The caller is a platform administrator and may yank, delist and feature.
+        team:
+          $ref: '#/components/schemas/MarketplaceTeamDetail'
       description: >
-        The listing page read (internal/marketplace/search.go Get).
+        The listing page read (internal/marketplace/search.go Get). A team
+        listing (kind `team`) also carries `team`: its current version's
+        members, each resolved as its own listing.
+
+    MarketplaceTeamMember:
+      type: object
+      required: [position, listing_id, version_id, name, description, icon_url, version_name, hireable, requirements, hired_application_id]
+      properties:
+        position: { type: integer, minimum: 1, maximum: 16, description: The member's place in the roster. }
+        listing_id: { type: string, description: The member's agent listing. }
+        version_id: { type: string, description: The member listing version the team pins. }
+        name: { type: string }
+        description: { type: string }
+        icon_url: { type: string, nullable: true }
+        version_name: { type: string }
+        hireable:
+          type: boolean
+          description: The member's listing is listed and its pinned version neither yanked nor withdrawn.
+        requirements: { $ref: '#/components/schemas/MarketplaceRequirements' }
+        hired_application_id:
+          type: string
+          nullable: true
+          description: >
+            The project's agent installed from the same listing version, which
+            a team install reuses instead of hiring again; null when none.
+      description: >
+        One member of a team listing (internal/marketplace/teams.go).
+
+    MarketplaceTeamDetail:
+      type: object
+      required: [version_id, floor_policy, lead_position, members]
+      properties:
+        version_id: { type: string, description: The team listing version these members belong to. }
+        floor_policy: { type: string, description: '`addressed` or `lead`.' }
+        lead_position:
+          type: integer
+          minimum: 0
+          maximum: 16
+          description: The lead member's position under `lead`; 0 under `addressed`.
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceTeamMember' }
+      description: >
+        The team part of a team listing's page (internal/marketplace/teams.go).
+
+    MarketplaceTeamPublishRequest:
+      type: object
+      properties:
+        version_name: { type: string, maxLength: 128, description: 'The version label; `v<N>` when absent.' }
+        release_notes: { type: string, maxLength: 4000 }
+        category: { type: string, maxLength: 64 }
+        tags:
+          type: array
+          maxItems: 64
+          items: { type: string }
+      description: >
+        Publish a saved team to the Marketplace
+        (internal/api/v2/eliteacore/marketplace_team.go).
+
+    MarketplaceTeamPublishResult:
+      type: object
+      required: [listing_id, version_id, version_name, digest]
+      properties:
+        listing_id: { type: string }
+        version_id: { type: string }
+        version_name: { type: string }
+        digest: { type: string, description: 'The SHA-256 of the team snapshot, in hex.' }
+      description: >
+        The team listing version a publish wrote
+        (internal/api/v2/eliteacore/marketplace_team.go).
+
+    MarketplaceTeamHireMemberRequest:
+      type: object
+      required: [position]
+      properties:
+        position: { type: integer, minimum: 1, maximum: 16 }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceBinding' }
+      description: >
+        The connections of one member, keyed by the member version's
+        requirement keys (internal/api/v2/eliteacore/marketplace_team.go).
+
+    MarketplaceTeamHireRequest:
+      type: object
+      required: [listing_id, version_id, mode]
+      properties:
+        listing_id: { type: string }
+        version_id: { type: string }
+        mode: { type: string, description: '`install` or `fork`.' }
+        name: { type: string, maxLength: 128, description: The saved team's name; the listing's when absent. }
+        members:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/MarketplaceTeamHireMemberRequest' }
+      description: >
+        Hire a team listing (internal/api/v2/eliteacore/marketplace_team.go).
+
+    MarketplaceTeamHireMemberResult:
+      type: object
+      required: [position, application_id, version_id, reused, tools_enabled, awaiting_approval, unbound]
+      properties:
+        position: { type: integer }
+        application_id: { type: string }
+        version_id: { type: string, description: The project agent version the team pins. }
+        reused:
+          type: boolean
+          description: Install reused the agent the project already installed from the same listing version.
+        tools_enabled: { type: boolean }
+        awaiting_approval:
+          type: boolean
+          description: A change request of kind `hire` waits for a person to enable this member's tools.
+        change_request_id: { type: string }
+        unbound:
+          type: array
+          items: { type: string }
+          description: The requirement keys hired without a connection; their tools stay unavailable until bound.
+      description: >
+        What the team hire did for one member
+        (internal/api/v2/eliteacore/marketplace_team.go).
+
+    MarketplaceTeamHireResult:
+      type: object
+      required: [team_id, name, mode, members]
+      properties:
+        team_id: { type: string, description: The saved team created in the project. }
+        name: { type: string }
+        mode: { type: string }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/MarketplaceTeamHireMemberResult' }
+      description: >
+        What the team hire created (internal/api/v2/eliteacore/marketplace_team.go).
 
     MarketplaceVersionStateRequest:
       type: object
@@ -46066,7 +46200,7 @@ paths:
         - name: kind
           in: query
           schema: { type: string }
-          description: '`agent` or `skill`. Absent keeps both.'
+          description: '`agent`, `skill` or `team`. Absent keeps all three.'
         - name: query
           in: query
           schema: { type: string, maxLength: 200 }
@@ -46284,6 +46418,94 @@ paths:
             version (`version_not_hireable`), an open change request on the
             agent, or a personal project that needs a shared one
             (`hire_needs_shared_project`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_team_publish/prompt_lib/{project_id}/{team_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: team_id
+        in: path
+        required: true
+        schema: { type: integer, format: int64, minimum: 1 }
+    post:
+      operationId: publishMarketplaceTeam
+      summary: Publish a saved team to the Marketplace
+      description: |
+        Lists a saved team as kind `team` (ADR-0051 amendment, issue 3137).
+        Every member agent must itself be listed: the version pins each member
+        to its listing's current version, and the requirements are the union
+        of the members'. A member with no listed, hireable listing answers
+        409 `team_members_unlisted` with the `members` it names. A republish
+        adds a version. Takes `models.applications.publish.post` and
+        `models.teams.list` (internal/api/v2/eliteacore/marketplace_team.go).
+      tags: [marketplace]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceTeamPublishRequest' }
+      responses:
+        '201':
+          description: The team listing version
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceTeamPublishResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: Members that are not listed (`team_members_unlisted`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /elitea_core/marketplace_team_hire/prompt_lib/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      operationId: hireMarketplaceTeam
+      summary: Hire a team listing into the project (Install or Fork)
+      description: |
+        Hires every member through the agent hire, then saves the team in
+        the project pinned to the hired agents' versions, in one transaction
+        (ADR-0051 amendment, issue 3137). Install reuses an agent the project
+        already installed from the same member listing version; Fork makes
+        new editable agents. Each member's connections follow the agent hire:
+        a required toolkit or MCP type needs a binding or `disabled`, and a
+        member above low tier or with write tools waits for a `hire` change
+        request. A member refusal refuses the whole team and names the member
+        (`position`). Takes `models.applications.applications.create` and
+        `models.teams.create` (internal/api/v2/eliteacore/marketplace_team.go).
+      tags: [marketplace]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MarketplaceTeamHireRequest' }
+      responses:
+        '201':
+          description: The hired team
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MarketplaceTeamHireResult' }
+        '400': { $ref: '#/components/responses/400' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
+        '409':
+          description: >-
+            A member's unbound requirement (`binding_missing`), an unhireable
+            version (`version_not_hireable`), a personal project that needs a
+            shared one (`hire_needs_shared_project`), or a taken team name
+            (`team_name_taken`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: The hired roster breaks a team rule (`team_invalid`).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }

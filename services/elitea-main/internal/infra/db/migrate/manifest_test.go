@@ -1328,7 +1328,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// (admin_elevation_items.note_source and .acknowledgement, one
 	// acknowledgement per elevation) (issue 2604, ADR-0059 R2.9c). No
 	// permission.
-	require.EqualValues(t, 285, Head(shared))
+	//
+	// 286: shared/0286_marketplace_teams.sql, saved teams in the Marketplace:
+	// listings.kind and installs.entity_kind accept `team` (issue 3137,
+	// ADR-0051 amendment). No permission.
+	require.EqualValues(t, 286, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
