@@ -42,8 +42,9 @@ export interface SessionCommands {
   run: (command: WorkspaceCommandId) => void;
 }
 
-export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTurn, canUndo: boolean): SessionCommands {
-  const [planMode, setPlanMode] = useState(false);
+export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTurn, canUndo: boolean, initialPlanMode = false): SessionCommands {
+  // A worktree's new thread starts in the plan mode its folder's new thread was in (#3144).
+  const [planMode, setPlanMode] = useState(initialPlanMode);
   // An accepted plan left plan mode on the host (`plan_accepted`): the switch follows, once per accept.
   const accepted = turn.view.planAccepted;
   const [followed, setFollowed] = useState<string | undefined>(undefined);

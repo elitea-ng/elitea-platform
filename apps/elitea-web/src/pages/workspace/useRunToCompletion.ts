@@ -33,8 +33,13 @@ export interface RunToCompletion {
   setChoice: (next: RunChoice) => void;
 }
 
-export function useRunToCompletion(workspaceId: string): RunToCompletion {
-  const [choice, setKept] = useState(() => readKept(workspaceId));
+/** `initial`: a worktree's new thread starts with its folder's choice (#3144), kept for the worktree from then on. */
+export function useRunToCompletion(workspaceId: string, initial?: RunChoice): RunToCompletion {
+  const [choice, setKept] = useState(() => {
+    if (initial === undefined) return readKept(workspaceId);
+    writeKept(workspaceId, initial);
+    return initial;
+  });
   return {
     choice,
     setChoice: (next) => {

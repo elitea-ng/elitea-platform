@@ -14,6 +14,7 @@ import type { TurnMode, TurnModeChoice } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 
 import type { FullAutoSwitch } from './ModePicker';
+import type { PreThreadChoices } from './preThreadChoices';
 import { useBypassMode, type BypassMode } from './useBypassMode';
 import { useFullAutoMode, type FullAutoMode } from './useFullAutoMode';
 import { useRunToCompletion } from './useRunToCompletion';
@@ -43,6 +44,10 @@ export interface ComposerModes {
   };
   /** The "Run to completion" control; undefined when it does not show. */
   runToCompletion: RunToCompletionBinding | undefined;
+  /** The modes as chosen now, for the thread a first message creates in a new worktree (#3144). */
+  choices: () => PreThreadChoices;
+  /** A handed mode is still being checked (Full auto's policy): the first message waits. */
+  settling: boolean;
 }
 
 function modeOf(planMode: boolean, fullAuto: boolean, bypass: boolean): TurnMode {
@@ -59,10 +64,11 @@ function choiceOf(mode: TurnMode, run: RunChoice | null): TurnModeChoice {
   return wire?.ok === true ? { mode, grant: wire.grant } : mode;
 }
 
-export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands): ComposerModes {
-  const bypass = useBypassMode(workspaceId);
-  const rawFullAuto = useFullAutoMode(local, commands.planMode);
-  const run = useRunToCompletion(workspaceId);
+/** `handed`: the modes a worktree's new thread was handed with its first message (#3144); it starts in them. */
+export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands, handed?: PreThreadChoices): ComposerModes {
+  const bypass = useBypassMode(workspaceId, handed?.bypass);
+  const rawFullAuto = useFullAutoMode(local, commands.planMode, handed?.fullAuto === true);
+  const run = useRunToCompletion(workspaceId, handed?.runToCompletion);
   const grantsOff = useGrantsTurnedOff();
   const mode = modeOf(commands.planMode, local && rawFullAuto.on, local && bypass.on);
   const offered = local && !grantsOff;
@@ -89,6 +95,8 @@ export function useComposerModes(workspaceId: string, local: boolean, commands: 
     choice: choiceOf(mode, offered ? run.choice : null),
     bypass,
     bypassActive: mode === 'bypass',
+    choices: () => ({ planMode: commands.planMode, bypass: bypass.on, fullAuto: rawFullAuto.on, runToCompletion: offered ? run.choice : undefined }),
+    settling: rawFullAuto.settling,
     fullAuto,
     switchProps: {
       bypass: local && bypass.on,

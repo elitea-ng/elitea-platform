@@ -20,6 +20,8 @@ export interface FullAutoMode {
   allowed: boolean;
   /** The thread's turns run in Full auto (never while it is not allowed). */
   on: boolean;
+  /** A handed choice waits for the organisation's answer (#3144): no first send until it came. */
+  settling: boolean;
   /** Turn it on (after the confirmation, every time) or off; `turnedOn` runs once it is on. */
   request: (on: boolean, turnedOn?: () => void) => void;
   /** The confirmation is open. */
@@ -30,18 +32,25 @@ export interface FullAutoMode {
 
 const FULL_AUTO_STATUS_KEY = ['desktop', 'full-auto-status'] as const;
 
-export function useFullAutoMode(local: boolean, planMode: boolean): FullAutoMode {
+/**
+ * `confirmed`: the person turned it on, and confirmed it, in the folder's new thread whose first message this (worktree)
+ * thread was handed (#3144): the thread being created starts in it. Nothing is stored.
+ */
+export function useFullAutoMode(local: boolean, planMode: boolean, confirmed = false): FullAutoMode {
   const status = useQuery({ queryKey: FULL_AUTO_STATUS_KEY, queryFn: fullAutoAllowed, enabled: local, staleTime: 60_000 });
   const allowed = local && status.data === true;
-  const [chosen, setChosen] = useState(false);
+  const [chosen, setChosen] = useState(confirmed);
   const [confirming, setConfirming] = useState(false);
-  // Plan mode (`/plan` included) and a policy that stops allowing it end the choice: coming back asks again.
-  if (chosen && (!allowed || planMode)) setChosen(false);
+  // Plan mode (`/plan` included) and a policy that stops allowing it end the choice: coming back asks again. While the
+  // policy is read, a handed choice waits (it reads as off, and `settling` holds the first send).
+  const known = !local || status.data !== undefined;
+  if (chosen && (planMode || (known && !allowed))) setChosen(false);
   // What runs once a confirmed turn-on lands (the composer leaves plan mode and Bypass).
   const pending = useRef<(() => void) | undefined>(undefined);
   return {
     allowed,
     on: allowed && chosen,
+    settling: chosen && !known,
     request: (next, turnedOn) => {
       if (!next) {
         setChosen(false);

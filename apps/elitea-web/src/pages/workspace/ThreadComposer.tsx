@@ -272,7 +272,7 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
   const { pipeline, run: runInCloud, remember, refusedPrompt, turnError } = composerPipeline;
   const model = useTurnModel(workspaceId, projectId, session.raw, turn, session.history);
   const local = !cloudMode && !pipeline;
-  const modes = useComposerModes(workspaceId, local, commands);
+  const modes = useComposerModes(workspaceId, local, commands, session.handedChoices);
   const idle = useIdleNotice(workspaceId, conversationId);
   const onDraftChange = useIdleHold(workspaceId, conversationId, local);
   const skillPins = useThreadSkillPins(ipc, workspaceId, projectId, conversationId, local);
@@ -302,11 +302,12 @@ export function ThreadComposer({ ipc, workspaceId, projectId, conversationId, se
     offered: offersWorkIn(canBranch, local, conversationId),
     send: controls.remembering(bound.onSend),
     handOver: () => selectionSeed(session.raw, projectId),
+    handOverChoices: modes.choices,
     onError: commands.showText,
     open: (id) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: id } }),
   });
   // A new thread's first message shows at once, while the thread is prepared (#3127).
-  const first = useFirstSend({ workspaceId, slot: session.first, fresh: isFresh(conversationId, local, session, turn), canSend: bound.canSend, send: workIn.send });
+  const first = useFirstSend({ workspaceId, slot: session.first, fresh: isFresh(conversationId, local, session, turn), canSend: bound.canSend && !modes.settling, send: workIn.send });
   const gate = firstGate(bound, first.holding);
   const openInChat = conversationId === '' ? undefined : () => void navigate({ to: '/chat/$conversationId', params: { conversationId } });
   const recorded = useMemo(() => recordedUsages(session.history), [session.history]);

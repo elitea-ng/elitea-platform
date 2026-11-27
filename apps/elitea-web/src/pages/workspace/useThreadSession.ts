@@ -32,6 +32,7 @@ import type { ChangeSet, DecidedApproval } from './sessionTypes';
 import { useThreadName } from './useThreadName';
 import { useAgentSelection, type AgentSelection, type SelectionSeed } from './useAgentSelection';
 import { peekHanded, useFirstMessageSlot, type FirstMessageSlot, type HandedFirstMessage } from './useFirstSend';
+import type { PreThreadChoices } from './preThreadChoices';
 import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt, type SendPrompt, type SentImages } from './useSendPrompt';
 import { useSessionCommands, type SessionCommands } from './useSessionCommands';
@@ -170,6 +171,8 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   createAgent: () => void;
   /** The new thread's first message, on screen before its turn starts (#3127). */
   first: FirstMessageSlot;
+  /** The modes the folder's new thread chose before handing its first message to this (worktree) thread (#3144). */
+  handedChoices: PreThreadChoices | undefined;
 }
 
 /** The message (and agents) handed to a new thread of the workspace; none for an existing thread. */
@@ -243,7 +246,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const recordedPlans = useMemo(() => recordedPlansOf(localTurns), [localTurns]);
   // `/undo` acts on the last turn, as before: only when it changed files.
   const undoTurnId = done !== undefined && done.changedFiles > 0 ? turn.turnId : null;
-  const commands = useSessionCommands(selection, turn, undoTurnId !== null);
+  const commands = useSessionCommands(selection, turn, undoTurnId !== null, handed.message?.choices?.planMode === true);
 
   const run = (command: WorkspaceCommandId): void => {
     if ((command === 'clear' || command === 'new') && !turn.busy) {
@@ -298,6 +301,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     rebind,
     createAgent,
     first,
+    handedChoices: handed.message?.choices,
     canSend,
     sendError,
     send,

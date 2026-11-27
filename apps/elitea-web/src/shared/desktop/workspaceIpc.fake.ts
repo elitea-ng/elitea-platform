@@ -53,6 +53,8 @@ type FailableCommand =
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
   emit(event: AgentEvent): void;
+  /** Lists `workspace` from now on, as the host does for a task worktree it made. */
+  addWorkspace(workspace: Workspace): void;
   readonly calls: {
     started: TurnStartRequest[];
     prewarmed: TurnPrewarmRequest[];
@@ -148,6 +150,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
 
   return {
     calls,
+    addWorkspace(workspace) {
+      workspaces = [...workspaces.filter((w) => w.id !== workspace.id), workspace];
+    },
     open() {
       const picked = options.nextOpen ?? null;
       if (picked !== null && !workspaces.some((w) => w.id === picked.id)) workspaces = [...workspaces, picked];
