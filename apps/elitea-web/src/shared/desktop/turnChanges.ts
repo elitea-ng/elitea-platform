@@ -1,5 +1,5 @@
 /** What a Local work turn changed on disk (IPC.md, `turn_changes`): its files, and what undo does not cover. */
-export type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
+type ChangeStatus = 'added' | 'modified' | 'deleted' | 'renamed';
 
 export interface ChangedFile {
   path: string;

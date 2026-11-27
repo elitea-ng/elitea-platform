@@ -20,7 +20,7 @@ const MAX_NAMED = 5;
 const MAX_COMMAND = 60;
 
 /** `1.2 MB`, `340 KB`, `12 bytes` (decimal units, one decimal under 10). */
-export function formatSize(bytes: number): string {
+function formatSize(bytes: number): string {
   if (bytes < 1000) return t('workspace.changes.bytes', '{{n}} bytes', { n: bytes });
   const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes / 1000;
