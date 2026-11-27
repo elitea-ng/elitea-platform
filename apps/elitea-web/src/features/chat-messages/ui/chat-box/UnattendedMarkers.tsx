@@ -8,6 +8,8 @@ import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
 
+import type { ChatMessage } from '../../lib/convertMessagesToChatHistory.types';
+
 /** Main started this turn by itself, the n-th time in its chain (when known). */
 export function ContinuedAutomaticallyLabel({ index }: { readonly index?: number | undefined }) {
   return (
@@ -40,6 +42,34 @@ export function FullAutoMarker() {
     <Typography variant="labelSmall" color="error.main" data-testid="chat-message-full-auto" sx={{ display: 'block', mt: 0.5 }}>
       {t('features.chatMessages.fullAuto', 'Ran in Full auto')}
     </Typography>
+  );
+}
+
+/**
+ * Whether the answer's Local work turn applied its folder's project instructions (issue 3130): the desktop thread's
+ * "Respect AGENTS.md" was on or off. Read-only here: the switch is the desktop's. Main stores
+ * `meta.local_work.project_instructions`; the files are the label's title.
+ */
+export function ProjectInstructionsMarker({ applied, files }: { readonly applied: boolean; readonly files: readonly string[] }) {
+  return (
+    <Typography variant="labelSmall" color="text.secondary" data-testid="chat-message-project-instructions" data-applied={String(applied)} title={files.join(', ')} sx={{ display: 'block', mt: 0.5 }}>
+      {applied ? t('features.chatMessages.agentsMdApplied', 'AGENTS.md applied') : t('features.chatMessages.agentsMdIgnored', 'AGENTS.md ignored')}
+    </Typography>
+  );
+}
+
+/**
+ * An answer's run marks, in order: continued automatically, outside the sandbox, Full auto, project instructions. The
+ * desktop states project instructions once, in the thread's Participants tab (issue 3130), never under a message.
+ */
+export function AnswerMarkers({ answer }: { readonly answer: Pick<ChatMessage, 'continuedAutomatically' | 'continuationIndex' | 'ranOutsideSandbox' | 'fullAuto' | 'projectInstructions'> }) {
+  return (
+    <>
+      {answer.continuedAutomatically === true && <ContinuedAutomaticallyLabel index={answer.continuationIndex} />}
+      {answer.ranOutsideSandbox === true && <RanOutsideSandboxMarker />}
+      {answer.fullAuto === true && <FullAutoMarker />}
+      {answer.projectInstructions !== undefined && import.meta.env.MODE !== 'desktop' && <ProjectInstructionsMarker {...answer.projectInstructions} />}
+    </>
   );
 }
 

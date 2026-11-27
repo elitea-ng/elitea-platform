@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "Geslaagd",
   "workspace.tool.failed": "Mislukt",
   "workspace.tool.truncated": "(uitvoer ingekort)",
-  "workspace.agentsMdApplied": "AGENTS.md toegepast",
   "workspace.cancel": "Annuleren",
   "workspace.commitFailed.retry": "Opnieuw",
   "workspace.git": "Git",

@@ -12,7 +12,10 @@
 //! answer reaches the caller as a tool result inside an untrusted
 //! envelope, and the turn's taint gate closes before it runs (the callee
 //! reads another agent's text). Bypass never carries into it: a Bypass turn
-//! runs the consult in Build and goes back to Bypass after.
+//! runs the consult in Build and goes back to Bypass after. The callee's
+//! prompt is its own instructions, then the folder's project instructions
+//! as the caller's turn applies them: none when the thread does not respect
+//! AGENTS.md (issue 3130).
 //!
 //! The callee must pass the desktop's admission (not a pipeline, no
 //! withheld secret, no project MCP server), cached per turn; one that does
@@ -36,6 +39,7 @@ use adk_session::{CreateRequest, InMemorySessionService, SessionService};
 use elitea_agent_runtime::host::{ModelRequest, ModelTransport, ToolProvider, ToolsetRequest};
 use elitea_agent_runtime::text::clip_bytes;
 use elitea_local_tools::approvals::PermissionProfile;
+use elitea_local_tools::project_instructions::ProjectInstructions;
 use elitea_local_tools::session::LocalSession;
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -101,6 +105,10 @@ pub struct LocalConsults {
     pub session: Arc<LocalSession>,
     /// The thread's framing nonce.
     pub nonce: String,
+    /// The workspace's project instructions as the caller's turn applies
+    /// them: none when the thread does not respect AGENTS.md (issue 3130).
+    /// The callee works in the same folder, so it follows the same files.
+    project: ProjectInstructions,
     /// The consults recorded for the commit (thread members only).
     pub recorded: Arc<Mutex<Vec<Value>>>,
     started: AtomicUsize,
@@ -159,11 +167,20 @@ impl LocalConsults {
             observer,
             session: session.clone(),
             nonce,
+            project: ProjectInstructions::default(),
             recorded,
             started: AtomicUsize::new(0),
             admitted: Mutex::new(HashMap::new()),
             profile: Arc::new(ProfileHold::new(session)),
         }
+    }
+
+    /// The project instructions the callee's prompt carries after its own
+    /// instructions (the caller's turn's, issue 3130).
+    #[must_use]
+    pub fn with_project(mut self, project: ProjectInstructions) -> Self {
+        self.project = project;
+        self
     }
 
     /// The thread member `spec` names, if any (its application is a
@@ -337,7 +354,11 @@ impl LocalConsults {
         };
         let model = transport
             .bind(ModelRequest {
-                system_instruction: admitted.instructions.clone(),
+                system_instruction: super::turn::with_project_instructions(
+                    &admitted.instructions,
+                    &self.project,
+                    &self.nonce,
+                ),
                 max_model_turns: MAX_STEPS,
                 ..self.model.clone()
             })

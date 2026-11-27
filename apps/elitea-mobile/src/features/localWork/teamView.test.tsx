@@ -13,7 +13,7 @@ import { toChatMessages } from '@/features/chat/messageModel';
 import { ParticipantsSheet } from '@/features/chat/ParticipantsSheet';
 import { LiveReply, PersistedMessage } from '@/features/chat/ThreadRows';
 import { sampleLive } from '@/features/designGallery/chatFixtures';
-import { agentExecutorOf, ranInFullAuto, ranOutsideSandbox } from '@/features/localWork/model';
+import { agentExecutorOf, projectInstructionsOf, ranInFullAuto, ranOutsideSandbox } from '@/features/localWork/model';
 import { TEAM_COPY } from '@/features/localWork/teamCopy';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
@@ -121,6 +121,25 @@ describe('the "Ran outside the sandbox" marker', () => {
     expect(screen.getByText(TEAM_COPY.fullAuto)).toBeTruthy();
     await view.rerender(<PersistedMessage message={plain!} {...props} />);
     expect(screen.queryByTestId('ran-in-full-auto')).toBeNull();
+  });
+
+  it('shows read-only whether the answer applied or ignored AGENTS.md, from meta.local_work.project_instructions (#3130)', async () => {
+    expect(projectInstructionsOf({ local_work: { project_instructions: { applied: false, files: ['AGENTS.md', 3] } } })).toEqual({ applied: false, files: ['AGENTS.md'] });
+    for (const meta of [undefined, null, {}, { local_work: {} }, { local_work: { project_instructions: true } }, { local_work: { project_instructions: { files: [] } } }]) {
+      expect(projectInstructionsOf(meta)).toBeNull();
+    }
+    const [ignored] = toChatMessages(detail({ local_work: { project_instructions: { applied: false, files: ['AGENTS.md'] } } }) as never);
+    const [applied] = toChatMessages(detail({ local_work: { project_instructions: { applied: true, files: ['AGENTS.md'] } } }) as never);
+    const [plain] = toChatMessages(detail({ executed_by: 'desktop' }) as never);
+    expect(plain?.projectInstructions).toBeUndefined();
+    const props = { highlight: { people: [], agents: [] }, opening: null, onOpenFile: null, tools: [], onOpenTool: () => {}, onActions: () => {} };
+    const view = await render(<PersistedMessage message={ignored!} {...props} />);
+    expect(screen.getByTestId('project-instructions').props.accessibilityLabel).toBe("This answer ignored the folder's project instructions: AGENTS.md.");
+    expect(screen.getByText(TEAM_COPY.agentsMdIgnored)).toBeTruthy();
+    await view.rerender(<PersistedMessage message={applied!} {...props} />);
+    expect(screen.getByText(TEAM_COPY.agentsMdApplied)).toBeTruthy();
+    await view.rerender(<PersistedMessage message={plain!} {...props} />);
+    expect(screen.queryByTestId('project-instructions')).toBeNull();
   });
 });
 

@@ -77,7 +77,17 @@
 //!         conversation_id TEXT, project_id INTEGER, skill_id INTEGER,
 //!         pinned_at INTEGER /* Unix ms */,
 //!         PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id))
+//! thread_settings (origin TEXT, user_id INTEGER, workspace_id TEXT,
+//!         conversation_id TEXT, respect_agents_md INTEGER /* 0|1 */,
+//!         updated_at INTEGER /* Unix ms */,
+//!         PRIMARY KEY (origin, user_id, workspace_id, conversation_id))
 //! ```
+//!
+//! `thread_settings` (schema 7, issue 3130) holds a local thread's own
+//! settings: whether its turns apply the folder's project instructions
+//! (AGENTS.md, "Respect AGENTS.md"). A thread without a row reads as the
+//! default (on). Keyed like the pins; a read takes the newest row of any
+//! spelling of the thread.
 //!
 //! `thread_skill_pins` (schema 6, ADR-0050 amendment 1, A1.5; #2183) holds the
 //! project skills pinned to a local thread: ids only, never text. The host
@@ -115,7 +125,7 @@ use crate::error::HostError;
 
 pub const FILE_NAME: &str = "threads.sqlite";
 /// `PRAGMA user_version` of the schema this build writes.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 /// A string inside one event's payload is cut to this many bytes.
 pub const MAX_EVENT_STRING: usize = 16 * 1024;
 /// One turn's stored events, in payload bytes.
@@ -235,6 +245,19 @@ CREATE TABLE IF NOT EXISTS thread_skill_pins (
     skill_id INTEGER NOT NULL,
     pinned_at INTEGER NOT NULL,
     PRIMARY KEY (origin, user_id, workspace_id, conversation_id, project_id, skill_id)
+);
+";
+
+/// A local thread's own settings (schema 7, issue 3130).
+const THREAD_SETTINGS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS thread_settings (
+    origin TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    workspace_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    respect_agents_md INTEGER NOT NULL DEFAULT 1,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (origin, user_id, workspace_id, conversation_id)
 );
 ";
 
@@ -1490,6 +1513,10 @@ impl HistoryStore {
                     ],
                 )?;
             }
+            // And its Respect AGENTS.md choice (issue 3130), when it has one.
+            if !read_respect_agents_md(&tx, owner, workspace_id, &source_spellings)? {
+                write_respect_agents_md(&tx, owner, workspace_id, target_id, false)?;
+            }
             prune_thread(&tx, owner, workspace_id, target_id, Some(target_uuid))?;
             tx.commit()?;
             Ok(ThreadCopy::Copied(copied))
@@ -1510,6 +1537,10 @@ impl HistoryStore {
             )?;
             conn.execute(
                 "DELETE FROM thread_skill_pins WHERE workspace_id = ?1",
+                params![workspace_id],
+            )?;
+            conn.execute(
+                "DELETE FROM thread_settings WHERE workspace_id = ?1",
                 params![workspace_id],
             )?;
             conn.execute(
@@ -1841,6 +1872,67 @@ impl HistoryStore {
                 )?;
             }
             Ok(removed > 0)
+        })
+    }
+
+    /// Whether the thread's turns apply the folder's project instructions
+    /// (issue 3130, "Respect AGENTS.md"): on unless the person turned it off.
+    ///
+    /// # Errors
+    ///
+    /// The database could not be read.
+    pub fn thread_respects_agents_md(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+    ) -> Result<bool, HostError> {
+        self.flush();
+        self.with("could not read the thread's settings", |conn| {
+            let spellings = spellings(conn, owner, workspace_id, conversation)?;
+            read_respect_agents_md(conn, owner, workspace_id, &spellings)
+        })
+    }
+
+    /// [`Self::thread_respects_agents_md`] on a blocking thread.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::thread_respects_agents_md`].
+    pub async fn read_thread_respects_agents_md(
+        self: &Arc<Self>,
+        owner: Owner,
+        workspace_id: String,
+        conversation: String,
+    ) -> Result<bool, HostError> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            store.thread_respects_agents_md(&owner, &workspace_id, &conversation)
+        })
+        .await
+        .map_err(|e| HostError::Internal(format!("the settings read stopped: {e}")))?
+    }
+
+    /// Keep the thread's Respect AGENTS.md choice: every spelling the
+    /// thread is known by reads it from now on (the next turn's start).
+    ///
+    /// # Errors
+    ///
+    /// The database could not be written.
+    pub fn set_thread_respects_agents_md(
+        &self,
+        owner: &Owner,
+        workspace_id: &str,
+        conversation: &str,
+        respect: bool,
+    ) -> Result<(), HostError> {
+        self.flush();
+        self.with("could not keep the thread's settings", |conn| {
+            let tx = conn.transaction()?;
+            for spelling in spellings(&tx, owner, workspace_id, conversation)? {
+                write_respect_agents_md(&tx, owner, workspace_id, &spelling, respect)?;
+            }
+            tx.commit()
         })
     }
 
@@ -2479,8 +2571,71 @@ fn delete_pins(
              AND workspace_id = ?3 AND conversation_id = ?4",
             params![owner.origin, owner.user_id, workspace_id, spelling],
         )?;
+        conn.execute(
+            "DELETE FROM thread_settings WHERE origin = ?1 AND user_id = ?2
+             AND workspace_id = ?3 AND conversation_id = ?4",
+            params![owner.origin, owner.user_id, workspace_id, spelling],
+        )?;
     }
     Ok(())
+}
+
+/// Keep `respect` as the thread's Respect AGENTS.md choice under
+/// `conversation` (the spelling the UI used).
+fn write_respect_agents_md(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    conversation: &str,
+    respect: bool,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO thread_settings (origin, user_id, workspace_id, conversation_id,
+             respect_agents_md, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (origin, user_id, workspace_id, conversation_id)
+         DO UPDATE SET respect_agents_md = excluded.respect_agents_md,
+                       updated_at = excluded.updated_at",
+        params![
+            owner.origin,
+            owner.user_id,
+            workspace_id,
+            conversation,
+            i64::from(respect),
+            now_ms()
+        ],
+    )?;
+    Ok(())
+}
+
+/// Whether the thread known by any of `spellings` respects AGENTS.md: its
+/// newest settings row, or on (the default) without one.
+fn read_respect_agents_md(
+    conn: &Connection,
+    owner: &Owner,
+    workspace_id: &str,
+    spellings: &[String],
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension as _;
+    let mut statement = conn.prepare(
+        "SELECT respect_agents_md, updated_at FROM thread_settings
+         WHERE origin = ?1 AND user_id = ?2 AND workspace_id = ?3 AND conversation_id = ?4",
+    )?;
+    let mut newest: Option<(i64, bool)> = None;
+    for spelling in spellings {
+        let row: Option<(bool, i64)> = statement
+            .query_row(
+                params![owner.origin, owner.user_id, workspace_id, spelling],
+                |row| Ok((row.get::<_, i64>(0)? != 0, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((respect, at)) = row
+            && newest.is_none_or(|(seen, _)| at >= seen)
+        {
+            newest = Some((at, respect));
+        }
+    }
+    Ok(newest.is_none_or(|(_, respect)| respect))
 }
 
 /// The UUID the stored turns know `conversation` by (itself when none
@@ -2590,7 +2745,7 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
         0 => conn
             .execute_batch(&format!(
                 "BEGIN; {SCHEMA} {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not create the thread history", &e)),
         // 2 (ADR-0034): turns imported from the cloud executor. 3 (#1229):
@@ -2601,32 +2756,39 @@ fn migrate(conn: &Connection) -> Result<(), HostError> {
                 "BEGIN; ALTER TABLE turns ADD COLUMN turn_origin TEXT NOT NULL DEFAULT 'local'; \
                  ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
                  {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         2 => conn
             .execute_batch(&format!(
                 "BEGIN; ALTER TABLE turns ADD COLUMN images TEXT NOT NULL DEFAULT '[]'; \
                  {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         3 => conn
             .execute_batch(&format!(
                 "BEGIN; {RESUME_SCHEMA} {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         4 => conn
             .execute_batch(&format!(
                 "BEGIN; {TAKE_BACK_SCHEMA} {THREAD_SKILL_PINS_SCHEMA} \
-                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                 {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         // 6 (#2183): the skills pinned to a thread.
         5 => conn
             .execute_batch(&format!(
-                "BEGIN; {THREAD_SKILL_PINS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {THREAD_SKILL_PINS_SCHEMA} {THREAD_SETTINGS_SCHEMA} \
+                 PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))
+            .map_err(|e| storage("could not upgrade the thread history", &e)),
+        // 7 (issue 3130): a thread's own settings (Respect AGENTS.md).
+        6 => conn
+            .execute_batch(&format!(
+                "BEGIN; {THREAD_SETTINGS_SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|e| storage("could not upgrade the thread history", &e)),
         SCHEMA_VERSION => Ok(()),
@@ -4293,6 +4455,99 @@ mod tests {
         );
         store.delete_workspace("w1").unwrap();
         assert!(store.thread_skill_pins(&me, "w1", "43").unwrap().is_empty());
+    }
+
+    #[test]
+    fn respect_agents_md_is_on_by_default_kept_per_thread_and_survives_a_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        let me = owner(1);
+        {
+            let store = HistoryStore::open(&dir).unwrap();
+            assert!(store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+            store
+                .set_thread_respects_agents_md(&me, "w1", "42", false)
+                .unwrap();
+            assert!(!store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+            // Another thread, workspace or account keeps the default.
+            assert!(store.thread_respects_agents_md(&me, "w1", "43").unwrap());
+            assert!(store.thread_respects_agents_md(&me, "w2", "42").unwrap());
+            assert!(
+                store
+                    .thread_respects_agents_md(&owner(2), "w1", "42")
+                    .unwrap()
+            );
+        }
+        // An app restart reopens the same file: the thread keeps its choice.
+        let store = HistoryStore::open(&dir).unwrap();
+        assert!(!store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+        store
+            .set_thread_respects_agents_md(&me, "w1", "42", true)
+            .unwrap();
+        assert!(store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+    }
+
+    #[test]
+    fn respect_agents_md_follows_the_thread_its_fork_and_its_deletion() {
+        let (_root, store) = store();
+        let me = owner(1);
+        // Set by id before any turn, read by the UUID the turns know it by.
+        store
+            .set_thread_respects_agents_md(&me, "w1", "42", false)
+            .unwrap();
+        play(&store, new_turn(me.clone(), "t1", "42"));
+        assert!(
+            !store
+                .thread_respects_agents_md(&me, "w1", "uuid-42")
+                .unwrap()
+        );
+        // Turned back on by the other spelling: both read on.
+        store
+            .set_thread_respects_agents_md(&me, "w1", "uuid-42", true)
+            .unwrap();
+        assert!(store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+        store
+            .set_thread_respects_agents_md(&me, "w1", "42", false)
+            .unwrap();
+        // A fork keeps the source's choice.
+        let none = HashSet::new();
+        let unmapped = HashMap::new();
+        store
+            .copy_thread(
+                &me,
+                "w1",
+                "uuid-42",
+                target("50", "uuid-50", &unmapped),
+                None,
+                &none,
+            )
+            .unwrap();
+        assert!(!store.thread_respects_agents_md(&me, "w1", "50").unwrap());
+        // Forgetting the thread forgets it; the workspace's removal too.
+        store.delete_thread(&me, "w1", "42").unwrap();
+        assert!(store.thread_respects_agents_md(&me, "w1", "42").unwrap());
+        store.delete_workspace("w1").unwrap();
+        assert!(store.thread_respects_agents_md(&me, "w1", "50").unwrap());
+    }
+
+    #[test]
+    fn a_schema_six_file_gains_the_settings_table() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("ai.elitea.desktop");
+        drop(HistoryStore::open(&dir).unwrap());
+        let conn = rusqlite::Connection::open(dir.join(FILE_NAME)).unwrap();
+        conn.execute_batch("DROP TABLE thread_settings; PRAGMA user_version = 6;")
+            .unwrap();
+        drop(conn);
+        let store = HistoryStore::open(&dir).unwrap();
+        store
+            .set_thread_respects_agents_md(&owner(1), "w1", "42", false)
+            .unwrap();
+        assert!(
+            !store
+                .thread_respects_agents_md(&owner(1), "w1", "42")
+                .unwrap()
+        );
     }
 
     #[test]

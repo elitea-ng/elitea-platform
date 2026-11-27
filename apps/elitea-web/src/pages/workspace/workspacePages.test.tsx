@@ -1818,15 +1818,15 @@ describe('WorkspaceSessionPage', () => {
       expect(screen.queryByTestId('workspace-command-menu')).toBeNull();
     });
 
-    it('shows when the turn applied AGENTS.md', async () => {
+    it('puts no AGENTS.md notice under the message: the Participants tab states it once (issue 3130)', async () => {
       const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
       const user = await ready(ipc);
       await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
-      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md', 'apps/web/AGENTS.md'] } });
-      const chip = await screen.findByTestId('agents-md-applied');
-      expect(chip).toHaveTextContent('AGENTS.md applied');
-      expect(chip).toHaveAttribute('aria-description', 'AGENTS.md, apps/web/AGENTS.md');
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md', 'apps/web/AGENTS.md'], project_instructions_applied: true } });
+      await screen.findByTestId('turn-status');
+      expect(screen.queryByTestId('agents-md-applied')).toBeNull();
+      expect(screen.queryByText('AGENTS.md applied')).toBeNull();
     });
   });
 });

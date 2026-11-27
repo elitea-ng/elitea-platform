@@ -131,3 +131,40 @@ describe('avatar packs in the participants sheet (#3131)', () => {
     await waitFor(() => expect(images().filter((uri) => isStillFile(uri))).toHaveLength(1));
   });
 });
+
+describe('agent logos in the participants sheet (#3130, the #3135 rule)', () => {
+  it("shows an agent's icon_meta logo when it has no avatar pack, read from the participant as web and desktop do", async () => {
+    setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13({ client_contract: '1.49' })) });
+    const icon = `/icons/${P}/0123456789abcdef.png`;
+    server.on('GET', icon, { status: 200, raw: PNG, headers: { 'Content-Type': 'image/png' } });
+    const detail = structuredClone(conversationDetail13) as { participants: { id: number; entity_settings?: Record<string, unknown> | null }[] };
+    const agent = detail.participants.find((p) => p.id === 3)!;
+    agent.entity_settings = { ...agent.entity_settings, icon_meta: { url: icon } };
+    queries = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    await render(
+      <QueryClientProvider client={queries}>
+        <ParticipantsSheet visible onClose={() => {}} projectId={P} conversationId="3" participants={detail.participants as never[]} selfUserId={null} offline onChanged={() => {}} />
+      </QueryClientProvider>,
+    );
+    // The logo, not the letter: its checked bytes are drawn in the row's avatar place.
+    await waitFor(() => expect(images()).toContain(PNG_DATA));
+    expect(server.requests.filter((r) => r.url.pathname === icon)).toHaveLength(1);
+  });
+
+  it("downloads no logo when the agent has an avatar pack (the pack's still wins)", async () => {
+    setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13({ client_contract: '1.49' })) });
+    const icon = `/icons/${P}/fedcba9876543210.png`;
+    server.on('GET', STILL.replace(/^\/api\/v2/, ''), { status: 200, raw: PNG, headers: { 'Content-Type': 'image/png' } });
+    const detail = withPack('avatar_pack_v1') as unknown as { participants: { id: number; entity_settings?: Record<string, unknown> | null }[] };
+    const agent = detail.participants.find((p) => p.id === 3)!;
+    agent.entity_settings = { ...agent.entity_settings, icon_meta: { url: icon } };
+    queries = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    await render(
+      <QueryClientProvider client={queries}>
+        <ParticipantsSheet visible onClose={() => {}} projectId={P} conversationId="3" participants={detail.participants as never[]} selfUserId={null} offline onChanged={() => {}} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(images().filter((uri) => isStillFile(uri))).toHaveLength(1));
+    expect(server.requests.filter((r) => r.url.pathname === icon)).toEqual([]);
+  });
+});

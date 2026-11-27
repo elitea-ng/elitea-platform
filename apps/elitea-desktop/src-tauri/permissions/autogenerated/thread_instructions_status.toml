@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-instructions-status"
+description = "Enables the thread_instructions_status command without any pre-configured scope."
+commands.allow = ["thread_instructions_status"]
+
+[[permission]]
+identifier = "deny-thread-instructions-status"
+description = "Denies the thread_instructions_status command without any pre-configured scope."
+commands.deny = ["thread_instructions_status"]

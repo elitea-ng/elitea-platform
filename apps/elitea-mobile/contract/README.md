@@ -179,6 +179,12 @@ does not animate WebP: Android builds with `expo.webp.animated=false`, iOS anima
 video state its poster, each with the default motion. An SVG is not drawn (the still, then the old icon).
 Reduced motion shows the still only and downloads nothing else.
 
+## Client contract 1.70
+
+| Area | What |
+|---|---|
+| Project instructions (issue 3130) | The commit's `local_work.project_instructions` record (`applied`, `files`) is desktop-only: the app never runs or commits a local turn, and has no "Respect AGENTS.md" switch. A viewed Local work turn whose folder held project instruction files shows a read-only marker, "AGENTS.md applied" or "AGENTS.md ignored", read from the answer meta's `local_work.project_instructions` object. A server before 1.70 stores no record, and the marker never shows. |
+
 ## Client contract 1.69
 
 | Area | What |

@@ -81,6 +81,9 @@ const (
 	// MaxFullAutoAnswered bounds the Full auto count a commit may report: a
 	// turn answering more questions than this is refused, not stored.
 	MaxFullAutoAnswered = 10_000
+	// MaxReportedInstructionFiles bounds the project instruction files a
+	// commit's record keeps (issue 3130).
+	MaxReportedInstructionFiles = 20
 	// MaxReportedMemoryIDs bounds each of the report's memory id lists
 	// (memories_saved, memories_deleted); further ids are counted only.
 	MaxReportedMemoryIDs = 200
@@ -367,6 +370,18 @@ type LocalWorkReport struct {
 	// pointer with omitempty keeps the commit digest of a report without it
 	// unchanged.
 	FullAuto *FullAutoReport `json:"full_auto,omitempty"`
+	// ProjectInstructions is present when the turn's folder held project
+	// instruction files (AGENTS.md, SOUL.md; issue 3130, client contract
+	// 1.70): whether the thread applied them. A pointer with omitempty keeps
+	// the commit digest of a report without it unchanged.
+	ProjectInstructions *ProjectInstructionsReport `json:"project_instructions,omitempty"`
+}
+
+// ProjectInstructionsReport says whether a turn applied the project
+// instruction files its folder held ("Respect AGENTS.md"), and which.
+type ProjectInstructionsReport struct {
+	Applied bool     `json:"applied"`
+	Files   []string `json:"files"`
 }
 
 // FullAutoReport is what Full auto answered in a turn: how many questions,
@@ -780,6 +795,10 @@ func validCommit(request CommitRequest) bool {
 	if len(request.Report.Commands) > 10*MaxReportedCommands || len(request.Report.Paths) > 10*MaxReportedPaths {
 		return false
 	}
+	if instructions := request.Report.ProjectInstructions; instructions != nil &&
+		len(instructions.Files) > 10*MaxReportedInstructionFiles {
+		return false
+	}
 	if fullAuto := request.Report.FullAuto; fullAuto != nil &&
 		(len(fullAuto.Asks) > 10*MaxReportedCommands || fullAuto.Answered < 0 || fullAuto.Answered > MaxFullAutoAnswered) {
 		return false
@@ -884,6 +903,32 @@ type boundedReport struct {
 	// that were not Held.
 	// Its presence is the "Full auto" marker web and mobile show.
 	FullAuto *FullAutoReport `json:"full_auto,omitempty"`
+	// ProjectInstructions: whether the turn applied its folder's project
+	// instruction files, with at most MaxReportedInstructionFiles of them cut
+	// to MaxReportedPathBytes. Web and mobile show it read-only.
+	ProjectInstructions *ProjectInstructionsReport `json:"project_instructions,omitempty"`
+}
+
+// boundProjectInstructions bounds a project instructions record: the first
+// MaxReportedInstructionFiles non-empty files, each cut. A record with no
+// file left is dropped (nothing was found to apply).
+func boundProjectInstructions(report *ProjectInstructionsReport) *ProjectInstructionsReport {
+	if report == nil {
+		return nil
+	}
+	out := &ProjectInstructionsReport{Applied: report.Applied, Files: []string{}}
+	for _, file := range report.Files {
+		if len(out.Files) == MaxReportedInstructionFiles {
+			break
+		}
+		if text := cleanReported(file, MaxReportedPathBytes); text != "" {
+			out.Files = append(out.Files, text)
+		}
+	}
+	if len(out.Files) == 0 {
+		return nil
+	}
+	return out
 }
 
 // boundFullAuto bounds a Full auto record: the first MaxReportedCommands asks
@@ -923,7 +968,8 @@ func boundReport(report LocalWorkReport) boundedReport {
 		MemoriesSaved: boundMemoryIDs(report.MemoriesSaved), MemoriesSavedTotal: len(report.MemoriesSaved),
 		MemoriesDeleted: boundMemoryIDs(report.MemoriesDeleted), MemoriesDeletedTotal: len(report.MemoriesDeleted),
 		HostCommands: max(report.HostCommands, 0), Trusted: report.Trusted,
-		FullAuto: boundFullAuto(report.FullAuto),
+		FullAuto:            boundFullAuto(report.FullAuto),
+		ProjectInstructions: boundProjectInstructions(report.ProjectInstructions),
 	}
 	out.RanOutsideSandbox = out.HostCommands > 0
 	for _, command := range report.Commands {

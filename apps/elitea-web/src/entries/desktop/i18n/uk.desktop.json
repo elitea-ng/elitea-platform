@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "Успішно",
   "workspace.tool.failed": "Збій",
   "workspace.tool.truncated": "(вивід обрізано)",
-  "workspace.agentsMdApplied": "AGENTS.md застосовано",
   "workspace.cancel": "Скасувати",
   "workspace.commitFailed.retry": "Повторити",
   "workspace.git": "Git",

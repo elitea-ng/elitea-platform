@@ -6,7 +6,7 @@ import type { CloudSubAgentLane, DelegationNotice } from '@elitea/client-core/st
 
 import { storedDelegationNotices } from '@/features/chat/delegationNotices';
 import { storedSubAgents } from '@/features/chat/subAgentLanes';
-import { ranInFullAuto, ranOutsideSandbox } from '@/features/localWork/model';
+import { projectInstructionsOf, ranInFullAuto, ranOutsideSandbox, type ProjectInstructionsRecord } from '@/features/localWork/model';
 
 /**
  * Persisted conversation history → what the thread renders.
@@ -72,6 +72,8 @@ export interface ChatMessage {
   ranOutsideSandbox?: true;
   /** The ADR-0061 amendment of 2026-11-26: a Local work answer that ran in Full auto (`meta.local_work.full_auto`, #3079); absent otherwise. */
   fullAuto?: true;
+  /** Whether a Local work answer applied its folder's AGENTS.md (`meta.local_work.project_instructions`, #3130); absent otherwise. */
+  projectInstructions?: ProjectInstructionsRecord;
 }
 
 /** One file of a message. */
@@ -174,6 +176,20 @@ export function participantAgentId(participant: Participant | undefined): number
   return id !== null && id > 0 ? id : null;
 }
 
+/**
+ * An agent participant's logo path (`icon_meta.url`, copied onto the participant when the agent was
+ * added): `entity_settings` first, then `meta`, the rule web and desktop use (#3135). Only a path on
+ * the workspace origin (Main serves every agent icon itself); null for none or anything else.
+ */
+export function participantIconPath(participant: Participant | undefined): string | null {
+  for (const holder of [participant?.entity_settings, participant?.meta]) {
+    const url = asRecord(asRecord(holder)?.icon_meta)?.url;
+    const path = typeof url === 'string' ? url.trim() : '';
+    if (path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/\\')) return path;
+  }
+  return null;
+}
+
 /** Who "me" is, for deciding which user messages are mine. */
 export interface SelfContext {
   /** The signed-in user's USER id ("who am I"), when known. */
@@ -246,6 +262,12 @@ function subAgentsOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatM
   return lanes.length === 0 ? {} : { subAgents: lanes };
 }
 
+/** An answer's project instructions record (#3130), as a spreadable field; nothing for a question or without one. */
+function projectInstructionsField(role: string, meta: unknown): { projectInstructions?: ProjectInstructionsRecord } {
+  const record = role === 'assistant' ? projectInstructionsOf(meta) : null;
+  return record === null ? {} : { projectInstructions: record };
+}
+
 function delegationNoticesOf(role: ChatRole, group: Record<string, unknown>): Pick<ChatMessage, 'delegationNotices'> {
   if (role !== 'assistant') return {};
   const notices = storedDelegationNotices(asRecord(group.meta) ?? asRecord(group.metadata));
@@ -307,6 +329,7 @@ export function toChatMessages(
       ...delegationNoticesOf(role, group),
       ...(role === 'assistant' && ranOutsideSandbox(asRecord(group.meta) ?? asRecord(group.metadata)) ? { ranOutsideSandbox: true } : {}),
       ...(role === 'assistant' && ranInFullAuto(asRecord(group.meta) ?? asRecord(group.metadata)) ? { fullAuto: true } : {}),
+      ...projectInstructionsField(role, asRecord(group.meta) ?? asRecord(group.metadata)),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.

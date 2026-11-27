@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.69"
+  x-elitea-client-contract: "1.70"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible with the Elitea Python SDK and with the clients built for
@@ -7416,6 +7416,33 @@ components:
             suspended) when the turn ran. Absent when it was not.
         full_auto:
           $ref: '#/components/schemas/LocalTurnFullAutoReport'
+        project_instructions:
+          $ref: '#/components/schemas/LocalTurnProjectInstructionsReport'
+    LocalTurnProjectInstructionsReport:
+      type: object
+      description: >-
+        Client contract 1.70 (issue 3130). Present when the turn's folder held
+        project instruction files (AGENTS.md, SOUL.md): whether the thread
+        applied them, so a later reader can tell. `applied` is false when the
+        person turned the thread's "Respect AGENTS.md" off. Stored on the
+        answer as `local_work.project_instructions` with at most 20 files (cut
+        to 400 bytes); web and mobile show it read-only. What the client
+        reports; the server cannot verify it. NOTE(W2):
+        internal/application/localturn/localturn.go:382
+        (`ProjectInstructionsReport`).
+      required: [applied, files]
+      properties:
+        applied:
+          type: boolean
+          example: false
+          description: The turn's prompt carried the files.
+        files:
+          type: array
+          maxItems: 200
+          description: The files found, workspace-relative, the root's first.
+          items:
+            type: string
+            example: AGENTS.md
     LocalTurnFullAutoReport:
       type: object
       description: >-
@@ -7424,7 +7451,7 @@ components:
         person. Stored on the answer as `local_work.full_auto` with at most 50
         asks (command and reason cut to 300 bytes); its presence is the
         "Full auto" marker viewers show. What the client reports; the server
-        cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:374
+        cannot verify it. NOTE(W2): internal/application/localturn/localturn.go:389
         (`FullAutoReport`).
       required: [answered, asks]
       properties:

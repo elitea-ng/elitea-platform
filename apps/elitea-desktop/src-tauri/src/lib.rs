@@ -641,6 +641,8 @@ pub fn run() {
             local_commands::thread_skills_list,
             local_commands::thread_skill_pin,
             local_commands::thread_skill_unpin,
+            local_commands::thread_instructions_status,
+            local_commands::thread_respect_agents_md_set,
             local_commands::thread_history_fork,
             local_commands::session_info,
             local_commands::checkpoint_restore,

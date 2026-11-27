@@ -7747,5 +7747,7 @@
   "marketplace.teamHire.name": "Team name",
   "marketplace.teamHire.reused": "Uses the agent this project already installed from this version.",
   "marketplace.teamHire.title": "Hire the team {{name}}",
-  "marketplace.teamHire.unavailable": "This agent version cannot be hired now, so the team cannot be hired."
+  "marketplace.teamHire.unavailable": "This agent version cannot be hired now, so the team cannot be hired.",
+  "features.chatMessages.agentsMdApplied": "AGENTS.md applied",
+  "features.chatMessages.agentsMdIgnored": "AGENTS.md ignored"
 }
