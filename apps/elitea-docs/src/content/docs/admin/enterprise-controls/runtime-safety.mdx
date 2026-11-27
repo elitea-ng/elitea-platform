@@ -287,6 +287,8 @@ A run cap is the most that one agent run can use. There are five caps:
 
 A value that is not a positive number in the cap's range fails with `RUN_CAP_INVALID`.
 
+In the agent editor, set the author caps on the **Configuration** tab under **Run caps**: **Tool calls per run**, **Model turns per run**, **Records read per run** and **Spend per run (USD)**. Each field shows the tier cap of the agent. An empty field keeps the tier cap. The editor reads the tier caps from `GET /elitea_core/run_caps/prompt_lib/{project_id}/{application_id}`, which needs the agent read permission. An agent file carries `run_caps`, and import checks each value against the tier cap of a new agent.
+
 **Step limit.** An agent's `step_limit` still limits each agent loop. With `max_model_turns`, the lower of the two stops the run first.
 
 **What is counted.**

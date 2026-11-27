@@ -10,6 +10,9 @@ package eliteacore_test
 // fork_postgres_integration_test.go.
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -32,17 +35,40 @@ func TestImportRefusesAnInvalidCitationsSetting(t *testing.T) {
 		"citations":       {"citations": "always"},
 		"output contract": {"output_contract": map[string]any{"type": "format", "format": "xml"}},
 	} {
-		answer := decodeImportLink(t, importLinkDo(t, router, []any{map[string]any{
+		// Issue 3137: the import checks every entry before it writes, and a
+		// refusal answers 422 naming the field, not a 400 errors.agents row.
+		recorder := importLinkDo(t, router, []any{map[string]any{
 			"entity": "agents", "name": "bad " + name, "import_uuid": "bad-" + name,
 			"versions": []any{contentCheckVersion(meta)},
-		}}))
-		if len(answer.Errors.Agents) != 1 || !strings.Contains(answer.Errors.Agents[0].Msg, "Import function has been failed") {
-			t.Errorf("%s: errors.agents = %+v, want one refusal", name, answer.Errors.Agents)
+		}})
+		refusal := decodeImportRefusal(t, recorder)
+		if recorder.Code != http.StatusUnprocessableEntity || refusal.Code != "import_invalid" ||
+			!strings.HasPrefix(refusal.Field, "applications[0].versions[0].meta.") || refusal.Name != "bad "+name {
+			t.Errorf("%s: status %d body %s, want the 422 import refusal", name, recorder.Code, recorder.Body)
 		}
 	}
 	if count := importLinkCount(t, pool, `SELECT count(*) FROM p_1.applications`); count != 0 {
 		t.Errorf("applications rows = %d, want 0: a refused agent must write nothing", count)
 	}
+}
+
+// importRefusal is the 422 body of a refused import document (issue 3137).
+type importRefusal struct {
+	Error string `json:"error"`
+	Code  string `json:"code"`
+	Field string `json:"field"`
+	Rule  string `json:"rule"`
+	Index int    `json:"index"`
+	Name  string `json:"name"`
+}
+
+func decodeImportRefusal(t *testing.T, recorder *httptest.ResponseRecorder) importRefusal {
+	t.Helper()
+	var refusal importRefusal
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("decode import refusal %q: %v", recorder.Body.String(), err)
+	}
+	return refusal
 }
 
 func TestForkRefusesAnInvalidCitationsSetting(t *testing.T) {

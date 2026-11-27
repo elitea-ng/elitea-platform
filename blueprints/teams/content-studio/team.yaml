@@ -1,0 +1,27 @@
+schema: elitea.team/v1
+kind: team
+name: Content Studio
+description: >-
+  Research, fact-check and edit a piece of writing as one team. Research Scout leads and
+  drafts from cited sources, Fact Checker verifies every claim, Writing Editor edits the
+  result to the house style.
+floor_policy: lead
+members:
+  - ../../agents/research-scout.agent.md
+  - members/fact-checker.agent.md
+  - ../../agents/writing-editor.agent.md
+lead: ../../agents/research-scout.agent.md
+blueprint:
+  brief: >-
+    A three-agent content team led by a research agent. The lead researches the topic and
+    drafts with citations, hands the draft to a fact checker that marks each claim as
+    supported, unsupported or wrong, and then to a writing editor that edits it to a house
+    style guide. The person talks to the lead; the lead decides who works next.
+  showcases:
+    - Team with a lead (floor policy lead)
+    - Members reused from single-agent blueprints
+    - Citations and fact checking hand-off
+  requirements:
+    - type: web_search
+      label: A web search or browser toolkit for Research Scout and Fact Checker, if they should read the web
+  surface: cloud

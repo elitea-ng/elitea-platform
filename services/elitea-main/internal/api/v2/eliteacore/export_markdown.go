@@ -46,6 +46,16 @@ package eliteacore
 // `skills` was a third. It is now written: `exportedSkills` builds the array
 // `_extract_skills_for_md` reads, and `skillBlocks` below renders it (#611).
 //
+// ## The elitea.agent/v1 keys (issue 3137)
+//
+// Every file now starts with `schema: elitea.agent/v1` and carries what the
+// legacy format had no key for: reasoning_effort, the version's tag names,
+// the rich meta blocks verbatim, the avatar and the evaluation datasets. See
+// export_blueprint.go for each, including the avatar's ZIP: a pack that names
+// uploaded files turns the single-file answer into `<slug>.agent.zip`, and
+// the multi-version ZIP carries the files too. Memory entries, heartbeat
+// enablement, run history and credentials are never written.
+//
 // Each is a gap in what this service EXPORTS, not in this file's rendering,
 // and each is listed on the route's own doc comment so it is visible from the
 // handler rather than only from here.
@@ -426,27 +436,23 @@ func markdownFilename(appName, versionName, rawAgentType string) string {
 	return fmt.Sprintf("%s.%s.%s.md", appSlug, versionSlug, kind)
 }
 
-// applicationToMarkdown is `_application_to_md` (:932).
-func applicationToMarkdown(app map[string]any, toolkits, skills []any, version map[string]any) (string, error) {
+// applicationToMarkdown is `_application_to_md` (:932), in the key order of
+// the elitea.agent/v1 format. avatarDir is the folder the version's avatar
+// files are written under; the files come back beside the markdown.
+func applicationToMarkdown(app map[string]any, toolkits, skills []any, version map[string]any, avatarDir string) (string, []exportedFile, error) {
 	versionName, _ := version["name"].(string)
 	rawAgentType, _ := version["agent_type"].(string)
 	agentType := markdownAgentType(rawAgentType)
 
 	front := newOrderedMap()
+	front.setAlways("schema", AgentFileSchema)
 	front.setAlways("name", app["name"])
 	front.setAlways("description", app["description"])
 	if versionName != "" && versionName != "base" {
 		front.set("version", versionName)
 	}
 
-	if llm, ok := version["llm_settings"].(map[string]any); ok {
-		front.set("model", llm["model_name"])
-		// `is not None`, not `if`: a temperature or top_p of 0 is a real
-		// setting, and dropping it would re-default the agent on import.
-		front.setAlways("temperature", llm["temperature"])
-		front.set("max_tokens", llm["max_tokens"])
-		front.setAlways("top_p", llm["top_p"])
-	}
+	setBlueprintModelKeys(front, version)
 
 	front.setAlways("agent_type", agentType)
 
@@ -455,11 +461,15 @@ func applicationToMarkdown(app map[string]any, toolkits, skills []any, version m
 		front.set("internal_tools", meta["internal_tools"])
 	}
 
+	front.set("tags", versionTagNames(version))
 	front.set("welcome_message", version["welcome_message"])
 	front.set("conversation_starters", version["conversation_starters"])
 	// ADR-0050 decision 1a: the soul document, as one nested mapping. The
 	// import reads it back as the version entry's `soul`.
 	front.set("soul", version["soul"])
+	setRichMetaKeys(front, version)
+	avatar, avatarFiles := exportedAvatar(version, avatarDir)
+	front.set("avatar", avatar)
 
 	// toAnySlice, not a `.([]any)` assertion: `exportedVersions` stores this as
 	// `[]map[string]any` (export_import.go:238), which no `[]any` assertion
@@ -492,6 +502,7 @@ func applicationToMarkdown(app map[string]any, toolkits, skills []any, version m
 
 	front.set("variables", version["variables"])
 	front.set("skills", skillBlocks(toAnySlice(version["skills"]), skills))
+	front.set("evaluation", evaluationFrontMatter(app))
 
 	var buffer bytes.Buffer
 	encoder := yaml.NewEncoder(&buffer)
@@ -500,23 +511,25 @@ func applicationToMarkdown(app map[string]any, toolkits, skills []any, version m
 	// reading a diff of two exports, one from each implementation.
 	encoder.SetIndent(2)
 	if err := encoder.Encode(front); err != nil {
-		return "", fmt.Errorf("render frontmatter: %w", err)
+		return "", nil, fmt.Errorf("render frontmatter: %w", err)
 	}
 	if err := encoder.Close(); err != nil {
-		return "", fmt.Errorf("close frontmatter encoder: %w", err)
+		return "", nil, fmt.Errorf("close frontmatter encoder: %w", err)
 	}
 
-	return fmt.Sprintf("---\n%s---\n\n%s", buffer.String(), body), nil
+	return fmt.Sprintf("---\n%s---\n\n%s", buffer.String(), body), avatarFiles, nil
 }
 
 // markdownFilesFor is `export_application_md` (:1103): one file per version of
-// every application in the document.
-func markdownFilesFor(result map[string]any) ([]exportedFile, error) {
+// every application in the document. The second list is the avatar files the
+// versions name, which only a ZIP can carry.
+func markdownFilesFor(result map[string]any) ([]exportedFile, []exportedFile, error) {
 	applications, _ := result["applications"].([]map[string]any)
 	toolkits := toAnySlice(result["toolkits"])
 	skills := toAnySlice(result["skills"])
 
 	files := make([]exportedFile, 0, len(applications))
+	var media []exportedFile
 	for _, app := range applications {
 		appName, _ := app["name"].(string)
 		versions := toAnySlice(app["versions"])
@@ -525,19 +538,18 @@ func markdownFilesFor(result map[string]any) ([]exportedFile, error) {
 			if !isMap {
 				continue
 			}
-			content, err := applicationToMarkdown(app, toolkits, skills, version)
-			if err != nil {
-				return nil, err
-			}
 			versionName, _ := version["name"].(string)
 			rawAgentType, _ := version["agent_type"].(string)
-			files = append(files, exportedFile{
-				name:    markdownFilename(appName, versionName, rawAgentType),
-				content: content,
-			})
+			filename := markdownFilename(appName, versionName, rawAgentType)
+			content, avatarFiles, err := applicationToMarkdown(app, toolkits, skills, version, avatarDirFor(filename))
+			if err != nil {
+				return nil, nil, err
+			}
+			files = append(files, exportedFile{name: filename, content: content})
+			media = append(media, avatarFiles...)
 		}
 	}
-	return files, nil
+	return files, media, nil
 }
 
 // toAnySlice normalises the two shapes the export document uses for its lists
@@ -636,9 +648,11 @@ func urlEncodePath(value string) string {
 //
 // One file goes out as markdown; more than one goes out as a ZIP, because a
 // single response cannot carry two documents and silently exporting only the
-// first would lose every version but one.
+// first would lose every version but one. A single version whose avatar
+// names uploaded files goes out as `<slug>.agent.zip` (the markdown plus
+// `avatars/<slug>/<slot>.<ext>`), for the same reason.
 func writeMarkdownExport(w http.ResponseWriter, entityID string, result map[string]any) {
-	files, err := markdownFilesFor(result)
+	files, media, err := markdownFilesFor(result)
 	if err != nil {
 		// 400, matching the legacy's own `return {'errors': ...}, 400` for a
 		// conversion failure — the export is readable, this rendering of it is
@@ -653,7 +667,7 @@ func writeMarkdownExport(w http.ResponseWriter, entityID string, result map[stri
 
 	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition")
 
-	if len(files) == 1 {
+	if len(files) == 1 && len(media) == 0 {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set("Content-Disposition", contentDispositionAttachment(files[0].name))
 		w.WriteHeader(http.StatusOK)
@@ -661,12 +675,15 @@ func writeMarkdownExport(w http.ResponseWriter, entityID string, result map[stri
 		return
 	}
 
-	archive, err := zipArchive(files)
+	archive, err := zipArchive(append(files, media...))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": exportReadFailed})
 		return
 	}
 	name := fmt.Sprintf("elitea_export_%s.zip", path.Base(entityID))
+	if len(files) == 1 {
+		name = strings.TrimSuffix(files[0].name, ".md") + ".zip"
+	}
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", contentDispositionAttachment(name))
 	w.WriteHeader(http.StatusOK)

@@ -9,7 +9,7 @@ import { getConfig } from '@/shared/config';
 import { t } from '@/shared/i18n';
 import { fetchMarkdownExport, triggerBlobDownload } from '@/shared/lib/download';
 
-import { buildTeamZip, teamZipName } from '../lib/teamExport';
+import { buildTeamZip, teamZipName, type MemberExport } from '../lib/teamExport';
 
 export interface TeamExport {
   /** The id of the team being exported, if any. */
@@ -28,7 +28,7 @@ export function useTeamExport(): TeamExport {
     setExportingId(team.id);
     setError(undefined);
     try {
-      const markdown: string[] = [];
+      const markdown: MemberExport[] = [];
       for (const member of team.members) {
         const result = await fetchMarkdownExport({
           baseUrl: config.config.vite_server_url,
@@ -44,7 +44,8 @@ export function useTeamExport(): TeamExport {
           );
           return;
         }
-        markdown.push(result.text);
+        // A member with uploaded avatar media answers its `.agent.zip` (issue 3137).
+        markdown.push(result.zip ?? result.text);
       }
       triggerBlobDownload(await buildTeamZip(team, markdown), teamZipName(team));
     } finally {

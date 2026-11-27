@@ -611,6 +611,38 @@ func TestCurrentRegenerationRouteReportsFinalizingResponseAsRetryable(t *testing
 	}
 }
 
+// #3137: another turn of the conversation still being written (the automatic
+// continuation of Run to completion) is a wait, so the client's retry of
+// `agent_regeneration_pending` covers it. It used to be a plain 422.
+func TestCurrentRegenerationRouteReportsTurnInFlightAsRetryable(t *testing.T) {
+	useCase := &currentStartUseCaseStub{err: agentexecutionapp.ErrConversationTurnInFlight}
+	route := newCurrentStartRoute(t, useCase, currentStartPermissionResolverFunc(func(
+		context.Context, auth.User, string, string,
+	) (auth.PermissionResolution, error) {
+		return auth.PermissionResolution{
+			UserID: 11, Permissions: []string{CurrentRegenerationPermission},
+		}, nil
+	}))
+
+	response := httptest.NewRecorder()
+	route.ServeHTTP(response, currentRegenerationRequest(validCurrentRegenerationBody()))
+
+	if response.Code != http.StatusConflict || response.Header().Get("Retry-After") != "1" {
+		t.Fatalf("status=%d retry_after=%q body=%s",
+			response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	var body struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Retryable bool   `json:"retryable"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil ||
+		body.Error != "agent_regeneration_pending" || !body.Retryable ||
+		!strings.Contains(body.Message, "Another answer in this conversation") {
+		t.Fatalf("body=%+v error=%v", body, err)
+	}
+}
+
 func TestCurrentApplicationStartRouteFallsBackBeforeUseCaseForUnsupportedTurn(t *testing.T) {
 	useCase := &currentStartUseCaseStub{}
 	permissions := allowCurrentStartPermission()

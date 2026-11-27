@@ -27,6 +27,12 @@ COPY scripts/brand/ /build/scripts/brand/
 COPY brand/elitea/ /build/brand/elitea/
 COPY brand/sample/ /build/brand/sample/
 COPY apps/elitea-web/scripts/brand-web.mjs ./scripts/
+# The blueprint gallery's files (issue 3137): vite.config.ts's elitea-blueprints
+# plugin (scripts/vite-blueprints.mjs) builds blueprints/ with
+# scripts/blueprints/build.mjs and emits the result under dist/app/blueprints/.
+COPY blueprints/ /build/blueprints/
+COPY scripts/blueprints/ /build/scripts/blueprints/
+COPY apps/elitea-web/scripts/vite-blueprints.mjs ./scripts/
 ARG ELITEA_BRAND=""
 ENV ELITEA_BRAND=${ELITEA_BRAND}
 # Vite's default publicDir — copied verbatim into dist/app. Holds the brand
@@ -55,6 +61,10 @@ COPY apps/elitea-docs/package.json apps/elitea-docs/package-lock.json ./
 RUN npm ci
 COPY libs/ts/client-core/src/brand/tokens.json /build/libs/ts/client-core/src/brand/tokens.json
 COPY apps/elitea-docs/ ./
+# The blueprint downloads (issue 3137): src/plugins/blueprints.ts builds them
+# from the repository's blueprints/ tree with scripts/blueprints/build.mjs.
+COPY blueprints/ /build/blueprints/
+COPY scripts/blueprints/ /build/scripts/blueprints/
 ENV ASTRO_TELEMETRY_DISABLED=1 DOCS_BASE=/docs/
 RUN npm run build
 

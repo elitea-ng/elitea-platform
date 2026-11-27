@@ -72,7 +72,13 @@ Notes are at most 2,048 bytes. An agent keeps at most 2,000 active notes; past t
 
 A new agent has memory on, in `auto_attended` mode. An agent created before this release has it off until you turn it on.
 
-The setting is the `memory` block of the version's `meta`:
+Set it on the agent editor's **Memory** tab, under **Memory settings**:
+
+- **Remember across conversations** turns memory on or off.
+- **New memories** sets how a note the agent writes becomes active: **Active when a person started the turn, else for review** (`auto_attended`), **Always active** (`auto`), **Always for review** (`review`) or **Off: recall only** (`off`).
+- **Memories recalled per turn** and **Recall budget (tokens)** limit the recall.
+
+The section is saved with the version. It writes the `memory` block of the version's `meta`:
 
 ```json
 {
@@ -84,7 +90,7 @@ The setting is the `memory` block of the version's `meta`:
 }
 ```
 
-`max_entries` is 1 to 50 and `max_tokens` is 100 to 8,000. A block with another key or a value out of range is refused (`memory_block_invalid`). The agent form does not edit this block yet; set it through the API or an export.
+`max_entries` is 1 to 50 and `max_tokens` is 100 to 8,000. A block with another key or a value out of range is refused (`memory_block_invalid`). The section shows the allowed range under each field.
 
 ## The Memory tab
 

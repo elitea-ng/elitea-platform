@@ -82,6 +82,23 @@ func (c *Checker) Check(ctx context.Context, projectID, applicationID int64, met
 	return AboveTier(settings.For(tier), author, tier)
 }
 
+// TierCaps answers an agent's risk tier and the platform's caps at it, for
+// the editor to show beside the author's caps (GET run_caps, issue 3137). An
+// applicationID of 0 is a new agent, whose tier is low. A cap of 0 is no cap.
+func (c *Checker) TierCaps(ctx context.Context, projectID, applicationID int64) (agentlifecycle.Tier, platformconfig.TierRunCaps, error) {
+	settings, err := c.settings.Get(ctx)
+	if err != nil {
+		return "", platformconfig.TierRunCaps{}, fmt.Errorf("read the platform run caps: %w", err)
+	}
+	tier := agentlifecycle.TierLow
+	if projectID > 0 && applicationID > 0 {
+		if tier, err = workerapprovalpolicy.ReadTier(ctx, c.tiers, projectID, applicationID); err != nil {
+			return "", platformconfig.TierRunCaps{}, err
+		}
+	}
+	return tier, settings.For(tier), nil
+}
+
 // AboveTier answers the first author cap above the tier's cap, or nil. A
 // tier cap of 0 is no cap: any author value lowers it.
 func AboveTier(tier, author platformconfig.TierRunCaps, name agentlifecycle.Tier) error {

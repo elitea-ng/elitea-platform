@@ -127,9 +127,9 @@ func (e *ParamError) Error() string { return e.Param + ": " + e.Message }
 // Validate checks the ranges and fills the defaults.
 func (p *SearchParams) Validate() error {
 	switch p.Kind {
-	case "", KindAgent, KindSkill:
+	case "", KindAgent, KindSkill, KindTeam:
 	default:
-		return &ParamError{"kind", "must be agent or skill"}
+		return &ParamError{"kind", "must be agent, skill or team"}
 	}
 	switch p.Sort {
 	case "":
@@ -446,7 +446,7 @@ AND %s <> '' GROUP BY 1, 2 ORDER BY 3 DESC, 2 LIMIT %d`, valueExpr, labelExpr, j
 		return out, rows.Err()
 	}
 	var err error
-	if facets.Kinds, err = group(facetKind, "l.kind", "CASE l.kind WHEN 'agent' THEN 'Agents' ELSE 'Skills' END", "", 5); err != nil {
+	if facets.Kinds, err = group(facetKind, "l.kind", "CASE l.kind WHEN 'agent' THEN 'Agents' WHEN 'team' THEN 'Teams' ELSE 'Skills' END", "", 5); err != nil {
 		return Facets{}, err
 	}
 	if facets.Categories, err = group(facetCategory, "l.category", "l.category", "", 50); err != nil {
@@ -489,6 +489,9 @@ type Detail struct {
 	Versions             []VersionJSON  `json:"versions"`
 	CanManage            bool           `json:"can_manage"`
 	CanModerate          bool           `json:"can_moderate"`
+	// Team is the members of a team listing (kind `team`); nil for an agent or
+	// a skill.
+	Team *TeamDetailJSON `json:"team,omitempty"`
 }
 
 // VersionJSON is the wire form of a version.
@@ -595,6 +598,11 @@ WHERE l.id = %s`, currentVersionSQL, likes, liked, args.add(p.ListingID)), args.
 	detail.Versions = versions
 	if kind == KindAgent {
 		if err := fillAgentDetail(ctx, db, p.ListingID, &detail); err != nil {
+			return Detail{}, err
+		}
+	}
+	if kind == KindTeam {
+		if err := fillTeamDetail(ctx, db, p.ListingID, p.ProjectID, &detail); err != nil {
 			return Detail{}, err
 		}
 	}

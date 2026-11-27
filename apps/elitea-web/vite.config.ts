@@ -17,6 +17,7 @@ import { viteSingleFile } from 'vite-plugin-singlefile';
 
 import { loadBrand } from '../../scripts/brand/load.mjs';
 import { BRAND_CACHE_DIR, brandDefaultPack, brandLogoFiles, brandTitle, isDefaultBrand } from './scripts/brand-web.mjs';
+import { blueprintsPlugin } from './scripts/vite-blueprints.mjs';
 import svgr from 'vite-plugin-svgr';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
@@ -362,6 +363,8 @@ function mainAppPlugins(basePlugins: PluginOption[]): PluginOption[] {
     }),
     ...basePlugins,
     pdfjsNoWasmDecoders(),
+    // Issue 3137 — the blueprint gallery's files under blueprints/ (build and dev).
+    blueprintsPlugin(),
   ];
 }
 

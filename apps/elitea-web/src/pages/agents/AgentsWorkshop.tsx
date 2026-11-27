@@ -17,6 +17,7 @@ import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
 import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
 import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter, useFolderOrder } from '@/widgets/entity-folders';
 import { EntityListSidebar, ListSelectionSection, pageBodySx, pageSx, useListSearchQuery, useListSelection } from '@/widgets/page-header';
+import { BlueprintGalleryButton } from '@/widgets/blueprint-gallery';
 import { usePermissionSet } from '@/widgets/sidebar';
 
 import { toApplicationRow } from './lib/applicationRows';
@@ -68,10 +69,9 @@ function AgentListActions({ projectId, canCreate }: { readonly projectId: string
       <EntityImportButton
         testIdPrefix="agents"
         isImporting={entityImport.run.isPending}
-        onImport={async (request) => {
-          await entityImport.run.mutateAsync(request);
-        }}
+        onImport={(request) => entityImport.run.mutateAsync(request)}
       />
+      {canCreate && <BlueprintGalleryButton projectId={projectId} initialTab="agents" testIdPrefix="agents" onAgentCreated={(agentId) => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId } })} />}
     </>
   );
 }
@@ -160,18 +160,20 @@ const renderMemberAvatar: RenderMemberAvatar = (avatar, size) => (
   />
 );
 
-/** Import, worded for the Teams page: a team zip makes its agents and the team (issue 3010). */
+/** Import, worded for the Teams page: a team zip makes its agents and the team (issue 3010); beside it, the blueprint gallery (issue 3137). */
 function TeamImportButton({ projectId, testIdPrefix }: { readonly projectId: string | undefined; readonly testIdPrefix: string }): ReactNode {
+  const navigate = useNavigate();
   const entityImport = useEntityImport(projectId);
   return (
-    <EntityImportButton
-      testIdPrefix={testIdPrefix}
-      label={t('pages.agents.teams.import', 'Import team')}
-      isImporting={entityImport.run.isPending}
-      onImport={async (request) => {
-        await entityImport.run.mutateAsync(request);
-      }}
-    />
+    <>
+      <EntityImportButton
+        testIdPrefix={testIdPrefix}
+        label={t('pages.agents.teams.import', 'Import team')}
+        isImporting={entityImport.run.isPending}
+        onImport={(request) => entityImport.run.mutateAsync(request)}
+      />
+      <BlueprintGalleryButton projectId={projectId} initialTab="teams" testIdPrefix={testIdPrefix} onAgentCreated={(agentId) => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId } })} />
+    </>
   );
 }
 

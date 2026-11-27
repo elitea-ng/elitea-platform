@@ -1005,7 +1005,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 610 -> 611 (issue 2604, ADR-0059 R2.9c, 2026-11-26): acknowledgeElevation, the
 // acknowledgement of an elevation nobody could review. The review page is R3.11 (issue 2542),
 // so MANIFEST_ENTRY_COUNT is unchanged.
-const GENERATED_OPERATION_COUNT = 611;
+// 611 -> 613 (issue 3137, ADR-0051 amendment, 2026-11-26): publishMarketplaceTeam and
+// hireMarketplaceTeam, saved teams in the Marketplace. The Teams row and the team hire dialog
+// call them, so MANIFEST_ENTRY_COUNT moves too.
+// 613 -> 614 (issue 3137, 2026-11-26): getAgentRunCaps, the platform's run caps for an agent's
+// risk tier. The agent editor's Run caps section calls it, so MANIFEST_ENTRY_COUNT moves too.
+const GENERATED_OPERATION_COUNT = 614;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
@@ -1352,8 +1357,14 @@ const GENERATED_OPERATION_COUNT = 611;
  * 395 -> 400 (5d-1 HTTP actions): the five HTTP action rule operations for Settings › HTTP Actions.
  *
  * 400 -> 401 (issue 3010): applications.importTeam, the Workshop Import of a team zip. Generated.
+ *
+ * 401 -> 403 (issue 3137): marketplace.publishTeam and marketplace.hireTeam, saved teams in the
+ * Marketplace. Both generated.
+ *
+ * 403 -> 404 (issue 3137): applications.getAgentRunCaps, the tier's run caps for the agent
+ * editor's Run caps section. Generated.
  */
-const MANIFEST_ENTRY_COUNT = 401;
+const MANIFEST_ENTRY_COUNT = 404;
 
 describe('GREEN — the real, checked-in manifest', () => {
   it('exits 0 against src/shared/api/endpoints.manifest.json, unmodified', () => {

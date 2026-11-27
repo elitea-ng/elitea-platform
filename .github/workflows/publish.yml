@@ -1423,6 +1423,66 @@ jobs:
             echo "::warning::desktop: ${DESKTOP_RESULT}; ${TAG} carries only the packages that were built"
           fi
 
+  # ── Blueprints — one importable file per agent and team blueprint ──────────
+  #
+  # Every release, nightly and dev pre-release carries the blueprints of
+  # blueprints/ (issue 3137), built by scripts/blueprints/build.mjs from the
+  # release tag: `elitea-team-<slug>-<version>.team.zip` per team and
+  # `elitea-agent-<slug>-<version>.agent.md` (`.agent.zip` with uploaded avatar
+  # media) per single agent. Each file imports as it is through Import; there
+  # is no umbrella archive. The release body gets a section listing them.
+  # no-binaries.yml builds the same assets on every pull request and ci-go's
+  # api-core shard imports each through the real import validation, so this
+  # job cannot meet a blueprint the pull request did not.
+  #
+  # After desktop-assets, because both edit the release body (each replaces
+  # only its own marked section); `!cancelled()` so a failed desktop build
+  # still gets its blueprints. Not in rollback's `needs`: assets of a release
+  # that is otherwise complete.
+  blueprints:
+    name: Blueprints (attach to the release)
+    needs: [release, desktop-assets]
+    if: ${{ !cancelled() && needs.release.outputs.new_release_published == 'true' }}
+    runs-on: ${{ (vars.ENG_RUNNER == 'on' && github.repository == 'elitea-ng/elitea-platform' && github.actor != 'dependabot[bot]' && github.triggering_actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]') || github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')) && 'eng-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release.outputs.new_release_git_tag }}
+          persist-credentials: false
+      - uses: ./.github/actions/eng-runner-env
+        with:
+          node: "true"
+      - name: Install the builder's YAML dependency
+        uses: ./.github/actions/ci-scripts-deps
+        with:
+          npm-cache: "false"
+      - name: Build the assets and attach them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.new_release_git_tag }}
+          VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null; then
+            echo "::warning::release ${TAG} no longer exists (rolled back or deleted); no blueprints attached"
+            exit 0
+          fi
+          dir="$RUNNER_TEMP/blueprint-assets"
+          node scripts/blueprints/build.mjs --release-dir "$dir" --version "$VERSION"
+          notes="$dir/blueprints-release-notes.md"
+          mv "$notes" "$RUNNER_TEMP/section.md"
+          gh release upload "$TAG" "$dir"/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "$RUNNER_TEMP/body.md"
+          node scripts/blueprints/build.mjs merge-notes "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/section.md" > "$RUNNER_TEMP/notes.md"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+          {
+            echo "### Blueprint assets on ${TAG}"
+            for f in "$dir"/*; do printf -- '- %s\n' "$(basename "$f")"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ── Job 6: Docs — deploy the docs site for a stable release ─────────────────
   #
   # A merge no longer deploys the docs (docs-pages.yml has no push arm), so the

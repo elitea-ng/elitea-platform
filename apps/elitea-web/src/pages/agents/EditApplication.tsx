@@ -244,6 +244,7 @@ export function EditApplication(): ReactNode {
   // ADR-0051: an installed agent's definition is its listing version's snapshot; only project settings change.
   const origin = useMarketplaceOrigin(projectId, applicationId);
   const definitionLocked = isDefinitionLocked(activeVersion, origin);
+  const definitionDisabled = isEditorDisabled || definitionLocked;
   const noticeTarget = { projectId, applicationId };
 
   // Routed through the same `onFieldChange` every other version-level field
@@ -363,16 +364,12 @@ export function EditApplication(): ReactNode {
               personaPanel={
                 <EditApplicationPersonaPanel
                   versionFields={versionFields}
-                  disabled={isEditorDisabled || definitionLocked}
+                  disabled={definitionDisabled}
                 />
               }
-              avatarPanel={
-                <EditApplicationAvatarPanel
-                  projectId={projectId}
-                  versionFields={versionFields}
-                  disabled={isEditorDisabled}
-                />
-              }
+              avatarPanel={<EditApplicationAvatarPanel projectId={projectId} versionFields={versionFields} disabled={isEditorDisabled} />}
+              // Issue 3137: the Heartbeat schedule, Memory settings and Workforce controls (meta blocks).
+              metaControls={isReadOnlyView ? undefined : { versionFields, disabled: definitionDisabled }}
               configurationPanel={
                 <EditApplicationConfigurationPanel
                   projectId={projectId}

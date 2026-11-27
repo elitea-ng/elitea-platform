@@ -5,7 +5,7 @@
  * shape, so a filtered view is a link.
  */
 import { SORT_OPTIONS, type MarketplaceSort } from './constants';
-import { kindFromSearch } from './listing';
+import { apiKind, kindFromSearch } from './listing';
 import type { MarketplaceKind } from './types';
 
 /** The URL's side of the filters: every value a string, as the router hands it. */
@@ -62,7 +62,7 @@ export function filtersFromSearch(search: MarketplaceSearch): MarketplaceFilters
 /** The URL for a set of filters; a default value is left out so the address stays short. */
 export function searchFromFilters(filters: MarketplaceFilters): MarketplaceSearch {
   const out: MarketplaceSearch = {};
-  if (filters.kind === 'skills') out.kind = 'skills';
+  if (filters.kind !== 'agents') out.kind = filters.kind;
   if (filters.query.trim() !== '') out.query = filters.query;
   if (filters.categories.length > 0) out.category = filters.categories.join(',');
   if (filters.tags.length > 0) out.tag = filters.tags.join(',');
@@ -79,7 +79,7 @@ export type ApiParams = Record<string, string | number | boolean>;
 
 /** The search route's parameters for a filter set (limit and offset are the pager's). */
 export function apiParamsFromFilters(filters: MarketplaceFilters): ApiParams {
-  const params: ApiParams = { kind: filters.kind === 'skills' ? 'skill' : 'agent', sort: filters.sort };
+  const params: ApiParams = { kind: apiKind(filters.kind), sort: filters.sort };
   if (filters.query.trim() !== '') params['query'] = filters.query.trim();
   if (filters.categories.length > 0) params['category'] = filters.categories.join(',');
   if (filters.tags.length > 0) params['tag'] = filters.tags.join(',');

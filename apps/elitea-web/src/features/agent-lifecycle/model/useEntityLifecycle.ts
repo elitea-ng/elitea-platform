@@ -21,7 +21,10 @@ import {
   type ImportOutcome,
   type PublishOutcome,
 } from '../api/lifecycleApi';
+import { uploadImportMedia } from '../api/importMediaApi';
 import { importTeamDocument, type TeamImportTeamBody } from '../api/teamImportApi';
+import { attachImportAvatars } from '../lib/importAvatars';
+import type { PendingAvatar } from '../lib/importTypes';
 import { governanceRefusalMessage, readGovernanceRefusal } from '../lib/governanceRefusal';
 import {
   normalizePublishValidation,
@@ -178,6 +181,8 @@ export function useEntityLifecycle(projectId: string | undefined, entityId: stri
 interface EntityImportRequest {
   readonly document: EntityExportDocument;
   readonly team?: TeamImportTeamBody | undefined;
+  /** A zip's avatar media (issue 3137), uploaded before the import so the document carries urls. */
+  readonly avatars?: readonly PendingAvatar[] | undefined;
 }
 
 export interface EntityImport {
@@ -196,8 +201,11 @@ export interface EntityImport {
 export function useEntityImport(projectId: string | undefined): EntityImport {
   const queryClient = useQueryClient();
   const run = useMutation<ImportOutcome, Error, EntityImportRequest>({
-    mutationFn: ({ document, team }) =>
-      team === undefined ? importEntities(projectId ?? '', document) : importTeamDocument(projectId ?? '', document, team),
+    mutationFn: async ({ document, team, avatars }) => {
+      const project = projectId ?? '';
+      const withAvatars = await attachImportAvatars(document, avatars ?? [], (file) => uploadImportMedia(project, file));
+      return team === undefined ? importEntities(project, withAvatars) : importTeamDocument(project, withAvatars, team);
+    },
     onSuccess: (_outcome, { team }) => {
       void queryClient.invalidateQueries({
         predicate: (query) =>

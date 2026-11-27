@@ -53,7 +53,7 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	}
 
 	subject := BudgetSubject("project", "42", 1700000000)
-	if total, err := c.IncrBudget(ctx, subject, 500); err != nil || total != 500 {
+	if total, err := incrBudgetOnce(ctx, c, subject, 500); err != nil || total != 500 {
 		t.Fatalf("IncrBudget = %d, %v", total, err)
 	}
 	if total, err := c.ReadBudget(ctx, subject); err != nil || total != 500 {
@@ -263,3 +263,40 @@ func dialAs(t *testing.T, s *natstest.Server, identity string) *nats.Conn {
 	t.Cleanup(nc.Close)
 	return nc
 }
+
+// incrBudgetOnce applies one plain (not idempotent) increment to a fresh
+// subject, tolerating a deadline on a loaded runner (seen in CI after the
+// warm-up: "IncrBudget = 0, nats: unavailable: context deadline exceeded";
+// OpTimeout is 150ms and pinned on purpose). A plain increment cannot simply
+// be retried: a write that landed but whose ack was late would count twice.
+// So after a deadline the counter is read: delta means the write landed,
+// zero means it did not and is sent again. Any other error fails at once.
+func incrBudgetOnce(ctx context.Context, c *Client, subject string, delta int64) (int64, error) {
+	isDeadline := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), context.DeadlineExceeded.Error())
+	}
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		var total int64
+		total, err = c.IncrBudget(ctx, subject, delta)
+		if !isDeadline(err) {
+			return total, err
+		}
+		for read := 0; read < 5; read++ {
+			time.Sleep(200 * time.Millisecond)
+			current, readErr := c.ReadBudget(ctx, subject)
+			if isDeadline(readErr) {
+				continue
+			}
+			if readErr != nil {
+				return 0, readErr
+			}
+			if current == delta {
+				return current, nil
+			}
+			break
+		}
+	}
+	return 0, err
+}
+

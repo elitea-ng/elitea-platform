@@ -2,24 +2,13 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useRef, useState } from 'react';
 
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 
-import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
-import { BaseModal } from '@/shared/ui/BaseModal';
 
-import type { EntityExportDocument } from '../api/lifecycleApi';
-import type { TeamImportTeamBody } from '../api/teamImportApi';
-import {
-  ImportDocumentError,
-  isImportableFileName,
-  readImportFile,
-  summarizeImportDocument,
-  type ImportDocumentSummary,
-} from '../lib/importDocument';
+import { ImportDocumentError, isImportableFileName, readImportFile, type ReadImportResult } from '../lib/importDocument';
+import { ImportDialog, type ImportDialogProps } from './ImportDialog';
 
 /**
  * Import, on the agents and pipelines list headers.
@@ -36,13 +25,13 @@ import {
  * export before it lands in their project.
  *
  * A zip with a `team.yaml` is a team (issue 3010): the preview names the team
- * and its lead, and the import creates the agents AND the team, or nothing. A
- * refusal (a taken name, a missing toolkit) stays in the dialog, in the
- * server's words, so the user can fix the file and try again.
+ * and its lead, and the import creates the agents AND the team, or nothing.
+ * The dialog itself (preview, refusal, and what is left to connect after the
+ * import, issue 3137) is `ImportDialog`, which the blueprint gallery shares.
  */
 export interface EntityImportButtonProps {
   readonly isImporting: boolean;
-  readonly onImport: (request: { readonly document: EntityExportDocument; readonly team?: TeamImportTeamBody | undefined }) => Promise<void>;
+  readonly onImport: ImportDialogProps['onImport'];
   /** Distinguishes the agents and pipelines copies in the DOM. */
   readonly testIdPrefix: string;
   /** False on the Pipelines list: a team makes agents and a team, so it is imported from the Agents list. */
@@ -51,73 +40,10 @@ export interface EntityImportButtonProps {
   readonly label?: string;
 }
 
-interface PendingImport {
-  readonly document: EntityExportDocument;
-  readonly team: TeamImportTeamBody | undefined;
-  readonly summary: ImportDocumentSummary;
-}
-
-function ImportPreview({ summary, refusal, testIdPrefix }: { readonly summary: ImportDocumentSummary; readonly refusal: string | undefined; readonly testIdPrefix: string }): ReactNode {
-  return (
-    <Box>
-      {summary.team !== undefined && (
-        <Box data-testid={`${testIdPrefix}-import-team`}>
-          <Typography variant="labelMedium">
-            {t('features.agentLifecycle.import.teamName', 'Team: {{name}}', { name: summary.team.name })}
-          </Typography>
-          {summary.team.lead !== undefined && (
-            <Typography variant="bodySmall">
-              {t('features.agentLifecycle.import.teamLead', 'Lead: {{name}}', { name: summary.team.lead })}
-            </Typography>
-          )}
-        </Box>
-      )}
-      {summary.names.map((name) => (
-        <Typography
-          key={name}
-          variant="bodyMedium"
-        >
-          {name}
-        </Typography>
-      ))}
-      <Typography variant="bodySmall">
-        {t('features.agentLifecycle.import.toolkits', 'Toolkits')}: {summary.toolkitCount}
-      </Typography>
-      <Typography variant="bodySmall">
-        {t('features.agentLifecycle.import.skills', 'Skills')}: {summary.skillCount}
-      </Typography>
-      {summary.skipped.length > 0 ? (
-        <Box>
-          <Typography variant="bodySmall">
-            {t('features.agentLifecycle.import.skipped', 'Not imported (this file cannot carry them)')}:
-          </Typography>
-          {summary.skipped.map((item) => (
-            <Typography
-              key={item}
-              variant="bodySmall"
-            >
-              {item}
-            </Typography>
-          ))}
-        </Box>
-      ) : null}
-      {refusal !== undefined && (
-        <Alert
-          severity="error"
-          data-testid={`${testIdPrefix}-import-refusal`}
-        >
-          {refusal}
-        </Alert>
-      )}
-    </Box>
-  );
-}
-
 export function EntityImportButton({ isImporting, onImport, testIdPrefix, acceptsTeams = true, label }: EntityImportButtonProps): ReactNode {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [pending, setPending] = useState<PendingImport>();
+  const [pending, setPending] = useState<ReadImportResult>();
   const [error, setError] = useState<string>();
-  const [refusal, setRefusal] = useState<string>();
 
   const handleFile = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = event.target.files?.[0];
@@ -130,13 +56,12 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix, accept
       return;
     }
     try {
-      const { document, skipped, team } = await readImportFile(file);
-      if (team !== undefined && !acceptsTeams) {
+      const read = await readImportFile(file);
+      if (read.team !== undefined && !acceptsTeams) {
         setError(t('features.agentLifecycle.import.teamOnAgents', 'This zip is a team. Import it from the Agents list.'));
         return;
       }
-      setRefusal(undefined);
-      setPending({ document, team, summary: summarizeImportDocument(document, skipped, team) });
+      setPending(read);
       setError(undefined);
     } catch (cause) {
       setError(
@@ -144,17 +69,6 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix, accept
           ? cause.message
           : t('features.agentLifecycle.import.unreadable', 'This file could not be read.'),
       );
-    }
-  };
-
-  const confirm = async (): Promise<void> => {
-    if (!pending) return;
-    setRefusal(undefined);
-    try {
-      await onImport({ document: pending.document, team: pending.team });
-      setPending(undefined);
-    } catch (cause) {
-      setRefusal(serverErrorMessage(cause, t('features.agentLifecycle.import.failed', 'The import failed. Nothing was imported.')));
     }
   };
 
@@ -188,27 +102,12 @@ export function EntityImportButton({ isImporting, onImport, testIdPrefix, accept
           {error}
         </Typography>
       )}
-      <BaseModal
-        open={pending !== undefined}
-        title={t('features.agentLifecycle.import.title', 'Import')}
-        data-testid={`${testIdPrefix}-import-dialog`}
+      <ImportDialog
+        pending={pending}
+        isImporting={isImporting}
+        onImport={onImport}
         onClose={() => setPending(undefined)}
-        onConfirm={() => {
-          void confirm();
-        }}
-        actions={{
-          confirmText: t('features.agentLifecycle.import.confirm', 'Import'),
-          confirming: isImporting,
-        }}
-        content={
-          pending ? (
-            <ImportPreview
-              summary={pending.summary}
-              refusal={refusal}
-              testIdPrefix={testIdPrefix}
-            />
-          ) : null
-        }
+        testIdPrefix={testIdPrefix}
       />
     </>
   );

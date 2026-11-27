@@ -13,8 +13,10 @@ export { PublishVersionDialog } from './ui/PublishVersionDialog';
 export { ForkEntityDialog } from './ui/ForkEntityDialog';
 export type { ForkTargetProject } from './ui/ForkEntityDialog';
 export { EntityImportButton } from './ui/EntityImportButton';
-export { useEntityLifecycle, useEntityImport, lifecycleErrorMessage } from './model/useEntityLifecycle';
-export type { EntityLifecycle } from './model/useEntityLifecycle';
+// The blueprint gallery's Import (issue 3137) reads a fetched file and shows it in the same dialog.
+export { ImportDialog } from './ui/ImportDialog';
+export { readImportFile } from './lib/importDocument';
+export { useEntityLifecycle, useEntityImport } from './model/useEntityLifecycle';
 export { buildEntityShareLink, getLifecycleBasename } from './lib/shareLink';
 export type { LifecycleEntity } from './lib/shareLink';
 export type { EntityExportDocument } from './api/lifecycleApi';

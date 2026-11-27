@@ -3856,7 +3856,36 @@ SELECT conversation.uuid AS conversation_uuid,
        )::boolean AS question_is_own,
        -- #1869: the session thread the answer ran in, so a regeneration keeps it
        -- ("" for an answer that settled none).
-       COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id
+       COALESCE(response.meta ->> 'thread_id', '')::text AS thread_id,
+       -- #3137: ANOTHER turn of this conversation is still being written (for
+       -- example the automatic continuation that Run to completion appends,
+       -- ADR-0045). The turn resolve that follows (ResolveCurrentAdhocTurn /
+       -- ResolveCurrentApplicationTurn) refuses that case with no row, and the
+       -- route used to answer it as a plain 422 ` + "`" + `unsupported_agent_execution` + "`" + `.
+       -- It is a wait, not a refusal, so the route answers it as the retryable
+       -- 409. The shape is the overlap gate's own: a streaming response that
+       -- is the newest one and does not answer the question regenerated here.
+       EXISTS (
+           SELECT 1
+           FROM chat_message_group AS pending_response
+           WHERE pending_response.conversation_id = conversation.id
+             AND pending_response.is_streaming
+             AND pending_response.id <> response.id
+             AND pending_response.reply_to_id IS DISTINCT FROM question.id
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM chat_message_group AS newer_response
+                 WHERE newer_response.conversation_id = pending_response.conversation_id
+                   AND newer_response.reply_to_id IS NOT NULL
+                   AND (
+                       newer_response.created_at > pending_response.created_at
+                       OR (
+                           newer_response.created_at = pending_response.created_at
+                           AND newer_response.id > pending_response.id
+                       )
+                   )
+             )
+       )::boolean AS other_turn_in_flight
 FROM chat_message_group AS response
 JOIN chat_conversations AS conversation
   ON conversation.id = response.conversation_id
@@ -3941,6 +3970,7 @@ type ResolveCurrentRegenerationRow struct {
 	UserInput           string      `db:"user_input" json:"user_input"`
 	QuestionIsOwn       bool        `db:"question_is_own" json:"question_is_own"`
 	ThreadID            string      `db:"thread_id" json:"thread_id"`
+	OtherTurnInFlight   bool        `db:"other_turn_in_flight" json:"other_turn_in_flight"`
 }
 
 func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCurrentRegenerationParams) (ResolveCurrentRegenerationRow, error) {
@@ -3955,6 +3985,7 @@ func (q *Queries) ResolveCurrentRegeneration(ctx context.Context, arg ResolveCur
 		&i.UserInput,
 		&i.QuestionIsOwn,
 		&i.ThreadID,
+		&i.OtherTurnInFlight,
 	)
 	return i, err
 }

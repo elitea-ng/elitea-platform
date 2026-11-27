@@ -2,8 +2,8 @@
  * Marketplace types — the one card shape both kinds of listing are drawn from.
  */
 
-/** What a listing is: an agent to hire or a skill to add. Pipelines come after publishing supports them (ADR-0051 Q7). */
-export type MarketplaceKind = 'agents' | 'skills';
+/** What a listing is: an agent to hire, a skill to add, or a saved team to hire (ADR-0051 amendment, issue 3137). Pipelines come after publishing supports them (ADR-0051 Q7). */
+export type MarketplaceKind = 'agents' | 'skills' | 'teams';
 
 /** One listing as a card shows it, whatever the kind. */
 export interface ListingCardData {

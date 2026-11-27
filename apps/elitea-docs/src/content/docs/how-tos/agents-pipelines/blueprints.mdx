@@ -1,0 +1,87 @@
+---
+title: "Start from a blueprint"
+description: "Import a ready-made agent or team, or let Build with AI craft your own version of it. Every blueprint is an ordinary agent or team file."
+---
+
+A **blueprint** is a ready-made agent or team. It is an ordinary [agent file or team zip](/reference/agent-file-format): the same file that **Export** writes and **Import** reads. Each blueprint also carries a short brief for [Build with AI](/how-tos/agents-pipelines/build-agent-with-ai).
+
+## Open the gallery
+
+1. Open **Agents**.
+2. Select **Start from a blueprint**. On the **Teams** switch, the button is next to **Import team**.
+3. Select **Agents** or **Teams**.
+
+Each card shows what the blueprint does, what it **Showcases**, what it **Needs** (for example a toolkit or the desktop app), and where it runs: **Cloud** or **Desktop · Local work**.
+
+You need the right to create agents in the project. A team blueprint also needs the right to create teams.
+
+## Import a blueprint
+
+Select **Import** on the card. The import dialog opens with the blueprint's file, as if you had chosen the file yourself. Review the summary and confirm.
+
+After the import, the summary lists what is left to do:
+
+- **Connect the toolkits.** A blueprint never carries credentials. Connect each toolkit that the summary names.
+- **Review the memory notes.** Some blueprints carry memory seeds. They wait for your review on the agent's **Memory** tab.
+- **Turn the heartbeat on.** A blueprint can carry a heartbeat schedule, but never the switch or a mandate. Publish the agent, then turn the heartbeat on in its **Heartbeat** tab. See [Proactive agents](/how-tos/agents-pipelines/agent-heartbeat).
+
+## Craft your own from a blueprint
+
+Select **Craft from it** on the card. **Build with AI** opens with the blueprint's brief as its first message. Change the brief to fit your work, then let Build with AI create the agent. Nothing is imported from the file.
+
+## On the mobile app
+
+1. Open **New chat**, then **Create an agent**.
+2. Select **Start from a blueprint**, then **Agents** or **Teams**.
+3. Select **Craft from it** on a card. The blueprint's brief fills **What should the agent do?**
+4. Change the brief if you want to, then select **Generate**. Review the draft and save it.
+
+The mobile app cannot import a blueprint file yet. Use the web or the desktop app to import one.
+
+## The blueprints
+
+### Agents
+
+| Blueprint | What it does | Needs |
+| --- | --- | --- |
+| **Research Scout** | Turns a question into a short brief. Every claim cites a source. | A web search or browser toolkit, if it should read the web. |
+| **Writing Editor** | Edits drafts to a house style guide and lists what it changed. | Nothing. |
+| **Data Analyst** | Loads a CSV or spreadsheet, runs the analysis in the Python sandbox, and explains the result with a chart. | The Python sandbox on this installation. |
+| **Daily Ops Digest** | Wakes on a heartbeat in working hours and posts one short digest a day. | A GitHub toolkit with read access. Turn the heartbeat on after you publish. |
+| **Code Reviewer** | Reviews a change in a desktop **Local work** folder against the folder's `AGENTS.md`. Reads only. | The desktop app with a **Local work** folder. |
+| **Agent Smith** | Splits a large task between temporary sub-agents, merges the results, and proposes useful sub-agents as saved agents. | Nothing. |
+
+### Teams
+
+| Blueprint | Members | Needs |
+| --- | --- | --- |
+| **Content Studio** | Research Scout (lead), Fact Checker, Writing Editor. | A web search or browser toolkit, if the team should read the web. |
+| **Incident Desk** | Incident Triage (lead, on a heartbeat), Incident Summariser, Comms Drafter. | Turn the heartbeat on for Incident Triage after you publish. Optional: a toolkit that reads your alerts or tickets. |
+| **Elitea dev team** | Eight members with photo avatars. The coordinator leads and hands work to the others. | The desktop app with the repository open as a **Local work** folder, and the `gh` command line signed in on that computer. |
+
+## Download a blueprint
+
+Each blueprint is also a file that you can download and import with the **Import** button:
+
+| Blueprint | File |
+| --- | --- |
+| Research Scout | [research-scout.agent.md](/blueprints/agents/research-scout.agent.md) |
+| Writing Editor | [writing-editor.agent.md](/blueprints/agents/writing-editor.agent.md) |
+| Data Analyst | [data-analyst.agent.md](/blueprints/agents/data-analyst.agent.md) |
+| Daily Ops Digest | [daily-ops-digest.agent.md](/blueprints/agents/daily-ops-digest.agent.md) |
+| Code Reviewer | [code-reviewer.agent.md](/blueprints/agents/code-reviewer.agent.md) |
+| Agent Smith | [agent-smith.agent.md](/blueprints/agents/agent-smith.agent.md) |
+| Content Studio | [content-studio.team.zip](/blueprints/teams/content-studio.team.zip) |
+| Incident Desk | [incident-desk.team.zip](/blueprints/teams/incident-desk.team.zip) |
+| Elitea dev team | [elitea-dev-team.team.zip](/blueprints/teams/elitea-dev-team.team.zip) |
+
+Every release also attaches the same files, one file for each blueprint: `elitea-agent-<name>-<version>.agent.md` (or `.agent.zip` for an agent with avatar files) and `elitea-team-<name>-<version>.team.zip`. The release notes list them. There is no single archive of all blueprints: import each file as it is.
+
+To import a downloaded file, open **Agents**, select **Import** (or **Import team** for a `.team.zip`), and choose the file. See [Import and export entities](/how-tos/agents-pipelines/import-export).
+
+## Related
+
+- [Agent and team file format](/reference/agent-file-format)
+- [Build an agent with AI](/how-tos/agents-pipelines/build-agent-with-ai)
+- [Saved teams of agents](/how-tos/agents-pipelines/agent-teams)
+- [Teams in the Marketplace](/menus/marketplace#teams)

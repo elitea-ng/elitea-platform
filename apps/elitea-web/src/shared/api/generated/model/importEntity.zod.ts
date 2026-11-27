@@ -41,7 +41,11 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ImportedEvaluation } from "./importedEvaluation.zod";
+import { ImportedMemorySeed } from "./importedMemorySeed.zod";
 import { VersionWriteRequest } from "./versionWriteRequest.zod";
+
+export const importEntityMemorySeedsMax = 50;
 
 export const ImportEntity = zod.object({
   entity: zod
@@ -55,6 +59,11 @@ export const ImportEntity = zod.object({
   description: zod.string().optional(),
   type: zod.string().optional(),
   settings: zod.record(zod.string(), zod.unknown()).optional(),
+  evaluation: ImportedEvaluation.optional(),
+  memory_seeds: zod
+    .array(ImportedMemorySeed)
+    .max(importEntityMemorySeedsMax)
+    .optional(),
   versions: zod
     .array(VersionWriteRequest)
     .optional()

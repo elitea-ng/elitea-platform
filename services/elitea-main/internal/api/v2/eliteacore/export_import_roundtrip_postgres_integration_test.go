@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -409,16 +410,22 @@ func TestImportReportsAColumnOfTheWrongType(t *testing.T) {
 			if recorder.Code == http.StatusCreated {
 				t.Fatalf("import reported success while the column was refused: %s", recorder.Body.String())
 			}
-			answer := decodeImportLink(t, recorder)
-			reported := answer.Errors.Agents
-			if testCase.channel == "toolkits" {
-				reported = answer.Errors.Toolkits
-			}
-			if len(reported) != 1 {
-				t.Fatalf("errors.%s = %+v, want exactly the rejected column", testCase.channel, reported)
-			}
-			if !bytes.Contains([]byte(reported[0].Msg), []byte(testCase.message)) {
-				t.Errorf("reported msg = %q, want it to name %q", reported[0].Msg, testCase.message)
+			// An agent column is refused by the check that runs before any
+			// write (issue 3137): 422, with the column's path in `field`.
+			if testCase.channel == "agents" {
+				refusal := decodeImportRefusal(t, recorder)
+				key := strings.Fields(testCase.message)[0]
+				if recorder.Code != http.StatusUnprocessableEntity || refusal.Field != "applications[0].versions[0]."+key {
+					t.Fatalf("status %d body %s, want the 422 naming %s", recorder.Code, recorder.Body, key)
+				}
+			} else {
+				reported := decodeImportLink(t, recorder).Errors.Toolkits
+				if len(reported) != 1 {
+					t.Fatalf("errors.%s = %+v, want exactly the rejected column", testCase.channel, reported)
+				}
+				if !bytes.Contains([]byte(reported[0].Msg), []byte(testCase.message)) {
+					t.Errorf("reported msg = %q, want it to name %q", reported[0].Msg, testCase.message)
+				}
 			}
 			// The wrong value must not have been written under any name. The
 			// `applications` table is not in this list: the agent row is

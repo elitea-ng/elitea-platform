@@ -1,5 +1,7 @@
 import { dump as dumpYaml } from 'js-yaml';
 
+import { AVATAR_PACK_SCHEMA, AVATAR_SLOTS, defaultAvatarOf } from '@elitea/client-core/conversation';
+
 /**
  * The pure pieces of the `.agent.md` import (#1996): reading typed values out
  * of the parsed frontmatter and assembling the import entry from it. Split out
@@ -139,6 +141,54 @@ export function collectSkills(front: Front, agentName: string): SkillBlocks {
   return { skills, skillRefs, skipped };
 }
 
+/**
+ * The rich `meta` blocks of `elitea.agent/v1` (issue 3137): each top-level
+ * key lands verbatim as the VersionMeta key of the same name. The server
+ * validates them; the client only carries them.
+ */
+const META_BLOCKS = ['memory', 'context', 'proactivity', 'tool_envelope', 'capabilities', 'run_caps', 'output_contract', 'citations'] as const;
+
+/** The version's `meta`: the step limit, the internal tools and every rich block the file names. */
+function frontMeta(front: Front): Front {
+  return defined({
+    step_limit: front['step_limit'],
+    internal_tools: front['internal_tools'],
+    ...Object.fromEntries(META_BLOCKS.map((key) => [key, front[key]])),
+  });
+}
+
+/** The front matter's `avatar`: a drawn default (a ready pack), a slot -> zip path map, or neither. */
+interface FrontAvatar {
+  readonly pack?: Front | undefined;
+  /** Slot name -> file path relative to the zip root (or to the folder of team.yaml). */
+  readonly paths?: Readonly<Record<string, string>> | undefined;
+  /** The key is present but is neither form; the summary names it. */
+  readonly unreadable?: boolean | undefined;
+}
+
+const KNOWN_SLOTS: ReadonlySet<string> = new Set(AVATAR_SLOTS);
+
+export function frontAvatar(front: Front): FrontAvatar {
+  const raw = front['avatar'];
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw === 'string') {
+    return defaultAvatarOf(raw) === undefined ? { unreadable: true } : { pack: { schema: AVATAR_PACK_SCHEMA, slots: { still: { url: raw } } } };
+  }
+  const paths = Object.fromEntries(
+    Object.entries(asRecord(raw)).filter(([slot, path]) => KNOWN_SLOTS.has(slot) && typeof path === 'string' && path.trim() !== ''),
+  ) as Record<string, string>;
+  return Object.keys(paths).length > 0 ? { paths } : { unreadable: true };
+}
+
+/** The application-level definitions a file carries beside its versions: eval datasets and memory seeds. */
+function applicationExtras(front: Front): Front {
+  const evaluation = asRecord(front['evaluation']);
+  return defined({
+    evaluation: Array.isArray(evaluation['datasets']) ? evaluation : undefined,
+    memory_seeds: Array.isArray(front['memory_seeds']) ? front['memory_seeds'] : undefined,
+  });
+}
+
 export interface EntryParts {
   readonly front: Front;
   readonly name: string;
@@ -148,6 +198,8 @@ export interface EntryParts {
   readonly uuid: string;
   readonly tools: { import_uuid: string }[];
   readonly skillRefs: { import_uuid: string; version_name: string }[];
+  /** A ready avatar pack (a drawn default); uploaded media is filled in at import time. */
+  readonly avatarPack?: Front | undefined;
 }
 
 export function buildEntry({
@@ -159,6 +211,7 @@ export function buildEntry({
   uuid,
   tools,
   skillRefs,
+  avatarPack,
 }: EntryParts): Front {
   return {
     entity: agentType === 'pipeline' ? 'pipelines' : 'agents',
@@ -176,8 +229,9 @@ export function buildEntry({
           temperature: front['temperature'],
           max_tokens: front['max_tokens'],
           top_p: front['top_p'],
+          reasoning_effort: front['reasoning_effort'],
         }),
-        meta: defined({ step_limit: front['step_limit'], internal_tools: front['internal_tools'] }),
+        meta: frontMeta(front),
         tools,
         skills: skillRefs,
         variables: arr(front['variables']),
@@ -185,8 +239,10 @@ export function buildEntry({
         welcome_message: str(front['welcome_message']),
         tags: asTags(front['tags']),
         ...soulField(front),
+        ...(avatarPack === undefined ? {} : { avatar_pack: avatarPack }),
       },
     ],
+    ...applicationExtras(front),
   };
 }
 

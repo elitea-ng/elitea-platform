@@ -171,6 +171,21 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
   await modelOption.click();
   await expect(page.getByTestId('model-selector-name')).toContainText(MODEL_NAME, { timeout: 10_000 });
 
+  // Run to completion (ADR-0045) is on by default. Then the goal check of the
+  // first turn can append an automatic continuation (a new question and a new
+  // answer), and with a real model whether it does is not deterministic. This
+  // file's subject is row identity ("one question, one answer, the same ids"),
+  // so the journey turns the control off, the way a person can, and checks
+  // below that the send carried no grant (#3137).
+  const runToCompletion = page.getByTestId('chat-run-to-completion-toggle');
+  await expect(runToCompletion, 'Run to completion must be offered, and on by default').toHaveAttribute(
+    'aria-pressed',
+    'true',
+    { timeout: 20_000 },
+  );
+  await runToCompletion.click();
+  await expect(runToCompletion, 'Run to completion must turn off').toHaveAttribute('aria-pressed', 'false');
+
   // ── One completed turn ──────────────────────────────────────────────────
   const send = await fillComposer(page, prompt);
   const created = page.waitForResponse(
@@ -196,6 +211,8 @@ test('regenerating rewrites the SAME answer row rather than appending a second o
     startResponse.status(),
     `the turn to be regenerated was itself refused: ${(await startResponse.text()).slice(0, 300)}`,
   ).toBe(200);
+  const startBody = JSON.parse(startResponse.request().postData() ?? '{}') as Record<string, unknown>;
+  expect(startBody['unattended'], 'with Run to completion off, the send must carry no grant').toBeUndefined();
 
   // The mock ECHOES the prompt, so `contains: token` proves the stored answer
   // belongs to THIS turn. A real model echoes nothing, and against one the

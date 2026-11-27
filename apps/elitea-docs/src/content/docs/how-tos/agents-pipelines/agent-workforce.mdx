@@ -7,6 +7,15 @@ Every agent of a project gets a daily **scorecard**. When an agent does badly, a
 
 Open an agent and select the **Workforce** tab.
 
+## Capabilities in the editor
+
+The agent editor's **Workforce** tab has **Capabilities and tool envelope**. Two switches set the version's `capabilities` block:
+
+- **May propose saving a sub-agent it started as a new agent** (`can_propose_agents`). See [Agent proposals](/how-tos/agents-pipelines/agent-proposals).
+- **Workforce manager: may propose a ladder stage for other agents** (`can_review_agents`). See [Workforce manager agents](#workforce-manager-agents).
+
+The same section sets the [tool envelope](/how-tos/agents-pipelines/agent-tool-envelope). Both are saved with the version.
+
 ## The scorecard
 
 Once a day the platform computes, for each agent, over the last 30 days:

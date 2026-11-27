@@ -89,6 +89,11 @@ export interface GenerateAgentModalProps {
   readonly onApproveError?: ((message: string) => void) | undefined;
   /** Forwarded to `useAgentDraftApproval` — see that hook's own doc comment. */
   readonly onAssociationWarning?: ((message: string) => void) | undefined;
+  /**
+   * The prompt the modal opens with (issue 3137: a blueprint's brief, "Craft
+   * from it"). Read when the modal mounts, so a caller mounts it per prompt.
+   */
+  readonly initialPrompt?: string | undefined;
 }
 
 function generateErrorMessage(error: unknown): string {
@@ -102,13 +107,14 @@ export function GenerateAgentModal({
   onAgentCreated,
   onApproveError,
   onAssociationWarning,
+  initialPrompt,
 }: GenerateAgentModalProps): ReactNode {
   const { approve, isApproving } = useAgentDraftApproval({ projectId, onAssociationWarning });
   const generator = useAgentDraftGenerator(projectId);
   const resetGenerateError = generator.reset;
 
   const [step, setStep] = useState<Step>('input');
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(initialPrompt ?? '');
   const [draft, setDraft] = useState<AgentDraft>(EMPTY_AGENT_DRAFT);
   const [isDraftValid, setIsDraftValid] = useState(true);
 

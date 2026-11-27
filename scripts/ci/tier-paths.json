@@ -54,7 +54,9 @@
         "apps/elitea-web/nginx/spa.conf",
         "apps/elitea-web/nginx/docs-security-headers.conf",
         ".github/workflows/ci-docs.yml",
-        ".github/actions/npm-cache/**"
+        ".github/actions/npm-cache/**",
+        "blueprints/**",
+        "scripts/blueprints/**"
       ]
     },
     "ci-go": {
@@ -90,7 +92,9 @@
         "scripts/contract/check_compiled_snapshots_postgres.sh",
         "scripts/contract/generate_proto.sh",
         "scripts/coverage/**",
-        "Taskfile.yml"
+        "Taskfile.yml",
+        "blueprints/**",
+        "scripts/blueprints/**"
       ]
     },
     "ci-web": {
@@ -104,7 +108,9 @@
         "brand/sample/**",
         "scripts/brand/**",
         "scripts/ci/brand-output-scan.mjs",
-        ".github/workflows/ci-web.yml"
+        ".github/workflows/ci-web.yml",
+        "blueprints/**",
+        "scripts/blueprints/**"
       ]
     },
     "ci-contract": {
@@ -152,6 +158,8 @@
       "tier": "fast",
       "paths": [
         "apps/elitea-mobile/**",
+        "blueprints/**",
+        "scripts/blueprints/**",
         "services/elitea-main/api/openapi/v2.yaml",
         "libs/ts/client-core/**",
         "brand/elitea/**",
@@ -319,13 +327,17 @@
         "scripts/ci/check-e2e-paths.mjs",
         ".github/workflows/ci-web-e2e.yml",
         ".github/workflows/ci-build-once.yml",
-        "scripts/ci/stack-image-hash.mjs"
+        "scripts/ci/stack-image-hash.mjs",
+        "blueprints/**",
+        "scripts/blueprints/**"
       ]
     },
     "ci-web-e2e-native": {
       "tier": "heavy",
       "paths": [
         "apps/elitea-web/**",
+        "blueprints/**",
+        "scripts/blueprints/**",
         "libs/ts/client-core/**",
         "brand/elitea/**",
         "brand/sample/**",

@@ -1,0 +1,153 @@
+---
+title: "Agent and team file format"
+description: "Every field of the elitea.agent/v1 agent file and the elitea.team/v1 team manifest: what export writes, what import reads, and what neither carries."
+---
+
+An agent file is a Markdown file that ends in `.agent.md`. It starts with YAML front matter. The instructions follow as the Markdown body. A team is a zip file that ends in `.team.zip`. It holds a `team.yaml` manifest, one agent file per member, and the members' avatar files. Export writes these files, and **Import** reads them. The [blueprints](/how-tos/agents-pipelines/blueprints) use the same files.
+
+## Format versions
+
+The first key names the format version:
+
+| File | Key | Value |
+| --- | --- | --- |
+| Agent file | `schema` | `elitea.agent/v1` |
+| Team manifest | `schema` | `elitea.team/v1` |
+
+Export always writes the key. Import reads a file without the key as an older file, with the fields that older exports wrote. Import refuses a file with another value, for example `elitea.agent/v2`, and names the version it cannot read.
+
+## Agent file (`elitea.agent/v1`)
+
+Every key except `name` is optional. Export writes a key only when it has a value, in the order of this table.
+
+| Key | Type | Where it goes | Notes |
+| --- | --- | --- | --- |
+| `schema` | string | | `elitea.agent/v1`. |
+| `name` | string | Agent name | Required. |
+| `description` | string | Agent description | |
+| `version` | string | Version name | Only for a version other than `base`. |
+| `model` | string | `llm_settings.model_name` | Absent: the project's default model. |
+| `temperature` | number | `llm_settings.temperature` | 0 is a real value and is kept. |
+| `max_tokens` | integer | `llm_settings.max_tokens` | |
+| `top_p` | number | `llm_settings.top_p` | |
+| `reasoning_effort` | string | `llm_settings.reasoning_effort` | `auto`, `off`, `low`, `medium` or `high`. |
+| `agent_type` | string | Agent type | `agent` or `pipeline`. |
+| `step_limit` | integer | `meta.step_limit` | |
+| `internal_tools` | list of strings | `meta.internal_tools` | For example `attachments`, `planner`, `data_analysis`, `pyodide`, `ask_user`, `subagents`. |
+| `tags` | list of strings | Version tags | |
+| `welcome_message` | string | Welcome message | |
+| `conversation_starters` | list of strings | Conversation starters | |
+| `soul` | mapping | Persona | An `elitea.soul/v1` document, at most 16 KiB of text. See [Persona](/menus/agents#persona). |
+| `memory` | mapping | `meta.memory` | `enabled`, `write` (`auto_attended`, `auto`, `review`, `off`), `recall.max_entries` (1–50), `recall.max_tokens` (100–8000). See [Agent memory](/how-tos/agents-pipelines/agent-memory). |
+| `context` | mapping | `meta.context` | `history`, `include_side_talk`, `activity_notes`. See [What an agent sees](/how-tos/agents-pipelines/agent-context-view). |
+| `proactivity` | mapping | `meta.proactivity` | The heartbeat schedule: `mode`, `interval`, `jitter`, `quiet_hours`, `watch`, `act_target`, `limits`. Not the on/off switch. See [Proactive agents](/how-tos/agents-pipelines/agent-heartbeat). |
+| `tool_envelope` | mapping | `meta.tool_envelope` | `tool_limits`, `unattended_tools`, `subagent_tools`. See [Limit an agent's tools](/how-tos/agents-pipelines/agent-tool-envelope). |
+| `capabilities` | mapping | `meta.capabilities` | `can_propose_agents`, `can_review_agents` (booleans). |
+| `run_caps` | mapping | `meta.run_caps` | `max_tool_calls`, `max_model_turns`, `max_records_read`, `max_spend`. Each value can only lower the platform's cap for the agent's risk tier. |
+| `output_contract` | mapping | `meta.output_contract` | `type` (`json_schema`, `regex`, `format`) and the one field that the type names. |
+| `citations` | string | `meta.citations` | `off` or `required`. |
+| `avatar` | string or mapping | Avatar pack | See [Avatars](#avatars). |
+| `toolkits` | list | Toolkits | Toolkit name, type, settings without credentials, and selected tools. |
+| `variables` | list | Variables | |
+| `skills` | list | Skills | Name, description, version and instructions of each skill. |
+| `evaluation` | mapping | Evaluation datasets | See [Evaluation datasets](#evaluation-datasets). |
+| `memory_seeds` | list | Memory notes | Import only. See [Memory seeds](#memory-seeds). |
+| `blueprint` | mapping | Nothing | Gallery data of a blueprint: `brief`, `showcases`, `requirements`, `surface`. Import ignores it. Export never writes it. |
+
+The body after the front matter holds the instructions. A pipeline's `state`, `nodes`, `entry_point`, `interrupt_after` and `interrupt_before` stay in the front matter, as before.
+
+### Avatars
+
+The `avatar` key has one of two forms:
+
+- A default avatar: `avatar: default:owl`. The names are `owl`, `hawk`, `fox`, `wolf`, `bear`, `otter`, `heron` and `lynx`.
+- Uploaded files: a mapping from state to a file path inside the zip.
+
+```yaml
+avatar:
+  still: avatars/coordinator/still.webp
+  idle: avatars/coordinator/idle.webp
+  thinking: avatars/coordinator/thinking.webp
+```
+
+The states are `still` (required), `idle`, `thinking`, `speaking`, `working`, `waiting`, `success`, `error` and `waking`. A path is relative to the zip root. A Markdown file cannot hold an image, so an agent with uploaded avatar files exports as `<name>.agent.zip`: the agent file and its `avatars/` folder. Import reads the zip. A single `.agent.md` file with file paths imports without the avatar, and the import summary says so.
+
+Import checks each file as an upload: at most 2 MiB, 512 pixels on the longer side and 4 seconds of animation. Import reads the file type from the bytes, not from the extension.
+
+### Evaluation datasets
+
+```yaml
+evaluation:
+  datasets:
+    - name: Research Scout smoke
+      description: Checks that briefs cite their sources.
+      cases:
+        - input: What year was the transformer paper published?
+          expected_output: 2017, with a citation.
+          variables: {}
+          excluded: false
+```
+
+Import creates each dataset for the new agent, with its cases. Export writes the datasets of the agent. Runs and results are not carried.
+
+### Memory seeds
+
+```yaml
+memory_seeds:
+  - kind: preference      # fact, preference or episode
+    content: Briefs start with a three-line answer.
+    pinned: false
+```
+
+Import adds each seed to the agent's memory as a note that waits for review. Approve or discard the notes on the agent's **Memory** tab. Import checks each note as the agent's own notes are checked, and refuses a note that holds a secret. Export never writes memory notes, because they can hold what people told the agent.
+
+## Team manifest (`elitea.team/v1`)
+
+```yaml
+schema: elitea.team/v1
+kind: team
+name: Content Studio
+description: Research, fact-check and edit a piece of writing as one team.
+floor_policy: lead
+members:
+  - members/research-scout.agent.md
+  - members/fact-checker.agent.md
+  - members/writing-editor.agent.md
+lead: members/research-scout.agent.md
+```
+
+| Key | Notes |
+| --- | --- |
+| `schema` | `elitea.team/v1`. |
+| `kind` | `team`. Optional. |
+| `name` | Required. |
+| `description` | Optional. |
+| `floor_policy` | `addressed` (the default) or `lead`. |
+| `members` | 1 to 16 paths of agent files, relative to `team.yaml`, in roster order. |
+| `lead` | One of the members. Required with `floor_policy: lead`. |
+| `blueprint` | Gallery data. Import ignores it. |
+
+The zip holds `team.yaml`, `members/<name>.agent.md` for each member, and `avatars/<name>/<state>.<ext>` for members with uploaded avatars.
+
+## What import checks
+
+Import checks every agent before it writes anything. The first problem stops the import with an error that names the field, for example `applications[0].versions[0].meta.run_caps.max_tool_calls`. Import checks:
+
+- the model settings and `reasoning_effort`;
+- `memory`, `context`, `proactivity`, `tool_envelope`, `capabilities`, `run_caps`, `output_contract` and `citations`, with the same rules as a save in the editor;
+- each run cap against the platform's cap for a new agent's risk tier;
+- the persona (`elitea.soul/v1`, 16 KiB);
+- the avatar and its files;
+- variables, tags, evaluation datasets and memory seeds.
+
+## What is never carried
+
+- Credentials, secrets and connection references. A toolkit imports without them. Connect it after the import.
+- The heartbeat's on/off switch and its mandate. Turn the heartbeat on in the agent's **Heartbeat** tab after you publish it. This is a decision for each installation.
+- Evaluation runs and results, conversation history and the agent's memory notes.
+
+## Related
+
+- [Start from a blueprint](/how-tos/agents-pipelines/blueprints)
+- [Import and export entities](/how-tos/agents-pipelines/import-export)
+- [Saved teams of agents](/how-tos/agents-pipelines/agent-teams)

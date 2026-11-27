@@ -20,6 +20,8 @@ import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import type { SxProps, Theme } from '@mui/material/styles';
 
+import { Link } from '@tanstack/react-router';
+
 import type { AgentTeam, CreatedConversation } from '@/shared/api/generated/model';
 import { serverErrorMessage } from '@/shared/api/serverErrorMessage';
 import { t } from '@/shared/i18n';
@@ -30,6 +32,7 @@ import { EntityEmptyState } from '@/shared/ui/EntityCardList';
 import { useAgentTeamList, useAgentTeamWrites, useTeamAbilities } from '../model/useAgentTeams';
 import { useTeamExport } from '../model/useTeamExport';
 import { useTeamMemberAvatars } from '../model/useTeamMemberAvatars';
+import { useTeamPublish, type PublishedTeam } from '../model/useTeamPublish';
 import type { RenderMemberAvatar } from './TeamAvatarStack';
 import { TeamCard } from './TeamCard';
 import { TeamEditDialog } from './TeamEditDialog';
@@ -90,6 +93,20 @@ function TeamsEmpty({ canCreate, onCreate }: { readonly canCreate: boolean; read
   );
 }
 
+/** What the last publish did: the unlisted members it named, or the version and a link to the team's listing. */
+function PublishNotices({ error, published }: { readonly error: string | undefined; readonly published: PublishedTeam | undefined }): ReactNode {
+  if (error !== undefined) return <Alert testId="agent-teams-publish-error">{error}</Alert>;
+  if (published === undefined) return null;
+  return (
+    <Typography component="output" variant="bodySmall" data-testid="agent-teams-published">
+      {t('features.agentTeams.published', 'Published {{version}} to the Marketplace.', { version: published.versionName })}{' '}
+      <Link to="/marketplace/$kind/$listingId" params={{ kind: 'teams', listingId: published.listingId }}>
+        {t('features.agentTeams.openListing', 'Open the listing')}
+      </Link>
+    </Typography>
+  );
+}
+
 type TeamsListProps = TeamsPanelProps & { readonly projectId: string; readonly abilities: ReturnType<typeof useTeamAbilities> };
 
 /** The header row: the intro on the left, New team and the page's actions on the right. */
@@ -119,6 +136,7 @@ function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
   const [startError, setStartError] = useState<string | undefined>(undefined);
   const teamExport = useTeamExport();
+  const teamPublish = useTeamPublish(projectId);
 
   const start = (team: AgentTeam): void => {
     setStartError(undefined);
@@ -150,6 +168,7 @@ function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange
           </Alert>
         ),
       )}
+      <PublishNotices error={teamPublish.error} published={teamPublish.published} />
       {list.isError && (
         <Alert testId="agent-teams-load-error">{serverErrorMessage(list.error, t('features.agentTeams.loadFailed', 'The teams could not be loaded.'))}</Alert>
       )}
@@ -171,6 +190,8 @@ function TeamsList({ projectId, abilities, onStarted, creating, onCreatingChange
               onStart={() => start(team)}
               exporting={teamExport.exportingId === team.id}
               onExport={() => void teamExport.exportTeam(team)}
+              onPublish={abilities.canPublish ? () => teamPublish.publish(team) : undefined}
+              publishing={teamPublish.publishingId === team.id}
               onEdit={abilities.canUpdate ? () => setEditingTeam(team) : undefined}
               onDelete={abilities.canDelete ? () => { setDeleteError(undefined); setDeleting(team); } : undefined}
             />

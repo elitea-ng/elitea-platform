@@ -67,7 +67,7 @@ func agentDocument(version map[string]any) map[string]any {
 
 func renderOne(t *testing.T, document map[string]any) exportedFile {
 	t.Helper()
-	files, err := markdownFilesFor(document)
+	files, _, err := markdownFilesFor(document)
 	if err != nil {
 		t.Fatalf("markdownFilesFor: %v", err)
 	}
@@ -83,8 +83,9 @@ func renderOne(t *testing.T, document map[string]any) exportedFile {
 func TestMarkdownExportWritesOrderedFrontmatterAndTheInstructionsBody(t *testing.T) {
 	file := renderOne(t, agentDocument(agentVersion()))
 
-	if !strings.HasPrefix(file.content, "---\nname: Support Bot\ndescription: Answers support questions.\n") {
-		t.Errorf("frontmatter does not open with name then description:\n%s", file.content)
+	// `schema` first (issue 3137): a reader decides from it how to read the rest.
+	if !strings.HasPrefix(file.content, "---\nschema: elitea.agent/v1\nname: Support Bot\ndescription: Answers support questions.\n") {
+		t.Errorf("frontmatter does not open with schema, name then description:\n%s", file.content)
 	}
 	if !strings.HasSuffix(file.content, "---\n\nAnswer briefly.") {
 		t.Errorf("the body must be the instructions, verbatim and last:\n%s", file.content)

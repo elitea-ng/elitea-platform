@@ -42,6 +42,14 @@ describe('kindFromSearch', () => {
   it('names the route kind for a page kind', () => {
     expect(apiKind('skills')).toBe('skill');
     expect(apiKind('agents')).toBe('agent');
+    expect(apiKind('teams')).toBe('team');
+  });
+
+  // Issue 3137: saved teams are a third kind.
+  it('selects teams for the literal value, and maps a team row to a teams card', () => {
+    expect(kindFromSearch('teams')).toBe('teams');
+    expect(listingCard(row({ kind: 'team', entity_id: '0' })).kind).toBe('teams');
+    expect(listingParams(listingCard(row({ kind: 'team' })))).toEqual({ kind: 'teams', listingId: '7' });
   });
 });
 

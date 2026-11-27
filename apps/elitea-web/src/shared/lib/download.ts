@@ -127,18 +127,35 @@ export async function exportMarkdown(params: ExportMarkdownParams, fallbackName:
     return { ok: false, error: { kind: 'http', status: response.status } };
   }
   const blob = await response.blob();
-  const filename = filenameFromContentDisposition(response.headers.get('Content-Disposition'), `${fallbackName}.md`);
+  // An agent with uploaded avatar media exports as `<slug>.agent.zip` (issue 3137).
+  const fallback = (await isZipBody(response, blob)) ? `${fallbackName}.agent.zip` : `${fallbackName}.md`;
+  const filename = filenameFromContentDisposition(response.headers.get('Content-Disposition'), fallback);
   triggerBlobDownload(blob, filename);
   return { ok: true, filename };
 }
 
+/** A zip answer: by its content type, else by the local-file-header magic `PK\x03\x04`. */
+async function isZipBody(response: Response, blob: Blob): Promise<boolean> {
+  if ((response.headers.get('content-type') ?? '').includes('zip')) return true;
+  try {
+    const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+    return head[0] === 0x50 && head[1] === 0x4b && head[2] === 0x03 && head[3] === 0x04;
+  } catch {
+    // Handled (§3.6): a body that cannot be sliced is read as markdown, as before.
+    return false;
+  }
+}
+
 export type FetchMarkdownResult =
-  | { readonly ok: true; readonly text: string }
+  | { readonly ok: true; readonly text: string; readonly zip?: undefined }
+  | { readonly ok: true; readonly zip: Uint8Array; readonly text?: undefined }
   | { readonly ok: false; readonly error: ExportFailure };
 
 /**
  * The markdown export as text, not a download: a team export (issue 3010)
  * reads each member's `.agent.md` and zips them with the team's `team.yaml`.
+ * An agent with uploaded avatar media answers a zip instead (issue 3137):
+ * its bytes come back as `zip`, for the team zip to merge.
  */
 export async function fetchMarkdownExport(params: ExportMarkdownParams): Promise<FetchMarkdownResult> {
   const url = buildMarkdownExportUrl(params.baseUrl, params.projectId, params.applicationId, params.followVersionIds);
@@ -156,7 +173,20 @@ export async function fetchMarkdownExport(params: ExportMarkdownParams): Promise
   if (!response.ok) {
     return { ok: false, error: { kind: 'http', status: response.status } };
   }
-  return { ok: true, text: await response.text() };
+  const blob = await response.blob();
+  if (await isZipBody(response, blob)) return { ok: true, zip: new Uint8Array(await blob.arrayBuffer()) };
+  return { ok: true, text: await blob.text() };
+}
+
+/**
+ * A static file the app ships beside its bundle (the blueprint gallery's
+ * `blueprints/`, issue 3137), as a Blob. Same origin and no credentials: it is
+ * part of the build, not the API, so the typed client does not apply.
+ */
+export async function fetchStaticFile(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${import.meta.env.BASE_URL}${path}`, { signal: signal ?? null });
+  if (!response.ok) throw new Error(`fetchStaticFile: ${String(response.status)} for ${path}`);
+  return response.blob();
 }
 
 /* ── row 4c: a generic API GET → blob → download (ADR-0024 WP9) ─────────── */

@@ -2,19 +2,21 @@
  * The `team.yaml` of a team zip (issue 3010): a set of `.agent.md` files
  * imported as one saved team (ADR-0050 decision 8).
  *
+ *     schema: elitea.team/v1      # optional (issue 3137); another value is refused
  *     kind: team                  # optional
  *     name: Dev team
  *     description: ...            # optional
  *     floor_policy: lead          # optional: addressed | lead
  *     members:                    # 1-16, roster order, paths beside team.yaml
- *       - agents/dev-coordinator.agent.md
- *     lead: agents/dev-coordinator.agent.md   # optional, one of the members
+ *       - agents/coordinator.agent.md
+ *     lead: agents/coordinator.agent.md   # optional, one of the members
  */
 import { load as loadYaml } from 'js-yaml';
 import type JSZip from 'jszip';
 
 import { t } from '@/shared/i18n';
 
+import { TEAM_FILE_SCHEMA, checkFileSchema } from './fileSchema';
 import { ImportDocumentError } from './importError';
 import { asRecord } from './importMarkdown';
 
@@ -45,8 +47,8 @@ export function findTeamManifest(zip: JSZip): string | undefined {
     .sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b))[0];
 }
 
-/** `path` read relative to the manifest's folder, with `.` and `..` resolved. */
-function resolveMemberPath(manifest: string, path: string): string {
+/** `path` read relative to the folder of the file `base` (a zip root for an empty `base`), with `.` and `..` resolved. */
+export function resolveZipPath(manifest: string, path: string): string {
   const parts = manifest.split('/').slice(0, -1);
   for (const part of path.trim().split('/')) {
     if (part === '' || part === '.') continue;
@@ -75,6 +77,7 @@ function manifestRecord(text: string, file: string): Record<string, unknown> {
   } catch {
     throw new ImportDocumentError(t('features.agentLifecycle.import.team.badYaml', '{{file}} is not valid YAML.', { file }));
   }
+  checkFileSchema(front, TEAM_FILE_SCHEMA);
   const kind = optionalString(front['kind']);
   if (kind !== undefined && kind !== 'team') {
     throw new ImportDocumentError(t('features.agentLifecycle.import.team.badKind', '{{file}} must have kind: team.', { file }));
@@ -95,7 +98,7 @@ function manifestMembers(front: Record<string, unknown>, file: string): string[]
       t('features.agentLifecycle.import.team.tooManyMembers', 'A team has at most {{limit}} agents.', { limit: MAX_TEAM_MEMBERS }),
     );
   }
-  const resolved = members.map((member) => resolveMemberPath(file, member));
+  const resolved = members.map((member) => resolveZipPath(file, member));
   if (new Set(resolved).size !== resolved.length) {
     throw new ImportDocumentError(t('features.agentLifecycle.import.team.repeatedMember', '{{file}} lists a member twice.', { file }));
   }
@@ -111,7 +114,7 @@ export function parseTeamManifest(text: string, file: string): TeamManifest {
   }
   const members = manifestMembers(front, file);
   const leadPath = optionalString(front['lead']);
-  const lead = leadPath === undefined ? undefined : resolveMemberPath(file, leadPath);
+  const lead = leadPath === undefined ? undefined : resolveZipPath(file, leadPath);
   if (lead !== undefined && !members.includes(lead)) {
     throw new ImportDocumentError(
       t('features.agentLifecycle.import.team.leadNotMember', 'The lead {{lead}} is not one of the members of {{file}}.', {

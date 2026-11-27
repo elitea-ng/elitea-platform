@@ -7,7 +7,7 @@ Export lets you back up or move an agent, pipeline, toolkit, skill or conversati
 
 ## Export an agent or pipeline
 
-Open the agent or pipeline, then use **Export** in the toolbar's three-dot menu. The download is a `.md` file of the version you have open, with its toolkits and skills in the YAML frontmatter. An agent's file does not carry its nested agents: export each of them as well, and attach them again after import. An agent's [avatar pack](/menus/agents#avatar) comes with its files, and import stores them in the destination project. Authentication credentials are never included — you reconfigure them after import.
+Open the agent or pipeline, then use **Export** in the toolbar's three-dot menu. The download is an `.agent.md` file of the version you have open, in the [`elitea.agent/v1` format](/reference/agent-file-format): its model settings, toolkits, skills, memory settings, heartbeat schedule, tool envelope, run caps, persona, avatar and evaluation datasets are in the YAML front matter. An agent with uploaded avatar files downloads as an `.agent.zip`: the agent file and its avatar files. An agent's file does not carry its nested agents: export each of them as well, and attach them again after import. An agent's [avatar pack](/menus/agents#avatar) comes with its files, and import stores them in the destination project. Authentication credentials are never included — you reconfigure them after import.
 
 <Screenshot id="entity-export-menu" alt="Export option in an agent's three-dot menu" />
 
@@ -15,7 +15,7 @@ Open the agent or pipeline, then use **Export** in the toolbar's three-dot menu.
 
 <Steps>
 <Step title="Open the import dialog">
-On the **Agents** or **Pipelines** list, click **Import** and choose a `.json` export file, a `.md` agent file (YAML frontmatter with `name`, `description` and `model`, then the instructions) or a `.zip` of `.md` agent files.
+On the **Agents** or **Pipelines** list, click **Import** and choose a `.json` export file, an `.agent.md` file (YAML front matter, then the instructions), an `.agent.zip`, or a `.zip` of `.md` agent files. To start from a ready-made file, see [Start from a blueprint](/how-tos/agents-pipelines/blueprints).
 </Step>
 <Step title="Review the summary">
 Elitea reads the file and shows the agent or pipeline names, and how many toolkits and skills it carries, before anything is created.
@@ -31,6 +31,10 @@ Any toolkit that needs a credential (API key, token) must be reconfigured manual
 <Screenshot id="entity-import-dialog" alt="Import dialog with an entity summary" />
 
 Importing requires import permission in the destination project; the **Import** button is disabled without it. A file that isn't valid JSON, or has no exported agents in it, is rejected with an explanation rather than silently failing.
+
+Import checks every agent with the rules of a save in the editor before it creates anything. The first problem stops the import, and the dialog names the field, for example `applications[0].versions[0].meta.run_caps.max_tool_calls`. The API answers HTTP 422 with `code: import_invalid` and the `field`. A file with a format version that this release cannot read, for example `elitea.agent/v2`, is refused. See [What import checks](/reference/agent-file-format#what-import-checks).
+
+After an import, the summary lists what is left to do: the toolkits to connect, the memory notes that wait for your review on the **Memory** tab, and the agents whose heartbeat schedule you can turn on in the **Heartbeat** tab after you publish them. Import never turns a heartbeat on.
 
 The toolkits a file carries are created in the project and linked to the agents that use them. Credentials are still yours to add.
 
@@ -53,13 +57,14 @@ Importing a team also needs the right to create teams in the project.
 `team.yaml` lists the members by their paths inside the zip, relative to `team.yaml`:
 
 ```yaml
+schema: elitea.team/v1                         # the format version; export always writes it
 kind: team
 name: Dev team
 description: Builds and reviews the platform   # optional
 members:                                       # 1 to 16, in roster order
-  - agents/dev-coordinator.agent.md
-  - agents/dev-implementer.agent.md
-lead: agents/dev-coordinator.agent.md          # optional: makes floor_policy lead
+  - agents/coordinator.agent.md
+  - agents/implementer.agent.md
+lead: agents/coordinator.agent.md          # optional: makes floor_policy lead
 floor_policy: lead                             # optional: addressed (default without a lead) or lead
 ```
 

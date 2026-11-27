@@ -4154,6 +4154,19 @@
       "responseSchema": "AgentMediaObject",
       "fixture": null,
       "usedBy": [
+        "pages/agents",
+        "features/agent-lifecycle"
+      ]
+    },
+    {
+      "id": "settings.getAgentRunCaps",
+      "method": "GET",
+      "path": "/elitea_core/run_caps/prompt_lib/{project_id}/{application_id}",
+      "operationId": "getAgentRunCaps",
+      "source": "generated",
+      "responseSchema": "AgentRunCaps",
+      "fixture": null,
+      "usedBy": [
         "pages/agents"
       ]
     },
@@ -4664,6 +4677,32 @@
       "fixture": null,
       "usedBy": [
         "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. The team hire dialog: Install or Fork a team listing, each member with its bindings (issue 3137).",
+      "id": "marketplace.hireTeam",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_team_hire/prompt_lib/{projectId}",
+      "operationId": "hireMarketplaceTeam",
+      "source": "generated",
+      "responseSchema": "MarketplaceTeamHireResult",
+      "fixture": null,
+      "usedBy": [
+        "pages/marketplace"
+      ]
+    },
+    {
+      "$comment": "WRITE. Publish to Marketplace on a saved team row (issue 3137).",
+      "id": "marketplace.publishTeam",
+      "method": "POST",
+      "path": "/elitea_core/marketplace_team_publish/prompt_lib/{projectId}/{teamId}",
+      "operationId": "publishMarketplaceTeam",
+      "source": "generated",
+      "responseSchema": "MarketplaceTeamPublishResult",
+      "fixture": null,
+      "usedBy": [
+        "features/agent-teams"
       ]
     },
     {

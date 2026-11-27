@@ -2411,8 +2411,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 		}
 		runEvidence = v2runevidence.NewHandler(steps, content)
 	}
+	// The run caps (ADR-0041 decision 3), built once: the version save, the
+	// two import routes and the override route below share them.
+	runCaps := newRunCapsServices(cfg.Pool, cfg.RunCapsCache)
 	coreHandler := v2core.NewHandler(
 		cfg.Pool,
+		v2core.WithRunCapsChecker(runCaps.checker),
 		v2core.WithReleases(agentReleases),
 		v2core.WithPublishGovernor(agentLifecycle),
 		v2core.WithListingSuspender(v2core.NewListingSuspender(cfg.SuspensionService)),
@@ -4265,7 +4269,16 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 				// The run caps (ADR-0041 decision 3): an agent save refuses
 				// an author cap above the agent's tier cap, and a holder of
 				// safety.override_cap lets a capped conversation continue.
-				runCaps := newRunCapsServices(cfg.Pool, cfg.RunCapsCache)
+				// runCaps is built beside coreHandler (the import routes
+				// apply the same author-cap check). The editor reads the
+				// caps of the agent's tier with the right to read the agent;
+				// a nil checker stays out of the interface (no typed nil).
+				var tierCaps v2runcaps.TierCapsReader
+				if runCaps.checker != nil {
+					tierCaps = runCaps.checker
+				}
+				r.With(projectPermission("models.applications.application.details")).
+					Get(v2runcaps.TierCapsPath, v2runcaps.NewTierCapsHandler(tierCaps).Read)
 				r.With(projectPermission(overrideCapPermission)).
 					Post(v2runcaps.ProjectPath, runCaps.override.Grant)
 				if cfg.AppsRepo != nil {
@@ -5539,6 +5552,14 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					Post("/marketplace_listing_version/prompt_lib/{projectID}/{listingID}/{versionID}", coreHandler.MarketplaceVersionState)
 				r.With(projectPermission("models.applications.applications.create")).
 					Post("/marketplace_hire/prompt_lib/{projectID}", coreHandler.MarketplaceHire)
+				// Saved teams in the Marketplace (ADR-0051 amendment, issue
+				// 3137; shared 0286). Publishing a team takes the agent publish
+				// permission and the team read; hiring one creates agents AND a
+				// team, so it takes both create permissions.
+				r.With(projectPermission("models.applications.publish.post"), projectPermission(agentteamsdomain.ListPermission)).
+					Post("/marketplace_team_publish/prompt_lib/{projectID}/{teamID}", coreHandler.MarketplaceTeamPublish)
+				r.With(projectPermission("models.applications.applications.create"), projectPermission(agentteamsdomain.CreatePermission)).
+					Post("/marketplace_team_hire/prompt_lib/{projectID}", coreHandler.MarketplaceTeamHire)
 				r.With(requireMarketplaceRead).
 					Get("/marketplace_origin/prompt_lib/{projectID}/{applicationID}", coreHandler.MarketplaceOrigin)
 				// Feedback per listing version (ADR-0051 decision 5, issue

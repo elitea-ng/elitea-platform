@@ -1009,6 +1009,9 @@ func (repository *CurrentAgentStartRepository) ResolveCurrentRegeneration(
 			if row.ResponseIsStreaming {
 				return agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing
 			}
+			if row.OtherTurnInFlight {
+				return agentexecutionapp.ErrConversationTurnInFlight
+			}
 			target = agentexecutionapp.CurrentRegenerationTarget{
 				Kind:                agentexecutionapp.CurrentRegenerationKind(row.RegenerationKind),
 				ConversationUUID:    uuid.UUID(row.ConversationUuid.Bytes).String(),

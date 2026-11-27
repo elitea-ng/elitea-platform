@@ -1,0 +1,38 @@
+schema: elitea.team/v1
+kind: team
+name: Elitea dev team
+description: >-
+  Develops elitea-platform from the desktop app, through gh only. The coordinator leads and
+  hands work to the others.
+floor_policy: lead
+members:
+  - members/coordinator.agent.md
+  - members/implementer.agent.md
+  - members/issue-groomer.agent.md
+  - members/pr-reviewer.agent.md
+  - members/ci-triager.agent.md
+  - members/docs-writer.agent.md
+  - members/security-triage.agent.md
+  - members/release-brief.agent.md
+lead: members/coordinator.agent.md
+blueprint:
+  brief: >-
+    An eight-agent software team that runs in the desktop app's Local work on a repository
+    folder and talks to GitHub only through the gh command line. A coordinator leads: it reads
+    the issue, plans, and hands parts to an implementer, an issue groomer, a pull-request
+    reviewer, a CI triager, a docs writer, a security triager and a release-brief writer. The
+    team follows the repository's AGENTS.md: one pull request per change with one review pass,
+    fix flaky tests instead of re-running them, docs with every change, and one new upgrade
+    note file per operator-facing change. No secrets ever enter a prompt or a file.
+  showcases:
+    - Eight-agent team with a lead
+    - Desktop Local work (AGENTS.md and SOUL.md)
+    - Photoreal animated avatar packs (nine states each)
+    - GitHub through gh only
+    - Personas with relationships
+  requirements:
+    - type: desktop
+      label: The desktop app with the repository open as a Local work folder
+    - type: gh
+      label: The gh command line, signed in on that computer (gh auth login); the team never handles tokens
+  surface: desktop

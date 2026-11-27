@@ -12,20 +12,41 @@ import { t } from '@/shared/i18n';
 
 import type { ListingCardData, MarketplaceKind } from './types';
 
-/** Which kind a raw `?kind=` value selects; anything but the literal `skills` is agents, so a stale or hand-typed value degrades to the default. */
+/** Which kind a raw `?kind=` value selects; anything but the literal `skills` or `teams` is agents, so a stale or hand-typed value degrades to the default. */
 export function kindFromSearch(kind: string | undefined): MarketplaceKind {
-  return kind === 'skills' ? 'skills' : 'agents';
+  if (kind === 'skills' || kind === 'teams') return kind;
+  return 'agents';
 }
 
+const API_KINDS: Readonly<Record<MarketplaceKind, 'agent' | 'skill' | 'team'>> = {
+  agents: 'agent',
+  skills: 'skill',
+  teams: 'team',
+};
+
 /** The route's kind word for a page kind. */
-export function apiKind(kind: MarketplaceKind): 'agent' | 'skill' {
-  return kind === 'skills' ? 'skill' : 'agent';
+export function apiKind(kind: MarketplaceKind): 'agent' | 'skill' | 'team' {
+  return API_KINDS[kind];
+}
+
+/** The page kind of the route's kind word; an unknown word reads as agents. */
+function pageKind(kind: string): MarketplaceKind {
+  if (kind === 'skill') return 'skills';
+  if (kind === 'team') return 'teams';
+  return 'agents';
+}
+
+/** The kind's plural label: Agents, Skills or Teams. */
+export function kindLabel(kind: MarketplaceKind): string {
+  if (kind === 'skills') return t('marketplace.kind.skills', 'Skills');
+  if (kind === 'teams') return t('marketplace.kind.teams', 'Teams');
+  return t('marketplace.kind.agents', 'Agents');
 }
 
 /** A search row as a card. */
 export function listingCard(row: MarketplaceListingSummary): ListingCardData {
   return {
-    kind: row.kind === 'skill' ? 'skills' : 'agents',
+    kind: pageKind(row.kind),
     id: row.id,
     entityId: row.entity_id,
     name: row.name,

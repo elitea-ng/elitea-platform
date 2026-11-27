@@ -4,6 +4,7 @@ import { toAgentLlmSettings, toLlmSettingsBody, type AgentLlmSettings } from '@/
 import type { ApplicationDetail, ApplicationVersionDetail, ApplicationVersionSummary, VersionWriteRequest } from '@/shared/api/generated/model';
 import { soulWriteField } from '@/shared/lib/agentSoulDraft';
 
+import { metaBlocksWriteField } from './agentMetaBlocks';
 import { avatarPackWriteField } from './avatarPackDraft';
 import type { EditApplicationVersionFields } from './useEditApplicationVersionFields';
 
@@ -199,6 +200,8 @@ function toVersionMetaBody(
       // ADR-0043 decision 5 and ADR-0050 decision 9 — always sent: `null` clears a stored setting.
       citations: edits.citations ?? null,
       context: edits.contextBlock ?? null,
+      // Issue 3137 — the Heartbeat, Memory, Workforce and Run caps controls; a cleared block is sent as null.
+      ...(edits.metaBlocks === undefined ? {} : metaBlocksWriteField(storedMeta, edits.metaBlocks)),
     },
   };
 }

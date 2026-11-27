@@ -3,7 +3,13 @@ title: "Limit an agent's tools"
 description: "Limit how often an agent may call a tool, which tools it may use with nobody present, and which tools its sub-agents may get."
 ---
 
-An agent's **tool envelope** narrows the tools the agent already has. Set it in the version's meta with a `tool_envelope` block:
+An agent's **tool envelope** narrows the tools the agent already has. Set it on the agent editor's **Workforce** tab, under **Capabilities and tool envelope**:
+
+- **Tool call limits per turn**: one `toolkit/tool = limit` per line.
+- **Tools in a turn nobody waits on**: one `toolkit/tool` per line.
+- **Tools a sub-agent may get**: one `toolkit/tool` per line.
+
+The section writes the `tool_envelope` block of the version's meta:
 
 ```yaml
 tool_envelope:

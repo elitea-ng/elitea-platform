@@ -33,6 +33,7 @@ import (
 	appmailer "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/mailer"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/personalproject"
 	toolkitexecutionapp "github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/application/workerruncaps"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/agentlifecycle"
 	"github.com/elitea-ng/elitea-platform/services/elitea-main/internal/domain/applicationcomposition"
@@ -155,6 +156,10 @@ type Handler struct {
 	// transaction that attaches or detaches it (ADR-0044 amendment 1). Nil
 	// leaves attachments as they were.
 	delegation DelegationGrantHook
+	// runCaps refuses an imported agent's meta.run_caps above the platform's
+	// cap for a new agent's tier (import_validation.go, ADR-0041 decision 3).
+	// Nil checks the caps' shape only.
+	runCaps *workerruncaps.Checker
 }
 
 // EventEmitter is the seam to internal/events.Publisher, declared locally so
@@ -329,6 +334,14 @@ func WithDelegationGrants(hook DelegationGrantHook) Option {
 // (ADR-0051 decision 6); without it the route refuses every caller.
 func WithWorkforceManagerCheck(check func(r *http.Request, projectID string) (bool, error)) Option {
 	return func(handler *Handler) { handler.holdsWorkforceManage = check }
+}
+
+// WithRunCapsChecker makes both import routes refuse an agent whose
+// meta.run_caps raises the platform's cap for the tier of a new agent, the
+// rule the applications handler's version save applies (WithRunCapsChecker
+// there). Nil keeps the shape check only.
+func WithRunCapsChecker(checker *workerruncaps.Checker) Option {
+	return func(handler *Handler) { handler.runCaps = checker }
 }
 
 // WithObjectStore wires S20b's icon byte path (UploadIcon/DeleteIcon) onto
@@ -3135,10 +3148,14 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	//     branch, failed to decode as a map, and took the same silent exit.
 	//
 	// bytes.TrimSpace removes the third. The other two are reported.
-	bodyBytes, err := io.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxImportBody+1))
 	if err != nil {
 		slog.ErrorContext(ctx, "import: unable to read the request body", "schema", s, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unable to read the request body"})
+		return
+	}
+	if len(bodyBytes) > maxImportBody {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("the import file is larger than %d MiB", maxImportBody>>20)})
 		return
 	}
 	entities, _, parseRefusal := importEntitiesFrom(bodyBytes)
@@ -3158,6 +3175,12 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	userID, ok := importPrincipalUserID(ctx)
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "an authenticated principal is required to import"})
+		return
+	}
+
+	// Every agent entry is checked before anything is written; the first
+	// failure answers 422 and names its field (import_validation.go).
+	if !h.admitImport(w, r, projectID, entities) {
 		return
 	}
 
@@ -3549,6 +3572,22 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 			}
 		}
 
+		// The definitions the file carries beside its versions: evaluation
+		// datasets linked to the new agent and memory seeds as pending entries
+		// (import_carried.go). Written only for an agent that has a version,
+		// and reported like a variable: a lost one makes the answer 207, and
+		// fails a team import whole.
+		if len(createdVersions) > 0 {
+			for _, message := range h.importCarriedDefinitions(ctx, q, s, projectID, appID, userID, app) {
+				slog.ErrorContext(ctx, "import: carried definition write failed",
+					"schema", s, "application_id", appID, "message", message)
+				errorAgents = append(errorAgents, map[string]any{
+					"index": ae.entityIdx, "name": name,
+					"msg": "Import function has been failed: " + message,
+				})
+			}
+		}
+
 		if appImportUUID != "" && len(createdVersions) > 0 {
 			firstVersion, _ := strconv.Atoi(createdVersions[0]["id"].(string))
 			importedByUUID[appImportUUID] = importedAgentRef{index: ae.entityIdx, appID: appID, versionID: firstVersion, name: name}
@@ -3645,6 +3684,15 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 			}
 		}
 
+		// Credentials never import (issue 3137): secret fields and
+		// configuration references are dropped, so the toolkit lands unbound
+		// and the result names what the person has to connect. A sub-agent
+		// toolkit carries no credential and keeps its resolved ids.
+		var unbound []string
+		if tkType != "application" {
+			settings, unbound = unboundToolkitSettings(settings)
+		}
+
 		settingsJSON, settingsErr := importedJSONEncode("settings", settings)
 		if settingsErr != nil {
 			errorToolkits = append(errorToolkits, map[string]any{
@@ -3670,7 +3718,12 @@ func (h *Handler) runImport(ctx context.Context, q relationQuerier, s, projectID
 				importUUIDToToolID[tk.importUUID] = toolID
 			}
 			importedToolkitByID[toolID] = importedToolkitSummary{name: tkName, toolkitType: tkType}
-			resultToolkits = append(resultToolkits, map[string]any{"id": strconv.Itoa(toolID), "name": tkName, "type": tkType})
+			imported := map[string]any{"id": strconv.Itoa(toolID), "name": tkName, "type": tkType}
+			if len(unbound) > 0 {
+				imported["needs_connection"] = true
+				imported["dropped_settings"] = unbound
+			}
+			resultToolkits = append(resultToolkits, imported)
 		} else {
 			errorToolkits = append(errorToolkits, map[string]any{"index": tk.entityIdx, "name": tkName, "msg": "Import function has been failed: " + err.Error()})
 			failedToolkitImportUUIDs[tk.importUUID] = true
@@ -4730,6 +4783,21 @@ func (h *Handler) ExportImportGet(w http.ResponseWriter, r *http.Request) {
 		"type":        appType,
 		"import_uuid": appUUID,
 		"versions":    versions,
+	}
+	// The agent's evaluation datasets with their cases (issue 3137). Not on
+	// a fork: a fork copies a published agent, whose datasets belong to the
+	// project that authored them.
+	if !isFork {
+		evaluation, err := h.exportedEvaluation(ctx, s, entityID)
+		if err != nil {
+			slog.ErrorContext(ctx, "export: "+exportReadFailed,
+				"schema", s, "application_id", entityID, "read", "evaluation datasets", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": exportReadFailed})
+			return
+		}
+		if evaluation != nil {
+			appExport["evaluation"] = evaluation
+		}
 	}
 	if isFork {
 		appExport["owner_id"] = fmt.Sprintf("%d", ownerID)

@@ -46,6 +46,7 @@ import { HttpResponse, delay, http } from "msw";
 import type { RequestHandlerOptions } from "msw";
 
 import type {
+  AgentRunCaps,
   EntitySettingsUpdateResponse,
   ExecutionSuspension,
   ExecutionSuspensionList,
@@ -164,6 +165,16 @@ export const getCreateRunCapOverrideResponseMock = (
   granted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   expires_at: faker.date.past().toISOString().slice(0, 19) + "Z",
   ...overrideResponse,
+});
+
+export const getGetAgentRunCapsResponseMock = (): AgentRunCaps => ({
+  tier: "low",
+  caps: {
+    max_tool_calls: 200,
+    max_model_turns: 50,
+    max_records_read: 100000,
+    max_spend: 5,
+  },
 });
 
 export const getGenerateProjectContextDraftResponseMock = (
@@ -382,6 +393,32 @@ export const getCreateRunCapOverrideMockHandler = (
   );
 };
 
+export const getGetAgentRunCapsMockHandler = (
+  overrideResponse?:
+    | AgentRunCaps
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<AgentRunCaps> | AgentRunCaps),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/run_caps/prompt_lib/:projectId/:applicationId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getGetAgentRunCapsResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getGenerateProjectContextDraftMockHandler = (
   overrideResponse?:
     | ProjectContextDraft
@@ -467,6 +504,7 @@ export const getSettingsMock = () => [
   getCreateProjectExecutionSuspensionMockHandler(),
   getResumeProjectExecutionSuspensionMockHandler(),
   getCreateRunCapOverrideMockHandler(),
+  getGetAgentRunCapsMockHandler(),
   getGenerateProjectContextDraftMockHandler(),
   getPatchEntitySettingsMockHandler(),
   getReplaceParticipantSettingsMockHandler(),
