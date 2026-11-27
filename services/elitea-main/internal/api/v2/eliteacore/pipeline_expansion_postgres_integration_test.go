@@ -68,9 +68,9 @@ func TestImportAndForkRefuseOverBudgetPipelineExpansion(t *testing.T) {
 					}
 					return
 				}
-				msgs := decodeLimitErrors(t, body).Errors.Agents
-				if code != http.StatusBadRequest || len(msgs) != 1 ||
-					!strings.Contains(msgs[0].Msg, "once anchors and aliases are expanded") || !strings.Contains(msgs[0].Msg, "before saving") {
+				text, ok := limitRefusalText(t, code, body)
+				if !ok || (route == "import") != (code == http.StatusUnprocessableEntity) ||
+					!strings.Contains(text, "once anchors and aliases are expanded") || !strings.Contains(text, "before saving") {
 					t.Fatalf("status=%d body=%.400s", code, body)
 				}
 				if versions != 0 || importLinkCount(t, pool, `SELECT count(*) FROM p_1.applications`) != 0 {

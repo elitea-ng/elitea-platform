@@ -21088,6 +21088,11 @@ components:
           type: string
           nullable: true
           description: Present only with ?fork=true.
+        evaluation:
+          allOf: [{ $ref: '#/components/schemas/ImportedEvaluation' }]
+          description: >
+            The agent's evaluation datasets with their cases; absent when it
+            has none, and never on a fork (issue 3137).
       description: >
         NOTE(W2): internal/api/v2/eliteacore/handler.go:3507-3528 — the four
         fork-only keys are set in the `isFork` branch at :3515-3528.
@@ -21186,6 +21191,12 @@ components:
           x-elitea-passthrough: >-
             NOTE(W2): toolkit settings persisted verbatim after import_uuid
             resolution (internal/api/v2/eliteacore/handler.go:2698-2734).
+        evaluation:
+          $ref: '#/components/schemas/ImportedEvaluation'
+        memory_seeds:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/ImportedMemorySeed' }
         versions:
           type: array
           items: { $ref: '#/components/schemas/VersionWriteRequest' }
@@ -21315,8 +21326,23 @@ components:
         id: { type: string }
         name: { type: string }
         type: { type: string }
+        needs_connection:
+          type: boolean
+          description: >
+            Present (true) when the import dropped a credential from the
+            toolkit's settings: a secret field, a `{{secret.NAME}}`
+            reference or a configuration reference of the source project.
+            The toolkit landed unbound; the person connects it (issue 3137).
+        dropped_settings:
+          type: array
+          items: { type: string }
+          description: >
+            With needs_connection, the settings keys (dotted paths) the
+            import dropped, sorted.
       description: >
-        NOTE(W2): internal/api/v2/eliteacore/handler.go:2757.
+        NOTE(W2): internal/api/v2/eliteacore/handler.go:2757. Credentials
+        never import (internal/api/v2/eliteacore/import_carried.go,
+        unboundToolkitSettings).
 
     ImportedSkill:
       type: object
@@ -21389,6 +21415,109 @@ components:
         this route can leave a channel out. The fast path used to carry the
         `agents` key alone. Status is 201 when all entities imported, 207 on
         partial failure, 400 when all failed (handler.go:2895-2905).
+
+    ImportRefusal:
+      type: object
+      description: >
+        A refused import document (issue 3137). Every agent entry is checked
+        with the version save's rules (llm_settings and the reasoning_effort
+        enum, every meta block, run caps against the platform cap of a new
+        agent's tier, soul, avatar pack and embedded media, variables, tags)
+        and its evaluation datasets and memory seeds, before anything is
+        written; the first failure answers. `field` is a JSON path into the
+        document (`applications[i]` counts the flat entity list, which for the
+        envelope is the applications array), `rule` the failed rule (a domain
+        code such as RUN_CAP_ABOVE_TIER, OUTPUT_CONTRACT_INVALID,
+        proactivity_invalid, avatar_pack_invalid, or EVALUATION_INVALID,
+        MEMORY_SEED_INVALID, LLM_SETTINGS_INVALID, REASONING_EFFORT_INVALID,
+        VARIABLES_INVALID, TAGS_INVALID, IMPORT_SHAPE_INVALID).
+        NOTE(W2): internal/api/v2/eliteacore/import_validation.go (`importRefusal`).
+      required: [error, code, field, rule, index, name]
+      properties:
+        error: { type: string }
+        code:
+          type: string
+          enum: [import_invalid]
+        field: { type: string }
+        rule: { type: string }
+        index: { type: integer }
+        name: { type: string }
+
+    ImportedEvaluation:
+      type: object
+      description: >
+        The evaluation datasets an agent file carries (issue 3137). The
+        export writes the datasets whose application_id is the agent, with
+        their cases; an import creates them linked to the new agent, each case
+        with source_type `import`. At most 10 cases a dataset, names at most
+        128 characters (the dataset routes' rules).
+      properties:
+        datasets:
+          type: array
+          items: { $ref: '#/components/schemas/ImportedEvaluationDataset' }
+
+    ImportedEvaluationDataset:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string }
+        cases:
+          type: array
+          maxItems: 10
+          items: { $ref: '#/components/schemas/ImportedEvaluationCase' }
+
+    ImportedEvaluationCase:
+      type: object
+      required: [input]
+      properties:
+        input: { type: string }
+        variables:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the case's template variables, stored as the case
+            routes store them (internal/api/v2/eliteacore/import_carried.go).
+        expected_output:
+          type: string
+          nullable: true
+          description: Absent or null is no expected answer.
+        excluded: { type: boolean }
+
+    ImportedMemorySeed:
+      type: object
+      description: >
+        One memory seed of an agent file (issue 3137): imported as a PENDING
+        memory entry written by the importing person, which the owner reviews
+        on the agent's Memory tab. Never exported. The content passes the
+        rule of every memory write (2048 bytes, no credential-shaped text).
+      required: [kind, content]
+      properties:
+        kind:
+          type: string
+          enum: [fact, preference, episode]
+        content: { type: string, maxLength: 2048 }
+        pinned: { type: boolean }
+
+    AgentRunCaps:
+      type: object
+      description: >
+        An agent's risk tier and the platform's run caps at it (ADR-0041
+        decision 3). A cap of 0 is no cap.
+        NOTE(W2): internal/api/v2/runcaps/tier.go (`TierCapsResponse`).
+      required: [tier, caps]
+      properties:
+        tier:
+          type: string
+          enum: [low, medium, high, critical]
+        caps:
+          type: object
+          required: [max_tool_calls, max_model_turns, max_records_read, max_spend]
+          properties:
+            max_tool_calls: { type: integer, format: int64 }
+            max_model_turns: { type: integer, format: int64 }
+            max_records_read: { type: integer, format: int64 }
+            max_spend: { type: number }
 
     TeamImportTeam:
       type: object
@@ -21482,13 +21611,27 @@ components:
       description: >
         A refused team import. Nothing of it was kept. `code` is
         `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit" or "agent: sub-agent name"),
-        `agent_name_taken` (with `names`), `team_name_taken` or
-        `import_failed` (with `errors`, the import channels).
+        `agent_name_taken` (with `names`), `team_name_taken`,
+        `import_failed` (with `errors`, the import channels) or
+        `import_invalid` (with `field`, `rule`, `index` and `name`; see
+        ImportRefusal).
         NOTE(W2): internal/api/v2/eliteacore/team_import.go:282 (`writeTeamImportRefusal`).
       required: [error, code]
       properties:
         error: { type: string }
         code: { type: string }
+        field:
+          type: string
+          description: With import_invalid, the JSON path of the failed value.
+        rule:
+          type: string
+          description: With import_invalid, the rule that failed.
+        index:
+          type: integer
+          description: With import_invalid, the index of the agent entry.
+        name:
+          type: string
+          description: With import_invalid, the name of the agent entry.
         names:
           type: array
           items: { type: string }
@@ -37861,6 +38004,57 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
+  /elitea_core/run_caps/prompt_lib/{project_id}/{application_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        description: The agent; 0 is an agent not saved yet, whose tier is low.
+        schema: { type: integer, format: int64, minimum: 0 }
+    get:
+      operationId: getAgentRunCaps
+      summary: Read the platform run caps of an agent's risk tier
+      description: >
+        ADR-0041 decision 3, issue 3137. The agent's risk tier and the
+        platform's caps at it, which the agent editor shows beside the
+        author's own meta.run_caps: a version save and an import refuse an
+        author cap above these (RUN_CAP_ABOVE_TIER). A cap of 0 is no cap.
+        application_id 0 answers the tier of a new agent (low), the tier an
+        imported agent is checked against. Requires
+        `models.applications.application.details` in the project.
+        NOTE(W2): internal/api/v2/runcaps/tier.go (`TierCapsHandler.Read`).
+      tags: [settings]
+      responses:
+        '200':
+          description: The tier and its caps
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentRunCaps' }
+              example:
+                tier: low
+                caps:
+                  max_tool_calls: 200
+                  max_model_turns: 50
+                  max_records_read: 100000
+                  max_spend: 5
+        '400':
+          description: A malformed project or application id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '500':
+          description: The platform run caps or the agent's tier could not be read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: No database in this composition
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
   /elitea_core/application_releases/prompt_lib/{project_id}/{application_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -47561,9 +47755,12 @@ paths:
           description: >
             Export document. JSON by default; with ?format=md the same
             document rendered as markdown (eliteacore/export_markdown.go
-            writeMarkdownExport), served as an attachment. An application
-            with more than one version answers application/zip instead,
-            one markdown file per version.
+            writeMarkdownExport), served as an attachment, in the
+            elitea.agent/v1 format (`schema` first). An application with more
+            than one version answers application/zip instead, one markdown
+            file per version; a single version whose avatar pack names
+            uploaded files answers `<slug>.agent.zip`, the markdown plus
+            `avatars/<slug>/<slot>.<ext>` (issue 3137).
           content:
             application/json:
               schema:
@@ -47652,6 +47849,29 @@ paths:
                 $ref: '#/components/schemas/ImportWizardResponse'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '422':
+          description: >
+            An agent entry fails the checks of the version save, its
+            evaluation datasets or its memory seeds; nothing was written
+            (code import_invalid). Every agent entry is checked before the
+            first write, and the first failure answers (issue 3137,
+            internal/api/v2/eliteacore/import_validation.go).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportRefusal'
+              example:
+                error: "applications[0].versions[0].meta.run_caps.max_tool_calls: 500 is above the low tier's cap of 200"
+                code: import_invalid
+                field: applications[0].versions[0].meta.run_caps.max_tool_calls
+                rule: RUN_CAP_ABOVE_TIER
+                index: 0
+                name: Research Scout
+        '500':
+          description: The platform run caps could not be read to check the document
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
 
   /elitea_core/team_import/prompt_lib/{project_id}:
     parameters:
@@ -47691,7 +47911,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/TeamImportRefusal'
         '422':
-          description: The team is invalid, a toolkit is missing, or an entity could not be written; nothing was created
+          description: >
+            The team is invalid, a toolkit is missing, an agent entry fails
+            the import checks (code import_invalid, with field, rule, index
+            and name, the ImportRefusal shape), or an entity could not be
+            written; nothing was created
           content:
             application/json:
               schema:

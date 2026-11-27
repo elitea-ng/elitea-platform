@@ -47,12 +47,28 @@ export const TeamImportRefusal = zod
   .object({
     error: zod.string(),
     code: zod.string(),
+    field: zod
+      .string()
+      .optional()
+      .describe("With import_invalid, the JSON path of the failed value."),
+    rule: zod
+      .string()
+      .optional()
+      .describe("With import_invalid, the rule that failed."),
+    index: zod
+      .int()
+      .optional()
+      .describe("With import_invalid, the index of the agent entry."),
+    name: zod
+      .string()
+      .optional()
+      .describe("With import_invalid, the name of the agent entry."),
     names: zod.array(zod.string()).optional(),
     missing: zod.array(zod.string()).optional(),
     errors: TeamImportErrors.optional(),
   })
   .describe(
-    'A refused team import. Nothing of it was kept. `code` is `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit" or "agent: sub-agent name"), `agent_name_taken` (with `names`), `team_name_taken` or `import_failed` (with `errors`, the import channels). NOTE(W2): internal/api/v2/eliteacore/team_import.go:282 (`writeTeamImportRefusal`).\n',
+    'A refused team import. Nothing of it was kept. `code` is `team_invalid`, `toolkit_missing` (with `missing`, "agent: toolkit" or "agent: sub-agent name"), `agent_name_taken` (with `names`), `team_name_taken`, `import_failed` (with `errors`, the import channels) or `import_invalid` (with `field`, `rule`, `index` and `name`; see ImportRefusal). NOTE(W2): internal/api/v2/eliteacore/team_import.go:282 (`writeTeamImportRefusal`).\n',
   );
 
 export type TeamImportRefusal = zod.input<typeof TeamImportRefusal>;

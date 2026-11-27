@@ -67,11 +67,13 @@ func TestTheSoulSurvivesTheMarkdownExportAndImport(t *testing.T) {
 
 	// A file whose soul names a capability is refused, and the row says why.
 	version["soul"] = map[string]any{"schema": "elitea.soul/v1", "tools": []any{"shell"}}
-	refused := decodeImportLink(t, importLinkDo(t, importLinkRouter(handler), entries))
-	if len(refused.Errors.Agents) != 1 {
-		t.Fatalf("a soul naming a capability was imported: %+v", refused.Result.Agents)
+	// It answers 422 before anything is written (issue 3137); `rule` names it.
+	recorder = importLinkDo(t, importLinkRouter(handler), entries)
+	refused := decodeImportRefusal(t, recorder)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a soul naming a capability was imported: %d %s", recorder.Code, recorder.Body)
 	}
-	if message := refused.Errors.Agents[0].Msg; !strings.Contains(message, "soul_capability_key") {
-		t.Fatalf("the refusal does not name the rule: %q", message)
+	if refused.Rule != "soul_capability_key" || !strings.HasSuffix(refused.Field, ".soul") {
+		t.Fatalf("the refusal does not name the rule: %+v", refused)
 	}
 }

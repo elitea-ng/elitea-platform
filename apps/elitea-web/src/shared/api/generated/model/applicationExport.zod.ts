@@ -42,6 +42,7 @@
  */
 import * as zod from "zod";
 import { ApplicationVersionExport } from "./applicationVersionExport.zod";
+import { ImportedEvaluation } from "./importedEvaluation.zod";
 
 export const ApplicationExport = zod
   .object({
@@ -61,6 +62,9 @@ export const ApplicationExport = zod
       .string()
       .nullish()
       .describe("Present only with ?fork=true."),
+    evaluation: ImportedEvaluation.optional().describe(
+      "The agent's evaluation datasets with their cases; absent when it has none, and never on a fork (issue 3137).\n",
+    ),
   })
   .describe(
     "NOTE(W2): internal/api/v2/eliteacore/handler.go:3507-3528 — the four fork-only keys are set in the `isFork` branch at :3515-3528.\n",

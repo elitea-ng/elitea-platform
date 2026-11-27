@@ -54,6 +54,7 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AgentRunCaps,
   BatchEntitySettingsRequest,
   EntitySettingsUpdateResponse,
   ErrorResponse,
@@ -1677,6 +1678,250 @@ export function useCreateRunCapOverride<
   const queryOptions = getCreateRunCapOverrideQueryOptions(
     projectId,
     runCapOverrideRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type getAgentRunCapsResponse200 = {
+  data: AgentRunCaps;
+  status: 200;
+};
+
+export type getAgentRunCapsResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type getAgentRunCapsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type getAgentRunCapsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type getAgentRunCapsResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
+export type getAgentRunCapsResponse503 = {
+  data: ErrorResponse;
+  status: 503;
+};
+
+export type getAgentRunCapsResponseSuccess = getAgentRunCapsResponse200 & {
+  headers: Headers;
+};
+export type getAgentRunCapsResponseError = (
+  | getAgentRunCapsResponse400
+  | getAgentRunCapsResponse401
+  | getAgentRunCapsResponse403
+  | getAgentRunCapsResponse500
+  | getAgentRunCapsResponse503
+) & {
+  headers: Headers;
+};
+
+export type getAgentRunCapsResponse =
+  getAgentRunCapsResponseSuccess | getAgentRunCapsResponseError;
+
+export const getGetAgentRunCapsUrl = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return `/elitea_core/run_caps/prompt_lib/${projectId}/${applicationId}`;
+};
+
+/**
+ * ADR-0041 decision 3, issue 3137. The agent's risk tier and the platform's caps at it, which the agent editor shows beside the author's own meta.run_caps: a version save and an import refuse an author cap above these (RUN_CAP_ABOVE_TIER). A cap of 0 is no cap. application_id 0 answers the tier of a new agent (low), the tier an imported agent is checked against. Requires `models.applications.application.details` in the project. NOTE(W2): internal/api/v2/runcaps/tier.go (`TierCapsHandler.Read`).
+ * @summary Read the platform run caps of an agent's risk tier
+ */
+export const getAgentRunCaps = async (
+  projectId: string,
+  applicationId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<getAgentRunCapsResponse> => {
+  return eliteaFetch<getAgentRunCapsResponse>(
+    getGetAgentRunCapsUrl(projectId, applicationId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetAgentRunCapsQueryKey = (
+  projectId: string,
+  applicationId: number,
+) => {
+  return [
+    `/elitea_core/run_caps/prompt_lib/${projectId}/${applicationId}`,
+  ] as const;
+};
+
+export const getGetAgentRunCapsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAgentRunCaps>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRunCaps>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getGetAgentRunCapsQueryKey(projectId, applicationId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAgentRunCaps>>> = ({
+    signal,
+  }) =>
+    getAgentRunCaps(projectId, applicationId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAgentRunCaps>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAgentRunCapsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAgentRunCaps>>
+>;
+export type GetAgentRunCapsQueryError =
+  ErrorResponse | N401Response | N403Response;
+
+export function useGetAgentRunCaps<
+  TData = Awaited<ReturnType<typeof getAgentRunCaps>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRunCaps>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentRunCaps>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentRunCaps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentRunCaps<
+  TData = Awaited<ReturnType<typeof getAgentRunCaps>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRunCaps>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof getAgentRunCaps>>,
+          TError,
+          Awaited<ReturnType<typeof getAgentRunCaps>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useGetAgentRunCaps<
+  TData = Awaited<ReturnType<typeof getAgentRunCaps>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRunCaps>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Read the platform run caps of an agent's risk tier
+ */
+
+export function useGetAgentRunCaps<
+  TData = Awaited<ReturnType<typeof getAgentRunCaps>>,
+  TError = ErrorResponse | N401Response | N403Response,
+>(
+  projectId: string,
+  applicationId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof getAgentRunCaps>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getGetAgentRunCapsQueryOptions(
+    projectId,
+    applicationId,
     options,
   );
 

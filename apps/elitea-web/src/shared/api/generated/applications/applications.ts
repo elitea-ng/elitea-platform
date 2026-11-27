@@ -175,6 +175,7 @@ import type {
   IconMetaRequest,
   IconUploadForm,
   IconUploadResponse,
+  ImportRefusal,
   ImportWizardRequest,
   ImportWizardResponse,
   InvalidClientVersionError,
@@ -34511,13 +34512,27 @@ export type importWizardResponse403 = {
   status: 403;
 };
 
+export type importWizardResponse422 = {
+  data: ImportRefusal;
+  status: 422;
+};
+
+export type importWizardResponse500 = {
+  data: ErrorResponse;
+  status: 500;
+};
+
 export type importWizardResponseSuccess = (
   importWizardResponse201 | importWizardResponse207
 ) & {
   headers: Headers;
 };
 export type importWizardResponseError = (
-  importWizardResponse400 | importWizardResponse401 | importWizardResponse403
+  | importWizardResponse400
+  | importWizardResponse401
+  | importWizardResponse403
+  | importWizardResponse422
+  | importWizardResponse500
 ) & {
   headers: Headers;
 };
@@ -34588,7 +34603,12 @@ export const getImportWizardQueryKey = (
 
 export const getImportWizardQueryOptions = <
   TData = Awaited<ReturnType<typeof importWizard>>,
-  TError = ImportWizardResponse | N401Response | N403Response,
+  TError =
+    | ImportWizardResponse
+    | N401Response
+    | N403Response
+    | ImportRefusal
+    | ErrorResponse,
 >(
   projectId: string,
   importWizardRequest: ImportWizardRequest,
@@ -34626,11 +34646,20 @@ export type ImportWizardQueryResult = NonNullable<
   Awaited<ReturnType<typeof importWizard>>
 >;
 export type ImportWizardQueryError =
-  ImportWizardResponse | N401Response | N403Response;
+  | ImportWizardResponse
+  | N401Response
+  | N403Response
+  | ImportRefusal
+  | ErrorResponse;
 
 export function useImportWizard<
   TData = Awaited<ReturnType<typeof importWizard>>,
-  TError = ImportWizardResponse | N401Response | N403Response,
+  TError =
+    | ImportWizardResponse
+    | N401Response
+    | N403Response
+    | ImportRefusal
+    | ErrorResponse,
 >(
   projectId: string,
   importWizardRequest: ImportWizardRequest,
@@ -34654,7 +34683,12 @@ export function useImportWizard<
 };
 export function useImportWizard<
   TData = Awaited<ReturnType<typeof importWizard>>,
-  TError = ImportWizardResponse | N401Response | N403Response,
+  TError =
+    | ImportWizardResponse
+    | N401Response
+    | N403Response
+    | ImportRefusal
+    | ErrorResponse,
 >(
   projectId: string,
   importWizardRequest: ImportWizardRequest,
@@ -34678,7 +34712,12 @@ export function useImportWizard<
 };
 export function useImportWizard<
   TData = Awaited<ReturnType<typeof importWizard>>,
-  TError = ImportWizardResponse | N401Response | N403Response,
+  TError =
+    | ImportWizardResponse
+    | N401Response
+    | N403Response
+    | ImportRefusal
+    | ErrorResponse,
 >(
   projectId: string,
   importWizardRequest: ImportWizardRequest,
@@ -34698,7 +34737,12 @@ export function useImportWizard<
 
 export function useImportWizard<
   TData = Awaited<ReturnType<typeof importWizard>>,
-  TError = ImportWizardResponse | N401Response | N403Response,
+  TError =
+    | ImportWizardResponse
+    | N401Response
+    | N403Response
+    | ImportRefusal
+    | ErrorResponse,
 >(
   projectId: string,
   importWizardRequest: ImportWizardRequest,

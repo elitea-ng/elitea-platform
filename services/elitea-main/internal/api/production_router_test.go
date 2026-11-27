@@ -2072,6 +2072,7 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"GET /api/v2/elitea_core/release_gates/prompt_lib/{projectID}/{applicationID}",
 		"GET /api/v2/elitea_core/release_gates/prompt_lib/{projectID}/{applicationID}/{gateID}",
 		"GET /api/v2/elitea_core/roles/{mode}/{projectID}",
+		"GET /api/v2/elitea_core/run_caps/prompt_lib/{projectID}/{applicationID}",
 		"GET /api/v2/elitea_core/run_steps/prompt_lib/{projectID}/{runID}",
 		"GET /api/v2/elitea_core/run_steps/prompt_lib/{projectID}/{runID}/verify",
 		"GET /api/v2/elitea_core/run_steps/prompt_lib/{projectID}/{runID}/{stepID}/{side}",

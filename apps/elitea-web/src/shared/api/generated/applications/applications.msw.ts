@@ -13440,6 +13440,17 @@ export const getImportWizardResponseMock = (
           id: faker.string.alpha({ length: { min: 10, max: 20 } }),
           name: faker.string.alpha({ length: { min: 10, max: 20 } }),
           type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          needs_connection: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          dropped_settings: faker.helpers.arrayElement([
+            Array.from(
+              { length: faker.number.int({ min: 1, max: 10 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            undefined,
+          ]),
         })),
         skills: Array.from(
           { length: faker.number.int({ min: 1, max: 10 }) },
@@ -14226,6 +14237,17 @@ export const getImportWizardResponseMock = (
           id: faker.string.alpha({ length: { min: 10, max: 20 } }),
           name: faker.string.alpha({ length: { min: 10, max: 20 } }),
           type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          needs_connection: faker.helpers.arrayElement([
+            faker.datatype.boolean(),
+            undefined,
+          ]),
+          dropped_settings: faker.helpers.arrayElement([
+            Array.from(
+              { length: faker.number.int({ min: 1, max: 10 }) },
+              (_, i) => i + 1,
+            ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+            undefined,
+          ]),
         })),
         skills: Array.from(
           { length: faker.number.int({ min: 1, max: 10 }) },
@@ -14945,6 +14967,17 @@ export const getImportTeamResponseMock = (): TeamImportResponse => ({
         id: faker.string.alpha({ length: { min: 10, max: 20 } }),
         name: faker.string.alpha({ length: { min: 10, max: 20 } }),
         type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        needs_connection: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
+        dropped_settings: faker.helpers.arrayElement([
+          Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          undefined,
+        ]),
       })),
       skills: Array.from(
         { length: faker.number.int({ min: 1, max: 10 }) },
@@ -15842,6 +15875,17 @@ export const getForkAgentResponseMock = (
       id: faker.string.alpha({ length: { min: 10, max: 20 } }),
       name: faker.string.alpha({ length: { min: 10, max: 20 } }),
       type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      needs_connection: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
+      dropped_settings: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
     })),
     skills: Array.from(
       { length: faker.number.int({ min: 1, max: 10 }) },

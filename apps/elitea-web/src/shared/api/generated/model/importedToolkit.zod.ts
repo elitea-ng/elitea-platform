@@ -47,8 +47,22 @@ export const ImportedToolkit = zod
     id: zod.string(),
     name: zod.string(),
     type: zod.string(),
+    needs_connection: zod
+      .boolean()
+      .optional()
+      .describe(
+        "Present (true) when the import dropped a credential from the toolkit's settings: a secret field, a `{{secret.NAME}}` reference or a configuration reference of the source project. The toolkit landed unbound; the person connects it (issue 3137).\n",
+      ),
+    dropped_settings: zod
+      .array(zod.string())
+      .optional()
+      .describe(
+        "With needs_connection, the settings keys (dotted paths) the import dropped, sorted.\n",
+      ),
   })
-  .describe("NOTE(W2): internal/api/v2/eliteacore/handler.go:2757.\n");
+  .describe(
+    "NOTE(W2): internal/api/v2/eliteacore/handler.go:2757. Credentials never import (internal/api/v2/eliteacore/import_carried.go, unboundToolkitSettings).\n",
+  );
 
 export type ImportedToolkit = zod.input<typeof ImportedToolkit>;
 export type ImportedToolkitOutput = zod.output<typeof ImportedToolkit>;

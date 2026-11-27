@@ -4154,6 +4154,19 @@
       "responseSchema": "AgentMediaObject",
       "fixture": null,
       "usedBy": [
+        "pages/agents",
+        "features/agent-lifecycle"
+      ]
+    },
+    {
+      "id": "settings.getAgentRunCaps",
+      "method": "GET",
+      "path": "/elitea_core/run_caps/prompt_lib/{project_id}/{application_id}",
+      "operationId": "getAgentRunCaps",
+      "source": "generated",
+      "responseSchema": "AgentRunCaps",
+      "fixture": null,
+      "usedBy": [
         "pages/agents"
       ]
     },

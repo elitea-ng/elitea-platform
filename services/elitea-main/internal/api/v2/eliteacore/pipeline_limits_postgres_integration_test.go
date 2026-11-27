@@ -69,6 +69,28 @@ func decodeLimitErrors(t *testing.T, body string) limitErrors {
 	return decoded
 }
 
+// limitRefusalText is the refusal a route answered with: the import's 422
+// (issue 3137: every entry is checked before anything is written, and the
+// answer names the field) or the fork's one errors.agents row under 400. ok
+// is false when the answer is neither.
+func limitRefusalText(t *testing.T, code int, body string) (string, bool) {
+	t.Helper()
+	if code == http.StatusUnprocessableEntity {
+		var refusal struct {
+			Error, Code, Field string
+		}
+		if err := json.Unmarshal([]byte(body), &refusal); err != nil {
+			t.Fatalf("decode %q: %v", body, err)
+		}
+		return refusal.Error, refusal.Code == "import_invalid" && strings.HasSuffix(refusal.Field, ".instructions")
+	}
+	msgs := decodeLimitErrors(t, body).Errors.Agents
+	if code != http.StatusBadRequest || len(msgs) != 1 {
+		return "", false
+	}
+	return msgs[0].Msg, true
+}
+
 func TestImportAndForkRefuseOverBoundPipelineInstructions(t *testing.T) {
 	over := limitPipelineYAML(1, pipelinelimits.MaxInstructionsBytes+1)
 	atBytes := limitPipelineYAML(1, pipelinelimits.MaxInstructionsBytes)
@@ -106,9 +128,9 @@ func TestImportAndForkRefuseOverBoundPipelineInstructions(t *testing.T) {
 				code, body := r.call(t, eliteacore.NewHandler(pool), tc.agentType, tc.instructions)
 				versions := importLinkCount(t, pool, `SELECT count(*) FROM p_1.application_versions`)
 				if tc.refused {
-					msgs := decodeLimitErrors(t, body).Errors.Agents
-					if code != http.StatusBadRequest || len(msgs) != 1 ||
-						!strings.Contains(msgs[0].Msg, tc.text) || !strings.Contains(msgs[0].Msg, "before saving") {
+					text, ok := limitRefusalText(t, code, body)
+					if !ok || (r.name == "import") != (code == http.StatusUnprocessableEntity) ||
+						!strings.Contains(text, tc.text) || !strings.Contains(text, "before saving") {
 						t.Fatalf("status=%d body=%.400s", code, body)
 					}
 					if strings.Contains(body, pipelineLimitMarker) {

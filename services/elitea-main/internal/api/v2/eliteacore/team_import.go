@@ -207,6 +207,11 @@ func (h *Handler) TeamImportPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The same check the import route runs, before the transaction opens.
+	if !h.admitImport(w, r, projectID, entities) {
+		return
+	}
+
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": importWriteFailed})
