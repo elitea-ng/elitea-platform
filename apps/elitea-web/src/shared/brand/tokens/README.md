@@ -20,7 +20,8 @@ submodule. Since brand guide v3 the values come from client-core's
   and add the new id to `addedDefaultIDs` in
   `services/elitea-main/internal/application/brandpackage/package.go`.
   Packages of the earlier release then stay untouched exports. The Go job
-  holds both.
+  holds both when the PR changes the Go copy. A PR that changes only this
+  file runs no Go job; the nightly Go run on main then fails.
 - `libs/ts/client-core/src/brand/identity.ts` holds the product name and
   `brand.hue`; `defaultPack.gen.ts` there restates the hue and each scheme's
   `primary.main` / `text.button.primary` for the mobile app.
@@ -55,7 +56,7 @@ always gives its colour to `primary.contrastText`.
 
 New code reads `role.textMuted` for muted text, not `text.default`. Shared code
 reads `focus.ring` for the focus ring, as every ring reads it today, so a tuned
-ring loses nothing. `text.default`
+ring loses nothing; review holds this rule. `text.default`
 and `focus.ring` are not on the map. From PR 4 (#3092), theme-gate check 10
 counts reads of the ids on the map. It does not count reads of `text.default`:
 review holds that rule. The stage 4 script (ADR-0062 Rollout) rewrites only the
@@ -89,7 +90,7 @@ does not always say what the value now is. The mapping decisions:
 | --- | --- | --- |
 | Accent / primary action (`primary.*`, `background.button.{primary,neutral,positive,maxi}.*`, switch on, checkbox and radio checked, tag / chip selected) | `primary` / `primaryHover` / `primaryPressed`, label `onPrimary` | One action colour in both schemes. `text.button.primary` is white in both schemes |
 | Soft accent (`background.button.special.*`, `split.*`, selected rows, drawer / conversation selection, drag target) | `selected` (and an alpha of `primary` for hover / pressed) | No per-scheme magenta / cyan washes |
-| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset |
+| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset. It is not on the map: shared code reads `focus.ring` itself (Roles) |
 | AI presence (`aiAssistant.*`, `capability.*`, magic assistant, agent hub icon, `nodeColors.llm|agent`) | `ai` (icons, fills, alpha washes) and `aiText` (text) | Violet marks AI only |
 | Canvas / surfaces (`background.default`, `card.*`, `secondary`, `modal.simple`, `sideBar`, …) | `bg` → `surface` → `elevated` | Dark: page `bg`, cards `surface`, raised `elevated`. Light: page `bg`, cards `elevated` with a `border`, insets `surface` |
 | Text (`text.secondary` = strong, `text.primary` / `text.default` = muted) | `text` / `textMuted` / `textDisabled` | The old names are inverted (`text.primary` is the MUTED role); kept for the call sites |

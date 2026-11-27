@@ -44,8 +44,8 @@ reach a role: for example `text.default`, `focus.ring`, `text.button.primary`,
 one keeps its colour on each screen that reads it. A screen that a later
 release moves onto a shared component reads roles, and the tuned id then
 stops reaching that screen. That release says so in its own upgrade note.
-`focus.ring` loses nothing: shared code reads it for focus rings, so a tuned
-ring reaches moved screens too.
+`focus.ring` loses nothing: shared code reads it for focus rings (ADR-0062
+R-T15), so a tuned ring reaches moved screens too.
 
 A file layer (`BRAND_PACK_PATH`) can state every legacy id with another
 `brand.hue`. It then keeps the default look only if it also states the 27
