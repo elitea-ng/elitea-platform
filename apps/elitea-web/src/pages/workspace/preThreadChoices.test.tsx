@@ -6,7 +6,7 @@
  * picked and never kept (ADR-0061): carried into the thread being created only.
  */
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { configure, getConfig, render, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, getConfig, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -21,14 +21,14 @@ import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/
 import { createFakeWorktreeIpc } from '@/shared/desktop/worktreeIpc.fake';
 import type { WorktreeIpc } from '@/shared/desktop/worktreeIpc';
 import { testTimeout } from '@/test/timeouts';
-import { InspectorScope } from '@/widgets/desktop-shell';
+import { InspectorScope, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { server } from '../../test/setup';
 import { setPendingRespect } from './pendingRespect';
 import WorkspaceSessionPage from './WorkspaceSessionPage';
 
-// The organisation allows Full auto (`full_auto_status`).
-vi.mock('@/shared/desktop/fullAutoIpc', () => ({ fullAutoAllowed: () => Promise.resolve(true) }));
+// The organisation allows Full auto (`full_auto_status`, the host's only command this test answers).
+const invoke = vi.fn((command: string) => (command === 'full_auto_status' ? Promise.resolve({ allowed: true }) : Promise.reject(new Error(command))));
 
 const BASE = '/api/v2';
 const FOLDER: Workspace = { id: 'w1', path: '/Users/me/code/app', name: 'app', project_id: 42, is_git: true };
@@ -74,9 +74,11 @@ beforeEach(() => {
     http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
   );
   forgetKept();
+  vi.stubGlobal('__TAURI_INTERNALS__', { invoke });
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   resetGeneratedClient();
   resetConfigForTests();
   delete globals['elitea_ui_config'];
@@ -124,7 +126,9 @@ async function confirmFullAuto(user: ReturnType<typeof userEvent.setup>): Promis
   expect(screen.getByTestId('mode-picker')).toHaveTextContent('Full auto');
 }
 
+/** "Work in" is under the Participants tab's Thread settings (#3145). */
 async function chooseWorktree(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  act(() => useDesktopLayout.getState().showInspector('participants'));
   await user.click(await screen.findByTestId('work-in-chip'));
   await user.click(await screen.findByTestId('work-in-worktree'));
 }

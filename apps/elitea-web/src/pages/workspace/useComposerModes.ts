@@ -64,11 +64,16 @@ function choiceOf(mode: TurnMode, run: RunChoice | null): TurnModeChoice {
   return wire?.ok === true ? { mode, grant: wire.grant } : mode;
 }
 
+const NOT_HANDED: Partial<PreThreadChoices> = {};
+
+/** "Run to completion" as chosen, when the control is offered (grants on). */
+const offeredRun = (offered: boolean, choice: RunChoice): RunChoice | undefined => (offered ? choice : undefined);
+
 /** `handed`: the modes a worktree's new thread was handed with its first message (#3144); it starts in them. */
-export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands, handed?: PreThreadChoices): ComposerModes {
-  const bypass = useBypassMode(workspaceId, handed?.bypass);
-  const rawFullAuto = useFullAutoMode(local, commands.planMode, handed?.fullAuto === true);
-  const run = useRunToCompletion(workspaceId, handed?.runToCompletion);
+export function useComposerModes(workspaceId: string, local: boolean, commands: SessionCommands, handed: Partial<PreThreadChoices> = NOT_HANDED): ComposerModes {
+  const bypass = useBypassMode(workspaceId, handed.bypass);
+  const rawFullAuto = useFullAutoMode(local, commands.planMode, handed.fullAuto);
+  const run = useRunToCompletion(workspaceId, handed.runToCompletion);
   const grantsOff = useGrantsTurnedOff();
   const mode = modeOf(commands.planMode, local && rawFullAuto.on, local && bypass.on);
   const offered = local && !grantsOff;
@@ -95,7 +100,7 @@ export function useComposerModes(workspaceId: string, local: boolean, commands: 
     choice: choiceOf(mode, offered ? run.choice : null),
     bypass,
     bypassActive: mode === 'bypass',
-    choices: () => ({ planMode: commands.planMode, bypass: bypass.on, fullAuto: rawFullAuto.on, runToCompletion: offered ? run.choice : undefined }),
+    choices: () => ({ planMode: commands.planMode, bypass: bypass.on, fullAuto: rawFullAuto.on, runToCompletion: offeredRun(offered, run.choice) }),
     settling: rawFullAuto.settling,
     fullAuto,
     switchProps: {

@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AppProviders } from '@/app/providers/AppProviders';
 import { WorkspaceIpcProvider } from '@/features/workspace';
 import { HandoffIpcProvider, readThreadUuids, useTakeBackRequests } from '@/features/workspace-handoff';
-import { useActivityFeed } from '@/widgets/desktop-shell';
+import { InspectorScope, useActivityFeed, useDesktopLayout } from '@/widgets/desktop-shell';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
@@ -40,11 +40,15 @@ function mount(handoff: FakeHandoffIpc, path = '/workspaces/w1?conversation=77')
     <AppProviders>
       <WorkspaceIpcProvider ipc={createFakeWorkspaceIpc({ workspaces: [FOLDER] })}>
         <HandoffIpcProvider ipc={handoff}>
-          <RouterProvider router={router} />
+          <InspectorScope>
+            <RouterProvider router={router} />
+          </InspectorScope>
         </HandoffIpcProvider>
       </WorkspaceIpcProvider>
     </AppProviders>,
   );
+  // Where the thread runs, and its moves, are under the Participants tab's Thread settings (#3145).
+  act(() => useDesktopLayout.getState().showInspector('participants'));
 }
 
 function serve(messages: { id: string; role: 'user' | 'assistant'; content: string }[] = []): void {
@@ -62,7 +66,7 @@ function serve(messages: { id: string; role: 'user' | 'assistant'; content: stri
     ),
     http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
     http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })),
-    http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () => HttpResponse.json({ id: 77, uuid: UUID, name: 'fix the build', source: 'local_work', participants: [{ id: 3, entity_name: 'application', name: 'Coder', meta: {} }] })),
+    http.get(`${BASE}/elitea_core/conversation/prompt_lib/42/77`, () => HttpResponse.json({ id: 77, uuid: UUID, name: 'fix the build', source: 'local_work', participants: [{ id: 3, entity_name: 'application', name: 'Coder', meta: {}, entity_meta: { id: 5, name: 'Coder' }, entity_settings: { version_id: 9 } }] })),
     http.get(`${BASE}/elitea_core/messages/prompt_lib/42/77`, () =>
       HttpResponse.json({ items: [...messages].reverse().map((m) => ({ ...m, uid: m.id, conversation_id: '77' })), total: messages.length, page: 1, page_size: 100, total_pages: 1 }),
     ),
@@ -85,7 +89,7 @@ afterEach(() => {
   delete globals['elitea_ui_config'];
 });
 
-/** Opens the small ⌄ menu beside the composer footer's run-location button. */
+/** Opens the small ⌄ menu beside Thread settings' run-location button. */
 async function openLocation(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(await screen.findByTestId('run-location-more'));
 }
@@ -96,8 +100,7 @@ describe('a thread running here', () => {
     const handoff = createFakeHandoffIpc();
     const user = userEvent.setup();
     mount(handoff);
-    const session = await screen.findByTestId('workspace-session');
-    await waitFor(() => expect(within(session).getByTestId('run-location-action')).toHaveTextContent('Send to cloud'));
+    await waitFor(() => expect(screen.getByTestId('run-location-action')).toHaveTextContent('Send to cloud'));
     await waitFor(() => expect(handoff.calls.statuses).toContain(UUID));
     await openLocation(user);
     expect(await screen.findByRole('menuitem', { name: 'Handoff settings…' })).toBeInTheDocument();
@@ -172,7 +175,7 @@ describe('a thread running in the cloud', () => {
 
     const banner = await screen.findByTestId('cloud-thread-banner');
     expect(banner).toHaveTextContent('This thread is running in the cloud executor. Local changes are not seen by it.');
-    expect(within(await screen.findByTestId('workspace-session')).getByTestId('run-location')).toHaveAttribute('data-executor', 'cloud');
+    expect(await screen.findByTestId('run-location')).toHaveAttribute('data-executor', 'cloud');
     // The transcript is the server's, and it is the only one shown.
     // Looked up again on every try: the session may re-render while the first reads settle.
     await waitFor(() => expect(within(screen.getByTestId('cloud-transcript')).getByText('Done in the cloud.')).toBeInTheDocument());

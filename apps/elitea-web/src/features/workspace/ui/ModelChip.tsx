@@ -1,9 +1,9 @@
 /**
- * The composer footer's model chip (issue 1228): the model the next turn
- * runs on, with its reasoning effort, drawn as a native pop-up button
+ * An agent's model chip (issue 1228; in Thread settings › Models since #3145, one per agent): the model the agent's
+ * next turn runs on, with its reasoning effort, drawn as a native pop-up button
  * (`ComposerPicker`, "gpt-5 · High ⌄"), and a menu of the project's chat
- * models; for a model that `supports_reasoning`, the effort too. `/model`
- * opens the same menu (it clicks the chip, like `/agent`).
+ * models, first "the agent's own model" when it is known; for a model that `supports_reasoning`, the effort too.
+ * `/model` opens the menu of the lead's (else the composer's agent's) chip.
  *
  * The page hides it when the agent pins its model or the workspace turns
  * the choice off. Choosing here only says what the next turn asks for: the
@@ -36,6 +36,8 @@ export interface ModelChipProps {
   onChoose: (choice: TurnModelChoice) => void;
   /** The box holding the chip; `/model` clicks its button. */
   chipRef?: Ref<HTMLDivElement> | undefined;
+  /** The agent's own model: the menu's first row goes back to it. */
+  own?: string | null | undefined;
 }
 
 function effortLabel(effort: ReasoningEffort): string {
@@ -60,9 +62,18 @@ export function modelChipLabel(current: string | null, effort: ReasoningEffort |
 }
 
 /** The model menu's rows: the project's chat models, then, for one that reasons, its effort. */
-function modelRows({ current, effort, models }: Omit<ModelChipProps, 'onChoose' | 'chipRef'>, choose: (choice: TurnModelChoice) => void): React.JSX.Element[] {
+function modelRows({ current, effort, models, own }: Omit<ModelChipProps, 'onChoose' | 'chipRef'>, choose: (choice: TurnModelChoice) => void): React.JSX.Element[] {
   const reasoning = models.find((model) => model.name === current)?.supportsReasoning === true;
   const rows: React.JSX.Element[] = [<MenuHeader key="header">{t('workspace.model', 'Model')}</MenuHeader>];
+  if (own !== undefined && own !== null) {
+    rows.push(
+      <MenuRow key="own" data-testid="model-own" onClick={() => choose({ name: own })}>
+        <MenuRowIcon />
+        <MenuRowText>{t('workspace.model.own', 'Agent’s own model ({{model}})', { model: own })}</MenuRowText>
+      </MenuRow>,
+      <MenuDivider key="own-divider" />,
+    );
+  }
   if (models.length === 0) {
     rows.push(
       <MenuRow key="none" disabled>
@@ -98,12 +109,12 @@ function modelRows({ current, effort, models }: Omit<ModelChipProps, 'onChoose' 
   return rows;
 }
 
-export function ModelChip({ current, effort, models, onChoose, chipRef }: ModelChipProps): React.JSX.Element {
+export function ModelChip({ current, effort, models, onChoose, chipRef, own }: ModelChipProps): React.JSX.Element {
   return (
     <Box ref={chipRef} sx={{ display: 'inline-flex', minWidth: 0 }}>
       <ComposerPicker label={t('workspace.model', 'Model')} value={modelChipLabel(current, effort)} testId="model-chip" minMenuWidth="14rem">
         {(close) =>
-          modelRows({ current, effort, models }, (choice) => {
+          modelRows({ current, effort, models, own }, (choice) => {
             close();
             onChoose(choice);
           })

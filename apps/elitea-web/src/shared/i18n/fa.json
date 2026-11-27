@@ -5068,5 +5068,7 @@
   "chat.presence.waitingForYou": "در انتظار شما",
   "chat.presence.waking": "در حال ازسرگیری",
   "chat.presence.working": "در حال کار",
-  "features.chatMessages.ranOutsideSandbox": "خارج از محیط ایزوله اجرا شد"
+  "features.chatMessages.ranOutsideSandbox": "خارج از محیط ایزوله اجرا شد",
+  "chat.participants.model": "مدل در این رشته…",
+  "chat.participants.modelBadge": "مدل در این رشته: {{model}}"
 }

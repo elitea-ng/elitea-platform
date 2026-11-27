@@ -3,20 +3,19 @@
  * agents before the folder's files, an agent pick inserts the text Main routes on, a file pick is unchanged; the To
  * chip names who answers by Main's rule; the Participants tab's Address puts `@Name ` into the composer.
  */
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from '@tanstack/react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
-import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { matchingAgents, requestAddress, useAddressRequests } from './useComposerMentions';
 import type { ThreadAgent } from './useEnsureConversation';
 import { WorkspaceComposer } from './WorkspaceComposer';
-import { toTarget, WorkspaceToChip } from './WorkspaceToChip';
+import { toTarget } from './WorkspaceToChip';
 
 const MIRA: ThreadAgent = { participantId: 11, applicationId: 5, name: 'Mira', versionId: 0, cloud: false };
 const DOCTOR: ThreadAgent = { participantId: 12, applicationId: 6, name: 'CI Doctor', versionId: 0, cloud: true };
@@ -93,23 +92,12 @@ describe('the "@" menu of a team thread (issue 3056)', () => {
   });
 });
 
-describe('the To chip (issue 3056)', () => {
-  it('names the lead, then the agent the text addresses, and is absent with one agent', () => {
+describe('who answers (issue 3056; the footer\'s To chip since #3145)', () => {
+  it('names the lead, then the agent the text addresses, and nobody with one agent', () => {
     expect(toTarget('fix it', AGENTS, LEAD_META, 0)).toEqual({ agent: DOCTOR, isLead: true });
     expect(toTarget('@Mira fix it', AGENTS, LEAD_META, 0)).toEqual({ agent: MIRA, isLead: false });
     expect(toTarget('fix it', AGENTS, {}, 11)).toEqual({ agent: MIRA, isLead: false });
     expect(toTarget('fix it', [MIRA], LEAD_META, 11)).toBeUndefined();
-
-    const onAddress = vi.fn();
-    const { rerender } = renderWithTheme(<WorkspaceToChip draft="" agents={AGENTS} meta={LEAD_META} fallbackParticipantId={0} onAddress={onAddress} />);
-    expect(screen.getByTestId('workspace-to-chip')).toHaveTextContent('To: CI Doctor (lead)');
-    rerender(<WorkspaceToChip draft="@CI Doctor look" agents={AGENTS} meta={{}} fallbackParticipantId={11} onAddress={onAddress} />);
-    expect(screen.getByTestId('workspace-to-chip')).toHaveTextContent('To: CI Doctor');
-    fireEvent.click(screen.getByTestId('workspace-to-chip'));
-    fireEvent.click(screen.getAllByTestId('workspace-to-chip-option')[0]!);
-    expect(onAddress).toHaveBeenCalledWith(MIRA);
-    rerender(<WorkspaceToChip draft="" agents={[MIRA]} meta={LEAD_META} fallbackParticipantId={0} onAddress={onAddress} />);
-    expect(screen.queryByTestId('workspace-to-chip')).toBeNull();
   });
 });
 

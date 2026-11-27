@@ -16,6 +16,7 @@ import { resetConfigForTests } from '@/shared/config/get-config';
 import { SidePanelHarness } from '@/test/sidePanelHarness';
 import { server } from '@/test/setup';
 
+import type { AgentModels } from './agentModels';
 import { ParticipantsTab } from './ParticipantsTab';
 import { executorSettings } from './useThreadTeam';
 
@@ -58,7 +59,7 @@ function serve(participants: readonly unknown[], meta: Record<string, unknown> =
   return calls;
 }
 
-function mount(onAddress = vi.fn()): void {
+function mount(onAddress = vi.fn(), models?: AgentModels): void {
   const turn = { turnId: null, view: replayView([]) };
   const ipc = {
     stopExchange: vi.fn(),
@@ -68,7 +69,7 @@ function mount(onAddress = vi.fn()): void {
   };
   const Page = () => (
     <SidePanelHarness>
-      <ParticipantsTab workspaceId="ws-1" projectId={42} conversationId="77" subject="fix the build" executorLocked={false} onAddress={onAddress} turn={turn} ipc={ipc} />
+      <ParticipantsTab workspaceId="ws-1" projectId={42} conversationId="77" subject="fix the build" executorLocked={false} onAddress={onAddress} turn={turn} ipc={ipc} models={models} />
     </SidePanelHarness>
   );
   const rootRoute = createRootRoute({ component: Page });
@@ -126,7 +127,7 @@ describe("a Local work thread's Participants tab (issue 3055)", () => {
     expect(screen.queryByTestId('side-panel-tab-participants')).toBeNull();
   });
 
-  it('shows each agent\'s logo or avatar pack in the row\'s avatar place, the letter only without either, and no second avatar (#3131)', async () => {
+  it('shows each agent\'s logo or avatar pack in the row\'s avatar place, the default avatar without either, and no second avatar (#3131, #3145)', async () => {
     const media = (sha: string, ext: string) => `/api/v2/agent_media/42/${sha.repeat(32)}.${ext}`;
     const packed = { ...coder, persona: { display_name: 'Coder', avatar_pack_v1: { schema: 'elitea.avatar_pack/v1', slots: { still: { url: media('ab', 'png') }, working: { url: media('cd', 'mp4'), poster_url: media('ab', 'png') } } } } };
     const logo = { ...reviewer, entity_settings: { ...reviewer.entity_settings, icon_meta: { url: '/icons/42/reviewer.png' } } };
@@ -134,14 +135,15 @@ describe("a Local work thread's Participants tab (issue 3055)", () => {
     serve([packed, logo, plain]);
     mount();
     const tab = await screen.findByTestId('side-panel-tab-team');
-    await waitFor(() => expect(within(tab).getAllByTestId('participant-avatar')).toHaveLength(2));
+    await waitFor(() => expect(within(tab).getAllByTestId('participant-avatar')).toHaveLength(3));
     const avatarOf = (id: number) => within(tab).getAllByTestId('participant-avatar').find((node) => node.getAttribute('data-participant-id') === String(id));
     // On the deployment's origin (#3132): the page is served from another one here.
     expect(avatarOf(11)?.querySelector('img')?.getAttribute('src')).toBe(`https://elitea.example${media('ab', 'png')}`);
     expect(avatarOf(12)?.querySelector('img')?.getAttribute('src')).toBe('https://elitea.example/icons/42/reviewer.png');
-    expect(avatarOf(14)).toBeUndefined();
-    // The agent with neither keeps its letter.
-    expect(within(tab).getByText('D')).toBeInTheDocument();
+    // The agent with neither has the shared avatar too (its brand mark), so its live state animates (#3145).
+    expect(avatarOf(14)?.querySelector('[data-testid="chat-message-avatar"]')).not.toBeNull();
+    expect(avatarOf(14)?.querySelector('img')).toBeNull();
+    expect(within(tab).queryByText('D')).toBeNull();
     // The right side keeps the chips and the menu, with no second avatar.
     for (const controls of within(tab).getAllByTestId('participant-lead')) {
       expect(within(controls).queryByTestId('chat-message-avatar')).toBeNull();
@@ -208,5 +210,33 @@ describe('where an agent runs (issue 3055)', () => {
     expect(executorSettings(reviewer, false)).toEqual({ version_id: 10, llm_settings: { model: 'm' } });
     expect(executorSettings(coder, true)).toEqual({ version_id: 9, executor: 'cloud' });
     expect(executorSettings(null, true)).toEqual({ executor: 'cloud' });
+  });
+});
+
+describe('each agent\'s model in the thread (#3145)', () => {
+  it('opens a local agent\'s model from its row, offers none for a cloud agent, and badges only a chosen model', async () => {
+    serve([coder, reviewer]);
+    const edit = vi.fn();
+    const models: AgentModels = {
+      overrideOf: (applicationId) => (applicationId === 5 ? { name: 'gpt-5' } : undefined),
+      choose: vi.fn(),
+      entries: () => [],
+      editing: null,
+      edit,
+      dropPending: vi.fn(),
+    };
+    mount(vi.fn(), models);
+    await screen.findByTestId('side-panel-tab-team');
+    await waitFor(() => expect(screen.getAllByTestId('participant-model-badge')).toHaveLength(1));
+    expect(screen.getByTestId('participant-model-badge')).toHaveTextContent('gpt-5');
+    expect(screen.getByTestId('participant-model-badge')).toHaveAccessibleName('Model in this thread: gpt-5');
+    await openMenu(11);
+    fireEvent.click(await screen.findByTestId('participant-model'));
+    expect(edit).toHaveBeenCalledWith(5);
+    // Reviewer runs in the cloud, on its own version's model.
+    await openMenu(12);
+    expect(screen.queryByTestId('participant-model')).toBeNull();
+    // Thread settings has its place in the tab, above the project instructions.
+    expect(screen.getByRole('heading', { name: 'Thread settings', hidden: true })).toBeInTheDocument();
   });
 });

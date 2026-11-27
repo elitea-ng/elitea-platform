@@ -1292,5 +1292,21 @@
   "workspace.instructions.none": "No AGENTS.md in this folder.",
   "workspace.instructions.respect": "Respect AGENTS.md",
   "workspace.instructions.saveFailed": "The setting could not be saved. Try again.",
-  "workspace.instructions.title": "Project instructions"
+  "workspace.instructions.title": "Project instructions",
+  "workspace.team.noticeClose": "Hide for this thread",
+  "workspace.team.noticeLess": "Show less",
+  "workspace.team.noticeMore": "Learn more",
+  "workspace.to.header": "Send to",
+  "workspace.to.manage": "Manage participants…",
+  "workspace.settings.title": "Thread settings",
+  "workspace.settings.workspace": "Workspace",
+  "workspace.settings.sandbox": "Sandbox",
+  "workspace.settings.sandboxed": "Sandboxed",
+  "workspace.settings.subAgents": "Sub-agents",
+  "workspace.settings.subAgentsValue": "Read-only, offered",
+  "workspace.settings.models": "Models",
+  "workspace.settings.modelCloud": "Its own model (cloud)",
+  "workspace.settings.modelPinned": "{{model}} (pinned)",
+  "workspace.settings.context": "Context",
+  "workspace.model.own": "Agent’s own model ({{model}})"
 }

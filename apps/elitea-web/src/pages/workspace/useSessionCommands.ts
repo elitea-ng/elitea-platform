@@ -33,8 +33,11 @@ export interface SessionCommands {
   continueTurn: () => void;
   /** The box holding the agent picker; `/agent` opens it. */
   agentRef: RefObject<HTMLDivElement | null>;
-  /** The box holding the model chip; `/model` opens it (no chip: the agent's model is fixed here). */
-  modelRef: RefObject<HTMLDivElement | null>;
+  /**
+   * `/model`: the composer opens the lead's (else its agent's) model chip in Thread settings and says `true`; `false`
+   * or none: the agent's model is fixed here (#3145).
+   */
+  modelOpen: RefObject<(() => boolean) | null>;
   /** `/compact` was asked for: the next message's turn compacts the context first. */
   compactNext: boolean;
   /** The turn that compacts started. */
@@ -59,7 +62,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
   const [continueRequest, setContinueRequest] = useState(0);
   const [compactNext, setCompactNext] = useState(false);
   const agentRef = useRef<HTMLDivElement>(null);
-  const modelRef = useRef<HTMLDivElement>(null);
+  const modelOpen = useRef<(() => boolean) | null>(null);
 
   const actions: Record<WorkspaceCommandId, () => void> = {
     new: () => {
@@ -76,9 +79,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     steps: () => undefined,
     agent: () => agentRef.current?.querySelector<HTMLElement>('button')?.click(),
     model: () => {
-      const chip = modelRef.current?.querySelector<HTMLElement>('button');
-      if (chip === undefined || chip === null) setNotice('modelFixed');
-      else chip.click();
+      if (modelOpen.current?.() !== true) setNotice('modelFixed');
     },
     clear: () => turn.clear(),
     compact: () => {
@@ -103,7 +104,7 @@ export function useSessionCommands(selection: AgentSelection, turn: WorkspaceTur
     continueRequest,
     continueTurn: () => setContinueRequest((value) => value + 1),
     agentRef,
-    modelRef,
+    modelOpen,
     compactNext,
     compactSent: () => {
       setCompactNext(false);

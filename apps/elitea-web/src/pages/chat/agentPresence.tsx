@@ -17,7 +17,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, 
 
 import Box from '@mui/material/Box';
 import type { Theme } from '@mui/material/styles';
-import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 
 import {
@@ -32,7 +31,7 @@ import {
   type ActivityLabels,
   type AvatarStates,
 } from '@elitea/client-core/conversation';
-import { AgentAvatar, participantIconUrl, useAgentAvatarStates } from '@/features/chat-messages';
+import { AgentAvatar, participantIconUrl } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
 import type { ParticipantRowView } from './ParticipantRowControls';
@@ -56,16 +55,17 @@ function agentMediaOf(participant: unknown): { iconUrl: string | undefined; pack
 const ROW_AVATAR_SIZE = '1.5rem';
 
 /**
- * The participants panel's `renderAgentAvatar` slot (#3131): an agent row's logo or avatar pack takes the row's avatar
- * place at full size, animating with the agent's state as in chat (only the active agent, never under reduced motion).
- * An agent with neither keeps the row's letter (`null`). The state's label stays on the right, without a second avatar.
+ * The participants panel's `renderAgentAvatar` slot (#3131): every agent row's avatar is the shared `AgentAvatar` at the
+ * row's avatar place, animating with the agent's live state as in chat (only the active agent, never under reduced
+ * motion; #3145). Its still is the agent's logo or avatar pack, else the default avatar (the brand mark), so an agent
+ * without either animates too. The row's box lets the motion's ring draw outside it. The state's label stays on the
+ * right, without a second avatar.
  */
 export function agentAvatarRenderer(participants: readonly unknown[] | undefined, rows: readonly ParticipantRowView[]): (props: { participantId: number }) => ReactNode {
   return ({ participantId }) => {
     const participant = (participants ?? []).find((candidate) => participantRowId(candidate) === participantId);
     if (participant === undefined) return null;
     const { iconUrl, pack } = agentMediaOf(participant);
-    if (iconUrl === undefined && pack === undefined) return null;
     const motion = rows.find((row) => row.participantId === participantId)?.motion ?? 'still';
     return (
       <Box data-testid="participant-avatar" data-participant-id={participantId} data-motion={motion} sx={{ display: 'flex' }}>
@@ -126,25 +126,6 @@ export function agentRowViews(agents: readonly PresenceAgent[], states: AvatarSt
 export function useAgentRowViews(agents: readonly PresenceAgent[], states: AvatarStates, leadParticipantId: number): ParticipantRowView[] {
   const reducedMotion = useMediaQuery(REDUCED_MOTION, { noSsr: true });
   return useMemo(() => agentRowViews(agents, states, leadParticipantId, reducedMotion), [agents, states, leadParticipantId, reducedMotion]);
-}
-
-/**
- * The thread's active agent and its label ("Mira · Running cargo") for a header, with its avatar animated (still under
- * reduced motion); nothing while no agent works or in a thread of one agent.
- */
-export function ActiveAgentStatus({ conversationKey, agents }: { readonly conversationKey: string; readonly agents: readonly PresenceAgent[] }): ReactNode {
-  const states = useAgentAvatarStates(conversationKey === '' ? undefined : conversationKey);
-  const rows = useAgentRowViews(agents, states, 0);
-  const now = newestSince(states);
-  const active = agents.length < 2 ? undefined : activeAnimatedParticipant(states, now);
-  const row = rows.find((candidate) => candidate.participantId === active);
-  if (row?.label === undefined) return null;
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }} data-testid="active-agent-status" data-participant-id={row.participantId}>
-      <AgentAvatar motion={row.motion} size="1rem" />
-      <Typography variant="labelSmall" color="text.secondary" noWrap>{`${row.name} · ${row.label}`}</Typography>
-    </Box>
-  );
 }
 
 type Announced = Map<number, { label: string; at: number }>;

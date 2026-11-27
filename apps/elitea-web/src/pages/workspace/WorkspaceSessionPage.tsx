@@ -44,6 +44,7 @@ import { ForkNotices } from './forkNotices';
 import { CONVERSATION_COLUMN as COLUMN } from '@/shared/ui/conversation-column';
 
 import { EarlierTurns, Exchanges, ThreadIntro } from './sessionParts';
+import { useSessionAgentModels } from './agentModels';
 import { ParticipantsTab } from './ParticipantsTab';
 import { PendingFirstMessage } from './PendingFirstMessage';
 import { SessionInspector } from './SessionPanel';
@@ -126,6 +127,9 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   // ⋯ ▸ Create Agent… and the palette's "Create agent…" (ADR-0037).
   const [createAgentOpen, setCreateAgentOpen] = useState(false);
   const openCreateAgent = (): void => setCreateAgentOpen(true);
+  // Each agent's model in this thread (#3145), and where the Participants tab shows "Thread settings".
+  const models = useSessionAgentModels(projectId, conversationId, turn, session.history, raw.agentId);
+  const [settingsHost, setSettingsHost] = useState<HTMLElement | null>(null);
 
   return (
     // Pinned to the frame's scroll box (which is `position: relative`): the
@@ -184,7 +188,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           </Box>
         </Box>
         <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} canBranch={workspace.is_git && workspace.parent_id === undefined} />
+          <ThreadComposer ipc={ipc} workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} session={session} turn={turn} handoff={handoff} cloud={cloud} skills={skills} canBranch={workspace.is_git && workspace.parent_id === undefined} models={models} settingsHost={settingsHost} />
         </Box>
       </Box>
       <SessionInspector
@@ -204,7 +208,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
         conversationId={conversationId}
         cloudBrowserSession={cloudBrowser}
       />
-      <ParticipantsTab workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} subject={subject} executorLocked={handoff.offLaptop} onAddress={(name) => requestAddress(conversationId, name)} turn={turn} ipc={ipc} selection={session.selection} />
+      <ParticipantsTab workspaceId={workspace.id} projectId={projectId} conversationId={conversationId} subject={subject} executorLocked={handoff.offLaptop} onAddress={(name) => requestAddress(conversationId, name)} turn={turn} ipc={ipc} selection={session.selection} models={models} settingsRef={setSettingsHost} />
       <HandoffDialogs handoff={handoff} workspaceId={workspace.id} projectId={projectId} title={subject} />
       <CreateAgentDialog
         open={createAgentOpen}

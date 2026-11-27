@@ -176,9 +176,9 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
 }
 
 /** The message (and agents) handed to a new thread of the workspace; none for an existing thread. */
-function handedTo(workspaceId: string, conversationId: string): { message: HandedFirstMessage | undefined; seed: SelectionSeed | undefined } {
+function handedTo(workspaceId: string, conversationId: string): { message: HandedFirstMessage | undefined; seed: SelectionSeed | undefined; choices: PreThreadChoices | undefined; planMode: boolean } {
   const message = conversationId === '' ? peekHanded(workspaceId) : undefined;
-  return { message, seed: message?.seed };
+  return { message, seed: message?.seed, choices: message?.choices, planMode: message?.choices?.planMode === true };
 }
 
 export function useThreadSession({ ipc, workspace, projectId, conversationId, onAdopt }: ThreadSessionInput): ThreadSession {
@@ -246,7 +246,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const recordedPlans = useMemo(() => recordedPlansOf(localTurns), [localTurns]);
   // `/undo` acts on the last turn, as before: only when it changed files.
   const undoTurnId = done !== undefined && done.changedFiles > 0 ? turn.turnId : null;
-  const commands = useSessionCommands(selection, turn, undoTurnId !== null, handed.message?.choices?.planMode === true);
+  const commands = useSessionCommands(selection, turn, undoTurnId !== null, handed.planMode);
 
   const run = (command: WorkspaceCommandId): void => {
     if ((command === 'clear' || command === 'new') && !turn.busy) {
@@ -301,7 +301,7 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     rebind,
     createAgent,
     first,
-    handedChoices: handed.message?.choices,
+    handedChoices: handed.choices,
     canSend,
     sendError,
     send,

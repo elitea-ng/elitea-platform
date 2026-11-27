@@ -187,6 +187,8 @@ test('a thread run by a team writes its lead and starts on it', async ({ page })
   await expect(chip).toContainText('Review crew · To: Reviewer (lead)');
   const notice = page.getByTestId('workspace-team-notice');
   await expect(notice).toContainText('goes to Reviewer (lead)');
+  // One line (#3145): where the members run is behind "Learn more".
+  await notice.getByTestId('workspace-team-notice-more').click();
   await expect(notice).toContainText('Only an agent that cannot run on this computer runs in the cloud without the folder');
 
   await page.getByRole('textbox').fill('fix the flaky test');
@@ -242,7 +244,7 @@ test('the @ menu addresses an agent, and Stop exchange starts no later agent', a
   await expect(menu.getByRole('option').first()).toHaveAccessibleName('@Reviewer');
   await menu.getByRole('option', { name: '@Reviewer' }).click();
   await input.pressSequentially('check the fix');
-  await expect(page.getByTestId('workspace-to-chip')).toContainText('Reviewer');
+  await expect(chip).toContainText('To: Reviewer');
   await page.getByTestId('workspace-send-button').click();
   await expect.poll(async () => (await h.started()).length).toBe(2);
   expect((await h.started())[1]?.['addressed_to']).toEqual([88]);

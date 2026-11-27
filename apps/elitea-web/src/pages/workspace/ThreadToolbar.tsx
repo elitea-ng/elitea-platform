@@ -2,10 +2,10 @@
  * The thread's toolbar, a native unified title bar: sidebar toggle, the title
  * (folder ▸ thread, a button that opens the folder's path card), an optional
  * centre slot (the activity island), and at the trailing edge the inspector
- * toggle and a ⋯ menu (its Rename Thread turns the title into a field). Everything else that used to sit here lives where a
- * native app keeps it: the agent, mode and run location in the composer's
- * footer; the index in the inspector (its state as an icon in the composer's footer, `IndexStatusIcon`); the rest
- * in the Thread and Folder menus. The centre island shows only what runs now, never a resting state.
+ * toggle and a ⋯ menu (its Rename Thread turns the title into a field). Nothing else (#3145): the mode, the agents
+ * and "To completion" are the composer's; the folder's sandbox, where the thread works, its models and the rest of its
+ * settings are the Participants tab's "Thread settings"; each agent's live state is its row's avatar there. The centre
+ * island is the one run status: it shows only what runs now, never a resting state.
  */
 import { useState } from 'react';
 
@@ -24,18 +24,13 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import { TrustBadge } from '@/features/folder-trust';
 import { readThreads, threadNames, threadsQueryKey } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { MenuDivider, MenuHeader, MenuRow, MenuRowText, pressToOpen } from '@/shared/ui/native-menu';
 import { ActivityIsland, conversationLink, copyText as copy, selectInspectorShown, ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
-import { ActiveAgentStatus } from '@/pages/chat/agentPresence';
-
 import { PanelToggle } from './sessionParts';
-import { useThreadFloor } from './useComposerMentions';
-import type { ThreadAgent } from './useEnsureConversation';
 
 export interface ThreadToolbarProps {
   workspace: Workspace;
@@ -159,8 +154,6 @@ function ThreadTitle(props: ThreadToolbarProps & RenameProps): React.JSX.Element
           {title}
         </Typography>
       </ButtonBase>
-      {/* A worktree's state is its parent's (`inherited_from`): the host answers for the root folder. */}
-      <TrustBadge workspaceId={workspace.id} workspaceName={workspace.name} />
       <Popover
         open={open}
         anchorEl={anchor}
@@ -253,14 +246,6 @@ function Overflow({ conversationId, onIndexSettings, onFork, onCreateAgent, onRe
   );
 }
 
-/** The thread's active agent and what it does (ADR-0061 decision 4c), in a thread of several agents. */
-function ThreadAgentStatus({ projectId, conversationId }: { readonly projectId: number; readonly conversationId: string }): React.JSX.Element {
-  const floor = useThreadFloor(projectId, conversationId);
-  return <ActiveAgentStatus conversationKey={conversationId} agents={floor?.agents ?? NO_AGENTS} />;
-}
-
-const NO_AGENTS: readonly ThreadAgent[] = [];
-
 export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
   // Shown whenever the inspector is not on screen: hidden, or every one of the thread's tabs closed.
   const inspectorShown = useDesktopLayout(selectInspectorShown);
@@ -282,7 +267,6 @@ export function ThreadToolbar(props: ThreadToolbarProps): React.JSX.Element {
         <Box sx={{ flex: '0 1 auto', minWidth: 0 }}>
           <ThreadTitle {...props} renaming={renaming} onRenamingChange={setRenaming} />
         </Box>
-        <ThreadAgentStatus projectId={props.projectId} conversationId={props.conversationId} />
         <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
           <ActivityIsland />
         </Box>
