@@ -386,12 +386,13 @@ test.describe('J14b: the agent publish plane', () => {
       // The preview names what is about to be created — the step that lets
       // someone notice they picked the wrong file.
       await expect(page.getByTestId('agents-import-dialog')).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByTestId('agents-import-dialog').getByText(name)).toBeVisible();
+      // A single agent's preview is its header (issue 3142): the name is the heading.
+      await expect(page.getByTestId('agents-import-dialog').getByRole('heading', { name })).toBeVisible();
 
       const importResponse = page.waitForResponse(
         (response) => response.url().includes('/import_wizard/') && response.request().method() === 'POST',
       );
-      await page.getByRole('button', { name: 'Import' }).click();
+      await page.getByTestId('agents-import-confirm').click();
       const imported = await importResponse;
       expect([200, 201, 207], await imported.text()).toContain(imported.status());
 
