@@ -43,7 +43,7 @@ export function oxlintArgs(config) {
 }
 
 /** Kinds counted now (ADR-0062 decisions 3.4 and 4). A message names its kind as `[kind]`. */
-export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch', 'legacy-palette', 'page-h1', 'mui-table'];
+export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch', 'legacy-palette', 'page-h1', 'mui-table', 'status-chip'];
 
 const KIND_RE = /\[([a-z][a-z0-9-]*)\]/;
 

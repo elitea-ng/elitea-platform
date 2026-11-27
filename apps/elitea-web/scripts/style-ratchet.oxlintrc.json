@@ -38,6 +38,9 @@
     "elitea/legacy-palette-id": "error",
     // ADR-0062 decision 4: a page h1 comes from PageHeader in shared/ui.
     "elitea/page-h1": "error",
+    // ADR-0062 decision 4: a status comes from StatusChip in shared/ui; only a
+    // coloured Chip is counted (a tag or a field value has no colour).
+    "elitea/status-chip": "error",
     // R-T14: Dialog and Switch go through their shared/ui wrappers; ADR-0062
     // decision 4: a table is GridTable from shared/ui (DataGrid is not counted,
     // D35 keeps two tables on it).
@@ -90,7 +93,7 @@
     {
       // The wrappers themselves.
       "files": ["**/shared/ui/**"],
-      "rules": { "no-restricted-imports": "off", "elitea/page-h1": "off" }
+      "rules": { "no-restricted-imports": "off", "elitea/page-h1": "off", "elitea/status-chip": "off" }
     },
     {
       // The brand layer maps legacy ids to MUI and to the roles; it is not

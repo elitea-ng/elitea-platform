@@ -83,6 +83,10 @@ describe('kindOf', () => {
     expect(kindOf({ message: '[mui-table] use GridTable from shared/ui/grid-table' })).toBe('mui-table');
   });
 
+  it('reads the status kind', () => {
+    expect(kindOf({ message: '[status-chip] a status comes from StatusChip (shared/ui/status-chip)' })).toBe('status-chip');
+  });
+
   it('reads a kind with a digit in its name', () => {
     expect(kindOf({ message: '[page-h1] a page title comes from PageHeader' })).toBe('page-h1');
   });
@@ -203,7 +207,7 @@ describe('totals and formatting', () => {
     expect(formatCounts(counts)).toEqual([
       'src/app: mui-dialog 1',
       'src/features/foo: spacing-rem 1',
-      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0, legacy-palette 0, page-h1 0, mui-table 0',
+      'total: spacing-rem 1, spacing-px 0, spacing-off-scale 0, mui-dialog 1, mui-switch 0, legacy-palette 0, page-h1 0, mui-table 0, status-chip 0',
     ]);
   });
 
