@@ -32,9 +32,11 @@ COPY scripts/brand/ /build/scripts/brand/
 COPY brand/elitea/ /build/brand/elitea/
 COPY brand/sample/ /build/brand/sample/
 COPY apps/elitea-web/scripts/brand-web.mjs ./scripts/
-# vite.config.ts imports the blueprint gallery's plugin (issue 3137) at the top;
-# the admin build never runs it, and it loads scripts/blueprints/build.mjs only
-# when it does, so the plugin file alone resolves the import.
+# vite.config.ts imports the blueprint gallery's plugin (issue 3137). The admin
+# build never runs it, but bundling the config resolves the plugin's import of
+# scripts/blueprints/build.mjs (Node built-ins only), so both are copied; the
+# blueprints/ tree itself is not needed here.
+COPY scripts/blueprints/ /build/scripts/blueprints/
 COPY apps/elitea-web/scripts/vite-blueprints.mjs ./scripts/
 ARG ELITEA_BRAND=""
 ENV ELITEA_BRAND=${ELITEA_BRAND}
