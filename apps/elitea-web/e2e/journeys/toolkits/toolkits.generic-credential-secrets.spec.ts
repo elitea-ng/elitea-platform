@@ -14,6 +14,7 @@ import { expect, test, request as apiRequest, type APIRequestContext, type Page 
 
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID } from '../../fixtures/api';
+import { openMuiSelect } from '../../fixtures/muiSelect';
 
 const RUN_ID = String(Date.now()).slice(-6);
 const CREDENTIAL_CREATE_ROUTE = 'credentials/create-credential';
@@ -71,7 +72,7 @@ const CREATE_SECRET_OPTION_NAME = /^(Create new secret|New (Project|Private) Sec
 /** Switches the Access Token field to Secret mode and opens its saved-secret dropdown. */
 async function openSecretDropdown(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Secret', exact: true }).click();
-  await page.getByRole('combobox').click();
+  await openMuiSelect(page.getByRole('combobox'));
   await expect(page.getByRole('option', { name: CREATE_SECRET_OPTION_NAME })).toBeVisible({ timeout: 10_000 });
 }
 
@@ -122,7 +123,7 @@ test('ELITEA-1073/1070/1071: the "Create new secret" shortcut opens Settings →
 
   await page.getByRole('button', { name: 'Refresh secrets' }).click();
 
-  await page.getByRole('combobox').click();
+  await openMuiSelect(page.getByRole('combobox'));
   await expect(page.getByRole('option', { name: secretName })).toBeVisible({ timeout: 15_000 });
   await page.getByRole('option', { name: secretName }).click();
   // The Select's display shows the MATCHING option's own label (the secret's
@@ -270,7 +271,7 @@ test.describe('as viewer', () => {
     // dropdown opening at all (the saved secret's own option, the one thing
     // guaranteed present for every persona once one secret exists).
     await page.getByRole('button', { name: 'Secret', exact: true }).click();
-    await page.getByRole('combobox').click();
+    await openMuiSelect(page.getByRole('combobox'));
     await expect(page.getByRole('option', { name: secretName })).toBeVisible({ timeout: 10_000 });
 
     // No CREATE section: `configuration.secrets.secret.create` is revoked for

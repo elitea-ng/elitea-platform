@@ -51,10 +51,11 @@
  * the constant below is named after the ORDER the nodes were added rather than
  * after the id they were minted with.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import { BASE_URL } from '../../playwright.config';
 import { AUTOTEST_PREFIX, expectStoredAssistantAnswer, fillComposer } from '../fixtures/api';
+import { openMuiSelect } from '../fixtures/muiSelect';
 import { COMPILER_LEGAL_NODE_ID, ensureChatPanelExpanded, foldEditorPanes, parseStoredGraph, readStoredPipelineVersion } from '../fixtures/pipelines';
 
 const APPLICATIONS_RE = /\/elitea_core\/applications\/prompt_lib\/(\d+)/;
@@ -104,28 +105,6 @@ async function renameNodeThroughCard(page: Page, fromId: string, toId: string): 
 }
 
 /**
- * Open a `SingleSelect` that lives INSIDE a React Flow node, by keyboard.
- *
- * A `click()` on these two dropdowns focuses them and does NOT open the menu —
- * the canvas handles mouse-down on a node itself (React Flow's drag layer),
- * and the escape hatch is the `nodrag` class, which every sibling field on
- * this card carries and `SimpleLLMInputItem`'s two dropdowns do not. That is a
- * finding about the app, not about Playwright: a real user cannot open them
- * with the mouse either. It is measured and recorded in
- * `chat.pipeline-authored.spec.ts`'s own helper; this file drives the surface
- * as it is rather than reaching across into another unit's files to change it.
- *
- * `focus()` dispatches no mouse event, and MUI's `Select` opens on Enter. The
- * options render in a portal at the document root, outside the canvas, so
- * clicking THEM is fine.
- */
-async function openSelect(select: Locator): Promise<void> {
-  await select.focus();
-  await select.press('Enter');
-  await expect(select.page().getByRole('listbox')).toBeVisible({ timeout: 10_000 });
-}
-
-/**
  * Point one LLM node's `task` prompt slot at the turn's own text, through the
  * node card's own two dropdowns.
  *
@@ -156,14 +135,14 @@ async function mapTaskToTurnInput(page: Page, nodeId: string): Promise<void> {
   await expect(panel).toBeVisible({ timeout: 10_000 });
   const typeSelects = panel.getByRole('combobox', { name: 'Type' });
   await expect(typeSelects).toHaveCount(3, { timeout: 20_000 });
-  await openSelect(typeSelects.nth(1));
+  await openMuiSelect(typeSelects.nth(1));
   await page.getByRole('option', { name: 'Variable', exact: true }).click();
 
   // Only the `task` row is a variable inside this drawer now, so this names
   // exactly one field.
   const valueSelect = panel.getByRole('combobox', { name: 'Value' });
   await expect(valueSelect).toHaveCount(1, { timeout: 10_000 });
-  await openSelect(valueSelect);
+  await openMuiSelect(valueSelect);
   await page.getByRole('option', { name: 'input', exact: true }).click();
 }
 

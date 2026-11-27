@@ -31,6 +31,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { BASE_URL, STORAGE_STATE } from '../../../playwright.config';
 import { API_BASE, AUTOTEST_PREFIX, DEFAULT_PROJECT_ID, clickCreateButton } from '../../fixtures/api';
 import { createConfiguration, deleteConfiguration } from '../../fixtures/configurations';
+import { openMuiSelect } from '../../fixtures/muiSelect';
 import { readsPlatformFlags } from '../../fixtures/platformFlags';
 
 readsPlatformFlags(test);
@@ -183,28 +184,13 @@ function ahaConfigPicker(page: Page) {
 }
 
 /**
- * Opens the Aha Configuration picker from the keyboard and waits for its
- * listbox (#3156).
- *
- * Not `picker.click()`. MUI's `Select` opens on the trigger's MOUSEDOWN and
- * arms an "opening mouseup" selection: if the matching mouseup comes more than
- * 200 ms later (400 ms when nothing is selected), it lands on whichever option
- * the menu has put under the pointer and CLICKS it, the press-drag-release
- * gesture a native select has. A real hand releases well within that window.
- * Playwright sends mousedown, waits for the page to process it (which here
- * includes rendering every saved credential row, a list other workers keep
- * seeding), and only then sends mouseup. On a loaded webkit runner that gap
- * passed 200 ms, so the mouseup picked a random saved row and closed the menu.
- * The next "New project credentials" click then had no menu to land on, and no
- * tab ever opened. Focus plus Enter sends no mouse event to the trigger, so
- * that path cannot fire. This is the same pattern
- * `streaming/chat.pipeline-multinode.spec.ts`'s `openSelect` uses.
+ * Opens the Aha Configuration picker from the keyboard, never by clicking it
+ * (#3156). A click races MUI's opening-mouseup selection: it picked a random
+ * saved row and closed the menu, so AHA-3's "New project credentials" click
+ * found no menu. See `fixtures/muiSelect.ts` for the full mechanism.
  */
 async function openAhaConfigPicker(page: Page): Promise<void> {
-  const picker = ahaConfigPicker(page);
-  await picker.focus();
-  await picker.press('Enter');
-  await expect(page.getByRole('listbox')).toBeVisible({ timeout: 10_000 });
+  await openMuiSelect(ahaConfigPicker(page));
 }
 
 /**
@@ -367,7 +353,10 @@ test('AHA-3: the Aha Configuration picker offers CREATE + SAVED sections, create
   // that tab while this one stays on the form.
   // The option is clicked inside the open listbox, never the trigger, so the
   // mousedown lands on the option itself and MUI's click handler opens the tab
-  // synchronously, inside the user gesture.
+  // synchronously, inside the user gesture. `role=option` exists only while
+  // the CREATE rows stay direct `MenuItem` children of the Select
+  // (`src/features/credentials/ui/credentialsSelectMenuItems.tsx` records why
+  // a wrapper breaks that); this locator depends on that structure.
   await openAhaConfigPicker(page);
   const createProjectOption = page.getByRole('listbox').getByRole('option', { name: /New project .*credentials/i });
   const [createTab] = await Promise.all([
