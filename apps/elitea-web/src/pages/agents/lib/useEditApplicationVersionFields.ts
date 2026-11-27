@@ -9,6 +9,16 @@ import { areOutputContractsEqual, readOutputContract } from '@/shared/ui/OutputC
 
 import type { AvatarPack } from '@elitea/client-core/conversation';
 
+import {
+  areMetaBlocksEqual,
+  metaBlockProblems,
+  readMetaBlocks,
+  type MetaBlock,
+  type MetaBlockKey,
+  type MetaBlocks,
+  type MetaProblems,
+  type TierRunCaps,
+} from './agentMetaBlocks';
 import { areAvatarPacksEqual, avatarPackDraftOf } from './avatarPackDraft';
 
 /**
@@ -101,6 +111,12 @@ export interface EditApplicationVersionFields {
    * pack; `null` for none. Sent only when edited, like the soul.
    */
   readonly avatarPack: AvatarPack | null;
+  /**
+   * Issue 3137 — the Heartbeat, Memory, Workforce and Run caps controls'
+   * blocks of `meta` (`agentMetaBlocks.ts`). Optional so a caller with no
+   * live editor state keeps the stored blocks.
+   */
+  readonly metaBlocks?: MetaBlocks | undefined;
 }
 
 export interface EditApplicationVersionFieldsState {
@@ -118,7 +134,13 @@ export interface EditApplicationVersionFieldsState {
   readonly setSoul: (soul: AgentSoulDraft) => void;
   /** Replaces the Avatar tab's pack draft (ADR-0050 decision 6). */
   readonly setAvatarPack: (pack: AvatarPack | null) => void;
-  /** False while the soul draft holds something Main would refuse, so Save waits (ADR-0050). */
+  /** Replaces one meta block of the issue 3137 controls (`null` removes it). */
+  readonly setMetaBlock: (key: MetaBlockKey, block: MetaBlock | null) => void;
+  /** The platform's run caps at the agent's tier, which the run caps the author sets may not pass. */
+  readonly setTierRunCaps: (caps: TierRunCaps) => void;
+  /** What the meta block controls hold that Main would refuse, by path; the controls show each one. */
+  readonly metaProblems: MetaProblems;
+  /** False while the soul draft or a meta block holds something Main would refuse, so Save waits (ADR-0050, issue 3137). */
   readonly isSoulValid: boolean;
   /** Feeds the page's `useUnsavedChangesNavBlocker` — RHF's own `isDirty` cannot see these fields (#133's create-page half made the same point). */
   readonly isDirty: boolean;
@@ -165,6 +187,7 @@ function fromVersion(version: ApplicationVersionDetail | undefined): EditApplica
     citations: citationsOf(metaRecord['citations']),
     contextBlock: contextBlockForSave(readContextBlock(metaRecord['context'])),
     ...personaDraftsOf(version),
+    metaBlocks: readMetaBlocks(metaRecord),
   };
 }
 
@@ -195,7 +218,8 @@ function areContentControlsEqual(a: EditApplicationVersionFields, b: EditApplica
     (a.citations ?? null) === (b.citations ?? null) &&
     areContextBlocksEqual(a.contextBlock ?? null, b.contextBlock ?? null) &&
     areSoulDraftsEqual(a.soul, b.soul) &&
-    areAvatarPacksEqual(a.avatarPack, b.avatarPack)
+    areAvatarPacksEqual(a.avatarPack, b.avatarPack) &&
+    areMetaBlocksEqual(a.metaBlocks ?? readMetaBlocks(undefined), b.metaBlocks ?? readMetaBlocks(undefined))
   );
 }
 
@@ -345,10 +369,16 @@ export function useEditApplicationVersionFields(
     setFields((previous) => ({ ...previous, avatarPack }));
   }, []);
 
+  const setMetaBlock = useCallback((key: MetaBlockKey, block: MetaBlock | null) => {
+    setFields((previous) => ({ ...previous, metaBlocks: { ...(previous.metaBlocks ?? readMetaBlocks(undefined)), [key]: block } }));
+  }, []);
+  const [tierRunCaps, setTierRunCaps] = useState<TierRunCaps>({});
+
   const markSaved = useCallback(() => setBaseline(fields), [fields]);
 
   const isDirty = useMemo(() => !areEqual(fields, baseline), [fields, baseline]);
-  const isSoulValid = useMemo(() => soulDraftProblems(fields.soul).size === 0, [fields.soul]);
+  const metaProblems = useMemo(() => metaBlockProblems(fields.metaBlocks ?? readMetaBlocks(undefined), tierRunCaps), [fields.metaBlocks, tierRunCaps]);
+  const isSoulValid = useMemo(() => soulDraftProblems(fields.soul).size === 0 && metaProblems.size === 0, [fields.soul, metaProblems]);
 
-  return { fields, applyFieldChange, setTags, setSoul, setAvatarPack, isSoulValid, isDirty, markSaved };
+  return { fields, applyFieldChange, setTags, setSoul, setAvatarPack, setMetaBlock, setTierRunCaps, metaProblems, isSoulValid, isDirty, markSaved };
 }

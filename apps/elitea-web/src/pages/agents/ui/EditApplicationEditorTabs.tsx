@@ -47,7 +47,7 @@
  * no "Restore" action (no live chat pane exists on this page to restore
  * into), same as toolkits.
  */
-import { useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useState, type ComponentType, type ReactNode, type SyntheticEvent } from 'react';
 
 import Box from '@mui/material/Box';
 import type { SxProps, Theme } from '@mui/material/styles';
@@ -62,6 +62,10 @@ import { BaseTab } from '@/shared/ui/BaseTab';
 import { BaseTabs } from '@/shared/ui/BaseTabs';
 
 import { EvaluationRequestPublish } from './EvaluationRequestPublish';
+import { HeartbeatScheduleSection } from './meta/HeartbeatScheduleSection';
+import { MemorySettingsSection } from './meta/MemorySettingsSection';
+import type { MetaSectionProps } from './meta/metaControls';
+import { WorkforceControlsSection } from './meta/WorkforceControlsSection';
 
 const EDITOR_TABS = {
   configuration: 'configuration',
@@ -82,6 +86,27 @@ const stripSx: SxProps<Theme> = {
 };
 
 const historyPanelSx: SxProps<Theme> = { height: '35rem' };
+
+/** A tab with an editor section (issue 3137) above its panel; both mount only while the tab is open. */
+function MetaTabBody({
+  active,
+  metaControls,
+  Section,
+  panel,
+}: {
+  readonly active: boolean;
+  readonly metaControls: MetaSectionProps | undefined;
+  readonly Section: ComponentType<MetaSectionProps>;
+  readonly panel: ReactNode;
+}): ReactNode {
+  if (!active) return null;
+  return (
+    <>
+      {metaControls !== undefined && <Section {...metaControls} />}
+      {panel}
+    </>
+  );
+}
 
 export interface EditApplicationEditorTabsProps {
   readonly projectId: string | undefined;
@@ -104,10 +129,16 @@ export interface EditApplicationEditorTabsProps {
   readonly avatarPanel?: ReactNode;
   /** #955 — this agent's own versions, so the History tab can name which one produced each run. */
   readonly versions?: readonly { readonly id: string | number; readonly name: string }[] | undefined;
+  /**
+   * Issue 3137 — the version state the Heartbeat schedule, Memory settings and
+   * Workforce controls edit (meta blocks saved by the page's one Save). Absent
+   * on a read-only view: the tabs then show only their panels.
+   */
+  readonly metaControls?: MetaSectionProps | undefined;
 }
 
 export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps): ReactNode {
-  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions } =
+  const { projectId, applicationId, applicationVersionId, configurationPanel, personaPanel, avatarPanel, versions, metaControls } =
     props;
   const [tab, setTab] = useState<EditorTab>(EDITOR_TABS.configuration);
 
@@ -191,13 +222,28 @@ export function EditApplicationEditorTabs(props: EditApplicationEditorTabsProps)
         )}
       </Box>
       <Box hidden={tab !== EDITOR_TABS.memory}>
-        {tab === EDITOR_TABS.memory && <MemoryPanel projectId={projectId} applicationId={applicationId} />}
+        <MetaTabBody
+          active={tab === EDITOR_TABS.memory}
+          metaControls={metaControls}
+          Section={MemorySettingsSection}
+          panel={<MemoryPanel projectId={projectId} applicationId={applicationId} />}
+        />
       </Box>
       <Box hidden={tab !== EDITOR_TABS.heartbeat}>
-        {tab === EDITOR_TABS.heartbeat && <HeartbeatPanel projectId={projectId} applicationId={applicationId} />}
+        <MetaTabBody
+          active={tab === EDITOR_TABS.heartbeat}
+          metaControls={metaControls}
+          Section={HeartbeatScheduleSection}
+          panel={<HeartbeatPanel projectId={projectId} applicationId={applicationId} />}
+        />
       </Box>
       <Box hidden={tab !== EDITOR_TABS.workforce}>
-        {tab === EDITOR_TABS.workforce && <WorkforcePanel projectId={projectId} applicationId={applicationId} />}
+        <MetaTabBody
+          active={tab === EDITOR_TABS.workforce}
+          metaControls={metaControls}
+          Section={WorkforceControlsSection}
+          panel={<WorkforcePanel projectId={projectId} applicationId={applicationId} />}
+        />
       </Box>
       <Box hidden={tab !== EDITOR_TABS.history} sx={historyPanelSx}>
         {tab === EDITOR_TABS.history && (

@@ -31,6 +31,7 @@ import type { EditApplicationVersionFieldsState } from '../lib/useEditApplicatio
 import { useSkillNav } from '../lib/useSkillNav';
 import { EditApplicationToolsPanel } from './EditApplicationToolsPanel';
 import { EditApplicationTriggersPanel } from './EditApplicationTriggersPanel';
+import { RunCapsSection } from './meta/RunCapsSection';
 
 const mcpTagName = 'mcp';
 
@@ -126,6 +127,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
     onModelSettingsChange,
   } = props;
   const locked = props.definitionLocked === true;
+  const definitionDisabled = isEditorDisabled || locked;
   const skillNav = useSkillNav();
   const tags = versionFields.fields.tags;
   const setTags = versionFields.setTags;
@@ -149,7 +151,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         values={editor.values}
         onFieldChange={editor.onFieldChange}
         disabled={isEditorDisabled}
-        definitionDisabled={isEditorDisabled || locked}
+        definitionDisabled={definitionDisabled}
         metaControls={{ contextHistoryError: contextBlockRefusal(props.saveError) }}
         /* #345 — the tag control. It reaches the wire through
            `toVersionSaveBody`'s `tags`, which `UpdateVersion` now
@@ -183,7 +185,7 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
             projectId={projectId}
             value={editor.values.version_details.llm_settings}
             onChange={onModelSettingsChange}
-            disabled={isEditorDisabled || locked}
+            disabled={definitionDisabled}
           />
         }
       />
@@ -233,6 +235,15 @@ export function EditApplicationConfigurationPanel(props: EditApplicationConfigur
         versionId={activeVersion === undefined ? undefined : Number(activeVersion.id)}
         isReadOnly={isReadOnly}
       />
+      {/* Issue 3137 — `meta.run_caps`, bounded by the agent's tier cap. */}
+      {!isReadOnly && (
+        <RunCapsSection
+          versionFields={versionFields}
+          disabled={definitionDisabled}
+          projectId={projectId}
+          applicationId={applicationId}
+        />
+      )}
       {/*
        * #898 — the EDITOR NOTES accordion. Free-text documentation for the
        * author: never sent to the model, to chat or to execution, and stored

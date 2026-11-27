@@ -61,8 +61,8 @@ const REASON_TEXT: Readonly<Record<string, () => string>> = {
     ),
   proactivity_block_off: () =>
     t(
-      'features.agentHeartbeat.reason.blockOff',
-      'The published release has no proactivity block with mode heartbeat. Add one to the agent meta and publish.',
+      'features.agentHeartbeat.reason.blockOffSchedule',
+      'The published release has no heartbeat schedule. Set the schedule above to Heartbeat, save and publish.',
     ),
 };
 

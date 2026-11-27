@@ -39,6 +39,7 @@ describe('team export (issue 3010)', () => {
     const zip = await JSZip.loadAsync(await blob.arrayBuffer());
     const manifest = loadYaml((await zip.files['team.yaml']?.async('string')) ?? '') as Record<string, unknown>;
     expect(manifest).toEqual({
+      schema: 'elitea.team/v1',
       kind: 'team',
       name: 'Dev Team',
       description: 'Builds the platform',
@@ -55,5 +56,21 @@ describe('team export (issue 3010)', () => {
     const manifest = loadYaml((await zip.files['team.yaml']?.async('string')) ?? '') as Record<string, unknown>;
     expect(manifest['lead']).toBeUndefined();
     expect(manifest['floor_policy']).toBe('addressed');
+  });
+
+  it('merges a member exported as an .agent.zip: its markdown, its avatars under its slug, paths rewritten (issue 3137)', async () => {
+    const member = new JSZip();
+    member.file(
+      'dev-coordinator.agent.md',
+      '---\nname: Dev Coordinator\navatar:\n  still: avatars/still.webp\n---\nKeep avatars/still.webp in the body.\n',
+    );
+    member.file('avatars/still.webp', new Uint8Array([1, 2, 3]));
+    const memberBytes = await member.generateAsync({ type: 'uint8array' });
+    const zip = await JSZip.loadAsync(await (await buildTeamZip(team, ['one', memberBytes, 'three'])).arrayBuffer());
+    const markdown = (await zip.files['members/dev-coordinator.agent.md']?.async('string')) ?? '';
+    expect(markdown).toContain('still: avatars/dev-coordinator/still.webp');
+    expect(markdown).toContain('Keep avatars/still.webp in the body.');
+    expect(Array.from((await zip.files['avatars/dev-coordinator/still.webp']?.async('uint8array')) ?? [])).toEqual([1, 2, 3]);
+    expect(zip.files['avatars/still.webp']).toBeUndefined();
   });
 });
