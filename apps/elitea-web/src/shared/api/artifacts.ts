@@ -378,3 +378,13 @@ export async function downloadArtifactsAsZip(params: DownloadArtifactsAsZipParam
   const blob = await params.archiver.generateAsync({ type: 'blob' });
   return { status: 'ok', blob };
 }
+
+/** A public server file (an agent's avatar media or icon, #3132) as a Blob, through the native transport on the desktop; `undefined` when it cannot be read. */
+export async function fetchServerFileBlob(path: string): Promise<Blob | undefined> {
+  try {
+    const response = await sendRaw(fetch, path);
+    return response.ok ? await response.blob() : undefined;
+  } catch {
+    return undefined;
+  }
+}

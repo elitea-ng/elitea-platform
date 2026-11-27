@@ -37,6 +37,27 @@ export function agentLeadOf(
   return render && participantId !== undefined ? { leadSlot: render({ participantId }) } : {};
 }
 
+/** The avatar of one agent row (#3131), or nothing (the row keeps its own). */
+export function agentAvatarOf(
+  render: ((props: { participantId: number }) => ReactNode) | undefined,
+  participant: TransformedParticipant,
+): { avatarSlot?: ReactNode } {
+  const participantId = render ? agentParticipantId(participant) : undefined;
+  const avatar = render && participantId !== undefined ? render({ participantId }) : null;
+  return avatar === null || avatar === undefined ? {} : { avatarSlot: avatar };
+}
+
+/** An agent row's lead badge and menu (1612) and its avatar (3131), each bound to the conversation; absent ones left out. */
+export function useAgentRowSlots(
+  lead: AgentContextRenderer | undefined,
+  avatar: AgentContextRenderer | undefined,
+  conversationId: string | number | undefined,
+): { renderAgentLead?: (props: { participantId: number }) => ReactNode; renderAgentAvatar?: (props: { participantId: number }) => ReactNode } {
+  const renderAgentLead = useAgentContextSlot(lead, conversationId).renderAgentContext;
+  const renderAgentAvatar = useAgentContextSlot(avatar, conversationId).renderAgentContext;
+  return useMemo(() => ({ ...(renderAgentLead ? { renderAgentLead } : {}), ...(renderAgentAvatar ? { renderAgentAvatar } : {}) }), [renderAgentLead, renderAgentAvatar]);
+}
+
 /** Binds the meter to the conversation the budget may query (none for a new or replayed one). */
 export function useAgentContextSlot(
   render: AgentContextRenderer | undefined,

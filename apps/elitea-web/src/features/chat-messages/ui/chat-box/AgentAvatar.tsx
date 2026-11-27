@@ -13,6 +13,11 @@
  * media (an image, or a muted looping <video> with its poster) and the
  * default motion is not drawn; a state with no slot shows the pack's still
  * with the default motion. `avatarSource` decides it.
+ *
+ * The media and the icon are server paths: `useAgentMediaSrc` loads them from
+ * the deployment (#3132; the desktop app through its host, as `blob:` URLs).
+ * Until a file has loaded, the avatar shows its fallback (the default avatar
+ * or the brand mark).
  */
 import type { ReactNode } from 'react';
 
@@ -35,6 +40,8 @@ import {
 } from '@elitea/client-core/conversation';
 
 import { BrandLogoMark } from '@/shared/ui/brand-logo';
+
+import { useAgentMediaSrc } from '../../lib/agentMediaSrc';
 
 export interface AgentAvatarProps {
   /** The agent's icon URL; absent shows the brand mark. */
@@ -173,9 +180,19 @@ function MotionLayer({ spec }: { readonly spec: MotionSpec }): ReactNode {
   }
 }
 
+type Source = NonNullable<ReturnType<typeof avatarSource>>;
+
+/** The source with its files where they load from (#3132); `undefined` while its file has not loaded. */
+function useLoadedSource(source: Source | undefined): Source | undefined {
+  const src = useAgentMediaSrc(source?.src);
+  const poster = useAgentMediaSrc(source?.kind === 'video' ? source.poster : undefined);
+  if (source === undefined || src === undefined) return undefined;
+  return source.kind === 'video' ? { ...source, src, poster } : { ...source, src };
+}
+
 /** The still with the motion of its state. */
 export function AgentAvatar({ iconUrl, pack, avatarKey, motion = 'still', ephemeral = false, size = DEFAULT_SIZE }: AgentAvatarProps): ReactNode {
-  const source = avatarSource(pack, iconUrl, motion);
+  const source = useLoadedSource(avatarSource(pack, iconUrl, motion));
   const defaultAvatar = defaultAvatarOf(avatarKey ?? packDefaultAvatarKey(pack));
   const spec = motion === 'still' || source?.ownMotion === true ? undefined : MOTION_SPEC[motion];
   const breathe = spec !== undefined && spec.peakScale > 1;

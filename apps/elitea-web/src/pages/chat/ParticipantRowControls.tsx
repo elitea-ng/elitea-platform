@@ -21,7 +21,6 @@ import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 
 import type { AvatarMotion } from '@elitea/client-core/conversation';
-import { AgentAvatar } from '@/features/chat-messages';
 import { t } from '@/shared/i18n';
 
 /** What one row shows. */
@@ -96,7 +95,6 @@ function StateBadge({ row }: { readonly row: ParticipantRowView }): ReactNode {
   if (row.label === undefined) return null;
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }} data-testid="participant-state" data-participant-id={row.participantId} data-motion={row.motion}>
-      <AgentAvatar motion={row.motion} size="0.875rem" />
       {/* 5rem: beside the chips and the menu the name keeps room in the chat panel (issue 3067's visual baseline). */}
       <Typography variant="labelSmall" color="text.secondary" noWrap sx={{ fontKerning: 'none', maxWidth: '5rem' }}>{row.label}</Typography>
     </Box>
