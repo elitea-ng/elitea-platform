@@ -35,19 +35,19 @@ export const BRAND_ANCHOR_TOKEN = 'primary.main';
 export const ROLE_GROUP = 'role';
 
 /**
- * Role → its generic legacy ids, in precedence order (ADR-0062 decision 1.4):
- * `legacy-roles.json`, `{ "<role>": ["<legacy id>", …] }`.
+ * Role → its generic legacy id (ADR-0062 decision 1.4):
+ * `legacy-roles.json`, `{ "<role>": ["<legacy id>"] }`.
  *
  * ADR-0024 lets a deployment hand-tune legacy ids (`scheme_tokens`); such a
  * pack does not know the roles. `resolveScheme` gives a role the first value
- * a pack states differently from the default pack: the role id itself, then
- * each id of this list in order. The same file is what theme-gate check 10
- * counts (decision 3.4), so a read the stage 4 script rewrites is always one
- * the role honours.
+ * a pack tunes: the role id itself, then its legacy id. PR 4 (#3092) makes
+ * theme-gate check 10 count reads of the ids on this file (decision 3.4), and
+ * the stage 4 script rewrites only ids on this file (ADR-0062 Rollout).
  *
  * An id is listed only by hand and only when its meaning is the role and its
- * default colour is the role's in both schemes; an id sits on one list only;
- * the first id is the one whose meaning is most exactly the role. A role
- * with no generic id has no entry. `__tests__/roles.test.ts` holds the rule.
+ * default colour is the role's in both schemes. A role has one id at most: a
+ * role cannot hold two tuned colours, so a second id would lose one of them.
+ * A role with no generic id has no entry. `__tests__/roles.test.ts` holds the
+ * rule.
  */
 export const LEGACY_ROLES: Readonly<Record<string, readonly string[]>> = legacyRolesJson;

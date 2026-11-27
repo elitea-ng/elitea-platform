@@ -32,18 +32,20 @@ legacy ids below stay for the call sites that read them. Change a role here
 only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
 differ.
 
-`legacy-roles.json` maps each role to its generic legacy ids,
-`{ "<role>": ["<legacy id>", …] }` (ADR-0062 decision 1.4). A deployment that
-hand-tunes one of them keeps that colour in the role: `resolveScheme` gives a
-role the first value the pack states differently from this pack, the role id
-first, then each listed id in order; otherwise the role resolves like every
-other id (stated, or re-hued from its default). theme-gate check 10 counts
-reads of the same ids, and the stage 4 script rewrites only them. Put an id
-there only by hand, only when its meaning is the role and its colour here is
-the role's in both schemes, and on one list only; the first id of a list is
-the one whose meaning is most exactly the role. `__tests__/roles.test.ts`
-fails when the rule breaks. What this means for operators:
-`docs/upgrading/2026-11-26-0000-colour-roles-hand-tuned-legacy-ids.md`.
+`legacy-roles.json` maps a role to its generic legacy id,
+`{ "<role>": ["<legacy id>"] }` (ADR-0062 decision 1.4). A deployment that
+hand-tunes that id keeps the colour in the role: `resolveScheme` gives a role
+the first value the pack tunes, the role id first, then its legacy id. A
+value counts as tuned when it differs from what the id gets unstated (its
+default, re-hued), so a pin at the default under another hue counts too.
+`brand.onBrand` reaches `role.onPrimary` as it reaches
+`primary.contrastText`. PR 4 (#3092) makes theme-gate check 10 count reads
+of the ids on this file, and the stage 4 script rewrites only them (ADR-0062
+Rollout). Put an id there only by hand, only when its meaning is the role and
+its colour here is the role's in both schemes. A role has one id at most: a
+role cannot hold two tuned colours. A change of the map adds an upgrade note.
+`__tests__/roles.test.ts` fails when the rule breaks. What this means for
+operators: `docs/upgrading/2026-11-26-3091-colour-roles-hand-tuned-legacy-ids.md`.
 
 ## Where the values come from
 

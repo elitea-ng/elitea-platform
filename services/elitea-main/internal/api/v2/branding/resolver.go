@@ -255,7 +255,7 @@ func applyOverlay(base *Pack, o platformconfig.BrandingOverlay) (*Pack, error) {
 	merged.Schemes = Schemes{Light: base.Schemes.Light, Dark: base.Schemes.Dark, HC: base.Schemes.HC}
 	// A NEW hue drops the base's stated tokens. The UI resolves a scheme as
 	// "stated token wins, else derive from brand.hue" (toMuiPalette.ts's
-	// resolveScheme), and the product default states all 406 ids per
+	// resolveScheme), and the product default states all 435 ids per
 	// scheme — so a hue laid over stated tokens would change
 	// window.elitea_brand.brand.hue and nothing visible. Emptying the records
 	// is the hue-only tenant-pack shape: every id derives from the new hue

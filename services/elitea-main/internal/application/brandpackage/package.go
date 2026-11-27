@@ -30,7 +30,7 @@
 // maps every scalar and asset field to its section key. Scheme tokens are
 // carried over ONLY when the package states any and they differ from the
 // product default's — an untouched export re-imports as "nothing hand-tuned"
-// rather than pinning 406 tokens and switching hue derivation off.
+// rather than pinning every token and switching hue derivation off.
 package brandpackage
 
 import (
@@ -706,18 +706,24 @@ func assetValue(v string) string {
 	return ""
 }
 
-// untouchedRecord reports whether a package's scheme record changes nothing
-// against base's: every id it states has base's value. It does not ask for
-// the SAME ids. A package exported from an earlier product default states
-// that default's ids, and a later default adds ids (ADR-0062 decision 1: the
-// 27 `role.*` ids, 408 → 435). A length check called every such package
-// hand-tuned and carried all its ids, rgba ones included, into
-// scheme_tokens, which then refused the import and the restore (the section
-// takes six-digit hex only). An empty record (the hue-only shape) states
-// nothing and is untouched.
+// untouchedRecord reports whether a package's scheme record is an export of
+// a product default with nothing changed: every id it states has base's value
+// (hex case aside, for a hand-edited package), and every base id it lacks is
+// a `role.*` id. A package exported before ADR-0062 decision 1 states the 408
+// earlier ids and lacks only the 27 `role.*` ids (408 -> 435). A length check
+// called every such package hand-tuned and carried all its ids, rgba ones
+// included, into scheme_tokens, which then refused the import and the
+// restore (the section takes six-digit hex only). A record that lacks any
+// other id is carried as before: a deployment that states some ids at their
+// default values pins them, and under another brand hue they do not re-hue.
 func untouchedRecord(a, b map[string]string) bool {
 	for k, v := range a {
-		if bv, ok := b[k]; !ok || bv != v {
+		if bv, ok := b[k]; !ok || !strings.EqualFold(bv, v) {
+			return false
+		}
+	}
+	for k := range b {
+		if _, ok := a[k]; !ok && !strings.HasPrefix(k, "role.") {
 			return false
 		}
 	}
