@@ -7,6 +7,8 @@ import { t } from '@/shared/i18n';
 import { BaseBtn } from '@/shared/ui/BaseBtn';
 import { EntityCardList, EntityEmptyState, entityTypeIcon, type EntityListItem } from '@/shared/ui/EntityCardList';
 
+import { AgentCardAvatar } from './AgentCardAvatar';
+
 /**
  * The card grid for `Latest`/`MyLiked`/`Trending`/`PrivateAgentsList` —
  * the port of the baseline's `components/CardList.jsx` for these four
@@ -37,6 +39,12 @@ export interface ApplicationListRow {
   }[];
   readonly tags?: readonly string[];
   readonly createdAt?: string;
+  /** When the agent last changed: the rich card's muted line. */
+  readonly updatedAt?: string;
+  /** The persona role (`soul.role`, #3133): the rich card's second line. */
+  readonly personaRole?: string;
+  /** The version's avatar pack (#3133): the rich card plays it through the live-avatar renderer. */
+  readonly avatarPack?: object;
   /** The status as a word (Draft, Published): the card's badge and the table's Status column. */
   readonly badge?: string;
   /** #1995 — the uploaded icon (`meta.icon_meta.url`); the agent glyph when absent. */
@@ -67,6 +75,60 @@ export interface ApplicationListPanelProps {
   readonly onLoadMore: () => void;
   /** Wired to the empty state's `+ Create` CTA when the caller can route to a create page. */
   readonly onCreate?: () => void;
+  /** The Agents card of issue 3133 instead of the compact tile, with its Chat action when the page can start one. */
+  readonly rich?: RichCardOptions;
+}
+
+/** The grid's two cards (`EntityCardList`'s `variant`). */
+const COMPACT_CARD = 'compact';
+const RICH_CARD = 'rich';
+
+/** What the rich card adds: the Chat action, and which agent's chat is starting (every Chat waits for it). */
+export interface RichCardOptions {
+  readonly onChat?: (row: ApplicationListRow) => void;
+  readonly chattingId?: string | undefined;
+}
+
+/** The compact tile's icon: the uploaded icon, or the agent glyph. */
+function compactIcon(row: ApplicationListRow): ReactNode {
+  return row.iconUrl === undefined ? (
+    entityTypeIcon('agent')
+  ) : (
+    <Box component="img" src={row.iconUrl} alt="" data-testid="application-card-icon" sx={iconImageSx} />
+  );
+}
+
+/** The rich card's own fields: the live avatar (none means the card's monogram), the persona, the last change and Chat. */
+function richFields(row: ApplicationListRow, rich: RichCardOptions): Partial<EntityListItem> {
+  const hasAvatar = row.iconUrl !== undefined || row.avatarPack !== undefined;
+  const onChat = rich.onChat;
+  return {
+    icon: hasAvatar ? <AgentCardAvatar iconUrl={row.iconUrl} pack={row.avatarPack} /> : undefined,
+    ...(row.personaRole === undefined ? {} : { subtitle: row.personaRole }),
+    ...(row.updatedAt === undefined ? {} : { updatedAt: row.updatedAt }),
+    ...(onChat === undefined
+      ? {}
+      : { primaryAction: { label: t('pages.agents.list.chat', 'Chat'), onClick: () => onChat(row), disabled: rich.chattingId !== undefined } }),
+  };
+}
+
+function toListItem(row: ApplicationListRow, onSelect: (id: string) => void, rich: RichCardOptions | undefined): EntityListItem {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    icon: compactIcon(row),
+    authors: row.authors ?? [],
+    tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
+    ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
+    ...(row.badge === undefined ? {} : { badge: row.badge }),
+    onClick: () => {
+      onSelect(row.id);
+    },
+    ...(row.forkedFrom === undefined ? {} : { forkedFrom: row.forkedFrom }),
+    ...(row.action === undefined ? {} : { action: row.action }),
+    ...(rich === undefined ? {} : richFields(row, rich)),
+  };
 }
 
 export function ApplicationListPanel({
@@ -81,36 +143,15 @@ export function ApplicationListPanel({
   isLoadingMore,
   onLoadMore,
   onCreate,
+  rich,
 }: ApplicationListPanelProps): ReactNode {
-  const items = useMemo<EntityListItem[]>(
-    () =>
-      rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        description: row.description,
-        icon:
-          row.iconUrl === undefined ? (
-            entityTypeIcon('agent')
-          ) : (
-            <Box component="img" src={row.iconUrl} alt="" data-testid="application-card-icon" sx={iconImageSx} />
-          ),
-        authors: row.authors ?? [],
-        tags: (row.tags ?? []).map((tag) => ({ id: tag, name: tag })),
-        ...(row.createdAt === undefined ? {} : { createdAt: row.createdAt }),
-        ...(row.badge === undefined ? {} : { badge: row.badge }),
-        onClick: () => {
-          onSelect(row.id);
-        },
-        ...(row.forkedFrom === undefined ? {} : { forkedFrom: row.forkedFrom }),
-        ...(row.action === undefined ? {} : { action: row.action }),
-      })),
-    [rows, onSelect],
-  );
+  const items = useMemo<EntityListItem[]>(() => rows.map((row) => toListItem(row, onSelect, rich)), [rows, onSelect, rich]);
 
   return (
     <>
       <EntityCardList
         items={items}
+        variant={rich === undefined ? COMPACT_CARD : RICH_CARD}
         isLoading={isLoading}
         isError={isError}
         errorMessage={errorMessage}

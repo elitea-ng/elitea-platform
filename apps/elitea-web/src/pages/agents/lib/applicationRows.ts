@@ -27,6 +27,18 @@ function iconUrlOf(application: Application): string | undefined {
   return typeof url === 'string' && url !== '' ? url : undefined;
 }
 
+/** A string the list row carries on its passthrough `meta`, or undefined. */
+function metaText(application: Application, key: string): string | undefined {
+  const value = application.meta?.[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/** The version's avatar pack the list row carries on `meta.avatar_pack` (#3133): the card's live avatar. */
+function avatarPackOf(application: Application): object | undefined {
+  const pack = application.meta?.['avatar_pack'];
+  return typeof pack === 'object' && pack !== null ? pack : undefined;
+}
+
 /** One list row from the wire; `badge` is the status as a word (ADR-0051: status is a badge, not a tab). */
 export function toApplicationRow(
   application: Application,
@@ -36,6 +48,8 @@ export function toApplicationRow(
 ): ApplicationListRow {
   const forkedFrom = forkedFromId(application);
   const iconUrl = iconUrlOf(application);
+  const personaRole = metaText(application, 'persona_role');
+  const avatarPack = avatarPackOf(application);
   return {
     id: application.id,
     name: applicationName(application),
@@ -48,6 +62,9 @@ export function toApplicationRow(
     })),
     tags: application.tags ?? [],
     createdAt: application.created_at,
+    updatedAt: application.updated_at,
+    ...(personaRole === undefined ? {} : { personaRole }),
+    ...(avatarPack === undefined ? {} : { avatarPack }),
     ...(badge === undefined ? {} : { badge }),
     ...(action === undefined ? {} : { action }),
     ...(iconUrl === undefined ? {} : { iconUrl }),

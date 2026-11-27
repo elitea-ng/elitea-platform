@@ -441,11 +441,12 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			COALESCE(a.meta, '{}'::jsonb)::text,
 			COALESCE(av.meta, '{}'::jsonb)::text,
 			COALESCE(av.agent_type, '`+defaultAgentType+`'),
+			COALESCE(dv.soul->>'role', ''), COALESCE(dv.avatar_pack::text, ''),
 			COALESCE(av.author_id, 0), COALESCE(u.email, ''), COALESCE(u.name, ''),
 			`+statusExpr+`,
 			`+tagsExpr+`,
 			`+probationOnSQL+`, `+probationUntilSQL+`
-		FROM %s.applications a`, s) + join +
+		FROM %s.applications a`, s) + join + cardVersionJoin(s) +
 		// The author join reads `av.author_id`, the USER that wrote the
 		// version, and not `a.owner_id`, which is the owning PROJECT (#533).
 		// The old join gave the list the account whose user id happened to
@@ -475,11 +476,14 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 			authorName     string
 			onProbation    bool
 			probationUntil string
+			personaRole    string
+			avatarPackStr  string
 		)
 		if err := rows.Scan(
 			&app.ID, &app.Name, &app.Description, &app.Icon,
 			&app.OwnerID, &app.CreatedAt, &app.UpdatedAt,
 			&metaStr, &versionMetaStr, &app.AgentType,
+			&personaRole, &avatarPackStr,
 			&authorID, &authorEmail, &authorName,
 			&app.Status, &app.Tags,
 			&onProbation, &probationUntil,
@@ -530,6 +534,7 @@ func (r *ApplicationsRepo) List(ctx context.Context, req applications.ListReques
 				app.Meta["icon_meta"] = iconMeta
 			}
 		}
+		surfaceCardPersona(app.Meta, personaRole, avatarPackStr)
 		app.Authors = []applications.Author{}
 		// The id comes from the VERSION, not from the user join, so an author
 		// whose account was deleted stays on the row with an empty name and
@@ -1656,4 +1661,35 @@ func soulParameter(soul json.RawMessage) any {
 		return nil
 	}
 	return string(soul)
+}
+
+// cardVersionJoin selects the version the Agents card describes (#3133): the
+// one a chat from the card runs, which is the agent's default version
+// (`meta.default_version_id`), else `base`, else the first. It is the rule
+// the clients apply (`defaultRunVersionId`), so the persona role and the
+// avatar on the card are the ones the conversation then shows. The list's
+// other metadata keeps the first version (`av`), as before.
+func cardVersionJoin(schema string) string {
+	return fmt.Sprintf(` LEFT JOIN LATERAL (SELECT cv.soul, cv.avatar_pack FROM %s.application_versions cv
+ WHERE cv.application_id=a.id
+ ORDER BY (cv.id::text = COALESCE(a.meta->>'`+defaultVersionMetaKey+`', '')) DESC, (cv.name = 'base') DESC, cv.id ASC
+ LIMIT 1) dv ON TRUE`, schema)
+}
+
+// surfaceCardPersona puts what the Agents list card draws (#3133) on the
+// list row's passthrough `meta`, the way #1995 surfaced `icon_meta`: the
+// version's persona role (`soul.role`) and its avatar pack, so the card can
+// play the agent's own live avatar. Both come from the card's version
+// (`cardVersionJoin`); an empty role or a missing pack adds nothing.
+func surfaceCardPersona(meta map[string]any, personaRole, avatarPack string) {
+	if role := strings.TrimSpace(personaRole); role != "" {
+		meta["persona_role"] = role
+	}
+	if avatarPack == "" || avatarPack == "null" {
+		return
+	}
+	var pack map[string]any
+	if err := json.Unmarshal([]byte(avatarPack), &pack); err == nil && len(pack) > 0 {
+		meta["avatar_pack"] = pack
+	}
 }

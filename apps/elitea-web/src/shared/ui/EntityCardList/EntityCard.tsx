@@ -178,7 +178,7 @@ function CardBottomRow({ item, onTagClick }: { readonly item: EntityListItem; re
 }
 
 /** The selection checkbox in a card's top-left corner. Its clicks never reach the card behind it. */
-function CardSelectBox({ name, selected, onToggle }: { readonly name: string; readonly selected: boolean; readonly onToggle: () => void }): ReactNode {
+export function CardSelectBox({ name, selected, onToggle }: { readonly name: string; readonly selected: boolean; readonly onToggle: () => void }): ReactNode {
   return (
     <Box
       data-entity-select=""

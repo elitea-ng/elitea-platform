@@ -6,5 +6,6 @@
  */
 export { TeamsPanel } from './ui/TeamsPanel';
 export type { TeamsPanelProps } from './ui/TeamsPanel';
+export type { RenderMemberAvatar } from './ui/TeamAvatarStack';
 export { SaveAsTeamDialog } from './ui/SaveAsTeamDialog';
 export { TEAM_PERMISSIONS, useAgentTeamList, useTeamAbilities } from './model/useAgentTeams';
