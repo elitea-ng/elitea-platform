@@ -28,7 +28,6 @@ const HUE_ONLY: BrandInput = { hue: formatHex(hslaToRgba({ h: 90, s: 0.7, l: 0.5
 const roleId = (role: string) => `${ROLE_GROUP}.${role}`;
 const brandRoles = (scheme: (typeof SCHEMES)[number]) => BRAND_TOKENS.schemes[scheme] as Record<string, string>;
 const MAPPED = Object.entries(LEGACY_ROLES).flatMap(([role, ids]) => ids.map((id) => [role, id] as const));
-const WITH_TWO = Object.entries(LEGACY_ROLES).filter(([, ids]) => ids.length > 1);
 
 describe('role ids in the default pack', () => {
   it('states the 27 roles of tokens.json, with its values, in both schemes', () => {
@@ -57,10 +56,11 @@ describe('role ids in the default pack', () => {
 });
 
 describe('legacy-roles.json, the map rule (decision 1.4, Risks)', () => {
-  it('lists brand-guide roles, each with at least one id', () => {
+  it('lists brand-guide roles, each with exactly one id', () => {
+    // A role cannot hold two tuned colours, so a second id would lose one.
     for (const [role, ids] of Object.entries(LEGACY_ROLES)) {
       expect(brandRoles('dark')[role], `${role} is a brand-guide role`).toBeDefined();
-      expect(ids.length, role).toBeGreaterThan(0);
+      expect(ids, role).toHaveLength(1);
     }
   });
 
@@ -95,27 +95,19 @@ describe('a hand-tuned pack keeps its colours in the roles (decision 1.4)', () =
     }
   });
 
-  it.each(MAPPED)('%s takes %s when an export of the product default changes only that id', (role, id) => {
-    for (const scheme of SCHEMES) {
-      const record: SchemeRecord = { ...DEFAULT_BRAND_PACK.schemes[scheme], [id]: TUNED };
-      expect(resolveScheme(record, brand, scheme)[roleId(role)], scheme).toBe(TUNED);
-    }
-  });
+  it.each(MAPPED)(
+    '%s takes %s when the file layer states the product default with only that id changed',
+    (role, id) => {
+      for (const scheme of SCHEMES) {
+        const record: SchemeRecord = { ...DEFAULT_BRAND_PACK.schemes[scheme], [id]: TUNED };
+        expect(resolveScheme(record, brand, scheme)[roleId(role)], scheme).toBe(TUNED);
+      }
+    },
+  );
 
-  it.each(WITH_TWO)('%s takes the first of two tuned ids, in list order', (role, ids) => {
-    const [first, second] = ids as [string, string];
+  it.each(MAPPED)('%s takes %s when a tuned deployment states only that id under another hue', (role, id) => {
     for (const scheme of SCHEMES) {
-      const resolved = resolveScheme({ [second]: OTHER, [first]: TUNED }, brand, scheme);
-      expect(resolved[roleId(role)], scheme).toBe(TUNED);
-    }
-  });
-
-  it.each(WITH_TWO)('%s skips an id stated at its default and takes the next tuned one', (role, ids) => {
-    const [first, second] = ids as [string, string];
-    for (const scheme of SCHEMES) {
-      const atDefault = (DEFAULT_BRAND_PACK.schemes[scheme][first] as string).toLowerCase();
-      const resolved = resolveScheme({ [first]: atDefault, [second]: TUNED }, brand, scheme);
-      expect(resolved[roleId(role)], scheme).toBe(TUNED);
+      expect(resolveScheme({ [id]: TUNED }, HUE_ONLY, scheme)[roleId(role)], scheme).toBe(TUNED);
     }
   });
 
@@ -136,16 +128,30 @@ describe('a hand-tuned pack keeps its colours in the roles (decision 1.4)', () =
     expect(resolveScheme(record, brand, 'dark')['role.text']).toBe(TUNED);
   });
 
-  it('does not let a legacy id stated at its default override the role', () => {
-    // A legacy id at its default is not a tuning: the role resolves as any
-    // other id, here re-hued from its default under a non-default hue.
+  it('keeps a legacy id pinned at its default under another hue in the role', () => {
+    // Under another hue an unstated id re-hues, so stating its default is a
+    // pin: the role keeps the pinned colour, not the hue-only one.
     for (const scheme of SCHEMES) {
       const hueOnly = resolveScheme({}, HUE_ONLY, scheme);
       for (const [role, id] of MAPPED) {
         const atDefault = DEFAULT_BRAND_PACK.schemes[scheme][id] as string;
         const resolved = resolveScheme({ [id]: atDefault }, HUE_ONLY, scheme);
-        expect(resolved[roleId(role)], `${scheme}.${id}`).toBe(hueOnly[roleId(role)]);
-        expect(resolved[roleId(role)], `${scheme}.${id}`).not.toBe(atDefault);
+        expect(resolved[roleId(role)], `${scheme}.${id}`).toBe(atDefault);
+        expect(resolved[roleId(role)], `${scheme}.${id}`).not.toBe(hueOnly[roleId(role)]);
+      }
+    }
+  });
+
+  it('gives each role the colour of its id when a file layer of the 408-id default sets another hue', () => {
+    // A file layer written before the role ids states every legacy id at its
+    // default: each is a pin under another hue, and the role follows it.
+    for (const scheme of SCHEMES) {
+      const before = Object.entries(DEFAULT_BRAND_PACK.schemes[scheme]).filter(
+        ([id]) => !id.startsWith(`${ROLE_GROUP}.`),
+      );
+      const resolved = resolveScheme(Object.fromEntries(before), HUE_ONLY, scheme);
+      for (const [role, id] of MAPPED) {
+        expect(resolved[roleId(role)], `${scheme}.${role}`).toBe(resolved[id]);
       }
     }
   });
@@ -194,7 +200,7 @@ describe('a role follows the brand hue (decision 1.6)', () => {
     }
   });
 
-  it('gives every role on the map the colour of the first id of its list', () => {
+  it('gives every role on the map the colour of its legacy id', () => {
     for (const scheme of SCHEMES) {
       const resolved = resolveScheme({}, HUE_ONLY, scheme);
       for (const [role, ids] of Object.entries(LEGACY_ROLES)) {
@@ -210,6 +216,33 @@ describe('a role follows the brand hue (decision 1.6)', () => {
       for (const [role, value] of Object.entries(brandRoles(scheme))) {
         expect(atDefaultHue[roleId(role)], `${scheme}.${role}`).toBe(value);
       }
+    }
+  });
+});
+
+describe('brand.onBrand reaches role.onPrimary', () => {
+  /** A light brand hue, where the default white label fails the contrast of tokens.json. */
+  const LIGHT_HUE: BrandInput = { hue: '#FFD400', onBrand: '#0B0B18' };
+
+  it('gives role.onPrimary the onBrand value, as primary.contrastText gets it', () => {
+    const theme = buildEliteaTheme({ ...DEFAULT_BRAND_PACK, brand: LIGHT_HUE, schemes: { light: {}, dark: {} } });
+    for (const scheme of SCHEMES) {
+      expect(resolveScheme({}, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe('#0B0B18');
+      const palette = theme.colorSchemes[scheme]?.palette as unknown as Record<string, Record<string, string>>;
+      expect(palette[ROLE_GROUP]?.['onPrimary'], scheme).toBe(palette['primary']?.['contrastText']);
+    }
+  });
+
+  it('keeps a tuned role.onPrimary over onBrand', () => {
+    for (const scheme of SCHEMES) {
+      expect(resolveScheme({ 'role.onPrimary': TUNED }, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe(TUNED);
+    }
+  });
+
+  it('leaves role.onPrimary alone when the pack has no onBrand', () => {
+    for (const scheme of SCHEMES) {
+      const atDefaultHue = resolveScheme({}, brand, scheme)['role.onPrimary'];
+      expect(atDefaultHue, scheme).toBe(brandRoles(scheme)['onPrimary']);
     }
   });
 });

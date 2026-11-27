@@ -57,14 +57,16 @@ function deriveContextFor(scheme: SchemeName, brand: BrandInput): DeriveContext 
  * accents, neutrals and gradients alike — from one field.
  *
  * A role (`role.<name>`) takes the first value the pack states differently
- * from the default pack: the role id itself, then each legacy id of its list
- * in `tokens/legacy-roles.json`, in list order (ADR-0062 decision 1.4). So a
- * hand-tuned deployment keeps its colours in the roles. If none differs, the
- * role resolves as every other id above: its stated value, or its default
- * re-hued (decision 1.6). "Stated with the default value" covers both kinds
- * of export: a tuned deployment's states only the ids it set, the product
- * default's states every id with its default, so nothing in it overrides a
- * role.
+ * from what that id resolves to when it is not stated (its default, re-hued):
+ * the role id itself, then its legacy id in `tokens/legacy-roles.json`
+ * (ADR-0062 decision 1.4). So a hand-tuned deployment keeps its colours in
+ * the roles, and an id pinned at its default under another hue keeps that
+ * pin. If neither counts, the role resolves as every other id above: its
+ * stated value, or its default re-hued (decision 1.6). An id stated with the
+ * value it gets anyway is not a tuning: the file layer can state every id of
+ * the product default, and none of them then overrides a role. `onBrand`
+ * gives `role.onPrimary` its value when the pack does not tune that role,
+ * as it gives `primary.contrastText` its value in `toMuiPalette`.
  */
 export function resolveScheme(
   record: SchemeRecord,
@@ -78,25 +80,30 @@ export function resolveScheme(
     const stated = record[id];
     resolved[id] = stated ?? rehue(reference[id] as string, context);
   }
+  const tunes = (id: string): boolean => {
+    const stated = record[id];
+    const unstated = reference[id];
+    return stated !== undefined && (unstated === undefined || !sameColour(stated, rehue(unstated, context)));
+  };
   for (const [role, legacyIds] of Object.entries(LEGACY_ROLES)) {
     const roleId = `${ROLE_GROUP}.${role}`;
-    for (const id of [roleId, ...legacyIds]) {
-      const stated = record[id];
-      if (stated !== undefined && !sameColour(stated, reference[id])) {
-        resolved[roleId] = stated;
-        break;
-      }
-    }
+    const source = [roleId, ...legacyIds].find(tunes);
+    if (source !== undefined) resolved[roleId] = record[source] as string;
   }
+  const onPrimary = `${ROLE_GROUP}.onPrimary`;
+  if (brand.onBrand !== undefined && !tunes(onPrimary)) resolved[onPrimary] = brand.onBrand;
   for (const [id, value] of Object.entries(record)) {
     resolved[id] ??= value;
   }
   return resolved;
 }
 
-/** Hex case differs between the admin editor and the pack; the colour does not. */
-function sameColour(a: string, b: string | undefined): boolean {
-  return b !== undefined && a.toLowerCase() === b.toLowerCase();
+/**
+ * Colours compare without regard to hex case: a hand-edited package can
+ * spell hex in lower case, and the colour is the same.
+ */
+function sameColour(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** Expand `a.b.c` -> nested objects. Throws on an id that shadows a group. */

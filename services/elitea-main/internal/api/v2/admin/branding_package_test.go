@@ -221,8 +221,9 @@ func TestBrandingPackageRoutes(t *testing.T) {
 func TestBrandingPackageImport_PackageFromBeforeTheRoleIds(t *testing.T) {
 	// A package exported with the default colours before the product default
 	// gained the 27 role.* ids (ADR-0062 PR 3) states the 408 earlier ids, 117
-	// of them rgba. It must pass the import checks as untouched, not reach
-	// the scheme_tokens rule (six-digit hex only) as a hand-tuned record.
+	// of them not six-digit hex. It must pass the import checks as untouched,
+	// not reach the scheme_tokens rule (six-digit hex only) as a hand-tuned
+	// record.
 	pack := v2branding.ProductDefault()
 	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
 		for id := range record {
