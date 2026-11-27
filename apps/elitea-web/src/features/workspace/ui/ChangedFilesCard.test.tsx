@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
+import type { ChangedFile } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
@@ -11,7 +12,7 @@ import { ChangedFilesCard } from './ChangedFilesCard';
 const DIFF = ['--- a/src/a.ts', '+++ b/src/a.ts', '@@ -1 +1 @@', '-old', '+new'].join('\n');
 
 function setup(
-  files = [
+  files: ChangedFile[] = [
     { path: 'src/a.ts', status: 'modified' as const, added: 1, removed: 1, diff: DIFF },
     { path: 'src/b.ts', status: 'added' as const, added: 4, removed: 0, diff: '' },
   ],
@@ -148,5 +149,38 @@ describe('ChangedFilesCard', () => {
     expect(screen.getByRole('button', { name: 'Show diff' })).toBeInTheDocument();
     // The failure queued for turn_changes was never consumed: the host was not asked.
     await expect(ipc.turnChanges('old')).rejects.toMatchObject({ code: 'turn_unknown' });
+  });
+
+  it('says what undo does not cover: files the checkpoint left out, and commands it could not list', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    ipc.setChanges('t1', {
+      files: [{ path: 'notes.md', status: 'modified', added: 1, removed: 0, diff: DIFF }],
+      latest: true,
+      not_saved: { too_large: ['a.mov', 'b.mov', 'c.mov', 'd.mov', 'e.mov', 'f.mov'], too_large_count: 8, placeholders: ['cloud.pdf'], placeholder_count: 1 },
+      commands_unlisted: true,
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithTheme(
+      <QueryClientProvider client={client}>
+        <ChangedFilesCard ipc={ipc} turnId="t1" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId('changes-not-saved')).toHaveTextContent('a.mov, b.mov, c.mov, d.mov, e.mov and 3 more');
+    expect(screen.getByTestId('changes-placeholders')).toHaveTextContent('cloud.pdf');
+    expect(screen.getByTestId('changes-commands-unlisted')).toBeInTheDocument();
+  });
+
+  it('says nothing about coverage when undo covers every file', async () => {
+    setup();
+    await screen.findAllByTestId('changed-file');
+    expect(screen.queryByTestId('changes-coverage')).toBeNull();
+  });
+
+  it('shows a command-made binary file by its sizes, not empty line counts', async () => {
+    setup([{ path: 'deck.pptx', status: 'deleted' as const, added: 0, removed: 0, diff: '', binary: true, size_before: 532, command: 'rm deck.pptx' }]);
+    const row = await screen.findByTestId('changed-file');
+    expect(within(row).getByTestId('change-sizes')).toHaveTextContent('532 bytes');
+    expect(within(row).queryByText('+0 -0')).toBeNull();
+    expect(within(row).getByTestId('change-command')).toHaveTextContent('rm deck.pptx');
   });
 });

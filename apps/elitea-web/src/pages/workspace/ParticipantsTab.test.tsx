@@ -104,14 +104,14 @@ afterEach(() => {
 });
 
 describe("a Local work thread's Participants tab (issue 3055)", () => {
-  it('states the thread\'s project instructions once, below the agents, with its Respect AGENTS.md choice (issue 3130)', async () => {
+  it('states the thread\'s project instructions once, below the agents, with its Respect project instructions choice (issue 3130)', async () => {
     serve([coder, reviewer]);
     mount();
     const tab = await screen.findByTestId('side-panel-tab-team');
     const section = await within(tab).findByTestId('project-instructions');
     expect(within(section).getByTestId('project-instructions-file')).toHaveTextContent('AGENTS.md');
-    await waitFor(() => expect(within(section).getByRole('switch', { name: 'Respect AGENTS.md' })).not.toBeChecked());
-    expect(within(section).getByTestId('agents-md-ignored')).toHaveTextContent('AGENTS.md ignored in this thread');
+    await waitFor(() => expect(within(section).getByRole('switch', { name: 'Respect project instructions' })).not.toBeChecked());
+    expect(within(section).getByTestId('agents-md-ignored')).toHaveTextContent('Project instructions ignored in this thread');
   });
 
   it('leads the tabs with two agents, with the Lead chip and Local/Cloud badges, and lists no toolkit', async () => {

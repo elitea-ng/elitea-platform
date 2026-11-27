@@ -151,6 +151,7 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
               {raw.empty && (
                 <NoAgents
                   codingAgent={codingAgent}
+                  folderKind={workspace.kind}
                   busy={busy}
                   onCreate={session.createAgent}
                   otherProjects={session.projects.filter((project) => project.id !== projectId)}

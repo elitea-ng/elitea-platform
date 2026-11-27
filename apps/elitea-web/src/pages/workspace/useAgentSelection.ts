@@ -6,7 +6,10 @@
  *
  * The agent and version last used in a workspace are remembered per
  * workspace and project (`el.desktop.workspace.<id>.agent`) and picked
- * again when the session opens; otherwise the first agent is.
+ * again when the session opens; otherwise the folder's default Local agent
+ * is, when the project has it (`defaultAgentId`: the Local documents agent
+ * for a folder of documents or a mixed one, the Local coding agent for a git
+ * or code folder), else the first agent.
  *
  * Several agents in one thread (ADR-0050 decision 7f): besides the composer's
  * agent, the person may add more of the project's agents to the thread
@@ -28,9 +31,11 @@ import { getApplication, useGetApplication, useListApplications } from '@/shared
 import { useListConversations } from '@/shared/api/generated/chat/chat';
 import type { Application, ApplicationDetail } from '@/shared/api/generated/model';
 import { unwrapBody, unwrapList } from '@/shared/api/unwrap';
+import type { FolderKind } from '@/shared/desktop/workspace';
 import { createStorage } from '@/shared/lib/storage';
 import { useAgentTeamList, useTeamAbilities } from '@/features/agent-teams';
 
+import { defaultLocalAgent, localAgentName } from './useLocalCodingAgent';
 import { teamChoice, type TeamChoice, type WorkTeam } from './workTeams';
 
 interface LastUsed {
@@ -204,7 +209,13 @@ function initialPick(seed: SelectionSeed | undefined, projectId: number | null):
   return seed !== undefined && seed.projectId === projectId ? { pick: seed, seeded: true } : { pick: NO_PICK, seeded: false };
 }
 
-export function useAgentSelection(workspaceId: string, projectId: number | null, seed?: SelectionSeed): AgentSelection {
+/** The agent a session picks when nothing is remembered: the folder's default Local agent when the project has it, else the first. */
+export function defaultAgentId(agents: readonly Pick<Application, 'id' | 'name'>[], kind: FolderKind | undefined): string {
+  const name = localAgentName(defaultLocalAgent(kind));
+  return agents.find((agent) => agent.name === name)?.id ?? agents[0]?.id ?? '';
+}
+
+export function useAgentSelection(workspaceId: string, projectId: number | null, seed?: SelectionSeed, folderKind?: FolderKind): AgentSelection {
   const project = projectId === null ? '' : String(projectId);
   const enabled = projectId !== null;
   // A seed of another project is not this folder's pick.
@@ -249,13 +260,13 @@ export function useAgentSelection(workspaceId: string, projectId: number | null,
     [conversationsQuery.data],
   );
 
-  // Nothing picked yet: the agent last used here, else the first one.
+  // Nothing picked yet: the agent last used here, else the folder's default one.
   useEffect(() => {
     if (agentId !== '' || agents.length === 0) return;
     const last = readLastUsed(workspaceId, projectId);
     const remembered = last !== null && agents.some((a) => a.id === last.agentId) ? last.agentId : undefined;
-    setAgentId(remembered ?? agents[0]?.id ?? '');
-  }, [agents, agentId, workspaceId, projectId]);
+    setAgentId(remembered ?? defaultAgentId(agents, folderKind));
+  }, [agents, agentId, workspaceId, projectId, folderKind]);
 
   // A different agent has different versions: drop a stale pick, default to
   // the one last used with this agent, else the first offered.

@@ -12,8 +12,8 @@
  * `ThreadAgentsPanel` lists the agents that join with the next message (before the first send, the composer's agent and
  * the ones added to it, so a new thread has the tab too) and the Add agent, Add cloud agent and Add team pickers.
  *
- * Below them, the thread's project instructions (issue 3130): the folder's AGENTS.md, once, with the thread's
- * "Respect AGENTS.md" switch (`ProjectInstructionsSection`).
+ * Below them, the thread's project instructions (issue 3130): the folder's AGENTS.md (or its README/NOTES fallback), once, with the thread's
+ * "Respect project instructions" switch (`ProjectInstructionsSection`).
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 

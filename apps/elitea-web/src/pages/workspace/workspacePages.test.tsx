@@ -1826,7 +1826,7 @@ describe('WorkspaceSessionPage', () => {
       ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md', 'apps/web/AGENTS.md'], project_instructions_applied: true } });
       await screen.findByTestId('turn-status');
       expect(screen.queryByTestId('agents-md-applied')).toBeNull();
-      expect(screen.queryByText('AGENTS.md applied')).toBeNull();
+      expect(screen.queryByText('Project instructions applied')).toBeNull();
     });
   });
 });

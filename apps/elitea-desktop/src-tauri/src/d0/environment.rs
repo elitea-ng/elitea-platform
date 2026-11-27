@@ -30,6 +30,8 @@ use elitea_local_tools::policy::{LocalWorkPolicy, SandboxMode};
 use elitea_local_tools::sandbox::Enforcement;
 use elitea_local_tools::session::LocalSession;
 
+use crate::workspaces::FolderKind;
+
 /// The section's heading.
 pub const HEADING: &str = "## Environment";
 
@@ -55,7 +57,10 @@ pub enum Git {
         branch: Option<String>,
         changed: usize,
     },
-    NotARepo,
+    /// Not in a repository: what the folder mostly holds
+    /// ([`crate::workspaces::folder_kind`]). The line says what it is
+    /// without suggesting git is missing.
+    Folder(FolderKind),
     /// `git status` took longer than [`PROBE_TIMEOUT`].
     Unknown,
 }
@@ -196,7 +201,12 @@ fn git_line(git: &Git) -> String {
                 None => format!("git: detached or unnamed branch, {files}"),
             }
         }
-        Git::NotARepo => "not a git repository".to_owned(),
+        Git::Folder(kind) => match kind {
+            FolderKind::Code => "a folder of code, not under version control",
+            FolderKind::Documents => "a folder of documents, not under version control",
+            FolderKind::Git | FolderKind::Mixed => "a folder, not under version control",
+        }
+        .to_owned(),
         Git::Unknown => "git status not read in time".to_owned(),
     }
 }
@@ -383,14 +393,24 @@ pub async fn gather(
     // The probes together: the turn waits at most one PROBE_TIMEOUT.
     let (git, sandbox, project) = tokio::join!(
         async {
-            match tokio::time::timeout(PROBE_TIMEOUT, session.git_summary()).await {
-                Ok(Some(summary)) => Git::Repo {
-                    branch: summary.branch,
-                    changed: summary.changed,
-                },
-                Ok(None) => Git::NotARepo,
-                Err(_) => Git::Unknown,
-            }
+            let probe = async {
+                match session.git_summary().await {
+                    Some(summary) => Git::Repo {
+                        branch: summary.branch,
+                        changed: summary.changed,
+                    },
+                    None => {
+                        let root = session.workspace().root().to_path_buf();
+                        let kind = tokio::task::spawn_blocking(move || {
+                            crate::workspaces::folder_kind(&root, false)
+                        });
+                        Git::Folder(kind.await.unwrap_or_default())
+                    }
+                }
+            };
+            tokio::time::timeout(PROBE_TIMEOUT, probe)
+                .await
+                .unwrap_or(Git::Unknown)
         },
         async {
             if !commands {
@@ -555,8 +575,17 @@ mod tests {
         assert!(preamble(&facts).contains("cannot be enforced on this machine"));
         facts.sandbox = Sandbox::NoCommands;
         assert!(preamble(&facts).contains("- Sandbox: no commands this turn"));
-        facts.git = Git::NotARepo;
-        assert!(current(&facts).contains("- Workspace: repo (not a git repository)"));
+        facts.git = Git::Folder(FolderKind::Documents);
+        assert!(
+            current(&facts)
+                .contains("- Workspace: repo (a folder of documents, not under version control)")
+        );
+        facts.git = Git::Folder(FolderKind::Code);
+        assert!(current(&facts).contains("(a folder of code, not under version control)"));
+        facts.git = Git::Folder(FolderKind::Mixed);
+        let line = current(&facts);
+        assert!(line.contains("- Workspace: repo (a folder, not under version control)"));
+        assert!(!line.contains("not a git"), "{line}");
     }
 
     /// The detected commands are one line of the stable part; without a

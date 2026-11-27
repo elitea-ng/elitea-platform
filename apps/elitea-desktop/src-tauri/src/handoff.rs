@@ -3404,7 +3404,11 @@ fn cloud_turns(detail: &Value, from: u64, to: u64, preflight: &Preflight) -> Vec
             .unwrap_or_default()
             .into_iter()
             .map(|diff| {
-                crate::d0::recorder::diff(&diff.path, diff.before.as_deref(), diff.after.as_deref())
+                crate::d0::recorder::diff_bytes(
+                    &diff.path,
+                    diff.before.as_deref(),
+                    diff.after.as_deref(),
+                )
             })
             .collect();
         let finished = parse_time(group.get("created_at")).unwrap_or_default();

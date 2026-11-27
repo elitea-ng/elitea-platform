@@ -38,6 +38,7 @@ use crate::error::HostError;
 use crate::history::StoredTurn;
 use crate::settings::SettingsFiles;
 use crate::workspaces::{AgentSettings, STEP_LIMIT_RANGE, Workspace, WorkspaceStore};
+use elitea_local_tools::checkpoint::CheckpointInfo;
 use elitea_local_tools::find::FoundPath;
 
 pub struct LocalState {
@@ -1278,6 +1279,35 @@ pub struct TurnChanges {
     latest: bool,
     /// Its changes were undone (no undo is offered).
     undone: bool,
+    /// What the turn's checkpoint left out (a change to one of these
+    /// files cannot be undone); `null` when it left nothing out.
+    not_saved: Option<NotSaved>,
+    /// Some command ran while the folder was too large to scan: its
+    /// changes may be missing from `files`.
+    commands_unlisted: bool,
+}
+
+/// The files a turn's checkpoint left out, at most 50 named per list.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct NotSaved {
+    too_large: Vec<String>,
+    too_large_count: usize,
+    placeholders: Vec<String>,
+    placeholder_count: usize,
+}
+
+/// The `not_saved` of a checkpoint: `None` when it left nothing out.
+fn not_saved(info: Option<CheckpointInfo>) -> Option<NotSaved> {
+    let info = info?;
+    if info.too_large_count == 0 && info.placeholder_count == 0 {
+        return None;
+    }
+    Some(NotSaved {
+        too_large: info.too_large,
+        too_large_count: info.too_large_count,
+        placeholders: info.placeholders,
+        placeholder_count: info.placeholder_count,
+    })
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1286,10 +1316,13 @@ pub fn turn_changes(
     turn_id: String,
 ) -> Result<TurnChanges, IpcError> {
     let offer = state.agents.undo_offer(&turn_id)?;
+    let coverage = state.agents.changes_coverage(&turn_id)?;
     Ok(TurnChanges {
         files: state.agents.changes(&turn_id)?,
         latest: offer.latest,
         undone: offer.undone,
+        not_saved: not_saved(coverage.not_saved),
+        commands_unlisted: coverage.commands_unlisted,
     })
 }
 
@@ -1352,6 +1385,41 @@ pub async fn checkpoint_preview(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turn_changes_name_what_the_checkpoint_left_out() {
+        assert_eq!(not_saved(None), None);
+        assert_eq!(not_saved(Some(CheckpointInfo::default())), None);
+        let info = CheckpointInfo {
+            too_large: vec!["video.mov".into()],
+            too_large_count: 3,
+            placeholders: vec!["cloud.pdf".into()],
+            placeholder_count: 1,
+            ..CheckpointInfo::default()
+        };
+        let changes = TurnChanges {
+            files: Vec::new(),
+            latest: true,
+            undone: false,
+            not_saved: not_saved(Some(info)),
+            commands_unlisted: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).unwrap(),
+            serde_json::json!({
+                "files": [],
+                "latest": true,
+                "undone": false,
+                "not_saved": {
+                    "too_large": ["video.mov"],
+                    "too_large_count": 3,
+                    "placeholders": ["cloud.pdf"],
+                    "placeholder_count": 1,
+                },
+                "commands_unlisted": true,
+            })
+        );
+    }
 
     #[test]
     fn a_refusal_reaches_the_webview_with_its_code() {

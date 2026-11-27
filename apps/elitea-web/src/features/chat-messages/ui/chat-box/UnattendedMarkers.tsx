@@ -47,13 +47,13 @@ export function FullAutoMarker() {
 
 /**
  * Whether the answer's Local work turn applied its folder's project instructions (issue 3130): the desktop thread's
- * "Respect AGENTS.md" was on or off. Read-only here: the switch is the desktop's. Main stores
+ * "Respect project instructions" was on or off. Read-only here: the switch is the desktop's. Main stores
  * `meta.local_work.project_instructions`; the files are the label's title.
  */
 export function ProjectInstructionsMarker({ applied, files }: { readonly applied: boolean; readonly files: readonly string[] }) {
   return (
     <Typography variant="labelSmall" color="text.secondary" data-testid="chat-message-project-instructions" data-applied={String(applied)} title={files.join(', ')} sx={{ display: 'block', mt: 0.5 }}>
-      {applied ? t('features.chatMessages.agentsMdApplied', 'AGENTS.md applied') : t('features.chatMessages.agentsMdIgnored', 'AGENTS.md ignored')}
+      {applied ? t('features.chatMessages.agentsMdApplied', 'Project instructions applied') : t('features.chatMessages.agentsMdIgnored', 'Project instructions ignored')}
     </Typography>
   );
 }

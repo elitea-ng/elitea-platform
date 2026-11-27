@@ -1,5 +1,8 @@
-//! `AGENTS.md` (the cross-tool convention, agents.md): the instructions a
-//! repository keeps for coding agents.
+//! Project instructions: what a folder keeps for the agents that work in
+//! it. `AGENTS.md` (the cross-tool convention, agents.md) first; a folder
+//! without one at its root (a folder of documents or notes, a project
+//! that never adopted the convention) falls back to its root
+//! [`FALLBACK_FILE_NAMES`], the first found in that order.
 //!
 //! [`load`] reads the workspace's root `AGENTS.md` and, for each path the
 //! person referenced, the `AGENTS.md` files of the folders between it and
@@ -8,7 +11,8 @@
 //! `Agents.md`); an exact `AGENTS.md` wins over another spelling in the
 //! same folder. Every read goes through the confined [`Workspace`]: a
 //! symlinked file or folder is not read, a `path_deny` match is refused,
-//! and the total text is capped.
+//! and the total text is capped. The fallback is the root's only: a
+//! nested folder's README is not read as instructions.
 
 use std::io::Read as _;
 
@@ -16,12 +20,16 @@ use crate::workspace::{EntryKind, Intent, Workspace, WsPath};
 
 /// The file name of the convention.
 pub const FILE_NAME: &str = "AGENTS.md";
+/// The root files read when the root has no `AGENTS.md`, in order: the
+/// first one present (in any case, exact spelling first) is read.
+pub const FALLBACK_FILE_NAMES: &[&str] = &["README.md", "README.txt", "NOTES.md"];
 /// The most bytes of `AGENTS.md` text one turn takes, all files together.
 pub const MAX_TOTAL_BYTES: usize = 32 * 1024;
 /// What a cut file ends with.
-pub const TRUNCATED_NOTE: &str = "[… truncated: the AGENTS.md text past this point was not read]";
+pub const TRUNCATED_NOTE: &str = "[… truncated: the file's text past this point was not read]";
 
-/// One `AGENTS.md` that was read.
+/// One instruction file that was read (an `AGENTS.md`, or the root's
+/// fallback).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstructionFile {
     /// Workspace-relative path.
@@ -129,7 +137,16 @@ pub fn load(workspace: &Workspace, mentions: &[String]) -> ProjectInstructions {
     let mut out = ProjectInstructions::default();
     let mut budget = MAX_TOTAL_BYTES;
     for folder in folders {
-        let Some(name) = agents_file_in(workspace, &folder) else {
+        let found = agents_file_in(workspace, &folder).or_else(|| {
+            if folder.is_root() {
+                FALLBACK_FILE_NAMES
+                    .iter()
+                    .find_map(|name| named_file_in(workspace, &folder, name))
+            } else {
+                None
+            }
+        });
+        let Some(name) = found else {
             continue;
         };
         let Some(path) = join(&folder, &name) else {
@@ -253,6 +270,57 @@ mod tests {
     fn open(dir: &tempfile::TempDir, deny: &[&str]) -> Workspace {
         let deny: Vec<String> = deny.iter().map(|s| (*s).to_owned()).collect();
         Workspace::open(dir.path(), &deny).unwrap()
+    }
+
+    #[test]
+    fn without_agents_md_the_root_readme_then_notes_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = |dir: &tempfile::TempDir| load(&open(dir, &[]), &[]).paths();
+        fs::write(dir.path().join("NOTES.md"), "Notes.").unwrap();
+        assert_eq!(paths(&dir), ["NOTES.md"]);
+        fs::write(dir.path().join("README.txt"), "Plain readme.").unwrap();
+        assert_eq!(paths(&dir), ["README.txt"]);
+        fs::write(dir.path().join("README.md"), "Readme.").unwrap();
+        assert_eq!(
+            paths(&dir),
+            ["README.md"],
+            "README.md, then README.txt, then NOTES.md"
+        );
+        let found = load(&open(&dir, &[]), &[]);
+        assert_eq!(found.files[0].text, "Readme.");
+        fs::write(dir.path().join("AGENTS.md"), "Agents.").unwrap();
+        assert_eq!(
+            paths(&dir),
+            ["AGENTS.md"],
+            "AGENTS.md wins over every fallback"
+        );
+    }
+
+    #[test]
+    fn a_nested_readme_is_never_read_as_instructions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("docs/README.md"), "Nested.").unwrap();
+        fs::write(dir.path().join("docs/a.md"), "A.").unwrap();
+        assert_eq!(
+            load(&open(&dir, &[]), &["docs/a.md".into()]).paths(),
+            Vec::<String>::new()
+        );
+        fs::write(dir.path().join("docs/AGENTS.md"), "Nested agents.").unwrap();
+        assert_eq!(
+            load(&open(&dir, &[]), &["docs/a.md".into()]).paths(),
+            ["docs/AGENTS.md"]
+        );
+    }
+
+    #[test]
+    fn a_denied_fallback_is_skipped_with_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "Secret.").unwrap();
+        let found = load(&open(&dir, &["README.md"]), &[]);
+        assert_eq!(found.paths(), Vec::<String>::new());
+        assert_eq!(found.skipped.len(), 1);
+        assert_eq!(found.skipped[0].0, "README.md");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 /**
- * "Respect AGENTS.md" turned off before a thread's first message (issue 3130). The thread does not exist yet, so the
+ * "Respect project instructions" turned off before a thread's first message (issue 3130). The thread does not exist yet, so the
  * host cannot keep the choice; it is held here, per folder, for this page load, and the send that creates the thread
  * hands it to the host before its first turn starts (`applyPendingRespect`), so even that turn runs without the files.
  */

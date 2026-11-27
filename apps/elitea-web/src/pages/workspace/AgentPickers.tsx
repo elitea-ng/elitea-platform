@@ -1,9 +1,12 @@
 /**
  * `NoAgents`: what a project without agents shows in the thread body instead
- * of an agent picker (`ComposerControls`): create a Local coding agent in it
- * (one click, under the person's own permissions), open the agent editor
- * there, or bind the folder to another project (a menu of the projects it may
- * join). Nothing is created on the server unless the person clicks.
+ * of an agent picker (`ComposerControls`): create a Local coding agent or a
+ * Local documents agent in it (one click, under the person's own
+ * permissions), open the agent editor there, or bind the folder to another
+ * project (a menu of the projects it may join). Both agents are always
+ * offered; the folder's kind puts its default first (`defaultLocalAgent`):
+ * the documents agent for a folder of documents or a mixed one. Nothing is
+ * created on the server unless the person clicks.
  */
 import { useState } from 'react';
 
@@ -14,14 +17,17 @@ import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+import type { FolderKind } from '@/shared/desktop/workspace';
 import { t } from '@/shared/i18n';
 
 import type { ProjectChoice } from './useBindableProjects';
-import type { LocalCodingAgent } from './useLocalCodingAgent';
+import { defaultLocalAgent, type LocalAgentKind, type LocalCodingAgent } from './useLocalCodingAgent';
 
 interface NoAgentsProps {
-  /** The "Local coding agent" offer for the bound project. */
+  /** The "Local coding agent" / "Local documents agent" offer for the bound project. */
   codingAgent: LocalCodingAgent;
+  /** What the folder mostly holds: which agent is offered first. */
+  folderKind?: FolderKind | undefined;
   /** Open the agent editor in the bound project. */
   onCreate: () => void;
   /** The projects the folder may move to (not the bound one), and the move. */
@@ -30,10 +36,16 @@ interface NoAgentsProps {
   busy: boolean;
 }
 
-/** What the empty project's notice says, by what the person may do in it. */
-function noAgentsBody(state: LocalCodingAgent['state']): string {
+/** What the empty project's notice says, by what the person may do in it and which agent comes first. */
+function noAgentsBody(state: LocalCodingAgent['state'], first: LocalAgentKind): string {
   switch (state) {
     case 'ready':
+      if (first === 'documents') {
+        return t(
+          'workspace.noAgents.documents',
+          'Create a Local documents agent? It reads, summarises and edits the documents in this folder, saves edited Office files as new files, and every change can be undone. It is an ordinary agent of this project: you can edit it on the web.',
+        );
+      }
       return t(
         'workspace.noAgents.coding',
         'Create a Local coding agent? It explores before it edits, keeps its changes small, runs the tests and explains what it changed. It is an ordinary agent of this project: you can edit it on the web.',
@@ -56,8 +68,14 @@ function noAgentsBody(state: LocalCodingAgent['state']): string {
   }
 }
 
-export function NoAgents({ codingAgent, onCreate, otherProjects, onMoveTo, busy }: NoAgentsProps): React.JSX.Element {
+function createLabel(kind: LocalAgentKind): string {
+  return kind === 'documents' ? t('workspace.noAgents.createDocuments', 'Create a Local documents agent') : t('workspace.noAgents.createCoding', 'Create a Local coding agent');
+}
+
+export function NoAgents({ codingAgent, folderKind, onCreate, otherProjects, onMoveTo, busy }: NoAgentsProps): React.JSX.Element {
   const { state } = codingAgent;
+  const first = defaultLocalAgent(folderKind);
+  const offers: readonly LocalAgentKind[] = first === 'documents' ? ['documents', 'coding'] : ['coding', 'documents'];
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   return (
     <Box
@@ -73,7 +91,7 @@ export function NoAgents({ codingAgent, onCreate, otherProjects, onMoveTo, busy 
     >
       <Typography variant="headingSmall">{t('workspace.noAgents.title', 'This project has no agents')}</Typography>
       <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}>
-        {noAgentsBody(state)}
+        {noAgentsBody(state, first)}
       </Typography>
       {codingAgent.error !== undefined && (
         <Typography variant="bodySmall" role="alert" sx={(theme: Theme) => ({ color: theme.vars.palette.error.main })}>
@@ -81,11 +99,12 @@ export function NoAgents({ codingAgent, onCreate, otherProjects, onMoveTo, busy 
         </Typography>
       )}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-        {state === 'ready' && (
-          <Button variant="contained" size="small" disabled={busy || codingAgent.creating} onClick={codingAgent.create}>
-            {t('workspace.noAgents.createCoding', 'Create a Local coding agent')}
-          </Button>
-        )}
+        {state === 'ready' &&
+          offers.map((kind) => (
+            <Button key={kind} variant={kind === first ? 'contained' : 'outlined'} size="small" disabled={busy || codingAgent.creating} onClick={() => codingAgent.create(kind)}>
+              {createLabel(kind)}
+            </Button>
+          ))}
         {state !== 'forbidden' && (
           <Button variant={state === 'ready' ? 'outlined' : 'contained'} size="small" onClick={onCreate}>
             {t('workspace.noAgents.create', 'Create an agent')}

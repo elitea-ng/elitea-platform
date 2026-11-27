@@ -33,12 +33,13 @@ import DialogTitle from '@mui/material/DialogTitle';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import { toWorkspaceIpcError, type ChangedFile, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { toWorkspaceIpcError, type ChangedFile, type NotSaved, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { parseUnifiedDiff } from '@/shared/lib/unifiedDiff';
 import { DiffView } from '@/shared/ui/DiffView';
 
 import { describeWorkspaceError } from '../model/describeWorkspaceError';
+import { ChangesCoverage, CommandNote, showsSizes, SizeChange } from './ChangesDetails';
 import { PanelFileRow, PanelTurnHeader } from './ChangesPanelParts';
 
 /** The host's codes that say why (busy, expired, no checkpoint, not the newest, …) are described; anything else gets the generic `fallback`. */
@@ -115,7 +116,9 @@ function FileRow({ file, busy, onRevert, fileActions, onContextMenu }: FileRowPr
       )}
     </Box>
   );
-  const counts = (
+  const counts = showsSizes(file) ? (
+    <SizeChange file={file} />
+  ) : (
     <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, flexShrink: 0 })}>
       {`+${String(file.added)} -${String(file.removed)}`}
     </Typography>
@@ -133,6 +136,7 @@ function FileRow({ file, busy, onRevert, fileActions, onContextMenu }: FileRowPr
           {file.path}
         </Typography>
         {counts}
+        {file.command !== undefined && <CommandNote command={file.command} />}
         {buttons}
       </Box>
       {file.diff !== '' && (
@@ -168,12 +172,14 @@ interface ChangesSource {
   /** The newest turn of its folder whose changes stand ("Undo turn"); an older one restores the folder instead. */
   latest: boolean;
   undone: boolean;
+  notSaved: NotSaved | null | undefined;
+  commandsUnlisted: boolean;
 }
 
 /** The host's live `turn_changes`, or the recorded list as it is. */
 function useChanges(ipc: WorkspaceIpc, turnId: string, recorded: readonly ChangedFile[] | undefined): ChangesSource {
   const live = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId), enabled: recorded === undefined });
-  if (recorded !== undefined) return { isPending: false, isError: false, error: null, files: recorded, latest: false, undone: false };
+  if (recorded !== undefined) return { isPending: false, isError: false, error: null, files: recorded, latest: false, undone: false, notSaved: null, commandsUnlisted: false };
   return {
     isPending: live.isPending,
     isError: live.isError,
@@ -181,6 +187,8 @@ function useChanges(ipc: WorkspaceIpc, turnId: string, recorded: readonly Change
     files: live.data?.files ?? [],
     latest: live.data?.latest ?? true,
     undone: live.data?.undone ?? false,
+    notSaved: live.data?.not_saved,
+    commandsUnlisted: live.data?.commands_unlisted === true,
   };
 }
 
@@ -372,6 +380,7 @@ export function ChangedFilesCard(props: ChangedFilesCardProps): React.JSX.Elemen
     >
       {panel ? <PanelTurnHeader label={label} expanded={expanded} onToggle={() => setExpanded((value) => !value)} listId={listId} {...summary} /> : <Summary {...summary} />}
       <CardAlerts changes={changes} restore={restore} />
+      <ChangesCoverage notSaved={changes.notSaved} commandsUnlisted={changes.commandsUnlisted} />
       {rows}
       <UndoDialog
         open={confirmingUndo && canRestore}
