@@ -58,7 +58,7 @@ blueprint:
     - Reasoning effort high
   requirements:
     - type: desktop
-      label: The Elitea desktop app with a Local work folder
+      label: The desktop app with a Local work folder
   surface: desktop
 ---
 # Code Reviewer

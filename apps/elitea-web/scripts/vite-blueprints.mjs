@@ -63,6 +63,8 @@ export function blueprintsPlugin({ root = REPO_ROOT, build = defaultBuild } = {}
     name: 'elitea-blueprints',
     async generateBundle() {
       for (const [path, source] of await files()) {
+        // The release notes section is for the GitHub release body, not the app.
+        if (path === 'release-notes.md') continue;
         this.emitFile({ type: 'asset', fileName: `${BLUEPRINTS_DIR}/${path}`, source });
       }
     },

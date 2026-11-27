@@ -32,7 +32,7 @@ blueprint:
     - Personas with relationships
   requirements:
     - type: desktop
-      label: The Elitea desktop app with the repository open as a Local work folder
+      label: The desktop app with the repository open as a Local work folder
     - type: gh
       label: The gh command line, signed in on that computer (gh auth login); the team never handles tokens
   surface: desktop

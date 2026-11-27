@@ -334,6 +334,8 @@
       "tier": "heavy",
       "paths": [
         "apps/elitea-web/**",
+        "blueprints/**",
+        "scripts/blueprints/**",
         "libs/ts/client-core/**",
         "brand/elitea/**",
         "brand/sample/**",

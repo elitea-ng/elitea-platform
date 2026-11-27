@@ -43,6 +43,11 @@ export const SKIPPED_FILES = [/(^|\/)NOTICE(\.[a-z]+)?$/i, /(^|\/)(LICEN[CS]E|CO
 export const ALLOWED = Object.freeze([
   {
     lane: '*',
+    text: 'Elitea dev team',
+    why: "The name of the blueprint team that develops the elitea-platform repository (blueprints/teams/elitea-dev-team, issue 3137): it names that repository's team, chosen by the owner, not the product. A white-label build can leave the blueprint out.",
+  },
+  {
+    lane: '*',
     text: '`Elitea`,`Epam`',
     why: 'Publish categories (the contract enum `PublishRequest.categories`, v2.yaml): stored values Main validates, shown as category names; renaming them is a data migration.',
   },
