@@ -769,6 +769,7 @@ export * from "./localTurnHandSkipRequest.zod";
 export * from "./localTurnHandSkipped.zod";
 export * from "./localTurnHandedAgent.zod";
 export * from "./localTurnMemoryRecall.zod";
+export * from "./localTurnProjectInstructionsReport.zod";
 export * from "./localTurnScreenshotStored.zod";
 export * from "./localTurnScreenshotUpload.zod";
 export * from "./localTurnStartRequest.zod";

@@ -244,3 +244,54 @@ async fn a_cloud_member_is_consulted_in_the_cloud() {
     assert_eq!(bodies(&h.server, "/llm/v1/chat/completions").len(), 2);
     assert!(commit(&h).get("consults").is_none());
 }
+
+/// Issue 3130: a consulted thread member works in the caller's folder, so
+/// its prompt carries the folder's AGENTS.md after its own instructions
+/// when the thread respects it, and none of it when it does not (the
+/// caller's neither).
+async fn a_consult_follows_respect_agents_md(respect: bool) {
+    let mut thread = Thread::new(handed(&[]), |n| match n {
+        0 => ask("Linter", "Lint the patch"),
+        1 => say("Lint clean."),
+        _ => say("Done."),
+    });
+    thread.tools = nested();
+    let server = serve(platform(thread)).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    h.host
+        .set_respect_agents_md(&h.workspace_id, "42", respect)
+        .await
+        .unwrap();
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h, &started.turn_id).await;
+
+    let model = bodies(&h.server, "/llm/v1/chat/completions");
+    assert_eq!(model.len(), 3);
+    let system = |n: usize| {
+        model[n]["messages"][0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let caller = system(0);
+    assert_eq!(caller.contains("Run task test."), respect, "{caller}");
+    // The callee (step 1).
+    let callee = system(1);
+    assert_eq!(callee.contains("Run task test."), respect, "{callee}");
+    assert_eq!(
+        callee.contains(crate::d0::turn::END_OF_PROJECT_INSTRUCTIONS),
+        respect,
+        "{callee}"
+    );
+}
+
+#[tokio::test]
+async fn a_consulted_member_follows_agents_md_when_the_thread_respects_it() {
+    a_consult_follows_respect_agents_md(true).await;
+}
+
+#[tokio::test]
+async fn a_consulted_member_ignores_agents_md_when_the_thread_does_not() {
+    a_consult_follows_respect_agents_md(false).await;
+}

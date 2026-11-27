@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "Succeeded",
   "workspace.tool.failed": "Failed",
   "workspace.tool.truncated": "(output truncated)",
-  "workspace.agentsMdApplied": "AGENTS.md applied",
   "workspace.cancel": "Cancel",
   "workspace.commitFailed.retry": "Retry",
   "workspace.git": "Git",
@@ -1287,5 +1286,11 @@
   "workspace.fullAuto.turnOff": "Turn off",
   "workspace.fullAutoMode": "Full auto (answers every approval, also after reading outside content)",
   "workspace.mode.fullAuto": "Full auto",
-  "workspace.mode.fullAutoHint": "Answers every approval"
+  "workspace.mode.fullAutoHint": "Answers every approval",
+  "workspace.instructions.beforeFirst": "Applies to the thread your first message starts.",
+  "workspace.instructions.ignored": "AGENTS.md ignored in this thread",
+  "workspace.instructions.none": "No AGENTS.md in this folder.",
+  "workspace.instructions.respect": "Respect AGENTS.md",
+  "workspace.instructions.saveFailed": "The setting could not be saved. Try again.",
+  "workspace.instructions.title": "Project instructions"
 }

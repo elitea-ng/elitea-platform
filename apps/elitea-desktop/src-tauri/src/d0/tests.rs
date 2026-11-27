@@ -2159,6 +2159,7 @@ async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
         running.payload["project_instructions"],
         json!(["agents.md", "apps/web/AGENTS.md"])
     );
+    assert_eq!(running.payload["project_instructions_applied"], true);
     let llm = seen(&h.server, "/llm/v1/chat/completions");
     let first: Value = serde_json::from_str(&llm[0].body).unwrap();
     let system = first["messages"][0]["content"].as_str().unwrap();
@@ -2183,6 +2184,107 @@ async fn agents_md_is_applied_after_the_agents_instructions_and_reported() {
         .cloned()
         .unwrap();
     assert!(second.payload.get("project_instructions").is_none());
+}
+
+/// Issue 3130: with the thread's "Respect AGENTS.md" off, the next turn's
+/// prompt carries none of the files (nor SOUL.md), the running status and
+/// the commit record that they were found and not applied, and turning it
+/// back on applies them from the turn after.
+#[tokio::test]
+async fn a_thread_that_does_not_respect_agents_md_assembles_none_of_it() {
+    let server = serve(platform(agent_details(), &[])).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    std::fs::write(h.folder.path().join("AGENTS.md"), "Run task test.").unwrap();
+    let status = h
+        .host
+        .instructions_status(&h.workspace_id, Some("42"))
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        super::turn::InstructionsStatus {
+            files: vec!["AGENTS.md".into()],
+            respect: true
+        }
+    );
+    h.host
+        .set_respect_agents_md(&h.workspace_id, "42", false)
+        .await
+        .unwrap();
+    assert!(
+        !h.host
+            .instructions_status(&h.workspace_id, Some("42"))
+            .await
+            .unwrap()
+            .respect
+    );
+    // A thread not created yet reads as the default.
+    assert!(
+        h.host
+            .instructions_status(&h.workspace_id, None)
+            .await
+            .unwrap()
+            .respect
+    );
+
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    let events = until_done(&h).await;
+    let running = events
+        .iter()
+        .find(|e| e.kind == "status" && e.payload["phase"] == "running")
+        .unwrap();
+    assert_eq!(
+        running.payload["project_instructions"],
+        json!(["AGENTS.md"])
+    );
+    assert_eq!(running.payload["project_instructions_applied"], false);
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let first: Value = serde_json::from_str(&llm[0].body).unwrap();
+    let system = first["messages"][0]["content"].as_str().unwrap();
+    assert!(system.contains("Be brief."), "{system}");
+    assert!(!system.contains("Run task test."), "{system}");
+    assert!(!system.contains(super::turn::AGENTS_MD_TAG), "{system}");
+    assert!(
+        !system.contains(super::turn::END_OF_PROJECT_INSTRUCTIONS),
+        "{system}"
+    );
+    let commit = &seen(
+        &h.server,
+        &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}"),
+    )[0];
+    let body: Value = serde_json::from_str(&commit.body).unwrap();
+    assert_eq!(
+        body["local_work"]["project_instructions"],
+        json!({"applied": false, "files": ["AGENTS.md"]})
+    );
+
+    // On again: the next turn applies the file.
+    h.host
+        .set_respect_agents_md(&h.workspace_id, "42", true)
+        .await
+        .unwrap();
+    let before = seen(&h.server, "/llm/v1/chat/completions").len();
+    let done_before = h.emitter.all().len();
+    h.host.start(request(&h.workspace_id)).await.unwrap();
+    for _ in 0..3000 {
+        if h.emitter.all()[done_before..]
+            .iter()
+            .any(|e| e.kind == "done")
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let llm = seen(&h.server, "/llm/v1/chat/completions");
+    let next: Value = serde_json::from_str(&llm[before].body).unwrap();
+    let system = next["messages"][0]["content"].as_str().unwrap();
+    assert!(system.contains("Run task test."), "{system}");
+    let running = h.emitter.all()[done_before..]
+        .iter()
+        .find(|e| e.kind == "status" && e.payload["phase"] == "running")
+        .cloned()
+        .unwrap();
+    assert_eq!(running.payload["project_instructions_applied"], true);
 }
 
 #[tokio::test]

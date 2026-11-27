@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "成功",
   "workspace.tool.failed": "失敗",
   "workspace.tool.truncated": "(出力は切り詰められました)",
-  "workspace.agentsMdApplied": "AGENTS.md を適用済み",
   "workspace.cancel": "キャンセル",
   "workspace.commitFailed.retry": "再試行",
   "workspace.git": "Git",

@@ -11,6 +11,9 @@
  * The thread's agents are managed here (#3081), not in the composer's chip: below the conversation's rows,
  * `ThreadAgentsPanel` lists the agents that join with the next message (before the first send, the composer's agent and
  * the ones added to it, so a new thread has the tab too) and the Add agent, Add cloud agent and Add team pickers.
+ *
+ * Below them, the thread's project instructions (issue 3130): the folder's AGENTS.md, once, with the thread's
+ * "Respect AGENTS.md" switch (`ProjectInstructionsSection`).
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
@@ -26,11 +29,13 @@ import { agentAvatarRenderer, AgentStateAnnouncer, HandoffBaton, useAgentRowView
 import { ParticipantRowControls, type ParticipantRowActions } from '@/pages/chat/ParticipantRowControls';
 
 import { ExchangeStrip, exchangeOf, type ExchangeStripProps } from './ExchangeStrip';
+import { ProjectInstructionsSection, type ProjectInstructionsSectionProps } from './ProjectInstructionsSection';
 import { participantsTabId, pendingAgents, ThreadAgentsPanel } from './ThreadAgentsPanel';
 import type { AgentSelection } from './useAgentSelection';
 import { useThreadTeam } from './useThreadTeam';
 
 export interface ParticipantsTabProps {
+  readonly workspaceId: string;
   readonly projectId: number;
   readonly conversationId: string;
   /** What the tab shows (the thread's title): its own window is named after it. */
@@ -41,7 +46,7 @@ export interface ParticipantsTabProps {
   readonly onAddress: (name: string) => void;
   /** The turn on screen and the host: the exchange strip, while a message's agents answer in turn, and the live states. */
   readonly turn: Pick<WorkspaceTurn, 'turnId' | 'view'>;
-  readonly ipc: ExchangeStripProps['ipc'];
+  readonly ipc: ExchangeStripProps['ipc'] & ProjectInstructionsSectionProps['ipc'];
   /** The composer's agents (#3081): the ones that join with the next message, and the add pickers. */
   readonly selection?: AgentSelection | undefined;
 }
@@ -62,7 +67,7 @@ function report(action: string) {
   return (error: unknown) => { console.error(`[workspace] failed to ${action}`, error); };
 }
 
-export function ParticipantsTab({ projectId, conversationId, subject, executorLocked, onAddress, turn, ipc, selection }: ParticipantsTabProps): ReactNode {
+export function ParticipantsTab({ workspaceId, projectId, conversationId, subject, executorLocked, onAddress, turn, ipc, selection }: ParticipantsTabProps): ReactNode {
   const navigate = useNavigate();
   const team = useThreadTeam({ projectId, conversationId });
   useLocalAgentStates(conversationId, turn.view.agentState);
@@ -111,6 +116,7 @@ export function ParticipantsTab({ projectId, conversationId, subject, executorLo
           />
         )}
         {selection !== undefined && <ThreadAgentsPanel selection={selection} joined={joined} locked={executorLocked} />}
+        <ProjectInstructionsSection workspaceId={workspaceId} conversationId={conversationId} turn={turn} ipc={ipc} />
         <HandoffBaton container={container} states={states} />
         <AgentStateAnnouncer rows={rows} />
       </Box>

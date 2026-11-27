@@ -60,6 +60,8 @@ fn main() {
             "thread_skills_list",
             "thread_skill_pin",
             "thread_skill_unpin",
+            "thread_instructions_status",
+            "thread_respect_agents_md_set",
             "session_info",
             "checkpoint_restore",
             "checkpoint_preview",

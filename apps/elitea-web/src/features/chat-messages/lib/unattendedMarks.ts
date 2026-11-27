@@ -8,7 +8,7 @@
  * `meta.goal_check` on the answer of a checked run.
  */
 import { readGoalCheck, readRunBrief, type GoalCheckView, type RunBriefView } from '@/entities/run-brief';
-import { ranInFullAuto, ranOutsideSandbox } from '@/shared/lib/localWork';
+import { projectInstructionsOf, ranInFullAuto, ranOutsideSandbox, type ProjectInstructionsRecord } from '@/shared/lib/localWork';
 
 import type { ChatMessage } from './convertMessagesToChatHistory.types';
 
@@ -22,6 +22,8 @@ export interface UnattendedMarks {
   readonly ranOutsideSandbox?: true;
   /** `meta.local_work.full_auto` (ADR-0061 amendment of 2026-11-26): a Local work turn ran in Full auto. */
   readonly fullAuto?: true;
+  /** `meta.local_work.project_instructions` (issue 3130): whether a Local work turn applied its folder's AGENTS.md. */
+  readonly projectInstructions?: ProjectInstructionsRecord;
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null;
@@ -32,6 +34,7 @@ export function unattendedMarksOf(meta: unknown): UnattendedMarks {
   const index = isRecord(meta['unattended']) ? meta['unattended']['continuation_index'] : undefined;
   const runBrief = readRunBrief(meta['run_brief']);
   const goalCheck = readGoalCheck(meta['goal_check']);
+  const projectInstructions = projectInstructionsOf(meta);
   return {
     ...(meta['continued_automatically'] === true ? { continuedAutomatically: true } : {}),
     ...(meta['continued_automatically'] === true && typeof index === 'number' && Number.isInteger(index) && index > 0 ? { continuationIndex: index } : {}),
@@ -40,6 +43,7 @@ export function unattendedMarksOf(meta: unknown): UnattendedMarks {
     ...(goalCheck === undefined ? {} : { goalCheck }),
     ...(ranOutsideSandbox(meta) ? { ranOutsideSandbox: true } : {}),
     ...(ranInFullAuto(meta) ? { fullAuto: true } : {}),
+    ...(projectInstructions === undefined ? {} : { projectInstructions }),
   };
 }
 

@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "کامیاب",
   "workspace.tool.failed": "ناکام",
   "workspace.tool.truncated": "(آؤٹ پٹ مختصر کیا گیا)",
-  "workspace.agentsMdApplied": "AGENTS.md لاگو",
   "workspace.cancel": "منسوخ کریں",
   "workspace.commitFailed.retry": "دوبارہ کوشش",
   "workspace.git": "Git",

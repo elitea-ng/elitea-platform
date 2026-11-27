@@ -7622,5 +7622,7 @@
   "pages.agents.teams.title": "Teams",
   "shared.entityList.pinned": "Pinned",
   "shared.entityList.primaryActionLabel": "{{action}} {{name}}",
-  "shared.entityList.updatedAgo": "Updated {{distance}} ago"
+  "shared.entityList.updatedAgo": "Updated {{distance}} ago",
+  "features.chatMessages.agentsMdApplied": "AGENTS.md applied",
+  "features.chatMessages.agentsMdIgnored": "AGENTS.md ignored"
 }

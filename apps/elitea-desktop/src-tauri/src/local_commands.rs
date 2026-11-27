@@ -1204,6 +1204,37 @@ pub async fn thread_skill_unpin(
         .await?)
 }
 
+/// The project instruction files of a workspace's folder and whether the
+/// thread respects them (issue 3130). `conversation_id` absent: a thread
+/// not created yet, which reads as on.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_instructions_status(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: Option<String>,
+) -> Result<crate::d0::turn::InstructionsStatus, IpcError> {
+    Ok(state
+        .agents
+        .instructions_status(&workspace_id, conversation_id.as_deref())
+        .await?)
+}
+
+/// Keep a local thread's "Respect AGENTS.md" (issue 3130): it applies from
+/// the thread's next turn, for every agent of the thread.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn thread_respect_agents_md_set(
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    conversation_id: String,
+    respect: bool,
+) -> Result<(), IpcError> {
+    state
+        .agents
+        .set_respect_agents_md(&workspace_id, &conversation_id, respect)
+        .await?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct HistoryForked {
     copied: usize,

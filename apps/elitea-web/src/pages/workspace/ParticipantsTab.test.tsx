@@ -60,10 +60,15 @@ function serve(participants: readonly unknown[], meta: Record<string, unknown> =
 
 function mount(onAddress = vi.fn()): void {
   const turn = { turnId: null, view: replayView([]) };
-  const ipc = { stopExchange: vi.fn(), skipInExchange: vi.fn() };
+  const ipc = {
+    stopExchange: vi.fn(),
+    skipInExchange: vi.fn(),
+    threadInstructionsStatus: vi.fn(() => Promise.resolve({ files: ['AGENTS.md'], respect: false })),
+    setThreadRespectAgentsMd: vi.fn(() => Promise.resolve()),
+  };
   const Page = () => (
     <SidePanelHarness>
-      <ParticipantsTab projectId={42} conversationId="77" subject="fix the build" executorLocked={false} onAddress={onAddress} turn={turn} ipc={ipc} />
+      <ParticipantsTab workspaceId="ws-1" projectId={42} conversationId="77" subject="fix the build" executorLocked={false} onAddress={onAddress} turn={turn} ipc={ipc} />
     </SidePanelHarness>
   );
   const rootRoute = createRootRoute({ component: Page });
@@ -99,6 +104,16 @@ afterEach(() => {
 });
 
 describe("a Local work thread's Participants tab (issue 3055)", () => {
+  it('states the thread\'s project instructions once, below the agents, with its Respect AGENTS.md choice (issue 3130)', async () => {
+    serve([coder, reviewer]);
+    mount();
+    const tab = await screen.findByTestId('side-panel-tab-team');
+    const section = await within(tab).findByTestId('project-instructions');
+    expect(within(section).getByTestId('project-instructions-file')).toHaveTextContent('AGENTS.md');
+    await waitFor(() => expect(within(section).getByRole('switch', { name: 'Respect AGENTS.md' })).not.toBeChecked());
+    expect(within(section).getByTestId('agents-md-ignored')).toHaveTextContent('AGENTS.md ignored in this thread');
+  });
+
   it('leads the tabs with two agents, with the Lead chip and Local/Cloud badges, and lists no toolkit', async () => {
     serve([coder, reviewer, toolkit]);
     mount();

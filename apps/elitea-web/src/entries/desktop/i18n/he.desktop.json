@@ -79,7 +79,6 @@
   "workspace.tool.succeeded": "הצליח",
   "workspace.tool.failed": "נכשל",
   "workspace.tool.truncated": "(הפלט קוצר)",
-  "workspace.agentsMdApplied": "AGENTS.md הוחל",
   "workspace.cancel": "ביטול",
   "workspace.commitFailed.retry": "ניסיון חוזר",
   "workspace.git": "Git",

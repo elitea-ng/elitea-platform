@@ -171,3 +171,26 @@ export function ranInFullAuto(meta: unknown): boolean {
   const record = (localWork as { full_auto?: unknown }).full_auto;
   return record !== null && typeof record === 'object' && !Array.isArray(record);
 }
+
+/** What a committed Local work answer recorded about its folder's project instructions (#3130). */
+export interface ProjectInstructionsRecord {
+  /** The turn's prompt carried them: false when the desktop thread's "Respect AGENTS.md" was off. */
+  applied: boolean;
+  files: string[];
+}
+
+/**
+ * Whether a committed local answer applied its folder's project instructions (AGENTS.md, #3130):
+ * Main stores the commit's `meta.local_work.project_instructions` record. Absent (no instruction
+ * files, or a server before contract 1.70) or malformed, null: no marker.
+ */
+export function projectInstructionsOf(meta: unknown): ProjectInstructionsRecord | null {
+  if (meta === null || typeof meta !== 'object') return null;
+  const localWork = (meta as { local_work?: unknown }).local_work;
+  if (localWork === null || typeof localWork !== 'object') return null;
+  const record = (localWork as { project_instructions?: unknown }).project_instructions;
+  if (record === null || typeof record !== 'object') return null;
+  const { applied, files } = record as { applied?: unknown; files?: unknown };
+  if (typeof applied !== 'boolean' || !Array.isArray(files)) return null;
+  return { applied, files: files.filter((file): file is string => typeof file === 'string') };
+}

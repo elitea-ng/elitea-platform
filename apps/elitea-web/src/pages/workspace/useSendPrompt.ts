@@ -25,10 +25,11 @@ import { defaultRunVersionId } from '@/entities/version';
 import { getApplication } from '@/shared/api/generated/applications/applications';
 import { unwrapBody } from '@/shared/api/unwrap';
 import { isDesktopGrantsOff, markGrantsTurnedOff } from '@/features/unattended';
-import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
+import { describeWorkspaceError, useWorkspaceIpc, type WorkspaceTurn } from '@/features/workspace';
 import type { TurnModelChoice } from '@/shared/desktop/turnModel';
 import type { AttachedImage, TurnCommand, TurnImagePick, TurnModeChoice, TurnStartRequest, Workspace } from '@/shared/desktop/workspaceIpc';
 
+import { applyPendingRespect } from './pendingRespect';
 import type { AgentSelection } from './useAgentSelection';
 import { takeRetry, type PendingConversation } from './sendRetry';
 import { modeFields } from './turnModeFields';
@@ -285,6 +286,7 @@ export function useSendPrompt(
 ): SendPrompt {
   const ensureConversation = useEnsureConversation();
   const queryClient = useQueryClient();
+  const ipc = useWorkspaceIpc();
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   // Synchronous: a second click lands before React re-renders with `sending`.
@@ -328,6 +330,8 @@ export function useSendPrompt(
       const conversationId = ensured.id;
       const floor = await threadFloor(queryClient, projectId, conversationId, selection.conversationId !== '', ensured.agents, ensured.meta);
       if (startsNew) pending.current = { key, id: conversationId, ready: true };
+      // "Respect AGENTS.md" turned off before the first message: the host keeps it before the first turn (#3130).
+      await applyPendingRespect(ipc, workspace.id, conversationId, startsNew);
       const base: TurnStartRequest = {
         workspace_id: workspace.id,
         project_id: projectId,

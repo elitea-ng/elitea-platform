@@ -43,6 +43,7 @@
 import * as zod from "zod";
 import { LocalTurnCommand } from "./localTurnCommand.zod";
 import { LocalTurnFullAutoReport } from "./localTurnFullAutoReport.zod";
+import { LocalTurnProjectInstructionsReport } from "./localTurnProjectInstructionsReport.zod";
 
 export const localTurnWorkReportCommandsMax = 500;
 
@@ -104,6 +105,7 @@ export const LocalTurnWorkReport = zod
         "Client contract 1.67. The turn's folder was trusted (and not suspended) when the turn ran. Absent when it was not.",
       ),
     full_auto: LocalTurnFullAutoReport.optional(),
+    project_instructions: LocalTurnProjectInstructionsReport.optional(),
   })
   .describe(
     "What the client reports it did on the device. Stored on the answer as `local_work` with at most 50 commands and 200 paths (cut to 300 and 400 bytes) plus the reported totals. NOTE(W2): internal/application/localturn/localturn.go:199 (`LocalWorkReport`).",

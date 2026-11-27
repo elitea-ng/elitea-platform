@@ -1345,6 +1345,23 @@ pub fn with_project_instructions(
     }
 }
 
+/// The project instruction files `project` holds, as the person sees them:
+/// the AGENTS.md files in order, then the root SOUL.md (issue 3130).
+#[must_use]
+pub fn instruction_paths(project: &ProjectInstructions) -> Vec<String> {
+    let mut paths = project.paths();
+    // As `with_project_instructions` frames it: a SOUL.md that renders to
+    // nothing adds nothing to the prompt, so it is not listed either.
+    paths.extend(
+        project
+            .soul
+            .as_ref()
+            .filter(|local| !local.soul.render().is_empty())
+            .map(|local| local.path.clone()),
+    );
+    paths
+}
+
 /// A thread's system prompt (#1227), in the order of authority: the
 /// agent's instructions, the stable part of the host's environment section
 /// (trusted: not framed), then the workspace's AGENTS.md (untrusted, framed
@@ -2946,6 +2963,19 @@ impl AgentHost {
             index.prioritise(&request.workspace_id, checked.iter().cloned());
         }
         drop(folder);
+        // The thread's "Respect AGENTS.md" (issue 3130), read at every turn
+        // start: a change made while a turn runs applies from the next one.
+        // Off, the turn (its sub-agents and consults too) is assembled
+        // without any of the files; which were found is still reported.
+        let instructions_found = instruction_paths(&project);
+        let instructions_applied = self
+            .respects_agents_md(&request.workspace_id, &conversation)
+            .await?;
+        let project = if instructions_applied {
+            project
+        } else {
+            ProjectInstructions::default()
+        };
         let command = command.map(|command| CommandTurn {
             mentions: checked.clone(),
             command,
@@ -3262,6 +3292,8 @@ impl AgentHost {
             conversation_uuid: answering.conversation_uuid,
             tap,
             project,
+            instructions_found,
+            instructions_applied,
             invoked,
             command,
             request: request.clone(),
@@ -3295,6 +3327,8 @@ impl AgentHost {
             conversation_uuid,
             tap,
             project,
+            instructions_found,
+            instructions_applied,
             invoked,
             command,
             mut request,
@@ -3373,6 +3407,7 @@ impl AgentHost {
         // Full auto (issue 3079), which the recorder reports on the commit.
         session.set_profile(request.profile());
         recorder.set_full_auto(request.profile() == PermissionProfile::FullAuto);
+        recorder.set_project_instructions(&instructions_found, instructions_applied);
         session.rules().set_unattended(
             request
                 .unattended
@@ -3423,7 +3458,11 @@ impl AgentHost {
         }) {
             events.set_participant(participant_id);
         }
-        events.running(&project.paths(), &turn_model(&admitted));
+        events.running(
+            &instructions_found,
+            instructions_applied,
+            &turn_model(&admitted),
+        );
         if let Some(turn) = &request.unattended {
             events.unattended(&unattended::running_status(
                 turn,
@@ -5519,27 +5558,30 @@ impl AgentHost {
                 .any(|agent| agent.participant_id != caller)
             && !admitted.child_agents.is_empty()
         {
-            let _ = children_remote.set_consults(Arc::new(super::consult::LocalConsults::new(
-                api.clone(),
-                request.project_id,
-                caller,
-                question.to_owned(),
-                started.thread_agents().to_vec(),
-                self.exchanges.clone(),
-                events.clone(),
-                transport.clone(),
-                child_model.clone(),
-                toolsets.clone(),
-                remote_specs.clone(),
-                remote.clone(),
-                ToolObserver {
-                    planner: None,
-                    ..observer.clone()
-                },
-                workspace.session.clone(),
-                nonce.clone(),
-                turn_context.consults(),
-            )));
+            let _ = children_remote.set_consults(Arc::new(
+                super::consult::LocalConsults::new(
+                    api.clone(),
+                    request.project_id,
+                    caller,
+                    question.to_owned(),
+                    started.thread_agents().to_vec(),
+                    self.exchanges.clone(),
+                    events.clone(),
+                    transport.clone(),
+                    child_model.clone(),
+                    toolsets.clone(),
+                    remote_specs.clone(),
+                    remote.clone(),
+                    ToolObserver {
+                        planner: None,
+                        ..observer.clone()
+                    },
+                    workspace.session.clone(),
+                    nonce.clone(),
+                    turn_context.consults(),
+                )
+                .with_project(project.clone()),
+            ));
         }
         // Sub-agents: the turn's model, quiet, and its local and index tools
         // (never the remote toolkits, nor the person's MCP servers: a child
@@ -6565,6 +6607,106 @@ impl AgentHost {
             .map_err(|e| TurnError::new("storage", e.to_string()))
     }
 
+    /// Whether the thread applies the folder's project instructions (issue
+    /// 3130): on without a history store (the default). A setting that
+    /// cannot be read refuses the turn (`not_signed_in`, `storage`), as the
+    /// thread's pinned skills do: a thread turned off never runs with the
+    /// files because of a failed read.
+    async fn respects_agents_md(
+        &self,
+        workspace_id: &str,
+        conversation: &str,
+    ) -> Result<bool, TurnError> {
+        let Some(history) = self.deps.history.clone() else {
+            return Ok(true);
+        };
+        let owner = self.owner(&self.api).await?;
+        history
+            .read_thread_respects_agents_md(owner, workspace_id.to_owned(), conversation.to_owned())
+            .await
+            .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
+    /// `thread_instructions_status`: the project instruction files the
+    /// workspace's folder holds at its root (a turn also applies the nested
+    /// AGENTS.md of the paths it references) and whether the thread
+    /// respects them (issue 3130). A thread not created yet
+    /// (`conversation_id` `None`) reads as the default, on. Only reads, so
+    /// it also answers while a turn runs.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `local_work_disabled`, `workspace_unknown`,
+    /// `workspace_unavailable`, `not_signed_in`, `storage`, `internal`.
+    pub async fn instructions_status(
+        &self,
+        workspace_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<InstructionsStatus, TurnError> {
+        let conversation = conversation_id
+            .map(|id| conversation_key(&Value::String(id.to_owned())))
+            .transpose()?;
+        let policy = self.policy()?;
+        let workspace = self
+            .deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let path = workspace.path.clone();
+        let deny = policy.path_deny.clone();
+        let project = tokio::task::spawn_blocking(move || {
+            mentions::open(Path::new(&path), &deny)
+                .map(|folder| project_instructions::load(&folder, &[]))
+        })
+        .await
+        .map_err(|_| TurnError::new("internal", "the instructions read stopped unexpectedly"))??;
+        let respect = match &conversation {
+            Some(conversation) => self.respects_agents_md(workspace_id, conversation).await?,
+            None => true,
+        };
+        Ok(InstructionsStatus {
+            files: instruction_paths(&project),
+            respect,
+        })
+    }
+
+    /// `thread_respect_agents_md_set`: keep the thread's "Respect AGENTS.md"
+    /// (issue 3130) in the host's thread store. It applies from the thread's
+    /// next turn; a running turn keeps what it started with.
+    ///
+    /// # Errors
+    ///
+    /// `invalid_request`, `workspace_unknown`, `not_signed_in`, `storage`,
+    /// `internal`.
+    pub async fn set_respect_agents_md(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+        respect: bool,
+    ) -> Result<(), TurnError> {
+        let conversation = conversation_key(&Value::String(conversation_id.to_owned()))?;
+        self.deps
+            .workspaces
+            .get(workspace_id)
+            .map_err(|e| TurnError::new("storage", e.to_string()))?
+            .ok_or_else(|| TurnError::new("workspace_unknown", "That workspace is not open."))?;
+        let history = self.deps.history.clone().ok_or_else(|| {
+            TurnError::new(
+                "storage",
+                "The thread history is not available, so the setting cannot be kept.",
+            )
+        })?;
+        let owner = self.owner(&self.api).await?;
+        let workspace = workspace_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            history.set_thread_respects_agents_md(&owner, &workspace, &conversation, respect)
+        })
+        .await
+        .map_err(|e| TurnError::new("internal", format!("the settings write stopped: {e}")))?
+        .map_err(|e| TurnError::new("storage", e.to_string()))
+    }
+
     /// The ids of the project skills pinned to the request's thread (the
     /// request's project's only), oldest first; none without a history store.
     async fn pinned_skill_ids(
@@ -7355,8 +7497,14 @@ struct Prepared {
     conversation_uuid: String,
     /// The turn's events' recorder (the thread history).
     tap: Arc<TurnTap>,
-    /// The workspace's AGENTS.md files, read at the start.
+    /// The workspace's AGENTS.md files, read at the start; none when the
+    /// thread does not respect them (issue 3130).
     project: ProjectInstructions,
+    /// The project instruction files the folder holds for this turn,
+    /// applied or not.
+    instructions_found: Vec<String>,
+    /// The thread applied them ("Respect AGENTS.md", issue 3130).
+    instructions_applied: bool,
     /// The skills the person picked for this turn, resolved.
     invoked: Vec<InvokedSkill>,
     /// The custom command the person picked, read and expanded.
@@ -7382,6 +7530,16 @@ struct Prepared {
     models: Option<Arc<Catalogue>>,
     /// The images the person attached (#1229); the model sees images.
     images: Vec<Arc<Attachment>>,
+}
+
+/// `thread_instructions_status`'s answer (issue 3130).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct InstructionsStatus {
+    /// The project instruction files at the folder's root (AGENTS.md, then
+    /// SOUL.md), workspace-relative; empty when it holds none.
+    pub files: Vec<String>,
+    /// The thread applies them ("Respect AGENTS.md"; on by default).
+    pub respect: bool,
 }
 
 /// Whether the catalogue says the turn's model sees images.
