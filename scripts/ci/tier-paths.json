@@ -158,6 +158,8 @@
       "tier": "fast",
       "paths": [
         "apps/elitea-mobile/**",
+        "blueprints/**",
+        "scripts/blueprints/**",
         "services/elitea-main/api/openapi/v2.yaml",
         "libs/ts/client-core/**",
         "brand/elitea/**",

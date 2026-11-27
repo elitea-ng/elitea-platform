@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
+import { BlueprintGallery } from '@/features/blueprints/BlueprintGallery';
 import { Button, DESCRIPTION_MAX_LENGTH, exceedsLimit, Text, TextField } from '@/ui';
 
 import type { AgentBuilder, EditableDraft } from './useAgentBuilder';
@@ -21,6 +22,7 @@ export function AgentBuilderView({ builder, onSaved }: { builder: AgentBuilder; 
   const [request, setRequest] = useState('');
   const [change, setChange] = useState('');
   const [edited, setEdited] = useState<EditableDraft>(EMPTY);
+  const [browsing, setBrowsing] = useState(false);
 
   // A new draft replaces the fields under review (adjusted while rendering, not in an effect).
   const reviewed = state.phase === 'review' ? state.draft : null;
@@ -58,6 +60,17 @@ export function AgentBuilderView({ builder, onSaved }: { builder: AgentBuilder; 
             testID="agent-builder-request"
           />
           <Button title="Generate" block disabled={request.trim() === ''} onPress={() => builder.generate(request)} />
+          {/* Issue 3137: Craft from a blueprint fills the request with its brief. */}
+          {browsing ? (
+            <BlueprintGallery
+              onCraft={(brief) => {
+                setRequest(brief);
+                setBrowsing(false);
+              }}
+            />
+          ) : (
+            <Button title="Start from a blueprint" variant="plain" block onPress={() => setBrowsing(true)} testID="agent-builder-blueprints" />
+          )}
         </>
       ) : null}
       {state.phase === 'streaming' ? (
