@@ -2,8 +2,9 @@
  * The spacing scale for R-T9 as amended by ADR-0062 decision 2.
  *
  * The scale is the brand's `space.steps` (px) divided by the web theme's
- * spacing unit — 8 in comfortable density (`src/shared/brand/buildTheme.ts`,
- * `spacing:`), not the pack's `space.unit`, which is 4. The steps are read
+ * spacing unit: 8 px, the comfortable unit at the 16 px browser default
+ * (`src/shared/brand/buildTheme.ts` `spacing:` writes 8, or 0.5rem after
+ * #3093), not the pack's `space.unit`, which is 4. The steps are read
  * from `tokens.json` so the scale is never copied by hand.
  */
 import { readFileSync } from 'node:fs';

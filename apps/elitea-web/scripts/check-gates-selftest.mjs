@@ -292,8 +292,8 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
     'theme-gate 10-style-ratchet: FAIL',
     'src/features/bar spacing-rem: 0 → 2',
     'src/features/bar/ui/Card.tsx (0 → 2 in this file; new at the head: git paired it with no base file)',
-    '1. land the move unchanged in its own PR first (a pure move pairs at 100 %), then edit it; or',
-    '2. move the values it carries onto the system in this PR.',
+    '1. land each move unchanged in its own PR (a pure move pairs at 100 %), and split, merge or edit inside one folder; or',
+    '2. move the values it carries onto the system; a change of pixels goes first in its own PR (ADR-0062 decision 5).',
   ];
   const missingUnpaired = expectedUnpaired.filter((line) => !unpairedOut.includes(line));
   const pairedOk = paired.status === 0 && pairedOut.includes('theme-gate 10-style-ratchet: PASS');

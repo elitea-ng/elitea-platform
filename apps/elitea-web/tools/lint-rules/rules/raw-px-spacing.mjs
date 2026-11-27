@@ -130,7 +130,7 @@ function ratchetVisitors(context, options) {
           : `theme.spacing(${n})`;
     if (onScale(units_, scale ?? [])) return `→ ${n} (${how})`;
     const near = scale ? nearestSteps(units_, scale) : [];
-    return `is ${fmt(units_)} units, off the scale → nearest steps ${near.map(fmt).join(' or ')} (a visible change, ADR-0062 decision 5)`;
+    return `is ${fmt(units_)} units, off the scale → nearest steps ${near.map(fmt).join(' or ')} (for an existing value, a visible change: ADR-0062 decision 5)`;
   };
 
   function reportLength(node, key, raw, value, lengthUnit, kind) {
@@ -154,7 +154,7 @@ function ratchetVisitors(context, options) {
       const near = nearestSteps(n, scale);
       context.report({
         node,
-        message: `R-T9 [spacing-off-scale] ${key}: ${fmt(n)} is off the scale → nearest steps ${near.map(fmt).join(' or ')} (a visible change, ADR-0062 decision 5)`,
+        message: `R-T9 [spacing-off-scale] ${key}: ${fmt(n)} is off the scale → nearest steps ${near.map(fmt).join(' or ')} (for an existing value, a visible change: ADR-0062 decision 5)`,
       });
     } else if (kind === 'px' && n !== 0 && units.has('px')) {
       const advice = unit ? stepAdvice(toUnits(n, unit), 'px') : '→ theme.spacing(n)';

@@ -42,7 +42,7 @@ export function oxlintArgs(config) {
   return ['-c', config, '-f', 'json', '--no-ignore', 'src'];
 }
 
-/** Kinds in stage 1 (ADR-0062 decision 3.4). A message names its kind as `[kind]`. */
+/** Kinds counted now (ADR-0062 decision 3.4; PR 4 adds the legacy-id kind). A message names its kind as `[kind]`. */
 export const KINDS = ['spacing-rem', 'spacing-px', 'spacing-off-scale', 'mui-dialog', 'mui-switch'];
 
 const KIND_RE = /\[([a-z][a-z-]*)\]/;
@@ -165,8 +165,8 @@ export const UNPAIRED_NOTE = 'new at the head: git paired it with no base file';
 export const UNPAIRED_FIXES = [
   'A file marked "new at the head" counts as new in this folder (git pairs a move at 50 % similarity or more).',
   'If it was moved, split or merged from another file with edits, either:',
-  '  1. land the move unchanged in its own PR first (a pure move pairs at 100 %), then edit it; or',
-  '  2. move the values it carries onto the system in this PR.',
+  '  1. land each move unchanged in its own PR (a pure move pairs at 100 %), and split, merge or edit inside one folder; or',
+  '  2. move the values it carries onto the system; a change of pixels goes first in its own PR (ADR-0062 decision 5).',
 ];
 
 /**
@@ -178,7 +178,7 @@ export function formatGrowth(growth, unpaired = { added: [] }) {
   const added = new Set(unpaired.added);
   const lines = [];
   for (const { folder, kind, before, after, files } of growth) {
-    lines.push(`${folder} ${kind}: ${before} → ${after} (the base branch is the ceiling; remove as many as you add)`);
+    lines.push(`${folder} ${kind}: ${before} → ${after} (the base branch is the ceiling)`);
     for (const { path, before: fileBefore, hits } of files) {
       const note = added.has(path) ? `; ${UNPAIRED_NOTE}` : '';
       lines.push(`  ${path} (${fileBefore} → ${hits.length} in this file${note})`);
@@ -214,13 +214,16 @@ export function formatCounts(counts) {
 /**
  * The base tree's file list, from `git diff --name-status -M <base> <head> -- <prefix>`
  * and `git ls-tree -r --name-only <base> -- <prefix>`: each base file and the
- * path it is written to. A renamed file goes to its head path (decision 3.2).
+ * path it is written to. A renamed file goes to its head path (decision 3.2),
+ * unless its base path is not counted (`isCounted`): such a file stays at its
+ * old path, so its values count as new at the head, as `unpairedFiles` lists it.
  * Only files under `<prefix>src/` are kept; paths are returned relative to `prefix`.
  */
 export function planBaseTree(baseFiles, nameStatus, prefix) {
+  const counted = (path) => path.startsWith(prefix) && isCounted(path.slice(prefix.length));
   const renames = new Map(
     parseNameStatus(nameStatus)
-      .filter(({ status }) => status === 'R')
+      .filter(({ status, from }) => status === 'R' && counted(from))
       .map(({ from, to }) => [from, to]),
   );
   const tree = `${prefix}src/`;
@@ -258,8 +261,10 @@ export function parseNameStatus(nameStatus) {
  * an `R` line, and the base tree holds the file under its head path. A file
  * git lists as added (`A`) has no base file: it counts as new in its folder.
  * A file git lists as deleted (`D`) has no head file: it counts as removed
- * from its folder. A file git pairs across the edge of `src/` is new to the
- * counted tree on one side or removed from it on the other. Nothing else
+ * from its folder. A file git pairs across the edge of the counted tree (out
+ * of `src/`, or out of a path `isCounted` leaves out, such as the vendor
+ * folder or a test file) is new to it on one side or removed from it on the
+ * other. Nothing else
  * reads names, sizes or contents to guess a move: a move with heavy edits, a
  * split or a merge is whatever git makes of it (a split pairs at most one
  * part, a merge at most one source), and the failure message names the new
@@ -270,11 +275,12 @@ export function parseNameStatus(nameStatus) {
 export function unpairedFiles(nameStatus, prefix) {
   const tree = `${prefix}src/`;
   const inTree = (path) => path.startsWith(tree);
+  const counted = (path) => inTree(path) && isCounted(path.slice(prefix.length));
   const added = [];
   const removed = [];
   for (const { status, from, to } of parseNameStatus(nameStatus)) {
-    if (status === 'A' || (status === 'R' && inTree(to) && !inTree(from))) added.push(to);
-    if (status === 'D' || (status === 'R' && inTree(from) && !inTree(to))) removed.push(from);
+    if (status === 'A' || (status === 'R' && counted(to) && !counted(from))) added.push(to);
+    if (status === 'D' || (status === 'R' && counted(from) && !counted(to))) removed.push(from);
   }
   const rel = (paths) =>
     paths

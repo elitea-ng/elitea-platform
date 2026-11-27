@@ -29,8 +29,9 @@
   // scripts/lib/style-ratchet-core.mjs.
   "rules": {
     // R-T9 as amended by ADR-0062 decision 2: rem and px lengths in spacing,
-    // and numbers MUI multiplies that are off the brand scale (unit 8 =
-    // buildTheme.ts `spacing`, comfortable density).
+    // and numbers MUI multiplies that are off the brand scale. unit 8: 8 px,
+    // the comfortable unit at the 16 px browser default (buildTheme.ts writes
+    // 8, or 0.5rem after #3093).
     "elitea/raw-px-spacing": ["error", { "units": ["px", "rem"], "unit": 8 }],
     // R-T14: Dialog and Switch go through their shared/ui wrappers.
     // A type-only import is not counted.
