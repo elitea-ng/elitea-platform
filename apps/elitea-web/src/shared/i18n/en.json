@@ -7609,5 +7609,20 @@
   "pages.admin.governance.confirm.deleteGuardrailBody": "The gateway stops applying this guardrail within its refresh interval: it no longer blocks or redacts anything.",
   "pages.admin.projects.delete.target": "{{count}} projects",
   "pages.admin.users.dangerous.deleteTarget": "{{count}} users",
-  "features.chatMessages.fullAuto": "Ran in Full auto"
+  "features.chatMessages.fullAuto": "Ran in Full auto",
+  "features.agentTeams.emptyDescription": "A team is a saved set of agents with a lead. Start a conversation with all of them at once. Save one here, or from a conversation's participants.",
+  "features.agentTeams.emptyTitle": "No teams yet",
+  "features.agentTeams.leadBadge": "Lead",
+  "features.agentTeams.memberCount": "{{count}} agents",
+  "features.agentTeams.membersList": "Members of {{name}}",
+  "features.agentTeams.moreActions": "More actions for {{name}}",
+  "features.agentTeams.updatedAgo": "Updated {{distance}} ago",
+  "pages.agents.list.chat": "Chat",
+  "pages.agents.list.chatFailed": "The chat could not be started. Try again.",
+  "pages.agents.list.chatNoVersion": "This agent has no saved version to chat with.",
+  "pages.agents.teams.import": "Import team",
+  "pages.agents.teams.title": "Teams",
+  "shared.entityList.pinned": "Pinned",
+  "shared.entityList.primaryActionLabel": "{{action}} {{name}}",
+  "shared.entityList.updatedAgo": "Updated {{distance}} ago"
 }

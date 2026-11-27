@@ -3,8 +3,9 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 
-import { getListApplicationsMockHandler } from '@/shared/api/generated/applications/applications.msw';
+import { getGetApplicationMockHandler, getListApplicationsMockHandler } from '@/shared/api/generated/applications/applications.msw';
 import { getPermissionListMockHandler } from '@/shared/api/generated/auth/auth.msw';
+import { getGetCurrentAuthorMockHandler } from '@/shared/api/generated/social/social.msw';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
@@ -278,5 +279,58 @@ describe('AgentsWorkshop (ADR-0051 M1)', () => {
 
     expect(await screen.findByTestId('agent-selection-count')).toHaveTextContent('1 agents selected');
     expect(await screen.findByRole('alert')).toHaveTextContent('could not be deleted');
+  });
+
+  // Issue 3133: the card's Chat starts a private conversation with the agent's default version and opens it.
+  it('starts a chat with the agent from its card and opens the conversation', async () => {
+    let participants: unknown;
+    server.use(
+      getGetCurrentAuthorMockHandler({ id: 5, email: 'me@example.com', name: 'Me' } as never),
+      getGetApplicationMockHandler({
+        id: '1',
+        name: 'Draft agent',
+        description: '',
+        icon: '',
+        owner_id: 'user-1',
+        created_at: '2026-01-01T00:00:00Z',
+        versions: [{ id: '11', name: 'base', status: 'draft', agent_type: 'classic', created_at: '2026-01-01T00:00:00Z', is_default: true }],
+      }),
+      http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => HttpResponse.json({ id: '77', name: 'Draft agent' }, { status: 201 })),
+      http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
+        participants = await request.json();
+        return HttpResponse.json([], { status: 200 });
+      }),
+    );
+    const user = userEvent.setup();
+    const { router } = renderAgentsRoute(<Applications />, '/agents/all', { projectId: '9' });
+
+    const cards = await screen.findAllByTestId('entity-card');
+    expect(cards[0]).toHaveAttribute('data-variant', 'rich');
+    const chat = within(cards[0] as HTMLElement).getByTestId('entity-card-primary-action');
+    await waitFor(() => expect(chat).toBeEnabled());
+    await user.click(chat);
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/77'));
+    expect(JSON.stringify(participants)).toContain('"version_id":"11"');
+  });
+
+  // Issue 3134: the Teams mode names itself and offers team actions, not agent ones.
+  it('offers New team and Import team in the side panel of the Teams mode, not New agent', async () => {
+    server.use(
+      getPermissionListMockHandler([
+        { name: 'models.applications.applications.create', enabled: true },
+        { name: 'models.teams.list', enabled: true },
+        { name: 'models.teams.create', enabled: true },
+      ]),
+      http.get('*/elitea_core/agent_teams/prompt_lib/:projectId', () => HttpResponse.json({ rows: [], total: 0 })),
+    );
+    renderAgentsRoute(<SidePanelHarness><Applications /></SidePanelHarness>, '/agents/teams', { projectId: '9' });
+
+    expect(await screen.findByTestId('agent-teams-empty')).toHaveTextContent('No teams yet');
+    expect(await screen.findByTestId('teams-create')).toHaveTextContent('New team');
+    expect(screen.getByTestId('teams-import-button')).toHaveTextContent('Import team');
+    expect(screen.getByTestId('teams-header-import-button')).toHaveTextContent('Import team');
+    expect(screen.queryByTestId('agents-create')).toBeNull();
+    expect(screen.queryByTestId('agents-import-button')).toBeNull();
   });
 });

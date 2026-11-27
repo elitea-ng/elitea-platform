@@ -56,6 +56,12 @@ export interface EntityListItem {
    * (the reason `forkedFrom` is a marker on the card).
    */
   readonly action?: { readonly label: string; readonly onClick: () => void };
+  /** The rich card's second line (an agent's persona role, #3133). */
+  readonly subtitle?: string;
+  /** ISO timestamp of the last change: the rich card's muted "Updated … ago" line. */
+  readonly updatedAt?: string;
+  /** The rich card's primary action (an agent's Chat), drawn on hover and focus beside the row slot's controls. */
+  readonly primaryAction?: { readonly label: string; readonly onClick: () => void; readonly disabled?: boolean };
 }
 
 /** `ViewOptions` (`apps/elitea-ui/src/common/constants.js`) — the `?view=` search-param vocabulary. */
@@ -63,3 +69,10 @@ export const ENTITY_LIST_VIEW = { cards: 'cards', table: 'table' } as const;
 
 /** @public The two list renderings `EntityCardList` switches between. */
 export type EntityListView = (typeof ENTITY_LIST_VIEW)[keyof typeof ENTITY_LIST_VIEW];
+
+/**
+ * The card a grid draws: `compact` is the port of the old app's card (every
+ * list but Agents), `rich` the Agents card of issue 3133 (avatar, description,
+ * persona, status beside the name, actions on hover and focus).
+ */
+export type EntityCardVariant = 'compact' | 'rich';

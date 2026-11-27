@@ -9,9 +9,10 @@ import { t } from '@/shared/i18n';
 import { useLocationSearch } from '@/shared/lib/hooks/useLocationSearch';
 
 import { EntityCard } from './EntityCard';
+import { EntityRichCard } from './EntityRichCard';
 import { EntityListPagination } from './EntityListPagination';
 import { EntityListTable } from './EntityListTable';
-import { ENTITY_LIST_VIEW, type EntityListItem, type EntityListTag, type EntityListView } from './model';
+import { ENTITY_LIST_VIEW, type EntityCardVariant, type EntityListItem, type EntityListTag, type EntityListView } from './model';
 
 /**
  * The list surface every entity page shares: the card grid (or, on
@@ -57,6 +58,8 @@ export interface EntityCardListProps {
   readonly renderCardActions?: (item: EntityListItem) => ReactNode;
   /** The table view's Actions column: a three-dot menu per row. Absent means no such column. */
   readonly renderRowActions?: (item: EntityListItem) => ReactNode;
+  /** Which card the grid draws (`compact` by default; `rich` is the Agents card, issue 3133). */
+  readonly variant?: EntityCardVariant;
 }
 
 /**
@@ -96,7 +99,7 @@ export function EntityCardList(props: EntityCardListProps): ReactNode {
 
 /** The four mutually-exclusive states, as early returns — kept out of {@link EntityCardList} for the §3.5 complexity budget. */
 function ListStates({ items, isLoading = false, isError = false, errorMessage, emptyState, ...rest }: EntityCardListProps): ReactNode {
-  if (isLoading) return <ListSkeletons />;
+  if (isLoading) return <ListSkeletons variant={rest.variant ?? 'compact'} />;
   if (isError) {
     return (
       <Box sx={centeredSx}>
@@ -122,7 +125,7 @@ function ListStates({ items, isLoading = false, isError = false, errorMessage, e
 type ListRowsProps = Omit<EntityCardListProps, 'isLoading' | 'isError' | 'errorMessage' | 'emptyState'>;
 
 /** The populated list itself: the `?view=`-selected rendering plus the optional pagination footer. */
-function ListRows({ items, view, onTagClick, pagination, renderCardActions, renderRowActions }: ListRowsProps): ReactNode {
+function ListRows({ items, view, onTagClick, pagination, renderCardActions, renderRowActions, variant = 'compact' }: ListRowsProps): ReactNode {
   const searchView = useSearchView();
   const isTable = (view ?? searchView) === ENTITY_LIST_VIEW.table;
   return (
@@ -135,15 +138,23 @@ function ListRows({ items, view, onTagClick, pagination, renderCardActions, rend
           />
         </Box>
       ) : (
-        <Box sx={gridSx}>
-          {items.map((item) => (
+        <Box sx={gridSxOf(variant)}>
+          {items.map((item) =>
+            variant === 'rich' ? (
+              <EntityRichCard
+                key={item.id}
+                item={item}
+                {...(onTagClick === undefined ? {} : { onTagClick })}
+              />
+            ) : (
             <EntityCard
               key={item.id}
               item={item}
               {...(renderCardActions === undefined ? {} : { actions: renderCardActions(item) })}
               {...(onTagClick === undefined ? {} : { onTagClick })}
             />
-          ))}
+            ),
+          )}
         </Box>
       )}
       {pagination !== undefined && (
@@ -160,16 +171,16 @@ function ListRows({ items, view, onTagClick, pagination, renderCardActions, rend
 }
 
 /** `DataCards.jsx`'s `renderSkeletons` — one card-shaped placeholder per grid slot while the first page loads. */
-function ListSkeletons(): ReactNode {
+function ListSkeletons({ variant }: { readonly variant: EntityCardVariant }): ReactNode {
   return (
-    <Box sx={gridSx}>
+    <Box sx={gridSxOf(variant)}>
       {Array.from({ length: SKELETON_COUNT }, (_, index) => (
         <Skeleton
           key={index}
           data-testid="entity-card-skeleton"
           animation="wave"
           variant="rectangular"
-          sx={skeletonSx}
+          sx={skeletonSx(variant)}
         />
       ))}
     </Box>
@@ -178,6 +189,8 @@ function ListSkeletons(): ReactNode {
 
 /** `MIN_CARD_WIDTH` (`common/constants.js:352`) — the track floor `auto-fill` counts columns against. */
 const MIN_CARD_WIDTH = '300px';
+/** The rich card's track floor: room for a 52px avatar, a name with its badge, and a readable description line. */
+const RICH_MIN_CARD_WIDTH = '320px';
 
 const containerSx: SxProps<Theme> = {
   boxSizing: 'border-box',
@@ -197,7 +210,23 @@ const gridSx: SxProps<Theme> = {
   minWidth: 0,
 };
 
-const skeletonSx: SxProps<Theme> = (theme: Theme) => ({ width: '100%', height: '7rem', borderRadius: theme.vars.shape.radiusLg });
+function skeletonSx(variant: EntityCardVariant): SxProps<Theme> {
+  return (theme: Theme) => ({ width: '100%', height: variant === 'rich' ? '11rem' : '7rem', borderRadius: theme.vars.shape.radiusLg });
+}
+
+/** The rich grid: wider tracks for the description, and every row as tall as its tallest card so the cards line up. */
+const richGridSx: SxProps<Theme> = {
+  display: 'grid',
+  gridTemplateColumns: `repeat(auto-fill, minmax(${RICH_MIN_CARD_WIDTH}, 1fr))`,
+  gridAutoRows: '1fr',
+  gap: '1rem',
+  width: '100%',
+  minWidth: 0,
+};
+
+function gridSxOf(variant: EntityCardVariant): SxProps<Theme> {
+  return variant === 'rich' ? richGridSx : gridSx;
+}
 
 const centeredSx: SxProps<Theme> = { display: 'flex', justifyContent: 'center', padding: '2rem' };
 

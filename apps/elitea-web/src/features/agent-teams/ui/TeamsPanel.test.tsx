@@ -1,4 +1,6 @@
-import { screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
+
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +10,7 @@ import { server } from '@/test/setup';
 import { renderWithQueryAndTheme } from '@/test/renderWithQueryAndTheme';
 
 import { SaveAsTeamDialog } from './SaveAsTeamDialog';
-import { TeamsPanel } from './TeamsPanel';
+import { TeamsPanel, type TeamsPanelProps } from './TeamsPanel';
 
 const BASE = '/api/v2';
 const TEAMS = `${BASE}/elitea_core/agent_teams/prompt_lib/:projectId`;
@@ -16,6 +18,20 @@ const TEAM = `${BASE}/elitea_core/agent_team/prompt_lib/:projectId/:teamId`;
 const START = `${BASE}/elitea_core/agent_team_conversation/prompt_lib/:projectId/:teamId`;
 const FROM = `${BASE}/elitea_core/agent_team_from_conversation/prompt_lib/:projectId/:conversationId`;
 const PERMISSIONS = `${BASE}/auth/permissions/prompt_lib/:projectId`;
+const APPLICATIONS = `${BASE}/elitea_core/applications/prompt_lib/:projectId`;
+
+/** The panel with its New team state held outside it, as the page holds it. */
+function Panel(props: Partial<TeamsPanelProps> & Pick<TeamsPanelProps, 'onStarted'>): React.JSX.Element {
+  const [creating, setCreating] = useState(false);
+  return (
+    <TeamsPanel
+      projectId="1"
+      creating={creating}
+      onCreatingChange={setCreating}
+      {...props}
+    />
+  );
+}
 
 const TEAM_ROW = {
   id: 3,
@@ -37,18 +53,38 @@ function grant(...names: string[]): void {
   server.use(http.get(PERMISSIONS, () => HttpResponse.json(names.map((name) => ({ name, enabled: true })))));
 }
 
-beforeEach(() => configureGeneratedClient({ baseUrl: BASE }));
+beforeEach(() => {
+  configureGeneratedClient({ baseUrl: BASE });
+  // The project's agents, for the member avatars: Mira has an uploaded icon, CI Doctor none.
+  server.use(
+    http.get(APPLICATIONS, () =>
+      HttpResponse.json({ rows: [{ id: '31', name: 'Mira', tags: [], created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-01T00:00:00Z', owner_id: '1', is_forked: false, has_interrupt: false, meta: { icon_meta: { url: '/media/mira.png' } } }], total: 1 }),
+    ),
+  );
+});
 afterEach(() => resetGeneratedClient());
 
 describe('TeamsPanel', () => {
   it('lists the teams, marks the lead, and offers only what the caller may do', async () => {
     grant('models.teams.list');
     server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     expect(await screen.findByTestId('agent-team-name-3')).toHaveTextContent('Release crew');
+    // The lead leads the stack, with its badge; the full list is one disclosure away.
+    const faces = screen.getByTestId('agent-team-avatars-3');
+    expect(faces.firstElementChild).toHaveAttribute('data-testid', 'agent-team-lead-avatar');
+    expect(screen.getByTestId('agent-team-lead-badge')).toBeInTheDocument();
+    const toggle = screen.getByTestId('agent-team-members-toggle-3');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Mira (lead)')).toBeInTheDocument();
+    expect(screen.getByText('CI Doctor')).toBeInTheDocument();
     expect(screen.getByTestId('agent-team-start-3')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-teams-create')).not.toBeInTheDocument();
+    // Export stays in the overflow menu; Edit and Delete are not offered without their permissions.
+    await userEvent.click(screen.getByTestId('agent-team-menu-3'));
+    expect(await screen.findByTestId('agent-team-export-3')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-team-edit-3')).not.toBeInTheDocument();
     expect(screen.queryByTestId('agent-team-delete-3')).not.toBeInTheDocument();
   });
@@ -68,7 +104,7 @@ describe('TeamsPanel', () => {
         return HttpResponse.json({ rows, total: 201 });
       }),
     );
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     expect(await screen.findByTestId('agent-teams-count')).toHaveTextContent('Showing 200 of 201 teams');
     expect(screen.queryByTestId('agent-team-name-201')).not.toBeInTheDocument();
     await userEvent.click(screen.getByTestId('agent-teams-more'));
@@ -88,7 +124,7 @@ describe('TeamsPanel', () => {
         return HttpResponse.json({ rows: Array.from({ length: 200 }, (_, i) => row(i + 1)), total: 200 });
       }),
     );
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     expect(await screen.findByTestId('agent-team-name-200')).toBeInTheDocument();
     expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
     expect(cursors).toEqual(['-']);
@@ -105,7 +141,7 @@ describe('TeamsPanel', () => {
         return HttpResponse.json({ rows, total: 202 });
       }),
     );
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     await userEvent.click(await screen.findByTestId('agent-teams-more'));
     expect(await screen.findByTestId('agent-team-name-201')).toBeInTheDocument();
     expect(screen.getAllByTestId('agent-team-name-200')).toHaveLength(1);
@@ -114,7 +150,7 @@ describe('TeamsPanel', () => {
   it('offers no more when every team is shown', async () => {
     grant('models.teams.list');
     server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     await screen.findByTestId('agent-team-name-3');
     expect(screen.queryByTestId('agent-teams-more')).not.toBeInTheDocument();
   });
@@ -130,7 +166,7 @@ describe('TeamsPanel', () => {
       }),
     );
     const onStarted = vi.fn();
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={onStarted} />);
+    renderWithQueryAndTheme(<Panel onStarted={onStarted} />);
     await userEvent.click(await screen.findByTestId('agent-team-start-3'));
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith(expect.objectContaining({ id: '77' })));
     expect(started).toBe('3');
@@ -142,7 +178,7 @@ describe('TeamsPanel', () => {
       http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })),
       http.post(START, () => HttpResponse.json({ error: 'agent 2 of the team does not exist or is not available to you', code: 'team_member_unavailable', position: 2 }, { status: 422 })),
     );
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     await userEvent.click(await screen.findByTestId('agent-team-start-3'));
     expect(await screen.findByTestId('agent-teams-start-error')).toHaveTextContent('agent 2 of the team');
   });
@@ -157,17 +193,58 @@ describe('TeamsPanel', () => {
         return new HttpResponse(null, { status: 204 });
       }),
     );
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
+    await userEvent.click(await screen.findByTestId('agent-team-menu-3'));
     await userEvent.click(await screen.findByTestId('agent-team-delete-3'));
+    // Nothing is deleted until the confirmation says so.
+    expect(deleted).toBe(false);
     await userEvent.click(await screen.findByRole('button', { name: /delete|confirm/i }));
     expect(await screen.findByTestId('agent-teams-empty')).toBeInTheDocument();
+  });
+
+  it('explains what a team is and offers New team when there are none', async () => {
+    grant('models.teams.list', 'models.teams.create');
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [], total: 0 })));
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
+    const empty = await screen.findByTestId('agent-teams-empty');
+    expect(empty).toHaveTextContent('No teams yet');
+    expect(empty).toHaveTextContent('saved set of agents');
+    await userEvent.click(within(empty).getByRole('button', { name: 'New team' }));
+    expect(await screen.findByTestId('agent-team-edit-dialog')).toBeInTheDocument();
+  });
+
+  it('opens New team when the page asks (the side panel\'s button) and shows the header actions', async () => {
+    grant('models.teams.list', 'models.teams.create');
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
+    const onCreatingChange = vi.fn();
+    renderWithQueryAndTheme(
+      <TeamsPanel
+        projectId="1"
+        onStarted={vi.fn()}
+        creating
+        onCreatingChange={onCreatingChange}
+        headerActions={<span data-testid="teams-header-probe" />}
+      />,
+    );
+    expect(await screen.findByTestId('agent-team-edit-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('teams-header-probe')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('agent-teams-create'));
+    expect(onCreatingChange).toHaveBeenCalledWith(true);
+  });
+
+  it('draws a member with an avatar through the page\'s renderer and the others as a monogram', async () => {
+    grant('models.teams.list');
+    server.use(http.get(TEAMS, () => HttpResponse.json({ rows: [TEAM_ROW], total: 1 })));
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} renderMemberAvatar={(avatar) => <span data-testid="live-avatar-probe">{avatar.iconUrl}</span>} />);
+    expect(await screen.findByTestId('live-avatar-probe')).toHaveTextContent('/media/mira.png');
+    expect(within(screen.getByTestId('agent-team-avatars-3')).getByTestId('monogram')).toHaveTextContent('CD');
   });
 
   it('reads nothing without the list permission', async () => {
     grant('models.chat.conversations.create');
     const list = vi.fn();
     server.use(http.get(TEAMS, () => { list(); return HttpResponse.json({ rows: [], total: 0 }); }));
-    renderWithQueryAndTheme(<TeamsPanel projectId="1" onStarted={vi.fn()} />);
+    renderWithQueryAndTheme(<Panel onStarted={vi.fn()} />);
     expect(await screen.findByTestId('agent-teams-forbidden')).toBeInTheDocument();
     expect(list).not.toHaveBeenCalled();
   });

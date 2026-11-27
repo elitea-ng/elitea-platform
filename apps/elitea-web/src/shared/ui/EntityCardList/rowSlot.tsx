@@ -17,6 +17,8 @@ export interface EntityRowSlot {
   readonly renderCell: (item: EntityListItem) => ReactNode;
   /** The card's top-right control for one card. */
   readonly renderCardAction: (item: EntityListItem) => ReactNode;
+  /** Whether the row is pinned: the rich card keeps a filled pin on screen while its actions are hidden. */
+  readonly isPinned?: (item: EntityListItem) => boolean;
 }
 
 const RowSlotContext = createContext<EntityRowSlot | undefined>(undefined);

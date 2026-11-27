@@ -6,11 +6,13 @@ import { useNavigate, useParams } from '@tanstack/react-router';
 
 import { EntityImportButton, useEntityImport, workshopList } from '@/features/agent-lifecycle';
 import { ProposalsInboxButton } from '@/features/agent-proposals';
-import { TEAM_PERMISSIONS, TeamsPanel } from '@/features/agent-teams';
+import { TEAM_PERMISSIONS, TeamsPanel, useTeamAbilities, type RenderMemberAvatar } from '@/features/agent-teams';
+import { AgentAvatar } from '@/features/chat-messages';
 import type { Application } from '@/shared/api/generated/model';
 import { t } from '@/shared/i18n';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 import { DeleteEntityModal } from '@/shared/ui/DeleteEntityModal';
+import { usePageCrumbs } from '@/shared/ui/page-chrome';
 import { EntitySelectionProvider } from '@/shared/ui/EntityCardList';
 import { EntityListFiltersBody, useRailTagSelection } from '@/shared/ui/EntityRail';
 import { EntityFolderDnd, EntityFolderPanel, EntityFolderScope, MoveSelectionControl, useFolderFilter, useFolderOrder } from '@/widgets/entity-folders';
@@ -20,7 +22,9 @@ import { usePermissionSet } from '@/widgets/sidebar';
 import { toApplicationRow } from './lib/applicationRows';
 import { useProbationUndo } from './lib/useProbationUndo';
 import { useSelectedProjectId } from './lib/useSelectedProjectId';
-import { ApplicationListPanel } from './ui/ApplicationListPanel';
+import { useStartAgentChat } from './lib/useStartAgentChat';
+import { AgentChatError } from './ui/AgentChatError';
+import { ApplicationListPanel, type RichCardOptions } from './ui/ApplicationListPanel';
 
 /** The two modes of the page: the project's agents, and its saved teams (ADR-0050 decision 8). */
 const AGENTS_MODE = 'all';
@@ -147,13 +151,54 @@ export function AgentsWorkshop(): ReactNode {
   );
 }
 
-/** The Teams mode: the sidebar keeps its switch and New agent, and the body lists the project's saved teams. */
+/** A team member's face on its card: the shared live-avatar renderer, still (issue 3134). */
+const renderMemberAvatar: RenderMemberAvatar = (avatar, size) => (
+  <AgentAvatar
+    iconUrl={avatar.iconUrl}
+    pack={avatar.pack}
+    size={size}
+  />
+);
+
+/** Import, worded for the Teams page: a team zip makes its agents and the team (issue 3010). */
+function TeamImportButton({ projectId, testIdPrefix }: { readonly projectId: string | undefined; readonly testIdPrefix: string }): ReactNode {
+  const entityImport = useEntityImport(projectId);
+  return (
+    <EntityImportButton
+      testIdPrefix={testIdPrefix}
+      label={t('pages.agents.teams.import', 'Import team')}
+      isImporting={entityImport.run.isPending}
+      onImport={async (request) => {
+        await entityImport.run.mutateAsync(request);
+      }}
+    />
+  );
+}
+
+/**
+ * The Teams mode (issue 3134): the title row reads Agents › Teams, the side
+ * panel keeps the Agents | Teams switch and offers the team actions (New
+ * team, Import team) instead of the agent ones, and the body lists the
+ * project's saved teams. Both New team buttons open the panel's one dialog.
+ */
 function TeamsMode({ base, projectId }: { readonly base: SidebarBase; readonly projectId: string | undefined }): ReactNode {
   const navigate = useNavigate();
+  const teams = useTeamAbilities(projectId);
+  const [creating, setCreating] = useState(false);
+  const title = t('pages.agents.teams.title', 'Teams');
+  usePageCrumbs([{ label: title }]);
   return (
     <>
       <EntityListSidebar
         {...base}
+        subject={title}
+        newAction={teams.canCreate ? { label: t('features.agentTeams.create', 'New team'), testId: 'teams-create', onClick: () => setCreating(true) } : undefined}
+        secondaryActions={
+          <TeamImportButton
+            projectId={projectId}
+            testIdPrefix="teams"
+          />
+        }
         listControls={false}
       />
       <Box
@@ -162,6 +207,15 @@ function TeamsMode({ base, projectId }: { readonly base: SidebarBase; readonly p
       >
         <TeamsPanel
           projectId={projectId}
+          creating={creating}
+          onCreatingChange={setCreating}
+          renderMemberAvatar={renderMemberAvatar}
+          headerActions={
+            <TeamImportButton
+              projectId={projectId}
+              testIdPrefix="teams-header"
+            />
+          }
           onStarted={(conversation) => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id } })}
         />
       </Box>
@@ -217,6 +271,12 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
   const facets = useMemo(() => workshopList.facets(list.wire?.facets), [list.wire]);
   const copy = emptyCopy(list.filtered);
   const open = (id: string): void => void navigate({ to: '/agents/$tab/$agentId', params: { tab: AGENTS_MODE, agentId: id } });
+  const chat = useStartAgentChat(projectId);
+  const { start: startChat, ready: chatReady, startingId } = chat;
+  const rich = useMemo<RichCardOptions>(
+    () => ({ ...(chatReady ? { onChat: (row) => void startChat(row.id, row.name) } : {}), chattingId: startingId }),
+    [chatReady, startChat, startingId],
+  );
 
   return (
     <EntityFolderDnd
@@ -288,8 +348,13 @@ function AgentsListMode({ base, projectId, permissions }: AgentsListModeProps): 
               hasMore={list.hasMore}
               isLoadingMore={list.isLoadingMore}
               onLoadMore={list.loadMore}
+              rich={rich}
             />
           </EntityFolderScope>
+          <AgentChatError
+            message={chat.error}
+            onClose={chat.clearError}
+          />
         </EntitySelectionProvider>
       </Box>
       <DeleteEntityModal
