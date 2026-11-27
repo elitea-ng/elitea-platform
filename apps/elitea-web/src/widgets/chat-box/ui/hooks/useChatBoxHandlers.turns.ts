@@ -129,6 +129,16 @@ function dropEarly(deps: ChatBoxHandlerDeps, early: boolean, questionId: string)
   if (early) deps.setChatHistory((prev) => prev.filter((message) => message.id !== questionId));
 }
 
+/** A step before the turn (creating the chat, uploading): if it throws, the early bubble goes with the send. */
+async function beforeTurn<T>(deps: ChatBoxHandlerDeps, early: boolean, questionId: string, step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (failure) {
+    dropEarly(deps, early, questionId);
+    throw failure;
+  }
+}
+
 /** Shows the turn as pending, unless the message is for people alone: nobody answers it. */
 function markPendingAnswer(deps: ChatBoxHandlerDeps, questionId: string, payload: Record<string, unknown>): void {
   if (!deps.isStreamingNow && !isPeopleOnlyPayload(payload)) deps.setStreamingInfo(questionId);
@@ -154,7 +164,7 @@ export function createSendQuestion(
     const bubble = (files?: readonly unknown[]) => buildOptimisticUserMessage(questionId, question, userParticipant, participantId, files);
     const early = showEarly(deps, bubble());
     const { uuid: resolvedConversationUuid, createdConversation } =
-      await resolveConversationForSend(deps, question);
+      await beforeTurn(deps, early, questionId, () => resolveConversationForSend(deps, question));
     // The conversation's UUID, not its numeric id — see
     // `resolveUploadConversationId`: the object key it becomes is what
     // admission authorises the attachment against.
@@ -162,11 +172,7 @@ export function createSendQuestion(
       createdConversation,
       deps.conversationUuid,
     );
-    const attachmentList = await uploadPendingAttachments(
-      deps,
-      attachments,
-      uploadConversationId,
-    );
+    const attachmentList = await beforeTurn(deps, early, questionId, () => uploadPendingAttachments(deps, attachments, uploadConversationId));
     // The conversation is already committed on the server by this point, so it
     // is announced even though this send is being abandoned (see `SendResult`).
     if (attachmentList === UPLOAD_FAILED) {

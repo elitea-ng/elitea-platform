@@ -61,10 +61,12 @@ export function useWorkIn({ workspaceId, offered: asked, send, handOver, onError
   const [threadIds] = useState(createSubmitIds);
   const toWorktree: Send = async (...args) => {
     if (start === undefined) return false;
+    // The agents as they were when the message was sent: a change made while the worktree is made is not carried.
+    const seed = handOver?.();
     try {
       const entry = await start(workspaceId, threadIds.current());
       threadIds.sent();
-      const handed: HandedFirstMessage = { args, seed: handOver?.() };
+      const handed: HandedFirstMessage = { args, seed };
       holdFirstMessage(entry.workspace_id, handed);
       open(entry.workspace_id);
       return true;

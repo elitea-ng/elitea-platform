@@ -15,7 +15,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
-import { peekFirstMessage, takeFirstMessage } from '@/features/workspace-worktrees';
+import { holdFirstMessage, peekFirstMessage, takeFirstMessage } from '@/features/workspace-worktrees';
 
 import type { SelectionSeed } from './useAgentSelection';
 import type { WorkspaceComposerProps } from './WorkspaceComposer';
@@ -27,6 +27,11 @@ export type FirstSendArgs = Parameters<Send>;
 export interface HandedFirstMessage {
   readonly args: FirstSendArgs;
   readonly seed?: SelectionSeed | undefined;
+  /**
+   * A thread already took it up. A later mount of the worktree's thread (navigating away and back) shows it "Not sent"
+   * with Retry and never sends it on its own, so a failed or in-flight hand-off is not sent twice.
+   */
+  readonly adopted?: boolean | undefined;
 }
 
 /** The workspace's handed first message, still held (shown before it is sent). */
@@ -53,8 +58,12 @@ export interface FirstMessageSlot {
 }
 
 /** The slot, holding the message handed to this workspace's thread from its first render. */
-export function useFirstMessageSlot(handed: HandedFirstMessage | undefined): FirstMessageSlot {
-  const [message, set] = useState<FirstMessage | null>(() => (handed === undefined ? null : { args: handed.args, state: 'waiting' }));
+export function useFirstMessageSlot(handed: HandedFirstMessage | undefined, workspaceId: string): FirstMessageSlot {
+  const [message, set] = useState<FirstMessage | null>(() => (handed === undefined ? null : { args: handed.args, state: handed.adopted === true ? 'failed' : 'waiting' }));
+  // Taken up: marked so a later mount offers Retry instead of sending it again (it is dropped once sent).
+  useEffect(() => {
+    if (handed !== undefined && handed.adopted !== true && peekFirstMessage(workspaceId) === handed) holdFirstMessage(workspaceId, { ...handed, adopted: true });
+  }, [handed, workspaceId]);
   const retryRef = useRef<() => void>(() => undefined);
   const [bound] = useState(() => ({
     retry: () => retryRef.current(),
@@ -79,7 +88,10 @@ export interface FirstSendInput {
 export interface FirstSend {
   /** The composer's send: for a fresh thread it resolves `true` at once (the input clears) and the send runs behind. */
   readonly send: Send;
-  /** A first message is shown and not yet sent: no other message goes until it did. */
+  /**
+   * A first message is being sent (or waits to be): no other message goes until it did. A failed one does not hold:
+   * the person may change the agents or "Work in" and send another, which replaces it.
+   */
   readonly holding: boolean;
   /** Sends the failed first message again (the same ids). */
   readonly retry: () => void;
@@ -112,8 +124,11 @@ export function useFirstSend({ workspaceId, slot, fresh, canSend, send }: FirstS
     if (waiting !== undefined && canSend) void run(waiting);
   });
 
+  const holding = message !== null && message.state !== 'failed';
   const optimistic: Send = (...args) => {
-    if (message !== null || running.current) return Promise.resolve(false);
+    if (holding || running.current) return Promise.resolve(false);
+    // A new message in place of a failed one: the old hand-off (if any) is dropped with it.
+    if (message?.state === 'failed') takeFirstMessage(workspaceId);
     void run(args);
     return Promise.resolve(true);
   };
@@ -123,5 +138,5 @@ export function useFirstSend({ workspaceId, slot, fresh, canSend, send }: FirstS
   };
   useEffect(() => slot.bindRetry(retry));
 
-  return { send: fresh ? optimistic : send, holding: message !== null, retry };
+  return { send: fresh ? optimistic : send, holding, retry };
 }

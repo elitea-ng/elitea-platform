@@ -299,6 +299,21 @@ describe("sendQuestion — a turn no transport accepted", () => {
     expect(result.success).toBe(false);
     expect(history.read().filter((message) => message.role === ROLES.User)).toEqual([]);
   });
+
+  it("drops the early question of a new chat whose create throws", async () => {
+    const history = makeHistory([]);
+    const handlers = useChatBoxHandlers(
+      makeDeps({
+        setChatHistory: history.setChatHistory,
+        conversationUuid: undefined,
+        createConversation: () => Promise.reject(new Error("network down")),
+        startStreamedExecution: () => Promise.resolve({ started: true } as StreamStartOutcome),
+      }),
+    );
+
+    await expect(handlers.sendQuestion({ question: "hi" })).rejects.toThrow("network down");
+    expect(history.read().filter((message) => message.role === ROLES.User)).toEqual([]);
+  });
 });
 
 describe("regenerateAnswer — the current REST and SSE contract", () => {

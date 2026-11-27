@@ -12,7 +12,7 @@ import { peekHanded, useFirstMessageSlot, useFirstSend, type HandedFirstMessage 
 function renderFirst(workspaceId: string, canSend: boolean, send: ReturnType<typeof vi.fn>) {
   return renderHook(
     ({ ready }) => {
-      const slot = useFirstMessageSlot(peekHanded(workspaceId));
+      const slot = useFirstMessageSlot(peekHanded(workspaceId), workspaceId);
       const first = useFirstSend({ workspaceId, slot, fresh: true, canSend: ready, send: send as never });
       return { slot, first };
     },
@@ -63,5 +63,36 @@ describe('useFirstSend', () => {
     expect(send).toHaveBeenLastCalledWith('hello', [], []);
     await act(() => Promise.resolve(answer(true)));
     expect(result.current.slot.message).toBeNull();
+  });
+
+  it('a failed first message does not hold the composer: another message replaces it', async () => {
+    const send = vi.fn(() => Promise.resolve(false));
+    const { result } = renderFirst('f-2', true, send);
+    await act(async () => {
+      await result.current.first.send('hello', [], []);
+    });
+    await waitFor(() => expect(result.current.slot.message?.state).toBe('failed'));
+    expect(result.current.first.holding).toBe(false);
+
+    send.mockImplementation(() => Promise.resolve(true));
+    await act(async () => {
+      expect(await result.current.first.send('in this folder instead', [], [])).toBe(true);
+    });
+    await waitFor(() => expect(result.current.slot.message).toBeNull());
+    expect(send).toHaveBeenLastCalledWith('in this folder instead', [], []);
+  });
+
+  it('a hand-off a thread took up and failed is offered with Retry on a later mount, never sent on its own', async () => {
+    holdFirstMessage('wt-2', { args: ['fix the build', [], []] } satisfies HandedFirstMessage);
+    const send = vi.fn(() => Promise.resolve(false));
+    const first = renderFirst('wt-2', true, send);
+    await waitFor(() => expect(first.result.current.slot.message?.state).toBe('failed'));
+    expect(send).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    const again = renderFirst('wt-2', true, send);
+    expect(again.result.current.slot.message).toEqual({ args: ['fix the build', [], []], state: 'failed' });
+    await act(() => Promise.resolve());
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
