@@ -111,7 +111,7 @@ describe('a hand-tuned pack keeps its colours in the roles (decision 1.4)', () =
     }
   });
 
-  it('keeps a role the pack states with a non-default value over a tuned legacy id', () => {
+  it('keeps a role the pack tunes over a tuned legacy id', () => {
     for (const scheme of SCHEMES) {
       for (const [role, id] of MAPPED) {
         const resolved = resolveScheme({ [id]: TUNED, [roleId(role)]: OTHER }, brand, scheme);
@@ -153,6 +153,17 @@ describe('a hand-tuned pack keeps its colours in the roles (decision 1.4)', () =
       for (const [role, id] of MAPPED) {
         expect(resolved[roleId(role)], `${scheme}.${role}`).toBe(resolved[id]);
       }
+    }
+  });
+
+  it('keeps a role stated at its default under another hue over its changed legacy id', () => {
+    // Under another hue a role stated at its default is a pin, so it tunes the
+    // role and wins: a file layer of the 435-id default keeps its roles.
+    for (const scheme of SCHEMES) {
+      const record: SchemeRecord = { ...DEFAULT_BRAND_PACK.schemes[scheme], 'primary.main': TUNED };
+      const resolved = resolveScheme(record, HUE_ONLY, scheme);
+      expect(resolved['role.primary'], scheme).toBe(brandRoles(scheme)['primary']);
+      expect(resolved['primary.main'], scheme).toBe(TUNED);
     }
   });
 
@@ -221,13 +232,14 @@ describe('a role follows the brand hue (decision 1.6)', () => {
 });
 
 describe('brand.onBrand reaches the labels of brand-coloured roles', () => {
-  /** A light brand hue, where the default white label fails the contrast of tokens.json. */
-  const LIGHT_HUE: BrandInput = { hue: '#FFD400', onBrand: '#0B0B18' };
+  /** A light yellow brand hue (50°), where the default white label fails the contrast of tokens.json. */
+  const ON_BRAND = brandRoles('dark')['onSignal'] as string;
+  const LIGHT_HUE: BrandInput = { hue: formatHex(hslaToRgba({ h: 50, s: 1, l: 0.5, a: 1 })), onBrand: ON_BRAND };
 
   it('gives role.onPrimary the onBrand value, as primary.contrastText gets it', () => {
     const theme = buildEliteaTheme({ ...DEFAULT_BRAND_PACK, brand: LIGHT_HUE, schemes: { light: {}, dark: {} } });
     for (const scheme of SCHEMES) {
-      expect(resolveScheme({}, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe('#0B0B18');
+      expect(resolveScheme({}, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe(ON_BRAND);
       const palette = theme.colorSchemes[scheme]?.palette as unknown as Record<string, Record<string, string>>;
       expect(palette[ROLE_GROUP]?.['onPrimary'], scheme).toBe(palette['primary']?.['contrastText']);
     }
@@ -239,8 +251,23 @@ describe('brand.onBrand reaches the labels of brand-coloured roles', () => {
     }
   });
 
-  it('gives role.onSignal the onBrand value only where Signal has the anchor colour (light)', () => {
-    expect(resolveScheme({}, LIGHT_HUE, 'light')['role.onSignal']).toBe('#0B0B18');
+  it('gives role.onPrimary the onBrand value when the deployment tunes primary.main', () => {
+    for (const scheme of SCHEMES) {
+      expect(resolveScheme({ 'primary.main': TUNED }, LIGHT_HUE, scheme)['role.onPrimary'], scheme).toBe(ON_BRAND);
+    }
+  });
+
+  it('keeps the derived role.onSignal when a tuned text.link gives Signal another colour (light)', () => {
+    // A dark link on a light yellow brand: the dark onBrand label would fail on it.
+    const record: SchemeRecord = { 'text.link': TUNED };
+    const resolved = resolveScheme(record, LIGHT_HUE, 'light');
+    expect(resolved['role.signal']).toBe(TUNED);
+    expect(resolved['role.onSignal']).not.toBe(ON_BRAND);
+    expect(resolved['role.onSignal']).toBe(resolveScheme(record, { hue: LIGHT_HUE.hue }, 'light')['role.onSignal']);
+  });
+
+  it('gives role.onSignal the onBrand value only where Signal resolves to the anchor colour (light)', () => {
+    expect(resolveScheme({}, LIGHT_HUE, 'light')['role.onSignal']).toBe(ON_BRAND);
     expect(resolveScheme({ 'role.onSignal': TUNED }, LIGHT_HUE, 'light')['role.onSignal']).toBe(TUNED);
     const darkHueOnly = resolveScheme({}, { hue: LIGHT_HUE.hue }, 'dark')['role.onSignal'];
     expect(resolveScheme({}, LIGHT_HUE, 'dark')['role.onSignal']).toBe(darkHueOnly);

@@ -227,14 +227,15 @@ func TestBrandingPackageImport_PackageFromBeforeTheRoleIds(t *testing.T) {
 	pack := v2branding.ProductDefault()
 	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
 		for id := range record {
-			if strings.HasPrefix(id, "role.") {
+			if brandpackage.AddedDefaultID(id) {
 				delete(record, id)
 			}
 		}
 	}
 	if len(pack.Schemes.Light) != 408 || len(pack.Schemes.Dark) != 408 {
 		t.Fatalf("pre-roles default states %d/%d ids, want 408/408: the ids before ADR-0062 PR 3; "+
-			"a new default id goes into addedDefaultIDs (brandpackage/package.go), not into this number",
+			"an added default id goes on addedDefaultIDs (brandpackage/package.go), not into this number; "+
+			"a removed default id needs its own rule",
 			len(pack.Schemes.Light), len(pack.Schemes.Dark))
 	}
 	fake := &fakePackages{exported: []byte("PK\x03\x04zip-bytes"), pack: pack}

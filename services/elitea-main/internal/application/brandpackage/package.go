@@ -712,11 +712,13 @@ func assetValue(v string) string {
 // decision 1) or one id. A package downloaded before an id was added does not
 // state it, and it is still an untouched export. Add each new default id here,
 // in the PR that adds it to the product default:
-// TestAddedDefaultIDs_CoverTheProductDefault fails until then.
+// TestAddedDefaultIDs_CoverTheProductDefault fails until then. A removed
+// default id is not covered here: such a PR needs its own rule.
 var addedDefaultIDs = []string{"role."}
 
-// addedDefaultID reports whether id is on addedDefaultIDs.
-func addedDefaultID(id string) bool {
+// AddedDefaultID reports whether id is on addedDefaultIDs. Tests outside the
+// package use it to build a package of the earlier default.
+func AddedDefaultID(id string) bool {
 	for _, entry := range addedDefaultIDs {
 		if id == entry || (strings.HasSuffix(entry, ".") && strings.HasPrefix(id, entry)) {
 			return true
@@ -742,7 +744,7 @@ func untouchedRecord(a, b map[string]string) bool {
 		}
 	}
 	for k := range b {
-		if _, ok := a[k]; !ok && !addedDefaultID(k) {
+		if _, ok := a[k]; !ok && !AddedDefaultID(k) {
 			return false
 		}
 	}
