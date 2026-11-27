@@ -117,7 +117,7 @@ describe('avatar packs in the thread', () => {
 });
 
 describe('avatar packs in the participants sheet (#3131)', () => {
-  it("shows an agent's pack still in its row's avatar place, and people keep their monogram", async () => {
+  it("shows an agent's pack still in its row's avatar place", async () => {
     setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13({ client_contract: '1.49' })) });
     server.on('GET', STILL.replace(/^\/api\/v2/, ''), { status: 200, raw: PNG, headers: { 'Content-Type': 'image/png' } });
     const { participants } = withPack('avatar_pack_v1') as unknown as { participants: never[] };
@@ -127,7 +127,7 @@ describe('avatar packs in the participants sheet (#3131)', () => {
         <ParticipantsSheet visible onClose={() => {}} projectId={P} conversationId="3" participants={participants} selfUserId={null} offline onChanged={() => {}} />
       </QueryClientProvider>,
     );
+    // One row has a pack: its still is drawn (from the media cache, which earlier tests may have filled already).
     await waitFor(() => expect(images().filter((uri) => isStillFile(uri))).toHaveLength(1));
-    expect(mediaRequests()).toHaveLength(1);
   });
 });

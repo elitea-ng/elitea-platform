@@ -44,7 +44,7 @@ function serverOrigin(): string | undefined {
 const throughHost = (): boolean => getNativeTransport() !== undefined;
 
 /** The URL the web loads the media from: a Main path on the deployment's origin, else as it is. */
-export function webMediaUrl(url: string): string {
+function webMediaUrl(url: string): string {
   if (!isServerPath(url)) return url;
   const origin = serverOrigin();
   return origin === undefined ? url : `${origin}${url}`;

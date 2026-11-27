@@ -21,7 +21,7 @@ import type { SelectionSeed } from './useAgentSelection';
 import type { WorkspaceComposerProps } from './WorkspaceComposer';
 
 type Send = WorkspaceComposerProps['onSend'];
-export type FirstSendArgs = Parameters<Send>;
+type FirstSendArgs = Parameters<Send>;
 
 /** What a folder's new thread hands to its worktree's thread: the message, and the agents chosen for it (#3128). */
 export interface HandedFirstMessage {
@@ -40,9 +40,9 @@ export function peekHanded(workspaceId: string): HandedFirstMessage | undefined 
 }
 
 /** `waiting`: handed to this thread, sent once it can; `preparing`: being sent; `failed`: not sent, Retry offered. */
-export type FirstMessageState = 'waiting' | 'preparing' | 'failed';
+type FirstMessageState = 'waiting' | 'preparing' | 'failed';
 
-export interface FirstMessage {
+interface FirstMessage {
   readonly args: FirstSendArgs;
   readonly state: FirstMessageState;
 }
