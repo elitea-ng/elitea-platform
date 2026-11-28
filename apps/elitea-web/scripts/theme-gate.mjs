@@ -13,8 +13,13 @@
  *   8. no engine name / vendor docs origin in       (grep, ADR-0024 decision 8 / WP8)
  *      sub-application screens
  *   9. no fontFamily literals outside shared/brand (grep, ADR-0024 WP3)
+ *  10. style ratchet: per folder, no more spacing   (oxlint with style-ratchet.oxlintrc.json
+ *      in rem/px or off the scale, no more MUI      on the tree and on --base; ADR-0062
+ *      Dialog/Switch past their wrappers, than the  decision 3). Without --base it prints
+ *      base tree has                                 the counts per folder and does not fail
  *
- * Usage: node scripts/theme-gate.mjs [--root <dir>]
+ * Usage: node scripts/theme-gate.mjs [--root <dir>] [--base <dir>]
+ *   --base: the PR's base tree, written by scripts/style-ratchet-base.mjs.
  * Checks 2–6 and 8 logic lives in scripts/lib/theme-gate-core.mjs (unit-tested);
  * this file walks files and orchestrates.
  */
@@ -24,6 +29,17 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
+import {
+  UNPAIRED_MANIFEST,
+  compareCounts,
+  countFindings,
+  formatCounts,
+  formatGrowth,
+  oxlintArgs,
+  parseOxlintJson,
+  parseUnpairedManifest,
+  totals,
+} from './lib/style-ratchet-core.mjs';
 import {
   checkExternalOrigins,
   checkFontFamilyLiterals,
@@ -49,12 +65,12 @@ const MIN_FILES_FIXTURE = 1;
 const BRAND_PACK_CONTRACT_TEST = 'src/shared/brand/__tests__/brandPack.contract.test.ts';
 
 function parseArgs(argv) {
-  const args = { root: APP_DIR };
+  const args = { root: APP_DIR, base: null };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--root') {
+    if (argv[i] === '--root' || argv[i] === '--base') {
       const value = argv[i + 1];
-      if (!value) throw new Error('--root requires a directory argument');
-      args.root = resolve(value);
+      if (!value) throw new Error(`${argv[i]} requires a directory argument`);
+      args[argv[i].slice(2)] = resolve(value);
       i++;
     } else {
       throw new Error(`unknown argument: ${argv[i]}`);
@@ -112,8 +128,63 @@ function report(name, hits) {
   return true;
 }
 
+// 10 — the style ratchet (ADR-0062 decision 3). Both trees are counted with
+// THIS checkout's config and rule, so a PR that adds a kind counts it on its
+// base too and does not fail on code it did not write (decision 3.2).
+const STYLE_RATCHET_CONFIG = join(SCRIPT_DIR, 'style-ratchet.oxlintrc.json');
+
+function styleRatchetCounts(oxlint, tree) {
+  if (!existsSync(join(tree, 'src'))) {
+    throw new Error(`${tree}/src does not exist — a missing tree would read as 0 findings`);
+  }
+  const run = spawnSync(oxlint, oxlintArgs(STYLE_RATCHET_CONFIG), {
+    cwd: tree,
+    encoding: 'utf8',
+    maxBuffer: 1 << 28,
+  });
+  try {
+    return countFindings(parseOxlintJson(run.stdout));
+  } catch (error) {
+    throw new Error(`${error.message}\n${run.stderr}`);
+  }
+}
+
+function styleRatchet(oxlint, root, base) {
+  const name = '10-style-ratchet';
+  let head;
+  let baseCounts;
+  let unpaired;
+  try {
+    head = styleRatchetCounts(oxlint, root);
+    baseCounts = base ? styleRatchetCounts(oxlint, base) : null;
+    // The files git did not pair, written next to the base tree (decision 3.2).
+    if (base) {
+      const manifest = join(base, UNPAIRED_MANIFEST);
+      if (!existsSync(manifest)) throw new Error(`${manifest} does not exist — write the base with style-ratchet-base.mjs`);
+      unpaired = parseUnpairedManifest(readFileSync(manifest, 'utf8'));
+    }
+  } catch (error) {
+    console.error(`theme-gate ${name}: FAIL — ${error.message}`);
+    return true;
+  }
+  if (!baseCounts) {
+    console.log(`theme-gate ${name}: REPORT — no --base tree (nightly, dispatch or a local run; see style-ratchet-base.mjs), counts per folder:`);
+    for (const line of formatCounts(head)) console.log(`  ${line}`);
+    return false;
+  }
+  const growth = compareCounts(baseCounts, head);
+  const sum = (counts) => Object.entries(totals(counts)).map(([kind, n]) => `${kind} ${n}`).join(', ');
+  if (growth.length === 0) {
+    console.log(`theme-gate ${name}: PASS (base: ${sum(baseCounts)}; head: ${sum(head)})`);
+    return false;
+  }
+  console.error(`theme-gate ${name}: FAIL (${growth.length} folder count(s) grew; ADR-0062 decision 3)`);
+  for (const line of formatGrowth(growth, unpaired)) console.error(`  ${line}`);
+  return true;
+}
+
 function main() {
-  const { root } = parseArgs(process.argv.slice(2));
+  const { root, base } = parseArgs(process.argv.slice(2));
   let failed = false;
 
   // 1 — raw colours, via the same rule implementation the main lint uses.
@@ -162,6 +233,7 @@ function main() {
   // 9 — fontFamily literals outside shared/brand (ADR-0024 WP3). Numbered
   // after check 7 below because 7 is the spec's own numbering; 9 is additive.
   failed = report('9-font-family-literals', checkFontFamilyLiterals(files)) || failed;
+  failed = styleRatchet(oxlint, root, base) || failed;
 
   // 7 — brand-pack round trip (unit T1 owns the test; §4.6 check 7).
   //

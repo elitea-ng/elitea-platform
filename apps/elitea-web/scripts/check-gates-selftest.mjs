@@ -243,6 +243,72 @@ for (const [id, mechanism, tag] of OXLINT_CASES) {
   recordDelegated('THEME/7-brand-pack', 'vitest brand-pack contract test (§4.6 check 7; theme-gate invokes when present)', 'unit T1');
 }
 
+// ── section 5b: theme-gate check 10, the style ratchet (ADR-0062 decision 3.8) ──
+// Each fixture is a base tree and a head tree. RED: the head adds a rem value,
+// an off-scale number and a Dialog import in one folder, and the message names
+// the fix. GREEN: the head removes one rem value and adds another in the same
+// folder, adds a step on the scale, a type-only Dialog import and Dialog
+// inside shared/ui.
+{
+  const RATCHET = join(FIXTURES, 'theme-gate-ratchet');
+  const run = (dir) =>
+    spawnSync(process.execPath, [join(SCRIPT_DIR, 'theme-gate.mjs'), '--root', join(dir, 'head'), '--base', join(dir, 'base')], {
+      encoding: 'utf8',
+    });
+  const bad = run(join(RATCHET, 'bad'));
+  const badOut = bad.stdout + bad.stderr;
+  const good = run(join(RATCHET, 'good'));
+  const goodOut = good.stdout + good.stderr;
+  const expected = [
+    'theme-gate 10-style-ratchet: FAIL',
+    'src/features/foo spacing-rem: 0 → 1',
+    "[spacing-rem] p: '1rem' → 2",
+    'src/features/foo spacing-off-scale: 0 → 1',
+    'gap: 0.75 is off the scale → nearest steps 0.5 or 1',
+    'src/features/foo mui-dialog: 0 → 1',
+    '[mui-dialog] use BaseModal from shared/ui',
+  ];
+  const missing = expected.filter((line) => !badOut.includes(line));
+  const greenOk = good.status === 0 && goodOut.includes('theme-gate 10-style-ratchet: PASS');
+  record(
+    'THEME/10-style-ratchet',
+    'scripts/theme-gate.mjs check 10 (ADR-0062 decision 3; --base tree vs head tree)',
+    bad.status !== 0 && missing.length === 0,
+    greenOk,
+  );
+  if (missing.length > 0) console.error(`\n[style ratchet] bad fixture did not print: ${missing.join(' | ')}\n${badOut}`);
+  if (!greenOk) console.error(`\n[style ratchet] good fixture failed:\n${goodOut}`);
+
+  // Decision 3.2, a move git does not pair. RED: Card.tsx moves from
+  // features/foo to features/bar with heavy edits, so git lists it as added
+  // (style-ratchet-unpaired.json); bar grows by the two rem values it carries
+  // and the message names the file with the two fixes. GREEN: the same move
+  // landed unchanged, which git pairs, so the base holds it under its new path.
+  const unpaired = run(join(RATCHET, 'unpaired'));
+  const unpairedOut = unpaired.stdout + unpaired.stderr;
+  const paired = run(join(RATCHET, 'paired'));
+  const pairedOut = paired.stdout + paired.stderr;
+  const expectedUnpaired = [
+    'theme-gate 10-style-ratchet: FAIL',
+    'src/features/bar spacing-rem: 0 → 2',
+    'src/features/bar/ui/Card.tsx (0 → 2 in this file; new at the head: git paired it with no base file)',
+    '1. land each move unchanged in its own PR (a pure move pairs at 100 %), and split, merge or edit inside one folder; or',
+    '2. move the values it carries onto the system; a change of pixels goes first in its own PR (ADR-0062 decision 5).',
+  ];
+  const missingUnpaired = expectedUnpaired.filter((line) => !unpairedOut.includes(line));
+  const pairedOk = paired.status === 0 && pairedOut.includes('theme-gate 10-style-ratchet: PASS');
+  record(
+    'THEME/10-style-ratchet-unpaired-move',
+    'scripts/theme-gate.mjs check 10, a move git did not pair (ADR-0062 decision 3.2; style-ratchet-unpaired.json)',
+    unpaired.status !== 0 && missingUnpaired.length === 0,
+    pairedOk,
+  );
+  if (missingUnpaired.length > 0) {
+    console.error(`\n[style ratchet] unpaired fixture did not print: ${missingUnpaired.join(' | ')}\n${unpairedOut}`);
+  }
+  if (!pairedOk) console.error(`\n[style ratchet] paired fixture failed:\n${pairedOut}`);
+}
+
 // ── section 6: R-M5 (vitest fixtures booting the REAL src/test/setup.ts) ──
 {
   const run = (file) =>
