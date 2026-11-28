@@ -255,6 +255,135 @@ func TestValuesFromPack_HandTunedTokensAreKept(t *testing.T) {
 	}
 }
 
+// earlierDefaultIDs is the number of ids per scheme that the product default
+// stated before the ids of addedDefaultIDs. It does not change.
+const earlierDefaultIDs = 408
+
+// preRolesDefault is the product default as it was before ADR-0062 PR 3: the
+// same pack without the ids of addedDefaultIDs, 408 ids per scheme, which is
+// what every package downloaded with the default colours before that release
+// states.
+func preRolesDefault(t *testing.T) *v2branding.Pack {
+	t.Helper()
+	pack := v2branding.ProductDefault()
+	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
+		for id := range record {
+			if AddedDefaultID(id) {
+				delete(record, id)
+			}
+		}
+	}
+	if len(pack.Schemes.Light) != earlierDefaultIDs || len(pack.Schemes.Dark) != earlierDefaultIDs {
+		t.Fatalf("the product default states %d/%d ids that are not on addedDefaultIDs, want %d/%d: "+
+			"an added default id goes on addedDefaultIDs (package.go), do not change earlierDefaultIDs; "+
+			"a removed default id needs its own rule",
+			len(pack.Schemes.Light), len(pack.Schemes.Dark), earlierDefaultIDs, earlierDefaultIDs)
+	}
+	return pack
+}
+
+func TestAddedDefaultIDs_CoverTheProductDefault(t *testing.T) {
+	// A package downloaded from any earlier release lacks only ids that were
+	// added later. When the product default gains an id that is not on
+	// addedDefaultIDs, every package of the release before it would import as
+	// hand-tuned and be refused (see untouchedRecord).
+	preRolesDefault(t)
+	// A package downloaded from this release, imported after a later id is
+	// added, lacks only that id.
+	current := v2branding.ProductDefault()
+	next := v2branding.ProductDefault()
+	for _, record := range []map[string]string{next.Schemes.Light, next.Schemes.Dark} {
+		record["role.later"] = "#123456"
+	}
+	if !untouchedRecord(current.Schemes.Light, next.Schemes.Light) || !untouchedRecord(current.Schemes.Dark, next.Schemes.Dark) {
+		t.Fatal("a package of the current default is not untouched against a default with one more role.* id")
+	}
+	// An id off the list that the package lacks is a tuning shape, not an
+	// untouched export.
+	for _, record := range []map[string]string{next.Schemes.Light, next.Schemes.Dark} {
+		record["text.later"] = "#123456"
+	}
+	if untouchedRecord(current.Schemes.Light, next.Schemes.Light) {
+		t.Fatal("a missing id off addedDefaultIDs was called untouched")
+	}
+}
+
+func TestExportImport_PackageFromBeforeTheRoleIds(t *testing.T) {
+	// A package exported before the product default gained ids must import as
+	// untouched: no scheme tokens, so nothing pinned and no rgba value sent to
+	// the section, which takes six-digit hex only.
+	ctx := context.Background()
+	svc, _ := newService(t)
+	old := preRolesDefault(t)
+	old.Product.Name = "Acme AI"
+	data, _, err := svc.Export(ctx, old)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	imported, problems := svc.Parse(data)
+	if len(problems) != 0 {
+		t.Fatalf("problems: %+v", problems)
+	}
+	values, err := svc.Apply(ctx, imported)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if tokens, _ := values[platformconfig.KeyBrandingSchemeTokens].(map[string]any); len(tokens) != 0 {
+		t.Fatalf("a package of the earlier default pinned %d schemes of tokens", len(tokens))
+	}
+	if values[platformconfig.KeyBrandingProductName] != "Acme AI" {
+		t.Errorf("product name = %v", values[platformconfig.KeyBrandingProductName])
+	}
+}
+
+func TestValuesFromPack_TunedRecordOfTheEarlierDefault(t *testing.T) {
+	// One id changed in a package of the earlier default is still a tuning.
+	old := preRolesDefault(t)
+	old.Schemes.Dark["text.primary"] = "#123456"
+	tokens := ValuesFromPack(old, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	dark, _ := tokens["dark"].(map[string]any)
+	if dark["text.primary"] != "#123456" {
+		t.Fatalf("tuned token lost: %v", tokens["dark"])
+	}
+	// A hand-tuned deployment's export states only the ids it set.
+	tuned := v2branding.ProductDefault()
+	tuned.Schemes.Light = map[string]string{"text.secondary": "#654321"}
+	tuned.Schemes.Dark = map[string]string{}
+	tokens = ValuesFromPack(tuned, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	light, _ := tokens["light"].(map[string]any)
+	if len(light) != 1 || light["text.secondary"] != "#654321" {
+		t.Fatalf("tuned record = %v", tokens)
+	}
+	if _, ok := tokens["dark"]; ok {
+		t.Fatalf("an empty record was carried: %v", tokens)
+	}
+}
+
+func TestValuesFromPack_PinsAtTheDefaultAreKept(t *testing.T) {
+	// A deployment that states some ids at their default values pins them:
+	// under another brand hue they must not re-hue. Such a record lacks ids
+	// other than role.*, so it is not an untouched export and is carried.
+	pinned := v2branding.ProductDefault()
+	pinned.Brand.Hue = "#FF6600"
+	pinned.Schemes.Light = map[string]string{}
+	pinned.Schemes.Dark = map[string]string{"error.main": v2branding.ProductDefault().Schemes.Dark["error.main"]}
+	tokens := ValuesFromPack(pinned, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any)
+	dark, _ := tokens["dark"].(map[string]any)
+	if len(dark) != 1 || dark["error.main"] != pinned.Schemes.Dark["error.main"] {
+		t.Fatalf("pin at the default lost: %v", tokens)
+	}
+	// An export of the earlier default in another hex case is still untouched.
+	old := preRolesDefault(t)
+	for _, record := range []map[string]string{old.Schemes.Light, old.Schemes.Dark} {
+		for id, v := range record {
+			record[id] = strings.ToLower(v)
+		}
+	}
+	if tokens, _ := ValuesFromPack(old, v2branding.ProductDefault())[platformconfig.KeyBrandingSchemeTokens].(map[string]any); len(tokens) != 0 {
+		t.Fatalf("a lower-case export of the earlier default pinned %d schemes of tokens", len(tokens))
+	}
+}
+
 func TestParse_Refusals(t *testing.T) {
 	svc, _ := newService(t)
 	good, _, _ := svc.Export(context.Background(), nil)

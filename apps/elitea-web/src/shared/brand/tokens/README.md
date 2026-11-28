@@ -15,12 +15,68 @@ submodule. Since brand guide v3 the values come from client-core's
   `background.*` under `TypeBackground`, `text.*` under `TypeText`, the extra
   leaves of the six MUI roles (`primary`, `secondary`, `info`, `warning`,
   `error`, `success`) under `PaletteColor`, everything else under `Palette`.
+- Copy the pack to
+  `services/elitea-main/internal/api/v2/branding/product_default.pack.json`,
+  and add the new id to `addedDefaultIDs` in
+  `services/elitea-main/internal/application/brandpackage/package.go`.
+  Packages of the earlier release then stay untouched exports. The Go job
+  holds both when the PR changes the Go copy. A PR that changes only this
+  file runs no Go job; the nightly Go run on main then fails.
 - `libs/ts/client-core/src/brand/identity.ts` holds the product name and
   `brand.hue`; `defaultPack.gen.ts` there restates the hue and each scheme's
   `primary.main` / `text.button.primary` for the mobile app.
 - `src/shared/brand/__tests__/defaultPackSync.test.ts` fails when any of these
   copies disagree: the two schemes' key sets, the pack vs the augmentation
   (both directions), and the pack vs client-core.
+
+## Roles
+
+The 27 roles of `tokens.json` (`schemes.dark` / `schemes.light`) are ids
+`role.<name>` in both scheme records, with the `tokens.json` values verbatim
+(ADR-0062 decision 1). A shared component reads roles
+(`theme.vars.palette.role.textMuted`, `--el-palette-role-textMuted`) or its own
+ids, and code reads `focus.ring` for focus rings; the legacy ids below stay for the call sites that read them. Change a role here
+only together with `tokens.json`: `__tests__/roles.test.ts` fails when they
+differ.
+
+`legacy-roles.json` maps a role to its generic legacy id,
+`{ "<role>": ["<legacy id>"] }` (ADR-0062 decision 1.4). The value stays a list,
+the shape that decision 1.4 gives and PR 4 reads. A role has exactly one id, or
+no entry. A role cannot hold two tuned colours, so a second id would lose
+one of them.
+
+`resolveScheme` gives a role the first value that the pack tunes: the role id
+first, then its legacy id. A value is tuned when it differs from the value that
+the id gets unstated (its default, re-hued). So a pin at the default under
+another hue is tuned too. `brand.onBrand` gives its colour to each label role
+`role.on<Name>` whose fill `role.<name>` resolves to the colour of
+`primary.main`, when the pack does not tune the label or its legacy id. With the
+default colours this is `role.onPrimary`, and in light `role.onSignal`. It
+always gives its colour to `primary.contrastText`.
+
+New code reads `role.textMuted` for muted text, not `text.default`. Code
+reads `focus.ring` for focus rings, as every ring reads it today, so a tuned
+ring loses nothing; review holds this rule. `text.default`
+and `focus.ring` are not on the map. From PR 4 (#3092), theme-gate check 10
+counts reads of the ids on the map. It does not count reads of `text.default`:
+review holds that rule. The stage 4 script (ADR-0062 Rollout) rewrites only the
+ids on the map.
+
+To change the map:
+
+- Add an id by hand. Its meaning must be the role.
+- Check that its default colour is already the role's colour in both schemes.
+  Do not change the id's value to make it match: that is a visible change
+  (ADR-0062 decision 5).
+- Add an upgrade note for each change of the map.
+- Update the role pairs in
+  `services/elitea-main/internal/application/brandpackage/templates/README.md`.
+
+`__tests__/roles.test.ts` holds the ids, the one list per id, the colours and
+the one id per role. Review holds the meaning and the upgrade note. When you
+change a role's value, change its mapped legacy id too. That is a visible
+change (ADR-0062 decision 5). What this means for operators:
+`docs/upgrading/2026-11-27-3091-colour-roles-hand-tuned-legacy-ids.md`.
 
 ## Where the values come from
 
@@ -38,7 +94,7 @@ does not always say what the value now is. The mapping decisions:
 | --- | --- | --- |
 | Accent / primary action (`primary.*`, `background.button.{primary,neutral,positive,maxi}.*`, switch on, checkbox and radio checked, tag / chip selected) | `primary` / `primaryHover` / `primaryPressed`, label `onPrimary` | One action colour in both schemes. `text.button.primary` is white in both schemes |
 | Soft accent (`background.button.special.*`, `split.*`, selected rows, drawer / conversation selection, drag target) | `selected` (and an alpha of `primary` for hover / pressed) | No per-scheme magenta / cyan washes |
-| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset |
+| Links, active indicators, focus (`text.link`, `info.main`, tab indicators, `icon.fill.active`, `status.draft`, `focus.ring`) | `signal` | Cyan on Ink, indigo on Paper. `focus.ring` (added in v3) is the one keyboard focus colour: `MuiCssBaseline` draws a 2px ring with a 2px offset. It is not on the map: code reads `focus.ring` itself (Roles) |
 | AI presence (`aiAssistant.*`, `capability.*`, magic assistant, agent hub icon, `nodeColors.llm|agent`) | `ai` (icons, fills, alpha washes) and `aiText` (text) | Violet marks AI only |
 | Canvas / surfaces (`background.default`, `card.*`, `secondary`, `modal.simple`, `sideBar`, …) | `bg` → `surface` → `elevated` | Dark: page `bg`, cards `surface`, raised `elevated`. Light: page `bg`, cards `elevated` with a `border`, insets `surface` |
 | Text (`text.secondary` = strong, `text.primary` / `text.default` = muted) | `text` / `textMuted` / `textDisabled` | The old names are inverted (`text.primary` is the MUTED role); kept for the call sites |
@@ -55,7 +111,7 @@ does not always say what the value now is. The mapping decisions:
 | Pipeline node colours (`nodeColors.*`) | `elevated` (dark) / `surface` (light); `llm` and `agent` an alpha of `ai` | No per-type accent hues |
 | Help Center resource cards (`background.resourceCard.<colour>.*`) | the same neutral values for every colour | The page no longer reads per-card colours |
 
-**Symmetry.** Both scheme records carry the same 408 ids; a value that has
+**Symmetry.** Both scheme records carry the same 435 ids; a value that has
 no meaning in one scheme (for example `background.folder.shadow` on Ink) is
 the pixel-neutral equivalent (`0 0 0 rgba(0, 0, 0, 0)`).
 

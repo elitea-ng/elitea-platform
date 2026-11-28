@@ -628,7 +628,7 @@ func validateFontFaces(key string, value any) string {
 	return ""
 }
 
-// maxSchemeTokens bounds one scheme's record: the product default states 406
+// maxSchemeTokens bounds one scheme's record: the product default states 435
 // ids, and a package that hand-tunes every one of them is still under this.
 const maxSchemeTokens = 512
 

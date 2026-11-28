@@ -217,3 +217,42 @@ func TestBrandingPackageRoutes(t *testing.T) {
 		}
 	})
 }
+
+func TestBrandingPackageImport_PackageFromBeforeTheRoleIds(t *testing.T) {
+	// A package exported with the default colours before the product default
+	// gained the 27 role.* ids (ADR-0062 PR 3) states the 408 earlier ids, 117
+	// of them not six-digit hex. It must pass the import checks as untouched,
+	// not reach the scheme_tokens rule (six-digit hex only) as a hand-tuned
+	// record.
+	pack := v2branding.ProductDefault()
+	for _, record := range []map[string]string{pack.Schemes.Light, pack.Schemes.Dark} {
+		for id := range record {
+			if brandpackage.AddedDefaultID(id) {
+				delete(record, id)
+			}
+		}
+	}
+	if len(pack.Schemes.Light) != 408 || len(pack.Schemes.Dark) != 408 {
+		t.Fatalf("pre-roles default states %d/%d ids, want 408/408: the ids before ADR-0062 PR 3; "+
+			"an added default id goes on addedDefaultIDs (brandpackage/package.go), not into this number; "+
+			"a removed default id needs its own rule",
+			len(pack.Schemes.Light), len(pack.Schemes.Dark))
+	}
+	fake := &fakePackages{exported: []byte("PK\x03\x04zip-bytes"), pack: pack}
+	router := packageRouter(admin.NewHandler(nil, admin.WithBrandingPackages(fake)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, multipartZip(t, "/admin/branding/package/administration?dry_run=true", fake.exported))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var report struct {
+		OK       bool                   `json:"ok"`
+		Problems []brandpackage.Problem `json:"problems"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK || len(report.Problems) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+}

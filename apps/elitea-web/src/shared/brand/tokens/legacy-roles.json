@@ -1,0 +1,15 @@
+{
+  "bg": ["background.default"],
+  "border": ["border.lines"],
+  "text": ["text.secondary"],
+  "textMuted": ["text.primary"],
+  "primary": ["primary.main"],
+  "primaryHover": ["primary.hover"],
+  "primaryPressed": ["primary.pressed"],
+  "signal": ["text.link"],
+  "success": ["success.main"],
+  "warning": ["warning.main"],
+  "danger": ["text.error"],
+  "dangerFill": ["error.main"],
+  "onDangerFill": ["error.contrastText"]
+}

@@ -3,7 +3,7 @@ import type { PaletteOptions } from '@mui/material/styles';
 import type { DeriveContext } from './color';
 import { hueOf, rehue } from './color';
 import type { BrandInput, SchemeRecord } from './schema';
-import { BRAND_ANCHOR_TOKEN, DEFAULT_BRAND_PACK } from './tokens';
+import { BRAND_ANCHOR_TOKEN, DEFAULT_BRAND_PACK, LEGACY_ROLES, ROLE_GROUP } from './tokens';
 
 /** The two schemes a pack always carries. `hc` is optional and not built yet. */
 export type SchemeName = 'light' | 'dark';
@@ -50,11 +50,24 @@ function deriveContextFor(scheme: SchemeName, brand: BrandInput): DeriveContext 
  * Resolve one scheme's full token record: the pack's own values, plus a
  * derived value for every catalogue id the pack does not state.
  *
- * This is where §4.1 Blocker 1 is resolved. The default pack states all 362
- * ids per scheme, so derivation is fully shadowed and rendering is byte-equal
+ * This is where §4.1 Blocker 1 is resolved. The default pack states every id
+ * per scheme, so derivation is fully shadowed and rendering is byte-equal
  * to the baseline (N4). A tenant pack that states only `brand.hue` states
  * zero tokens, so every id is derived and the whole surface repaints —
  * accents, neutrals and gradients alike — from one field.
+ *
+ * A role (`role.<name>`) takes the first value the pack states differently
+ * from what that id resolves to when it is not stated (its default, re-hued):
+ * the role id itself, then its legacy id in `tokens/legacy-roles.json`
+ * (ADR-0062 decision 1.4). So a hand-tuned deployment keeps its colours in
+ * the roles, and an id pinned at its default under another hue keeps that
+ * pin. If neither counts, the role resolves as every other id above: its
+ * stated value, or its default re-hued (decision 1.6). An id stated with the
+ * value it gets anyway is not a tuning: at the default hue the file layer can
+ * state every id of the product default, and none of them then overrides a
+ * role. `onBrand` gives its value to each label role of `onBrandRoles` whose
+ * fill resolves to the brand anchor's colour, unless the pack tunes the label
+ * or its legacy id. `toMuiPalette` always gives it to `primary.contrastText`.
  */
 export function resolveScheme(
   record: SchemeRecord,
@@ -68,10 +81,68 @@ export function resolveScheme(
     const stated = record[id];
     resolved[id] = stated ?? rehue(reference[id] as string, context);
   }
+  const tunes = (id: string): boolean => {
+    const stated = record[id];
+    const unstated = reference[id];
+    return stated !== undefined && (unstated === undefined || !sameColour(stated, rehue(unstated, context)));
+  };
+  for (const [role, legacyIds] of Object.entries(LEGACY_ROLES)) {
+    const roleId = `${ROLE_GROUP}.${role}`;
+    const source = [roleId, ...legacyIds].find(tunes);
+    if (source !== undefined) resolved[roleId] = record[source] as string;
+  }
+  if (brand.onBrand !== undefined) giveOnBrand(resolved, brand.onBrand, scheme, tunes);
   for (const [id, value] of Object.entries(record)) {
     resolved[id] ??= value;
   }
   return resolved;
+}
+
+/**
+ * Give `onBrand` to each label of `onBrandRoles` whose fill resolves to the
+ * brand anchor's colour, unless the pack tunes the label or its legacy id.
+ */
+function giveOnBrand(
+  resolved: Record<string, string>,
+  onBrand: string,
+  scheme: SchemeName,
+  tunes: (id: string) => boolean,
+): void {
+  const anchor = resolved[BRAND_ANCHOR_TOKEN] as string;
+  for (const { label, fill } of onBrandRoles(scheme)) {
+    const labelIds = [`${ROLE_GROUP}.${label}`, ...(LEGACY_ROLES[label] ?? [])];
+    const fillValue = resolved[`${ROLE_GROUP}.${fill}`];
+    if (fillValue !== undefined && sameColour(fillValue, anchor) && !labelIds.some(tunes)) {
+      resolved[`${ROLE_GROUP}.${label}`] = onBrand;
+    }
+  }
+}
+
+/**
+ * The label roles of `scheme`, each `role.on<Name>` with its fill
+ * `role.<name>`, both without the group. `resolveScheme` gives `brand.onBrand`
+ * to a label whose fill resolves to the brand anchor's colour: such a fill is
+ * the brand colour, so its label must follow `onBrand`, as
+ * `primary.contrastText` does. With the default pack's colours this is
+ * `role.onPrimary` in both schemes and `role.onSignal` in light; a tuned
+ * Signal of another colour keeps its own label.
+ */
+function onBrandRoles(scheme: SchemeName): { label: string; fill: string }[] {
+  const prefix = `${ROLE_GROUP}.on`;
+  return catalogueFor(scheme).flatMap((id) => {
+    const name = id.slice(prefix.length);
+    if (!id.startsWith(prefix) || name === '' || name[0] !== name[0]?.toUpperCase()) return [];
+    const fill = `${name[0]?.toLowerCase()}${name.slice(1)}`;
+    return catalogueFor(scheme).includes(`${ROLE_GROUP}.${fill}`) ? [{ label: `on${name}`, fill }] : [];
+  });
+}
+
+/**
+ * Colours compare without regard to hex case: a hand-edited package can
+ * spell hex in lower case, and the colour is the same.
+ */
+function sameColour(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** Expand `a.b.c` -> nested objects. Throws on an id that shadows a group. */
