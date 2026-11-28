@@ -129,7 +129,11 @@ function menuAnchorProps(anchor: TabMenuState['anchor'] | undefined): { anchorEl
 /** The active tab's body: the element its content portals into. */
 function TabBody({ tab, id, labelledBy, testId, bodyRef }: { readonly tab: InspectorTabId; readonly id: string; readonly labelledBy: string; readonly testId: string; readonly bodyRef: InspectorGroupProps['bodyRef'] }): React.JSX.Element {
   const ref = useCallback((node: HTMLElement | null) => bodyRef(tab, node), [bodyRef, tab]);
-  return <Box id={id} role="tabpanel" aria-labelledby={labelledBy} data-testid={testId} ref={ref} sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }} />;
+  // The web side panel's body (`WebSidePanel`'s `bodySx`), line for line: the body
+  // is a fixed-height column that scrolls its content, so a tab whose root does not
+  // pin itself (the chat's panel + skills, the Participants tab) still reaches every
+  // scrollable region instead of clipping the panel's bottom.
+  return <Box id={id} role="tabpanel" aria-labelledby={labelledBy} data-testid={testId} ref={ref} sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }} />;
 }
 
 function HeaderButton({ label, hint, onClick, onPointerDown, children, testId }: { readonly label: string; readonly hint?: string; readonly onClick: (event: MouseEvent<HTMLElement>) => void; readonly onPointerDown?: (event: PointerEvent<HTMLElement>) => void; readonly children: ReactNode; readonly testId?: string }): React.JSX.Element {

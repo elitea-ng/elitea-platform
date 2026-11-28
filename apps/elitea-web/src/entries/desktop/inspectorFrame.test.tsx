@@ -128,6 +128,14 @@ afterEach(() => {
 });
 
 describe('the desktop inspector, composed', () => {
+  it('lets every tab scroll its own body, not just the panel as a whole', async () => {
+    mount('/workspaces/w1?conversation=77');
+    await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
+    // The body every tab portals into scrolls its content, as the web side panel's does.
+    const body = await within(inspector()).findByTestId('inspector-body-0');
+    expect(getComputedStyle(body).overflowY).toBe('auto');
+  });
+
   it('holds a thread\'s tabs in one panel, and only the chat\'s on a chat', async () => {
     const { router } = mount('/workspaces/w1?conversation=77');
     await waitFor(() => expect(tabsOf(0)).toEqual(['Changes', 'Approvals', 'Index', 'Context']));
