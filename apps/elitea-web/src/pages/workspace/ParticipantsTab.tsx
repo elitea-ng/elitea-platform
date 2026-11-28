@@ -96,7 +96,7 @@ export function ParticipantsTab({ projectId, conversationId, subject, executorLo
   if (joined.length === 0 && pending.length === 0) return null;
   return (
     <InspectorTab id={participantsTabId(joined.length + pending.length)} title={t('workspace.participants.title', 'Participants')} subject={subject}>
-      <Box ref={container} sx={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: 0 }} data-testid="workspace-participants-tab">
+      <Box ref={container} sx={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }} data-testid="workspace-participants-tab">
         <ExchangeStrip exchange={exchangeOf(turn, team.agents)} ipc={ipc} />
         {joined.length > 0 && (
           <ParticipantsWrapper
