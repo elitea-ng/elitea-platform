@@ -116,8 +116,20 @@ export function buildEliteaTheme(pack: BrandPack, scope?: ThemeScope, direction:
       // radiusSm|Md|Lg (corner-rounding rungs, not a shape) represents.
       radiusPill: pack.shape.radiusPill,
     },
-    // Density is a token, not a fork: 6 vs 8 covers the whole compact mode.
-    spacing: pack.shape.density === 'compact' ? 6 : 8,
+    // Density is a token, not a fork: the unit is 0.375rem in compact and
+    // 0.5rem in comfortable. Lengths written in rem do not follow density
+    // until stage 4 of ADR-0062 rewrites them as steps. The unit is in rem, as
+    // R-T9 of the spec, amended by ADR-0062 decision 2.4, sets it: 0.5rem and 0.375rem are 8 px and 6 px at the
+    // 16 px browser default, and grow with a larger browser font as the rem
+    // lengths and the text already do. A string unit
+    // keeps MUI's output shape: with CSS variables on, `theme.spacing(n)` and
+    // an `sx` number give `calc(n * var(--el-spacing, 0.5rem))`, `spacing(1)`
+    // is `var(--el-spacing, 0.5rem)`, and negatives, halves, several
+    // arguments, 'auto', Grid and Stack all go through the same transform; the
+    // unit lands once, as `--el-spacing: 0.5rem` in the root block
+    // (`@mui/material/styles/createThemeWithVars.js` `getSpacingVal`,
+    // `@mui/system/spacing` `createUnaryUnit`, MUI 9.5.0).
+    spacing: pack.shape.density === 'compact' ? '0.375rem' : '0.5rem',
     breakpoints: { values: { ...BREAKPOINT_VALUES } },
     // A person who asked their system for less motion gets MUI's transitions
     // (menus growing in, dialogs fading, drawers sliding, ripples) with zero

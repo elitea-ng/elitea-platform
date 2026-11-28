@@ -3,12 +3,39 @@ import { describe, expect, it } from 'vitest';
 import { BREAKPOINT_VALUES, buildEliteaTheme } from '../buildTheme';
 import { COLOR_SCHEME_SELECTOR, CSS_VAR_PREFIX, DEFAULT_COLOR_SCHEME } from '../constants';
 import { muiOverrides } from '../mui-overrides';
+import { PREVIEW_THEME_SCOPE } from '../preview';
 import { BrandPack } from '../schema';
 import { catalogueFor } from '../toMuiPalette';
 import { DEFAULT_BRAND_PACK } from '../tokens';
 import { emittedCssVars } from './reference-scan';
 
 const theme = buildEliteaTheme(DEFAULT_BRAND_PACK);
+
+/**
+ * ADR-0062 decision 2.4: the spacing unit is in rem, so spacing follows the
+ * browser's default font size. At the 16 px default the two units are the
+ * same 8 px and 6 px as the old numeric `8 : 6`, so no baseline changes.
+ */
+const compactTheme = buildEliteaTheme(
+  BrandPack.parse({
+    ...DEFAULT_BRAND_PACK,
+    shape: { ...DEFAULT_BRAND_PACK.shape, density: 'compact' },
+  }),
+);
+
+/** Every value of the spacing variable that the theme's style sheets declare. */
+const spacingVarValues = (subject: typeof theme, name = '--el-spacing'): unknown[] => {
+  const sheets: readonly Record<string, unknown>[] = subject.generateStyleSheets();
+  const values: unknown[] = [];
+  for (const sheet of sheets) {
+    for (const block of Object.values(sheet)) {
+      if (typeof block === 'object' && block !== null && name in block) {
+        values.push((block as Record<string, unknown>)[name]);
+      }
+    }
+  }
+  return values;
+};
 
 describe('motion', () => {
   it('follows the system reduced-motion setting for MUI transitions', () => {
@@ -66,15 +93,9 @@ describe('shape, spacing and breakpoints', () => {
     expect(theme.shape.radiusPill).toBe(DEFAULT_BRAND_PACK.shape.radiusPill);
   });
 
-  it('treats density as a token: 8 comfortable, 6 compact', () => {
-    expect(theme.spacing(1)).toBe('var(--el-spacing, 8px)');
-    const compact = buildEliteaTheme(
-      BrandPack.parse({
-        ...DEFAULT_BRAND_PACK,
-        shape: { ...DEFAULT_BRAND_PACK.shape, density: 'compact' },
-      }),
-    );
-    expect(compact.spacing(1)).toBe('var(--el-spacing, 6px)');
+  it('treats density as a token: 0.5rem comfortable, 0.375rem compact', () => {
+    expect(theme.spacing(1)).toBe('var(--el-spacing, 0.5rem)');
+    expect(compactTheme.spacing(1)).toBe('var(--el-spacing, 0.375rem)');
   });
 
   it('carries the baseline breakpoints, custom rungs included', () => {
@@ -82,6 +103,49 @@ describe('shape, spacing and breakpoints', () => {
       expect(theme.breakpoints.values[name as keyof typeof BREAKPOINT_VALUES]).toBe(value);
     }
     expect(theme.breakpoints.values.prompt_list_xxxxxl).toBe(5120);
+  });
+});
+
+describe('spacing unit in rem (ADR-0062 decision 2.4)', () => {
+  it.each([
+    ['comfortable', '0.5rem', theme],
+    ['compact', '0.375rem', compactTheme],
+  ] as const)('%s: the root block declares the unit %s, once', (_density, unit, subject) => {
+    expect(spacingVarValues(subject)).toEqual([unit]);
+  });
+
+  it.each([
+    ['comfortable', '0.5rem', theme],
+    ['compact', '0.375rem', compactTheme],
+  ] as const)('%s: theme.spacing(n) is n × %s (0 stays 0px)', (_density, unit, subject) => {
+    const v = `var(--el-spacing, ${unit})`;
+    expect(subject.spacing()).toBe(v);
+    expect(subject.spacing(1)).toBe(v);
+    expect(subject.spacing(2)).toBe(`calc(2 * ${v})`);
+    expect(subject.spacing(0.5)).toBe(`calc(0.5 * ${v})`);
+    expect(subject.spacing(-1)).toBe(`calc(-1 * ${v})`);
+    expect(subject.spacing(-0.5)).toBe(`calc(-0.5 * ${v})`);
+    expect(subject.spacing(1, 2)).toBe(`${v} calc(2 * ${v})`);
+    expect(subject.spacing('auto', 2)).toBe(`auto calc(2 * ${v})`);
+    expect(subject.spacing(0)).toBe('0px');
+  });
+
+  it('gives sx spacing numbers the same unit, and leaves strings and 0 alone', () => {
+    const v = 'var(--el-spacing, 0.5rem)';
+    expect(theme.unstable_sx({ p: 2, m: -1, gap: 1.5, mx: 'auto', pt: 0 })).toEqual({
+      padding: `calc(2 * ${v})`,
+      margin: `calc(-1 * ${v})`,
+      gap: `calc(1.5 * ${v})`,
+      marginLeft: 'auto',
+      marginRight: 'auto',
+      paddingTop: 0,
+    });
+  });
+
+  it('keeps the unit under the preview scope (the admin branding preview)', () => {
+    const scoped = buildEliteaTheme(DEFAULT_BRAND_PACK, PREVIEW_THEME_SCOPE);
+    expect(spacingVarValues(scoped, '--elp-spacing')).toEqual(['0.5rem']);
+    expect(scoped.spacing(2)).toBe('calc(2 * var(--elp-spacing, 0.5rem))');
   });
 });
 
